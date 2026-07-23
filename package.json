@@ -1,0 +1,80 @@
+{
+  "name": "scarmvoice",
+  "productName": "ScarmVoice",
+  "version": "0.3.0",
+  "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
+  "author": "Scarmonit",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/Scarmonit/scarmvoice.git" },
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "postinstall": "node scripts/vendor-sdk.js && node scripts/make-icon.js",
+    "vendor": "node scripts/vendor-sdk.js",
+    "icon": "node scripts/make-icon.js",
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder --win --publish never",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "uiohook-napi": "^1.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/realtimekit": "2.0.0",
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.scarmonit.scarmvoice",
+    "productName": "ScarmVoice",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "owner": "Scarmonit",
+      "repo": "scarmvoice",
+      "releaseType": "release"
+    },
+    "asarUnpack": [
+      "**/*.node",
+      "**/node_modules/uiohook-napi/**"
+    ],
+    "files": [
+      "src/**/*",
+      "!src/renderer/vendor/.gitkeep",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "ScarmVoice-Setup.exe",
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ScarmVoice",
+      "runAfterFinish": true,
+      "differentialPackage": true
+    }
+  }
+}

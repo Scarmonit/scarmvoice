@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob: lounge: https:;
+  media-src 'self' data: blob: lounge: https:;
+  connect-src 'self' https: wss: blob: data:;
+  worker-src 'self' blob:;
+  font-src 'self' data:;
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>ScarmVoice</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Draggable title bar. Native window buttons are overlaid on the right by
+     Electron's titleBarOverlay, so we keep that area clear. -->
+<header id="titlebar">
+  <div class="tb-brand">
+    <span class="tb-dot" id="tb-dot" title="Realtime status"></span>
+    <span class="tb-name">ScarmVoice</span>
+    <span class="tb-conn" id="tb-conn" hidden></span>
+  </div>
+  <div class="tb-spacer"></div>
+</header>
+
+<!-- Non-blocking update banner. Sits under the title bar, above the app. -->
+<div id="update-banner" hidden>
+  <span class="ub-icon" aria-hidden="true">⬆</span>
+  <div class="ub-body">
+    <span class="ub-text" id="ub-text"></span>
+    <button class="ub-notes-toggle" id="ub-notes-toggle" hidden>release notes</button>
+    <div class="ub-notes" id="ub-notes" hidden></div>
+    <div class="ub-progress" id="ub-progress" hidden><i id="ub-bar"></i></div>
+  </div>
+  <div class="ub-actions">
+    <button class="ub-btn" id="ub-action"></button>
+    <button class="ub-x" id="ub-dismiss" title="Dismiss">✕</button>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <aside id="sidebar">
+    <div class="side-scroll">
+      <div class="side-section">
+        <div class="side-head">
+          <span>Channels</span>
+          <button class="icon-btn" id="btn-add-channel" title="Create a channel">+</button>
+        </div>
+        <nav id="channel-list"></nav>
+      </div>
+
+      <div class="side-section" id="voice-section">
+        <div class="side-head"><span>Voice</span></div>
+        <div id="voice-room" class="voice-room">
+          <div class="voice-room-head">
+            <span class="vr-icon" aria-hidden="true">🔊</span>
+            <!-- Display label only. The room *id* stays "lounge" (settings.room),
+                 because that's the /api/rt/<room> path shared with the website. -->
+            <span class="vr-name">VoiceChat</span>
+            <span class="vr-count" id="voice-count"></span>
+          </div>
+          <ul id="voice-roster" class="voice-roster"></ul>
+          <button id="btn-join-voice" class="btn-voice">Join Voice</button>
+          <div id="voice-live" class="voice-live" hidden>
+            <div class="vl-status">
+              <span class="vl-dot"></span>
+              <span id="vl-label">Voice connected</span>
+            </div>
+            <button id="btn-leave-voice" class="btn-leave" title="Disconnect">Leave</button>
+          </div>
+          <button id="btn-share" class="btn-share" hidden>
+            <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            <span id="btn-share-label">Share screen</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="me-bar">
+      <div class="me-id">
+        <span class="me-avatar" id="me-avatar"></span>
+        <button class="me-name" id="btn-name" title="Change your display name">
+          <span id="me-name-text">Anonymous</span>
+        </button>
+      </div>
+      <div class="me-actions">
+        <button class="icon-btn" id="btn-mute" title="Mute microphone" aria-pressed="false">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          <svg viewBox="0 0 24 24" class="ico ico-off" aria-hidden="true" hidden><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><path d="M4 3l16 18"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-deafen" title="Deafen" aria-pressed="false">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2v-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2v-2z"/></svg>
+          <svg viewBox="0 0 24 24" class="ico ico-off" aria-hidden="true" hidden><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2v-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2v-2z"/><path d="M4 3l16 18"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-settings" title="Settings">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 3V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 17 4.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1z"/></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header id="chan-head">
+      <h1 id="chan-title"># general</h1>
+      <div class="chan-actions">
+        <span id="chan-meta"></span>
+        <button class="icon-btn" id="btn-search" title="Search messages">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-pinned" title="Pinned messages">📌</button>
+        <button class="icon-btn" id="btn-rename-channel" title="Rename this channel">✎</button>
+        <button class="icon-btn" id="btn-delete-channel" title="Delete this channel">🗑</button>
+      </div>
+    </header>
+
+    <!-- Search bar. Server-side, whole archive, same endpoint as the website. -->
+    <div id="search-bar" hidden>
+      <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="text" id="search-input" placeholder="Search messages…" autocomplete="off">
+      <button type="button" class="search-scope" id="search-scope">This channel</button>
+      <span id="search-count"></span>
+      <button class="icon-btn" id="search-close" title="Close search">✕</button>
+    </div>
+    <div id="search-results" hidden></div>
+
+    <!-- Pinned messages for this channel. -->
+    <div id="pinned-panel" hidden>
+      <div class="pinned-head">
+        <span>📌 Pinned in #<span id="pinned-channel">general</span></span>
+        <button class="icon-btn" id="pinned-close" title="Close">✕</button>
+      </div>
+      <div id="pinned-list"></div>
+    </div>
+
+    <!-- Screen-share stage. One presenter at a time, matching the website. -->
+    <section id="stage" hidden>
+      <div class="stage-head">
+        <span class="stage-live"></span>
+        <span id="stage-title">Screen share</span>
+        <div class="stage-actions">
+          <select id="stage-quality" title="Capture resolution">
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+            <option value="1440p">1440p</option>
+          </select>
+          <button class="stage-btn" id="stage-motion" title="Sharp = crisp text · Smooth = fluid motion">Sharp</button>
+          <button class="stage-btn" id="stage-pip" title="Pop out">Pop out</button>
+          <button class="stage-btn" id="stage-full" title="Fullscreen">Fullscreen</button>
+          <button class="stage-btn danger" id="stage-stop" title="Stop sharing">Stop</button>
+        </div>
+      </div>
+      <div class="stage-video-wrap">
+        <video id="stage-video" autoplay playsinline></video>
+      </div>
+    </section>
+
+    <div id="messages" role="log" aria-live="polite"></div>
+
+    <div id="typing-line"></div>
+
+    <form id="composer" autocomplete="off">
+      <div id="reply-chip" hidden>
+        <span id="reply-chip-text"></span>
+        <button type="button" id="reply-chip-cancel" title="Cancel reply">✕</button>
+      </div>
+      <div id="upload-list"></div>
+      <div class="composer-row">
+        <button type="button" id="btn-attach" title="Attach a file (max 25 MB)">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M21.4 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/></svg>
+        </button>
+        <textarea id="composer-input" rows="1" placeholder="Message #general" maxlength="2000"></textarea>
+        <button type="submit" id="btn-send" title="Send (Enter)">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M3 20l18-8L3 4l4 8-4 8z"/></svg>
+        </button>
+      </div>
+      <input type="file" id="file-input" multiple hidden>
+    </form>
+
+    <div id="drop-hint" hidden>
+      <div class="drop-inner">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg>
+        <span>Drop to upload</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ---------- login ---------- -->
+<div id="login" class="overlay">
+  <form class="login-card" id="login-form">
+    <img class="login-mark" src="logo.png" alt="" aria-hidden="true">
+    <h1 class="login-title">ScarmVoice</h1>
+    <p class="login-sub" id="login-sub">Enter the board password to connect</p>
+    <input type="password" id="login-pw" placeholder="Password" autocomplete="current-password" autofocus>
+    <input type="text" id="login-name" placeholder="Display name" maxlength="40" autocomplete="off">
+    <button type="submit" id="login-btn">Connect</button>
+    <div class="login-error" id="login-error"></div>
+    <button type="button" class="linkish" id="login-advanced">Server settings</button>
+    <div id="login-advanced-box" hidden>
+      <label>Server URL
+        <input type="text" id="login-base" spellcheck="false">
+      </label>
+    </div>
+  </form>
+</div>
+
+<!-- ---------- settings ---------- -->
+<div id="settings" class="overlay" hidden>
+  <div class="modal">
+    <header class="modal-head">
+      <h2>Settings</h2>
+      <button class="icon-btn" id="settings-close" title="Close">✕</button>
+    </header>
+
+    <div class="modal-body">
+      <section class="set-group">
+        <h3>Identity</h3>
+        <label class="row">
+          <span>Display name</span>
+          <input type="text" id="set-name" maxlength="40">
+        </label>
+      </section>
+
+      <section class="set-group">
+        <h3>Voice</h3>
+        <label class="row">
+          <span>Microphone</span>
+          <select id="set-mic"></select>
+        </label>
+        <label class="row">
+          <span>Speaker</span>
+          <select id="set-speaker"></select>
+        </label>
+        <label class="row">
+          <span>Output volume</span>
+          <input type="range" id="set-outvol" min="0" max="200" step="1">
+          <output id="set-outvol-val"></output>
+        </label>
+        <label class="row">
+          <span>Input mode</span>
+          <select id="set-mode">
+            <option value="open">Open mic</option>
+            <option value="ptt">Push to talk</option>
+          </select>
+        </label>
+        <label class="row" id="row-ptt">
+          <span>Push-to-talk key</span>
+          <button type="button" id="set-ptt" class="keycap">Backquote</button>
+          <span class="hint" id="ptt-hint"></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-ec"><span>Echo cancellation</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-ns"><span>Noise suppression</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-agc">
+          <span>Automatic gain control <em class="hint">— off is recommended; its level loop can make your volume wobble</em></span>
+        </label>
+      </section>
+
+      <section class="set-group">
+        <h3>Appearance</h3>
+        <label class="row">
+          <span>Chat font size</span>
+          <select id="set-font-size">
+            <option value="small">Small</option>
+            <option value="medium">Medium</option>
+            <option value="large">Large</option>
+            <option value="xlarge">Extra Large</option>
+          </select>
+          <span class="hint">Ctrl + / Ctrl − / Ctrl 0</span>
+        </label>
+      </section>
+
+      <section class="set-group">
+        <h3>Screen share</h3>
+        <label class="row">
+          <span>Resolution</span>
+          <select id="set-share-quality">
+            <option value="720p">720p — lightest</option>
+            <option value="1080p">1080p — recommended</option>
+            <option value="1440p">1440p — sharpest on 4K displays</option>
+          </select>
+        </label>
+        <label class="row">
+          <span>Optimise for</span>
+          <select id="set-share-motion">
+            <option value="sharp">Crisp text — 30fps, holds resolution</option>
+            <option value="smooth">Fluid motion — 60fps, holds frame rate</option>
+          </select>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-share-audio"><span>Include system audio when sharing</span>
+        </label>
+      </section>
+
+      <section class="set-group">
+        <h3>Application</h3>
+        <label class="row check">
+          <input type="checkbox" id="set-launch"><span>Launch on system startup</span>
+        </label>
+        <label class="row check indent">
+          <input type="checkbox" id="set-launch-hidden">
+          <span>Start minimized to the tray <em class="hint">— open quietly in the background</em></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-tray"><span>Keep running in the tray when closed</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-autoupdate">
+          <span>Update automatically <em class="hint">— download in the background and install on quit</em></span>
+        </label>
+        <div class="row between" id="update-row">
+          <span class="hint" id="update-status">You're on the latest version.</span>
+          <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
+        </div>
+        <label class="row check">
+          <input type="checkbox" id="set-notify"><span>Desktop notifications for new messages</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-notify-sound">
+          <span>Notification sound <em class="hint">— chime when a new message arrives</em></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-voice-sounds">
+          <span>Join &amp; leave sounds <em class="hint">— only audible while you're in the call</em></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-autojoin"><span>Join voice automatically on launch</span>
+        </label>
+        <label class="row">
+          <span>Server URL</span>
+          <input type="text" id="set-base" spellcheck="false">
+        </label>
+      </section>
+
+      <section class="set-group">
+        <div class="row between">
+          <span class="hint" id="set-version"></span>
+          <button type="button" id="btn-logout" class="btn-danger">Sign out</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- per-participant volume popover -->
+<div id="popover" class="popover" hidden>
+  <div class="pop-name" id="pop-name"></div>
+  <label class="pop-row">
+    <input type="checkbox" id="pop-mute"><span>Mute for me</span>
+  </label>
+  <label class="pop-row">
+    <span>Volume</span>
+    <input type="range" id="pop-vol" min="0" max="200" step="1">
+    <output id="pop-vol-val"></output>
+  </label>
+</div>
+
+<!-- Screen-share source picker. Electron on Windows has no system picker, so
+     the source is chosen here and handed to the main process before the SDK
+     calls getDisplayMedia. -->
+<div id="picker" class="overlay" hidden>
+  <div class="modal picker-modal">
+    <header class="modal-head">
+      <h2>Share your screen</h2>
+      <button class="icon-btn" id="picker-close" title="Close">✕</button>
+    </header>
+    <div class="picker-tabs">
+      <button class="picker-tab active" data-tab="screen">Screens</button>
+      <button class="picker-tab" data-tab="window">Windows</button>
+    </div>
+    <div class="modal-body">
+      <div id="picker-grid" class="picker-grid"></div>
+      <div id="picker-empty" class="empty-state" hidden>Nothing to share here.</div>
+    </div>
+    <footer class="picker-foot">
+      <label class="pick-audio">
+        <input type="checkbox" id="picker-audio">
+        <span>Share system audio</span>
+      </label>
+      <div class="picker-foot-actions">
+        <span class="hint" id="picker-quality-hint"></span>
+        <button type="button" id="picker-cancel">Cancel</button>
+        <button type="button" id="picker-go" disabled>Share</button>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<!-- In-app prompt/confirm. Chromium in Electron has no window.prompt(), and a
+     native confirm() blocks the renderer, so we roll our own. -->
+<div id="dialog" class="overlay" hidden>
+  <form class="dialog-card" id="dialog-form">
+    <h2 id="dialog-title"></h2>
+    <p id="dialog-msg" hidden></p>
+    <input type="text" id="dialog-input" maxlength="60" autocomplete="off">
+    <div class="dialog-actions">
+      <button type="button" id="dialog-cancel">Cancel</button>
+      <button type="submit" id="dialog-ok">OK</button>
+    </div>
+  </form>
+</div>
+
+<!-- Expanded image viewer. Closes on X, Esc, or a backdrop click. -->
+<div id="lightbox" hidden>
+  <div class="lb-tools">
+    <button class="lb-btn" id="lb-zoom" title="Show at actual size">Actual size</button>
+    <button class="lb-btn lb-close" id="lb-close" title="Close (Esc)">✕</button>
+  </div>
+  <div class="lb-stage" id="lb-stage">
+    <img id="lb-image" class="fit" alt="">
+  </div>
+  <div class="lb-caption" id="lb-caption"></div>
+</div>
+
+<!-- Shared right-click menu, used by messages and by the expanded image. -->
+<div id="ctx-menu" class="ctx-menu" hidden></div>
+
+<div id="audio-sink" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<!-- voice.js MUST load before the SDK: it patches RTCPeerConnection and
+     getDisplayMedia, and the SDK captures those references when it evaluates.
+     Loading it second would leave the patches installed too late to ever see
+     the SDK's peer connections. -->
+<script src="voice.js"></script>
+<script src="sounds.js"></script>
+<script src="vendor/realtimekit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
