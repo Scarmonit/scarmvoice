@@ -91,6 +91,11 @@ Start-menu entry and desktop shortcut.
 - Both independently toggleable in Settings
 
 **Desktop**
+- **Auto-update** via electron-updater against GitHub Releases — a non-blocking
+  banner shows when a new version is available (with release notes and download
+  progress), and an optional "Update automatically" setting downloads in the
+  background and installs on quit. Downloads are **differential** (only changed
+  blocks), so a point release is a ~1 MB fetch, not the full installer
 - **Launch on system startup** (off by default) with a companion **Start
   minimized to the tray**, driven by `app.setLoginItemSettings`; the toggle
   reads the real OS state on open, so it's correct even if changed elsewhere
@@ -116,17 +121,35 @@ Start-menu entry and desktop shortcut.
 ```bash
 npm install         # also vendors the RealtimeKit SDK and generates the icon
 npm run dev         # run from source with devtools open
-npm run dist        # build both installers and copy the portable exe to the Desktop
+npm run build       # build the NSIS installer locally (no publish)
+GH_TOKEN=$(gh auth token) npm run release   # build AND publish a GitHub release
 ```
 
 | Command | What it does |
 | --- | --- |
 | `npm start` | Run from source |
 | `npm run dev` | Same, with devtools |
-| `npm run build` | `electron-builder --win` only |
-| `npm run dist` | Build **and** drop `ScarmVoice.exe` on the Desktop |
+| `npm run build` / `npm run dist` | Build the installer locally, `--publish never` |
+| `npm run release` | Build **and publish** to GitHub Releases (needs `GH_TOKEN`) |
 | `npm run vendor` | Re-copy the RealtimeKit browser bundle into `src/renderer/vendor/` |
 | `npm run icon` | Regenerate `build/icon.ico` |
+
+### Shipping a release
+
+Bump `version` in package.json, then `GH_TOKEN=$(gh auth token) npm run release`.
+electron-builder builds the NSIS installer, generates `latest.yml` + a blockmap,
+and publishes them to a GitHub release tagged `v<version>` on
+`Scarmonit/scarmvoice`. That single step is the whole release: installed apps
+pick it up through the update feed, and the website's "Download for Windows"
+button (which points at `releases/latest/download/ScarmVoice-Setup.exe`) serves
+it automatically — no site edit needed. The stable asset name is what makes the
+`latest` redirect work, so don't put the version in the NSIS `artifactName`.
+
+> **Installer, not portable.** electron-updater can't self-update a portable
+> exe, so the Windows target is a one-click NSIS installer (per-user, no admin,
+> creates a desktop shortcut, launches on finish). userData is keyed by
+> productName, so a user upgrading from the old portable build keeps their
+> settings and session.
 
 ## How it's put together
 
@@ -236,6 +259,25 @@ silent.
 > matches a login item by path **and args**, a query with `--openAsHidden` won't
 > match an entry written without it; `getLoginItem` reads both signatures and
 > merges them, or the checkbox reads back false right after you enable it.
+
+### Uploads work for any file type
+
+No code layer restricts file types — the historical blocker was Cloudflare's
+managed WAF, which content-scans raw upload bodies and 403s files whose bytes
+match attack signatures (real PDFs, Office docs, zips). Since the WAF runs before
+the Worker, an authenticated user just saw "Upload failed (403)" with no way to
+fix it in code. The fix is to send the upload body as **base64** (header
+`x-file-encoding: base64`): the WAF sees opaque text and passes it through, and
+the server decodes it byte-for-byte. Web and app both do this; the server
+accepts raw bodies too for backward compatibility. Size limits (25 MB) stay
+enforced on both the client and the decoded server bytes.
+
+Serving is hardened separately: the server sniffs magic bytes and only serves
+genuine images/audio/video **inline** (with the sniffed type); everything else —
+PDFs, HTML, SVG, archives, unknown — downloads as `application/octet-stream`
+with `attachment` disposition and `X-Content-Type-Options: nosniff`, so an
+uploaded HTML or SVG can never execute in the site's origin. Extensions are
+never trusted for inline rendering.
 
 ### Attachments and drag-and-drop
 

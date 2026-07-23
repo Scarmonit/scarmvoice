@@ -72,6 +72,11 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ra
     if (body !== undefined && body !== null) {
         if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
             opts.body = body;
+        } else if (typeof body === 'string') {
+            // Raw string body (e.g. a base64 upload). Trust the caller's
+            // Content-Type; don't JSON-encode it.
+            opts.body = body;
+            if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'text/plain';
         } else {
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);
@@ -203,14 +208,21 @@ async function upload(name, type, bytes) {
         return { success: false, error: `"${name}" is ${(buf.length / 1048576).toFixed(1)} MB — the limit is 25 MB` };
     }
 
+    // Send base64, not raw bytes: Cloudflare's WAF content-scans raw upload
+    // bodies and 403s real PDFs/binaries before they ever reach the Worker.
+    // Base64 is opaque text the WAF won't match, so any file type uploads.
+    const b64 = buf.toString('base64');
+
     let res;
     try {
         res = await request('/api/board/upload', {
             method: 'POST',
-            body: buf,
+            body: b64,
             headers: {
                 'x-file-name': encodeURIComponent(name || 'file'),
-                'x-file-type': type || 'application/octet-stream'
+                'x-file-type': type || 'application/octet-stream',
+                'x-file-encoding': 'base64',
+                'Content-Type': 'text/plain'
             },
             timeout: 5 * 60 * 1000   // 25 MB over a slow uplink needs far more than the default
         });

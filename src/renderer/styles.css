@@ -447,45 +447,71 @@ input, textarea, select { user-select: text; }
 }
 .btn-danger:hover { background: #321a24; }
 
-/* ---------- search ---------- */
+/* ---------- filter + search bar ---------- */
 
-#search-bar {
-  display: flex; align-items: center; gap: 8px;
+#filter-bar {
+  position: relative;
   padding: 8px 16px; border-bottom: 1px solid var(--line-solid);
   background: var(--bg-2);
 }
-#search-bar .ico { width: 15px; height: 15px; color: var(--dim); flex: 0 0 15px; }
-#search-input {
+.fb-top { display: flex; align-items: center; gap: 8px; }
+#filter-bar .ico { width: 15px; height: 15px; color: var(--dim); flex: 0 0 15px; }
+#filter-input {
   flex: 1; background: none; border: 0; outline: none;
   font-size: 14px; color: var(--text); min-width: 0;
 }
-#search-input::placeholder { color: var(--dim); }
-.search-scope {
+#filter-input::placeholder { color: var(--dim); }
+.fb-menu-btn {
   padding: 4px 10px; border-radius: 7px; cursor: pointer;
   background: #16162200; border: 1px solid var(--line-solid); color: var(--muted);
   font-size: 11px; font-weight: 600; white-space: nowrap;
 }
-.search-scope:hover { color: var(--text); border-color: #3a3a52; }
-.search-scope.all { color: var(--gold); border-color: rgba(255,204,68,.45); }
-#search-count { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.fb-menu-btn:hover { color: var(--text); border-color: #3a3a52; }
+.fb-caret { font-size: 9px; }
+#filter-count { font-size: 11px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-#search-results {
-  flex: 1; overflow-y: auto; min-height: 0;
-  padding: 8px 16px 12px; background: var(--bg);
+.fb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.fb-chips[hidden] { display: none; }
+.fb-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 6px 3px 9px; border-radius: 20px; cursor: pointer;
+  background: #241f10; border: 1px solid rgba(255,204,68,.4); color: var(--gold);
+  font-size: 11px; font-weight: 600;
 }
-.search-result {
-  display: block; width: 100%; text-align: left;
-  padding: 9px 12px; margin-bottom: 5px;
-  background: var(--panel); border: 1px solid var(--line-solid);
-  border-radius: 10px; cursor: pointer; color: var(--text);
+.fb-chip:hover { background: #2c2712; }
+.fb-chip-x { opacity: .7; font-size: 10px; }
+.fb-clear {
+  padding: 3px 10px; border-radius: 20px; cursor: pointer;
+  background: none; border: 1px solid var(--line-solid); color: var(--muted);
+  font-size: 11px; font-weight: 600;
 }
-.search-result:hover { border-color: var(--gold); background: #16161f; }
-.sr-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
-.sr-name { font-weight: 700; font-size: 12px; }
-.sr-meta { font-size: 11px; color: var(--dim); margin-left: auto; }
-.sr-body { font-size: 13px; color: var(--muted); line-height: 1.4; word-break: break-word; }
-.sr-body mark { background: rgba(255,204,68,.28); color: var(--gold); border-radius: 2px; padding: 0 1px; }
-.sr-empty { text-align: center; color: var(--dim); padding: 40px 20px; font-size: 13px; }
+.fb-clear:hover { color: #ff8095; border-color: #4a2030; }
+
+.fb-menu {
+  position: absolute; top: 100%; right: 44px; z-index: 30;
+  margin-top: 4px; min-width: 210px; padding: 6px;
+  background: var(--panel-2); border: 1px solid var(--line-solid);
+  border-radius: 10px; box-shadow: 0 16px 40px rgba(0,0,0,.6);
+}
+.fb-menu[hidden] { display: none; }
+.fb-menu-head { padding: 4px 8px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
+.fb-opt {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 7px 9px; border-radius: 7px;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  color: var(--text); font-size: 13px;
+}
+.fb-opt span { width: 16px; text-align: center; }
+.fb-opt:hover { background: #24243a; }
+.fb-opt.on { background: #241f10; color: var(--gold); }
+.fb-menu-sep { height: 1px; margin: 5px 6px; background: var(--line-solid); }
+.fb-from-row { display: flex; align-items: center; gap: 8px; padding: 6px 9px; font-size: 13px; color: var(--muted); }
+.fb-from-row select {
+  flex: 1; padding: 5px 8px; border-radius: 7px; min-width: 0;
+  background: #0d0d14; border: 1px solid var(--line-solid); color: var(--text); font-size: 12px; outline: none;
+}
+/* In a filtered view, matched messages are jump-to-context clickable. */
+#messages.filtering .msg { cursor: pointer; }
 
 /* ---------- pinned ---------- */
 
@@ -589,6 +615,10 @@ input, textarea, select { user-select: text; }
 }
 #stage-video { width: 100%; height: 100%; max-height: 46vh; object-fit: contain; display: block; }
 #stage-video:fullscreen { max-height: none; }
+/* When the wrapper is the fullscreen element, let the video fill the screen
+   (its inline 46vh cap would otherwise shrink it to a small centred box). */
+#stage-video-wrap:fullscreen { width: 100%; height: 100%; background: #000; }
+#stage-video-wrap:fullscreen #stage-video { max-height: 100vh; height: 100%; }
 
 /* ---------- screen share: picker ---------- */
 
@@ -646,21 +676,50 @@ input, textarea, select { user-select: text; }
 #upload-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 #upload-list:empty { display: none; }
 
-/* Staged (not yet uploaded) attachments, each individually removable. */
-.stage-chip {
+/* Staged (not yet uploaded) attachments — thumbnail cards, each removable. */
+.stage-grid {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.stage-card {
+  position: relative;
   display: flex; align-items: center; gap: 9px;
-  padding: 7px 9px 7px 12px; border-radius: 9px;
-  background: var(--panel); border: 1px solid var(--line-solid); font-size: 12px;
+  width: 232px; max-width: 100%;
+  padding: 6px 30px 6px 6px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line-solid);
 }
-.stage-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stage-size { color: var(--dim); font-variant-numeric: tabular-nums; }
-.stage-x {
-  width: 22px; height: 22px; flex: 0 0 22px;
-  display: grid; place-items: center; cursor: pointer;
-  background: none; border: 0; border-radius: 6px; color: var(--dim); font-size: 12px;
+.stage-card.errored { border-color: #4a2030; background: #1c1116; }
+.sc-thumb {
+  flex: 0 0 46px; width: 46px; height: 46px; border-radius: 7px;
+  overflow: hidden; background: #0d0d14; position: relative;
+  display: grid; place-items: center;
 }
-.stage-x:hover { background: #2c1620; color: var(--red); }
-.stage-sum { padding: 2px 4px; font-size: 11px; color: var(--dim); }
+.sc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sc-thumb.sc-icon { font-size: 22px; }
+.sc-thumb.sc-audio { color: var(--gold); }
+.sc-wave { width: 26px; height: 26px; fill: currentColor; }
+.sc-video .sc-play {
+  position: absolute; inset: 0; margin: auto; width: 20px; height: 20px;
+  display: grid; place-items: center; font-size: 10px; color: #fff;
+  background: rgba(0,0,0,.55); border-radius: 50%; pointer-events: none;
+}
+.sc-badge {
+  position: absolute; bottom: 2px; right: 2px;
+  padding: 0 4px; border-radius: 4px; font-size: 9px; line-height: 14px;
+  background: rgba(0,0,0,.75); color: #fff; font-variant-numeric: tabular-nums;
+}
+.sc-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.sc-name { display: flex; min-width: 0; font-size: 12px; color: var(--text); }
+.sc-head { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sc-tail { flex: 0 0 auto; white-space: nowrap; }
+.sc-meta { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.sc-err { font-size: 11px; color: #ff8095; }
+.sc-x {
+  position: absolute; top: 5px; right: 5px;
+  width: 20px; height: 20px; display: grid; place-items: center; cursor: pointer;
+  background: rgba(20,20,30,.7); border: 0; border-radius: 6px; color: var(--dim); font-size: 11px;
+}
+.sc-x:hover { background: #2c1620; color: var(--red); }
+.stage-sum { padding: 4px 2px 0; font-size: 11px; color: var(--dim); }
 .up-row {
   display: flex; align-items: center; gap: 9px;
   padding: 7px 11px; border-radius: 9px;

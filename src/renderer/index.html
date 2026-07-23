@@ -121,15 +121,32 @@
       </div>
     </header>
 
-    <!-- Search bar. Server-side, whole archive, same endpoint as the website. -->
-    <div id="search-bar" hidden>
-      <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-      <input type="text" id="search-input" placeholder="Search messages…" autocomplete="off">
-      <button type="button" class="search-scope" id="search-scope">This channel</button>
-      <span id="search-count"></span>
-      <button class="icon-btn" id="search-close" title="Close search">✕</button>
+    <!-- Filter + search bar. Filters the loaded messages live; text search runs
+         over them too, so "images from Alice matching 'logo'" all combine. -->
+    <div id="filter-bar" hidden>
+      <div class="fb-top">
+        <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="filter-input" placeholder="Filter or search this channel…" autocomplete="off">
+        <button type="button" class="fb-menu-btn" id="filter-menu-btn">Filters <span class="fb-caret">▾</span></button>
+        <span id="filter-count"></span>
+        <button class="icon-btn" id="filter-close" title="Close (Esc)">✕</button>
+      </div>
+      <div id="filter-chips" class="fb-chips"></div>
+      <div id="filter-menu" class="fb-menu" hidden>
+        <div class="fb-menu-head">Show only messages with</div>
+        <button class="fb-opt" type="button" data-type="links"><span>🔗</span> Links</button>
+        <button class="fb-opt" type="button" data-type="images"><span>🖼️</span> Images</button>
+        <button class="fb-opt" type="button" data-type="videos"><span>🎬</span> Videos</button>
+        <button class="fb-opt" type="button" data-type="audio"><span>🎵</span> Audio</button>
+        <button class="fb-opt" type="button" data-type="files"><span>📎</span> Any file</button>
+        <div class="fb-menu-sep"></div>
+        <button class="fb-opt" type="button" data-flag="pinned"><span>📌</span> Pinned</button>
+        <button class="fb-opt" type="button" data-flag="mentions"><span>@</span> Mentions of me</button>
+        <button class="fb-opt" type="button" data-flag="edited"><span>✎</span> Edited</button>
+        <div class="fb-menu-sep"></div>
+        <label class="fb-from-row">From <select id="filter-from"><option value="">anyone</option></select></label>
+      </div>
     </div>
-    <div id="search-results" hidden></div>
 
     <!-- Pinned messages for this channel. -->
     <div id="pinned-panel" hidden>
@@ -157,7 +174,7 @@
           <button class="stage-btn danger" id="stage-stop" title="Stop sharing">Stop</button>
         </div>
       </div>
-      <div class="stage-video-wrap">
+      <div class="stage-video-wrap" id="stage-video-wrap">
         <video id="stage-video" autoplay playsinline></video>
       </div>
     </section>

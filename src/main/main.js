@@ -291,7 +291,11 @@ function configurePermissions() {
     // deny the rest rather than accepting whatever is asked for.
     const ALLOWED = new Set([
         'media', 'audioCapture', 'videoCapture', 'display-capture',
-        'notifications', 'clipboard-sanitized-write'
+        'notifications', 'clipboard-sanitized-write',
+        // HTML element fullscreen (the screen-share stage's Fullscreen button) is
+        // gated as a permission in Electron — without this, requestFullscreen()
+        // is silently denied and the button appears to do nothing.
+        'fullscreen', 'pointerLock', 'keyboardLock'
     ]);
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
         callback(ALLOWED.has(permission));

@@ -33,8 +33,22 @@
     let windowFocused = true;
     let loading = false;
     let lastSoundId = 0;            // watermark so one message chimes exactly once
-    let searchScope = 'channel';    // 'channel' | 'all'
-    let searchTimer = null;
+    let filterTimer = null;
+    let filterScrollTop = null;      // scroll position to restore when filters clear
+    // Active message filters. Types combine as OR; every other criterion is AND.
+    const filter = {
+        text: '',
+        types: new Set(),           // 'links' | 'images' | 'videos' | 'audio' | 'files'
+        pinned: false,
+        mentions: false,
+        edited: false,
+        fromIds: null,              // every client_id belonging to the chosen person
+        fromName: null
+    };
+    function filterActive() {
+        return !!(filter.text || filter.types.size || filter.pinned ||
+            filter.mentions || filter.edited || filter.fromIds);
+    }
 
     // ---------- utilities -------------------------------------------------
 
@@ -418,7 +432,8 @@
         if (before) {
             // Keep the reader anchored where they were when older history loads in.
             box.scrollTop = prevTop + (box.scrollHeight - prevHeight);
-        } else if (scrollToEnd) {
+        } else if (scrollToEnd && !filterActive()) {
+            // Never yank a filtered view to the bottom on a poll.
             box.scrollTop = box.scrollHeight;
         }
     }
@@ -428,33 +443,67 @@
         return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     }
 
+    // Which type(s) a post satisfies, for filtering.
+    function postMatchesFilter(p) {
+        if (filter.fromIds && !filter.fromIds.includes(p.client_id)) return false;
+        if (filter.pinned && !p.pinned) return false;
+        if (filter.mentions && !mentionsMe(p.body)) return false;
+        if (filter.edited && !p.edited_at) return false;
+        if (filter.text) {
+            const hay = ((p.body || '') + ' ' + (p.att_name || '')).toLowerCase();
+            if (!hay.includes(filter.text.toLowerCase())) return false;
+        }
+        if (filter.types.size) {
+            const kind = p.att_key ? attachmentKind(p) : null;
+            let ok = false;
+            if (filter.types.has('links') && extractUrls(p.body).length) ok = true;
+            if (!ok && filter.types.has('files') && p.att_key) ok = true;
+            if (!ok && filter.types.has('images') && kind === 'image') ok = true;
+            if (!ok && filter.types.has('videos') && kind === 'video') ok = true;
+            if (!ok && filter.types.has('audio') && kind === 'audio') ok = true;
+            if (!ok) return false;
+        }
+        return true;
+    }
+    function displayedPosts() {
+        return filterActive() ? posts.filter(postMatchesFilter) : posts;
+    }
+
     function renderMessages() {
         // A background poll must not rip the inline editor out from under
         // someone mid-sentence. The list resyncs when the edit finishes.
         if (editingId) return;
 
         const box = $('messages');
+        const active = filterActive();
+        const list = displayedPosts();
+        box.classList.toggle('filtering', active);
         box.innerHTML = '';
 
+        // Older history can still be pulled in to widen a filter's reach.
         if (hasMore) {
             const b = document.createElement('button');
             b.className = 'load-more';
-            b.textContent = 'Load earlier messages';
+            b.textContent = active ? 'Load earlier messages to widen results' : 'Load earlier messages';
             b.addEventListener('click', () => loadMessages(false, posts.length ? posts[0].id : null));
             box.appendChild(b);
         }
 
-        if (!posts.length) {
+        if (active) updateFilterCount(list.length);
+
+        if (!list.length) {
             const e = document.createElement('div');
             e.className = 'empty-state';
-            e.textContent = `No messages in #${channel} yet — say something.`;
+            e.textContent = active
+                ? 'No loaded messages match these filters.' + (hasMore ? ' Load earlier messages to search further back.' : '')
+                : `No messages in #${channel} yet — say something.`;
             box.appendChild(e);
             return;
         }
 
         let lastDay = '';
         let prev = null;
-        posts.forEach((p) => {
+        list.forEach((p) => {
             const day = dayStr(p.created_at);
             if (day !== lastDay) {
                 lastDay = day;
@@ -637,7 +686,7 @@
 
     input.addEventListener('input', () => {
         autosize();
-        $('btn-send').disabled = !input.value.trim() && !staged.length;
+        updateSendEnabled();
         const now = Date.now();
         if (input.value.trim() && now - typingSentAt > TYPING_MS) {
             typingSentAt = now;
@@ -656,7 +705,7 @@
     $('composer').addEventListener('submit', async (e) => {
         e.preventDefault();
         const body = input.value.trim();
-        const attachments = staged.slice();
+        const attachments = validStaged();   // errored items are never sent
         if (!body && !attachments.length) return;
 
         input.value = '';
@@ -809,67 +858,234 @@
     // Nothing uploads until the message is sent.
 
     const MAX_FILES = 10;
-    let staged = [];                 // { id, name, type, size, file?, bytes? }
+    // Each staged item: { id, name, type, size, file?, bytes?, error?, kind,
+    //                     url?, poster?, duration?, prepared }
+    let staged = [];
     let stageSeq = 0;
 
-    function stagedTotal() { return staged.reduce((n, s) => n + s.size, 0); }
+    const STAGE_IMG = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif)$/i;
+    const STAGE_VID = /\.(mp4|webm|mov|mkv|avi|m4v)$/i;
+    const STAGE_AUD = /\.(mp3|wav|ogg|oga|m4a|flac|aac|opus|weba)$/i;
 
-    // Returns the number actually staged; warns about anything rejected.
-    function stageFiles(items) {
-        const rejected = [];
-        let added = 0;
+    function stageKind(item) {
+        const t = (item.type || '').toLowerCase();
+        const n = (item.name || '').toLowerCase();
+        if (t.startsWith('image/') || STAGE_IMG.test(n)) return 'image';
+        if (t.startsWith('video/') || STAGE_VID.test(n)) return 'video';
+        if (t.startsWith('audio/') || STAGE_AUD.test(n)) return 'audio';
+        return 'file';
+    }
+    function stageBlob(item) {
+        return item.file || new Blob([item.bytes], { type: item.type || 'application/octet-stream' });
+    }
+    function validStaged() { return staged.filter((s) => !s.error); }
+    function stagedTotal() { return validStaged().reduce((n, s) => n + s.size, 0); }
 
-        for (const it of items) {
-            if (staged.length >= MAX_FILES) {
-                rejected.push(`${it.name} — limit is ${MAX_FILES} files per message`);
-                continue;
-            }
-            if (it.size > MAX_UPLOAD) {
-                rejected.push(`${it.name} is ${fmtSize(it.size)} — the limit is 25 MB`);
-                continue;
-            }
-            if (!it.size) { rejected.push(`${it.name} is empty`); continue; }
-            staged.push({ id: ++stageSeq, ...it });
-            added++;
+    function fmtDuration(sec) {
+        if (!Number.isFinite(sec) || sec <= 0) return '';
+        const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+        return m + ':' + String(s).padStart(2, '0');
+    }
+
+    // Truncate in the MIDDLE so the extension stays readable. Returns {head, tail}
+    // where tail is the extension (+ a little context) and head ellipsizes in CSS.
+    function splitName(name) {
+        const s = String(name || '');
+        const dot = s.lastIndexOf('.');
+        if (dot > 0 && dot >= s.length - 8) {
+            // keep the extension plus up to 2 trailing chars of the stem as the tail
+            const tailStart = Math.max(dot - 2, 1);
+            return { head: s.slice(0, tailStart), tail: s.slice(tailStart) };
         }
+        return { head: s, tail: '' };
+    }
 
+    // ---- local thumbnails (no server round trip) -------------------------
+
+    // Grab a poster from a video ~1s in (frame 0 is usually black) + its duration.
+    function videoPoster(blob) {
+        return new Promise((resolve) => {
+            const v = document.createElement('video');
+            v.muted = true; v.preload = 'metadata';
+            const url = URL.createObjectURL(blob);
+            let done = false;
+            const finish = (r) => { if (done) return; done = true; URL.revokeObjectURL(url); resolve(r); };
+            v.onloadedmetadata = () => {
+                const dur = v.duration;
+                const seekTo = Math.min(1, (dur || 2) / 2);
+                v.onseeked = () => {
+                    try {
+                        const w = Math.min(v.videoWidth || 320, 320);
+                        const h = Math.round(w * ((v.videoHeight / v.videoWidth) || 0.5625));
+                        const c = document.createElement('canvas');
+                        c.width = w; c.height = h;
+                        c.getContext('2d').drawImage(v, 0, 0, w, h);
+                        finish({ poster: c.toDataURL('image/jpeg', 0.7), duration: dur });
+                    } catch (e) { finish({ duration: dur }); }
+                };
+                try { v.currentTime = seekTo; } catch (e) { finish({ duration: dur }); }
+            };
+            v.onerror = () => finish(null);
+            setTimeout(() => finish(null), 5000);   // some containers (mkv/avi) won't decode
+            v.src = url;
+        });
+    }
+    function mediaDuration(tag, blob) {
+        return new Promise((resolve) => {
+            const el = document.createElement(tag);
+            el.preload = 'metadata';
+            const url = URL.createObjectURL(blob);
+            const finish = (d) => { URL.revokeObjectURL(url); resolve(d); };
+            el.onloadedmetadata = () => finish(el.duration);
+            el.onerror = () => finish(null);
+            setTimeout(() => finish(null), 5000);
+            el.src = url;
+        });
+    }
+
+    // Prepare a preview once, when an item is staged (never on every render).
+    async function prepareStage(item) {
+        item.kind = stageKind(item);
+        if (item.error) { item.prepared = true; return; }
+        const blob = stageBlob(item);
+        try {
+            if (item.kind === 'image') {
+                // Object URL kept alive for the <img>; revoked when unstaged.
+                item.url = URL.createObjectURL(blob);
+            } else if (item.kind === 'video') {
+                const r = await videoPoster(blob);
+                if (r) { item.poster = r.poster; item.duration = r.duration; }
+            } else if (item.kind === 'audio') {
+                item.duration = await mediaDuration('audio', blob);
+            }
+        } catch (e) { /* fall back to an icon */ }
+        item.prepared = true;
         renderStaged();
-        if (rejected.length) {
-            toast(rejected.length === 1 ? rejected[0] : `${rejected.length} files skipped — ${rejected[0]}`, true);
+    }
+
+    // Stage items. Anything that fails validation is kept and shown as errored
+    // (not silently dropped); errored items are never uploaded.
+    function stageFiles(items) {
+        let added = 0;
+        for (const it of items) {
+            let error = null;
+            if (it.size > MAX_UPLOAD) error = `Too large — ${fmtSize(it.size)} (max 25 MB)`;
+            else if (!it.size) error = 'Empty file';
+            else if (validStaged().length >= MAX_FILES) error = `Only ${MAX_FILES} files per message`;
+
+            const item = {
+                id: ++stageSeq, name: it.name, type: it.type, size: it.size,
+                file: it.file, bytes: it.bytes, error
+            };
+            staged.push(item);
+            if (!error) added++;
+            prepareStage(item);   // async; re-renders when ready
         }
+        renderStaged();
         return added;
     }
 
     function unstage(id) {
+        const item = staged.find((s) => s.id === id);
+        if (item && item.url) { try { URL.revokeObjectURL(item.url); } catch (e) {} }
         staged = staged.filter((s) => s.id !== id);
         renderStaged();
     }
 
-    function clearStaged() { staged = []; renderStaged(); }
+    function clearStaged() {
+        staged.forEach((s) => { if (s.url) { try { URL.revokeObjectURL(s.url); } catch (e) {} } });
+        staged = [];
+        renderStaged();
+    }
+
+    // Icon glyph for a non-media file, by extension.
+    function fileGlyph(name) {
+        const ext = (String(name).split('.').pop() || '').toLowerCase();
+        const map = {
+            pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', ppt: '📙', pptx: '📙',
+            zip: '🗜️', rar: '🗜️', '7z': '🗜️', gz: '🗜️', tar: '🗜️',
+            txt: '📄', md: '📄', rtf: '📄', csv: '📊', json: '🧾', xml: '🧾',
+            exe: '⚙️', msi: '⚙️', dmg: '💿', iso: '💿'
+        };
+        return map[ext] || '📎';
+    }
+
+    function stageCard(s) {
+        const card = document.createElement('div');
+        card.className = 'stage-card' + (s.error ? ' errored' : '') + ' kind-' + (s.kind || 'file');
+
+        const { head, tail } = splitName(s.name);
+        const nameHtml = `<span class="sc-name" title="${esc(s.name)}"><span class="sc-head">${esc(head)}</span><span class="sc-tail">${esc(tail)}</span></span>`;
+
+        let thumb = '';
+        if (s.error) {
+            thumb = `<div class="sc-thumb sc-icon">${fileGlyph(s.name)}</div>`;
+        } else if (s.kind === 'image' && s.url) {
+            // A load error (e.g. HEIC that Chromium can't decode) swaps to an icon;
+            // wired in JS below because CSP forbids inline onerror handlers.
+            thumb = `<div class="sc-thumb"><img src="${esc(s.url)}" alt=""></div>`;
+        } else if (s.kind === 'image') {
+            thumb = `<div class="sc-thumb sc-icon">🖼️</div>`;
+        } else if (s.kind === 'video' && s.poster) {
+            thumb = `<div class="sc-thumb sc-video"><img src="${esc(s.poster)}" alt="">` +
+                `<span class="sc-play">▶</span>` +
+                (s.duration ? `<span class="sc-badge">${fmtDuration(s.duration)}</span>` : '') + '</div>';
+        } else if (s.kind === 'video') {
+            thumb = `<div class="sc-thumb sc-icon sc-video">🎬` +
+                (s.duration ? `<span class="sc-badge">${fmtDuration(s.duration)}</span>` : '') + '</div>';
+        } else if (s.kind === 'audio') {
+            thumb = `<div class="sc-thumb sc-icon sc-audio"><svg viewBox="0 0 24 24" class="sc-wave" aria-hidden="true">` +
+                '<rect x="3" y="9" width="2" height="6"/><rect x="7" y="6" width="2" height="12"/>' +
+                '<rect x="11" y="3" width="2" height="18"/><rect x="15" y="7" width="2" height="10"/>' +
+                '<rect x="19" y="10" width="2" height="4"/></svg></div>';
+        } else {
+            thumb = `<div class="sc-thumb sc-icon">${fileGlyph(s.name)}</div>`;
+        }
+
+        const meta = s.error
+            ? `<span class="sc-err">${esc(s.error)}</span>`
+            : `<span class="sc-meta">${esc(fmtSize(s.size))}${s.duration ? ' · ' + fmtDuration(s.duration) : ''}</span>`;
+
+        card.innerHTML =
+            thumb +
+            `<div class="sc-body">${nameHtml}${meta}</div>` +
+            '<button class="sc-x" type="button" title="Remove">✕</button>';
+        card.querySelector('.sc-x').addEventListener('click', () => unstage(s.id));
+
+        // Image decode failure → fall back to an icon (CSP-safe, no inline handler).
+        const img = card.querySelector('.sc-thumb img');
+        if (img && s.kind === 'image') {
+            img.addEventListener('error', () => {
+                const t = card.querySelector('.sc-thumb');
+                if (t) { t.classList.add('sc-icon'); t.textContent = '🖼️'; }
+            });
+        }
+        return card;
+    }
 
     function renderStaged() {
         const box = $('upload-list');
         box.innerHTML = '';
+        if (!staged.length) { updateSendEnabled(); return; }
 
-        staged.forEach((s) => {
-            const row = document.createElement('div');
-            row.className = 'stage-chip';
-            row.innerHTML =
-                `<span class="stage-name" title="${esc(s.name)}">${esc(s.name)}</span>` +
-                `<span class="stage-size">${esc(fmtSize(s.size))}</span>` +
-                '<button class="stage-x" type="button" title="Remove">✕</button>';
-            row.querySelector('.stage-x').addEventListener('click', () => unstage(s.id));
-            box.appendChild(row);
-        });
+        const grid = document.createElement('div');
+        grid.className = 'stage-grid';
+        staged.forEach((s) => grid.appendChild(stageCard(s)));
+        box.appendChild(grid);
 
-        if (staged.length > 1) {
+        const valid = validStaged();
+        if (valid.length > 1) {
             const sum = document.createElement('div');
             sum.className = 'stage-sum';
-            sum.textContent = `${staged.length} files · ${fmtSize(stagedTotal())} — press Enter to send`;
+            sum.textContent = `${valid.length} files · ${fmtSize(stagedTotal())} total — press Enter to send`;
             box.appendChild(sum);
         }
-        // An attachment alone is a valid message, even with no text.
-        $('btn-send').disabled = !staged.length && !input.value.trim();
+        updateSendEnabled();
+    }
+
+    function updateSendEnabled() {
+        // An attachment alone is a valid message; errored items don't count.
+        $('btn-send').disabled = !validStaged().length && !input.value.trim();
     }
 
     // ---- turning a drop / paste / picker into stageable items -------------
@@ -1320,9 +1536,29 @@
     });
 
     $('stage-full').addEventListener('click', () => {
-        const v = $('stage-video');
-        if (document.fullscreenElement) document.exitFullscreen();
-        else v.requestFullscreen().catch(() => {});
+        // Fullscreen the wrapper, not the bare <video>: it keeps the video
+        // centred on black and, unlike the element, has no transform/overflow
+        // quirks. Esc (handled natively by Chromium) exits and Chromium restores
+        // the element to its inline position automatically.
+        const target = $('stage-video-wrap') || $('stage-video');
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+            return;
+        }
+        const p = target.requestFullscreen ? target.requestFullscreen() : null;
+        if (p && p.catch) {
+            p.catch((e) => {
+                console.warn('[stage] fullscreen rejected:', e && e.message);
+                toast('Could not enter fullscreen: ' + ((e && e.message) || 'blocked'), true);
+            });
+        }
+    });
+
+    // Reflect fullscreen state on the button label.
+    document.addEventListener('fullscreenchange', () => {
+        const on = !!document.fullscreenElement;
+        const btn = $('stage-full');
+        if (btn) { btn.textContent = on ? 'Exit fullscreen' : 'Fullscreen'; btn.classList.toggle('on', on); }
     });
 
     $('stage-pip').addEventListener('click', async () => {
@@ -2489,121 +2725,180 @@
         });
     }
 
-    // ---------- search ----------------------------------------------------
-    // Server-side over the whole archive — same endpoint and scope semantics as
-    // the website. Results replace the message list while the bar is open.
+    // ---------- filters + search -----------------------------------------
+    // Filters the currently-loaded messages, live. Types (Links/Images/Videos/
+    // Audio/Files) combine as OR; every other criterion (text, from-user,
+    // pinned, mentions, edited) is AND. Clearing returns to the live view at the
+    // same scroll position. Load-more widens the pool a filter searches over.
 
-    function searchOpen() { return !$('search-bar').hidden; }
+    function filterOpen() { return !$('filter-bar').hidden; }
 
-    function toggleSearch(open) {
-        const bar = $('search-bar');
-        const results = $('search-results');
-        bar.hidden = !open;
+    function toggleFilter(open) {
+        $('filter-bar').hidden = !open;
         if (open) {
             $('pinned-panel').hidden = true;
-            $('search-input').focus();
-            $('search-input').select();
+            populateFromSelect();
+            $('filter-input').focus();
+            $('filter-input').select();
         } else {
-            $('search-input').value = '';
-            results.hidden = true;
-            results.innerHTML = '';
-            $('search-count').textContent = '';
-            $('messages').hidden = false;
+            clearFilters();
+            $('filter-menu').hidden = true;
         }
     }
 
-    $('btn-search').addEventListener('click', () => toggleSearch(!searchOpen()));
-    $('search-close').addEventListener('click', () => toggleSearch(false));
+    function clearFilters() {
+        filter.text = '';
+        filter.types.clear();
+        filter.pinned = filter.mentions = filter.edited = false;
+        filter.fromIds = filter.fromName = null;
+        $('filter-input').value = '';
+        const fs = $('filter-from'); if (fs) fs.value = '';
+        applyFilter();
+    }
 
-    $('search-scope').addEventListener('click', () => {
-        searchScope = (searchScope === 'channel') ? 'all' : 'channel';
-        const btn = $('search-scope');
-        btn.textContent = searchScope === 'all' ? 'All channels' : 'This channel';
-        btn.classList.toggle('all', searchScope === 'all');
-        doSearch($('search-input').value);
-    });
-
-    $('search-input').addEventListener('input', () => {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => doSearch($('search-input').value), 250);
-    });
-    $('search-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') toggleSearch(false);
-    });
-
-    async function doSearch(q) {
-        q = (q || '').trim();
-        const results = $('search-results');
-        const countEl = $('search-count');
-
-        if (q.length < 2) {
-            results.hidden = true;
-            results.innerHTML = '';
-            countEl.textContent = '';
-            $('messages').hidden = false;
-            return;
+    // The single entry point for any filter change: re-renders the (filtered)
+    // list, refreshes the chips, and restores scroll when filters go inactive.
+    function applyFilter() {
+        const active = filterActive();
+        if (active && filterScrollTop === null) filterScrollTop = $('messages').scrollTop;
+        renderChips();
+        syncMenuButtons();
+        renderMessages();
+        if (!active) {
+            $('filter-count').textContent = '';
+            if (filterScrollTop !== null) {
+                const t = filterScrollTop; filterScrollTop = null;
+                requestAnimationFrame(() => { $('messages').scrollTop = t; });
+            }
         }
+    }
 
-        const res = await L.board('search', {
-            query: { q, channel, scope: searchScope, limit: 40 }
+    function updateFilterCount(n) {
+        $('filter-count').textContent = n + (n === 1 ? ' match' : ' matches');
+    }
+
+    const TYPE_LABELS = { links: '🔗 Links', images: '🖼️ Images', videos: '🎬 Videos', audio: '🎵 Audio', files: '📎 Files' };
+
+    // Active filters as removable chips, plus a Clear all.
+    function renderChips() {
+        const box = $('filter-chips');
+        box.innerHTML = '';
+        const chips = [];
+        filter.types.forEach((t) => chips.push({ label: TYPE_LABELS[t] || t, off: () => filter.types.delete(t) }));
+        if (filter.pinned) chips.push({ label: '📌 Pinned', off: () => { filter.pinned = false; } });
+        if (filter.mentions) chips.push({ label: '@ Mentions me', off: () => { filter.mentions = false; } });
+        if (filter.edited) chips.push({ label: '✎ Edited', off: () => { filter.edited = false; } });
+        if (filter.fromIds) chips.push({ label: 'From ' + (filter.fromName || 'user'), off: () => { filter.fromIds = filter.fromName = null; const fs = $('filter-from'); if (fs) fs.value = ''; } });
+        if (filter.text) chips.push({ label: '“' + filter.text + '”', off: () => { filter.text = ''; $('filter-input').value = ''; } });
+
+        box.hidden = chips.length === 0;
+        chips.forEach((c) => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'fb-chip';
+            chip.innerHTML = '<span>' + esc(c.label) + '</span><span class="fb-chip-x">✕</span>';
+            chip.addEventListener('click', () => { c.off(); applyFilter(); });
+            box.appendChild(chip);
         });
-        if (res && res.needsAuth) return relogin();
-        if (!res || !res.success) { countEl.textContent = 'Search failed'; return; }
-        renderSearchResults(res.results || [], q);
-    }
-
-    // Highlight every occurrence of the query in an escaped string.
-    function highlight(text, q) {
-        const safe = esc(text || '');
-        try {
-            const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
-            return safe.replace(re, '<mark>$1</mark>');
-        } catch (e) { return safe; }
-    }
-
-    function renderSearchResults(list, q) {
-        const results = $('search-results');
-        const countEl = $('search-count');
-
-        countEl.textContent = list.length
-            ? `${list.length} result${list.length === 1 ? '' : 's'}`
-            : 'No results';
-
-        $('messages').hidden = true;
-        results.hidden = false;
-        results.innerHTML = '';
-
-        if (!list.length) {
-            const e = document.createElement('div');
-            e.className = 'sr-empty';
-            e.textContent = `Nothing matching “${q}”.`;
-            results.appendChild(e);
-            return;
+        if (chips.length > 1) {
+            const clr = document.createElement('button');
+            clr.type = 'button';
+            clr.className = 'fb-clear';
+            clr.textContent = 'Clear all';
+            clr.addEventListener('click', () => clearFilters());
+            box.appendChild(clr);
         }
+    }
 
-        list.forEach((r) => {
-            const it = document.createElement('button');
-            it.type = 'button';
-            it.className = 'search-result';
-            const who = r.client_id === settings.clientId ? 'You' : (r.name || 'Anonymous');
-            const when = new Date(r.created_at).toLocaleString([], {
-                month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-            });
-            const body = r.body || (r.att_name ? '📎 ' + r.att_name : '');
-            it.innerHTML =
-                '<div class="sr-top">' +
-                `<span class="sr-name">${esc(who)}</span>` +
-                `<span class="sr-meta">#${esc(r.channel)} · ${esc(when)}</span>` +
-                '</div>' +
-                `<div class="sr-body">${highlight(body, q)}</div>`;
-            it.addEventListener('click', () => jumpToPost(r));
-            results.appendChild(it);
+    // Reflect active state on the dropdown's toggle buttons.
+    function syncMenuButtons() {
+        document.querySelectorAll('#filter-menu .fb-opt').forEach((b) => {
+            const t = b.dataset.type, f = b.dataset.flag;
+            const on = (t && filter.types.has(t)) || (f && filter[f]);
+            b.classList.toggle('on', !!on);
         });
     }
+
+    // Populate the "From" dropdown from everyone seen in the loaded messages.
+    function populateFromSelect() {
+        const sel = $('filter-from');
+        if (!sel) return;
+        // Group by display name, not client_id: one person posting from two
+        // devices is still one person, and every poster who never set a name
+        // would otherwise get their own duplicate "Anonymous" row.
+        const byName = new Map();
+        posts.forEach((p) => {
+            if (!p.client_id) return;
+            const name = (p.client_id === settings.clientId) ? 'You' : (p.name || 'Anonymous');
+            if (!byName.has(name)) byName.set(name, new Set());
+            byName.get(name).add(p.client_id);
+        });
+        const cur = filter.fromIds ? filter.fromIds.join(',') : '';
+        sel.innerHTML = '<option value="">anyone</option>';
+        [...byName.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([name, ids]) => {
+            const o = document.createElement('option');
+            o.value = [...ids].join(',');
+            o.textContent = name;
+            sel.appendChild(o);
+        });
+        sel.value = cur;
+    }
+
+    $('btn-search').addEventListener('click', () => toggleFilter(!filterOpen()));
+    $('filter-close').addEventListener('click', () => toggleFilter(false));
+
+    $('filter-menu-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        $('filter-menu').hidden = !$('filter-menu').hidden;
+    });
+    document.addEventListener('mousedown', (e) => {
+        if (!$('filter-menu').hidden && !e.target.closest('#filter-menu') && !e.target.closest('#filter-menu-btn')) {
+            $('filter-menu').hidden = true;
+        }
+    });
+
+    document.querySelectorAll('#filter-menu .fb-opt').forEach((b) => {
+        b.addEventListener('click', () => {
+            const t = b.dataset.type, f = b.dataset.flag;
+            if (t) { filter.types.has(t) ? filter.types.delete(t) : filter.types.add(t); }
+            else if (f) { filter[f] = !filter[f]; }
+            applyFilter();
+        });
+    });
+
+    $('filter-from').addEventListener('change', (e) => {
+        filter.fromIds = e.target.value ? e.target.value.split(',') : null;
+        filter.fromName = e.target.value ? e.target.options[e.target.selectedIndex].textContent : null;
+        applyFilter();
+    });
+
+    $('filter-input').addEventListener('input', () => {
+        clearTimeout(filterTimer);
+        filterTimer = setTimeout(() => { filter.text = $('filter-input').value.trim(); applyFilter(); }, 200);
+    });
+    $('filter-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); toggleFilter(false); }
+    });
+
+    // In a filtered view, clicking a matching message (not an interactive part)
+    // clears the filters and jumps to it among its neighbours — full context.
+    $('messages').addEventListener('click', (e) => {
+        if (!filterActive()) return;
+        if (e.target.closest('button, a, input, textarea, select, .reaction, .msg-actions, img[data-lightbox], .att-save, .yt-card, .link-card, audio, video')) return;
+        const row = e.target.closest('.msg');
+        if (!row) return;
+        const id = parseInt(row.dataset.id, 10);
+        const p = posts.find((x) => x.id === id);
+        if (p) jumpToPost(p);
+    });
 
     // Walk back through history until the post is loaded, then flash it.
     async function jumpToPost(target) {
-        toggleSearch(false);
+        // Drop any active filters so the message shows among its neighbours, but
+        // keep the filter bar open so the user can refine again. Forget the
+        // saved pre-filter scroll position first: otherwise clearFilters queues
+        // a restore that lands after — and undoes — the scroll to the target.
+        if (filterActive()) { filterScrollTop = null; clearFilters(); }
         if (target.channel && target.channel !== channel) {
             await switchChannel(target.channel);
         }
@@ -2643,7 +2938,7 @@
     function togglePinned(open) {
         const panel = $('pinned-panel');
         panel.hidden = !open;
-        if (open) { toggleSearch(false); renderPinned(); }
+        if (open) { toggleFilter(false); renderPinned(); }
     }
 
     $('btn-pinned').addEventListener('click', () => togglePinned($('pinned-panel').hidden));
@@ -2693,13 +2988,14 @@
             else if (!$('picker').hidden) closePicker();
             else if (!$('popover').hidden) closePopover();
             else if (!$('settings').hidden) $('settings').hidden = true;
-            else if (searchOpen()) toggleSearch(false);
+            else if (!$('filter-menu').hidden) $('filter-menu').hidden = true;
+            else if (filterOpen()) toggleFilter(false);
             else if (!$('pinned-panel').hidden) togglePinned(false);
         }
-        // Ctrl+F opens search, like every other chat client.
+        // Ctrl+F opens the filter/search bar, like every other chat client.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !$('app').hidden) {
             e.preventDefault();
-            toggleSearch(true);
+            toggleFilter(true);
         }
 
         // Ctrl +/-/0 resize the chat text. Matching the browser/Discord muscle
