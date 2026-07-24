@@ -49,9 +49,12 @@ Start-menu entry and desktop shortcut.
 - Mute, deafen, and per-person local volume (0–200%) and mute, remembered
   between sessions
 - Live speaking indicators
-- **Camera** — turn on video in a call; everyone's tiles appear in a strip above
-  the message list. Plain RealtimeKit video on the same meeting, so it works
-  across desktop and web
+- **Camera** — turn on video in a call; everyone's tiles fill a responsive grid
+  above the message list (one fills, two split, and so on), letterboxed to keep
+  faces in frame. Click a tile to enlarge it with the rest as a strip, and each
+  tile has hover buttons for fullscreen and pop-out (picture-in-picture), the
+  same viewing options as the screen-share stage. The speaker's tile is ringed.
+  Plain RealtimeKit video on the same meeting, so it works across desktop and web
 - Microphone and speaker selection, echo cancellation / noise suppression /
   AGC toggles
 
@@ -281,6 +284,16 @@ resolution and framerate. It used to tune *every* outgoing video sender, which
 was safe only while the app had no camera — now it matches on the share track's
 own id, so camera video is left alone. Get this wrong and turning the camera on
 silently re-tunes the screen share (or vice versa).
+
+Camera tiles reuse the screen-share stage's viewing controls through two shared
+helpers, `toggleFullscreen(el)` and `togglePip(video)`, rather than a second
+copy. Fullscreen is requested on a **wrapper** element (the tile, not the bare
+`<video>`) and depends on the Electron `'fullscreen'` permission being granted
+in `main.js` — without it `requestFullscreen()` silently no-ops and the button
+looks dead, which is exactly the bug the share stage hit once. Pop-out is the OS
+picture-in-picture window (always-on-top, resizable, aspect-preserving). The
+tile's own tool buttons `stopPropagation` so they don't also trigger
+click-to-enlarge.
 
 ### Opening links
 

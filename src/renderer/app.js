@@ -1985,6 +1985,7 @@
                 speaking[cid] = on;
                 const el = document.querySelector(`.vp[data-cid="${CSS.escape(cid)}"]`);
                 if (el) el.classList.toggle('speaking', on);
+                markCamSpeaking(cid, on);
             },
             onError: (msg) => toast('Voice: ' + msg, true)
         });
@@ -2057,31 +2058,71 @@
     // Camera tiles. Kept keyed by participant so a re-render doesn't tear down
     // and re-attach a <video> that's already playing — that flashes black.
     const camTiles = new Map();
+    let camList = [];              // last list, so speaking/focus updates can re-lay-out
+    let focusedCamId = null;       // the tile clicked to enlarge, if any
+
+    // Balanced column count: 1→1, 2→2, 3-4→2, 5-6→3, 7-9→3, 10-12→4 …
+    function camColumns(n) { return Math.max(1, Math.ceil(Math.sqrt(n))); }
+
+    function buildCamTile(c) {
+        const wrap = document.createElement('div');
+        wrap.className = 'cam-tile';
+        wrap.dataset.cid = c.id;
+
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.playsInline = true;
+        video.muted = true;              // camera tiles carry no audio
+
+        const label = document.createElement('span');
+        label.className = 'cam-name';
+
+        const tools = document.createElement('div');
+        tools.className = 'cam-tools';
+        const pip = document.createElement('button');
+        pip.type = 'button';
+        pip.className = 'cam-tool';
+        pip.title = 'Pop out';
+        pip.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor" stroke="none"/></svg>';
+        const full = document.createElement('button');
+        full.type = 'button';
+        full.className = 'cam-tool';
+        full.title = 'Fullscreen';
+        full.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+        tools.appendChild(pip);
+        tools.appendChild(full);
+
+        // The tools act on the tile; they must not also trigger click-to-focus.
+        pip.addEventListener('click', (e) => { e.stopPropagation(); togglePip(video); });
+        full.addEventListener('click', (e) => { e.stopPropagation(); toggleFullscreen(wrap); });
+        wrap.addEventListener('click', () => toggleCamFocus(c.id));
+
+        wrap.appendChild(video);
+        wrap.appendChild(label);
+        wrap.appendChild(tools);
+        return { wrap, video, label, streamId: null };
+    }
 
     function renderCams(list) {
-        const strip = $('camera-strip');
+        camList = list || [];
+        const grid = $('cam-grid');
         const seen = new Set();
 
-        (list || []).forEach((c) => {
+        // A focus target that has left is no longer valid; a lone tile shouldn't
+        // sit in focus mode with an empty strip below it.
+        if (focusedCamId && !camList.some((c) => c.id === focusedCamId)) focusedCamId = null;
+        if (camList.length < 2) focusedCamId = null;
+
+        camList.forEach((c) => {
             seen.add(c.id);
             let tile = camTiles.get(c.id);
-            if (!tile) {
-                const wrap = document.createElement('div');
-                wrap.className = 'cam-tile';
-                const video = document.createElement('video');
-                video.autoplay = true;
-                video.playsInline = true;
-                video.muted = true;              // camera tiles carry no audio
-                const label = document.createElement('span');
-                label.className = 'cam-name';
-                wrap.appendChild(video);
-                wrap.appendChild(label);
-                strip.appendChild(wrap);
-                tile = { wrap, video, label, streamId: null };
-                camTiles.set(c.id, tile);
-            }
+            if (!tile) { tile = buildCamTile(c); camTiles.set(c.id, tile); grid.appendChild(tile.wrap); }
+
             tile.label.textContent = c.isMe ? 'You' : c.name;
             tile.wrap.classList.toggle('me', !!c.isMe);
+            tile.wrap.classList.toggle('speaking', !!speaking[c.id]);
+            tile.wrap.classList.toggle('primary', c.id === focusedCamId);
+
             const sid = c.stream && c.stream.id;
             if (sid !== tile.streamId) {
                 tile.streamId = sid;
@@ -2097,7 +2138,23 @@
             camTiles.delete(id);
         });
 
-        strip.hidden = camTiles.size === 0;
+        grid.classList.toggle('has-focus', !!focusedCamId);
+        grid.style.setProperty('--cols', String(camColumns(camTiles.size)));
+        $('camera-stage').hidden = camTiles.size === 0;
+    }
+
+    // Click a tile to enlarge it; click it again (or its speaking highlight) to
+    // return to the even grid.
+    function toggleCamFocus(id) {
+        if (camList.length < 2) return;
+        focusedCamId = (focusedCamId === id) ? null : id;
+        renderCams(camList);
+    }
+
+    // Keep the speaking ring on camera tiles in sync without a full re-render.
+    function markCamSpeaking(cid, on) {
+        const tile = camTiles.get(cid);
+        if (tile) tile.wrap.classList.toggle('speaking', on);
     }
 
     $('btn-cam').addEventListener('click', () => { if (voice) voice.toggleCam(); });
@@ -2213,40 +2270,46 @@
             : 'Sharp — 30fps, favours crisp text');
     });
 
-    $('stage-full').addEventListener('click', () => {
-        // Fullscreen the wrapper, not the bare <video>: it keeps the video
-        // centred on black and, unlike the element, has no transform/overflow
-        // quirks. Esc (handled natively by Chromium) exits and Chromium restores
-        // the element to its inline position automatically.
-        const target = $('stage-video-wrap') || $('stage-video');
-        if (document.fullscreenElement) {
-            document.exitFullscreen().catch(() => {});
-            return;
-        }
-        const p = target.requestFullscreen ? target.requestFullscreen() : null;
+    // Fullscreen a WRAPPER element, never the bare <video>: it keeps the video
+    // centred on black and has no transform/overflow quirks. Requesting
+    // fullscreen is gated behind the 'fullscreen' permission in Electron — it's
+    // granted in main.js, without which requestFullscreen() silently no-ops and
+    // the button appears dead. Esc (handled natively by Chromium) exits and
+    // restores the element to its inline position. Shared by the share stage
+    // and the camera tiles so the two can't drift.
+    function toggleFullscreen(el) {
+        if (!el) return;
+        if (document.fullscreenElement === el) { document.exitFullscreen().catch(() => {}); return; }
+        const p = el.requestFullscreen ? el.requestFullscreen() : null;
         if (p && p.catch) {
             p.catch((e) => {
-                console.warn('[stage] fullscreen rejected:', e && e.message);
+                console.warn('[fullscreen] rejected:', e && e.message);
                 toast('Could not enter fullscreen: ' + ((e && e.message) || 'blocked'), true);
             });
         }
-    });
+    }
 
-    // Reflect fullscreen state on the button label.
-    document.addEventListener('fullscreenchange', () => {
-        const on = !!document.fullscreenElement;
-        const btn = $('stage-full');
-        if (btn) { btn.textContent = on ? 'Exit fullscreen' : 'Fullscreen'; btn.classList.toggle('on', on); }
-    });
-
-    $('stage-pip').addEventListener('click', async () => {
-        const v = $('stage-video');
+    // Pop a <video> into the OS picture-in-picture window: always-on-top,
+    // resizable, aspect-preserving — the "pop out" the share stage already uses.
+    async function togglePip(v) {
+        if (!v) return;
         try {
+            if (document.pictureInPictureElement === v) { await document.exitPictureInPicture(); return; }
             if (document.pictureInPictureElement) await document.exitPictureInPicture();
-            else await v.requestPictureInPicture();
+            await v.requestPictureInPicture();
         } catch (e) {
             toast('Pop-out unavailable for this stream', true);
         }
+    }
+
+    $('stage-full').addEventListener('click', () => toggleFullscreen($('stage-video-wrap') || $('stage-video')));
+    $('stage-pip').addEventListener('click', () => togglePip($('stage-video')));
+
+    // Reflect fullscreen state on the share stage's button label.
+    document.addEventListener('fullscreenchange', () => {
+        const on = document.fullscreenElement === $('stage-video-wrap');
+        const btn = $('stage-full');
+        if (btn) { btn.textContent = on ? 'Exit fullscreen' : 'Fullscreen'; btn.classList.toggle('on', on); }
     });
 
     // The roster merges two sources: the SFU's live participant list (authoritative

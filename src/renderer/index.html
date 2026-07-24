@@ -200,8 +200,11 @@
       </div>
     </section>
 
-    <!-- Camera tiles for everyone with video on, above the message list. -->
-    <div id="camera-strip" hidden></div>
+    <!-- Camera tiles for everyone with video on, above the message list. The
+         grid inside grows to fill this region. -->
+    <div id="camera-stage" hidden>
+      <div id="cam-grid" class="cam-grid"></div>
+    </div>
 
     <!-- The wrapper exists so the jump button can float over the bottom of the
          list without covering the composer. -->
