@@ -612,8 +612,40 @@ function registerIpc() {
         win.flashFrame(!win.isFocused());
     });
 
+    // Handing an arbitrary url to the shell is how a message from someone else
+    // gets to run code on this machine, so the scheme is parsed, not pattern
+    // matched: only real http(s) urls are ever opened.
     ipcMain.handle('app:openExternal', (_e, url) => {
-        if (/^https?:/.test(url)) shell.openExternal(url);
+        let u;
+        try { u = new URL(String(url)); } catch (e) { return false; }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+        shell.openExternal(u.href);
+        return true;
+    });
+
+    // Editing commands for the in-app context menu on the composer. These run
+    // as native edit commands on the focused element, so they behave exactly
+    // like Ctrl+X/C/V — including firing the renderer's own paste handler when
+    // there's an image on the clipboard.
+    ipcMain.handle('edit:command', (_e, name) => {
+        if (!win) return false;
+        const wc = win.webContents;
+        if (name === 'cut') wc.cut();
+        else if (name === 'copy') wc.copy();
+        else if (name === 'paste') wc.paste();
+        else if (name === 'selectAll') wc.selectAll();
+        else return false;
+        return true;
+    });
+
+    // What's on the clipboard, so the menu can grey out Paste rather than
+    // offering an action that does nothing.
+    ipcMain.handle('edit:clipboard', () => {
+        const formats = clipboard.availableFormats();
+        return {
+            text: clipboard.readText().length > 0,
+            image: formats.some((f) => f.startsWith('image/'))
+        };
     });
 }
 

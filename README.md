@@ -72,6 +72,14 @@ Start-menu entry and desktop shortcut.
   bottom, badged with how many messages arrived while you were up there. New
   messages never yank your scroll position, including when images and link
   previews above the viewport finish loading
+- **Link actions** on right-click — Open link (in your default browser) and Copy
+  link address, on bare URLs in a message and anywhere on a YouTube or Open Graph
+  preview card, thumbnail and padding included. Only `http`/`https` is ever
+  offered; see [Opening links](#opening-links)
+- **Composer menu** on right-click — Cut / Copy / Paste / Select all, greyed out
+  when they'd do nothing (nothing selected, empty clipboard). Paste runs as a
+  native editing command, so an image on the clipboard stages as an attachment
+  exactly as Ctrl+V does
 - **YouTube previews** — thumbnail, title and channel with a play overlay, for
   `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/` and `m.`/`music.`
   hosts, ignoring any `&t=`/playlist/tracking params. Clicking opens the video in
@@ -222,6 +230,21 @@ link with no metadata is asked about exactly once and silently stays a plain
 link. Direct image URLs skip the round trip entirely and render inline, and a
 hotlinked image that fails to load removes itself instead of leaving a broken
 icon. `img-src` allows `https:` for the thumbnails, matching the website's CSP.
+
+### Opening links
+
+Every url in the app arrives from somewhere untrusted — a message body someone
+else typed, or the `url` field of a server-side unfurl. `shell.openExternal` hands
+that string to the OS, which will happily launch a registered protocol handler,
+so an unchecked one is a remote-code-execution path on the machine of whoever
+right-clicks it (`file://`, `ms-msdt:`, and friends).
+
+So the scheme is **parsed, not pattern matched**, in both places: the renderer
+won't offer Open link at all unless `new URL(...)` yields `http:`/`https:` — a
+`javascript:` card falls through to the ordinary message menu — and
+`app:openExternal` re-parses and returns false rather than trusting its caller.
+The renderer check is for the menu; the main-process check is the one that
+matters.
 
 ### Holding the reader's place
 

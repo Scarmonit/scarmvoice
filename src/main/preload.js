@@ -59,6 +59,15 @@ contextBridge.exposeInMainWorld('lounge', {
         onStatus: (cb) => sub('rt:status', cb)
     },
 
+    // Native editing commands + clipboard state, for the composer's menu.
+    edit: {
+        cut: () => ipcRenderer.invoke('edit:command', 'cut'),
+        copy: () => ipcRenderer.invoke('edit:command', 'copy'),
+        paste: () => ipcRenderer.invoke('edit:command', 'paste'),
+        selectAll: () => ipcRenderer.invoke('edit:command', 'selectAll'),
+        clipboard: () => ipcRenderer.invoke('edit:clipboard')
+    },
+
     settings: {
         get: () => ipcRenderer.invoke('settings:get'),
         set: (patch) => ipcRenderer.invoke('settings:set', patch)

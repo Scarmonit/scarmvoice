@@ -843,6 +843,7 @@ input, textarea, select { user-select: text; }
   color: var(--text); font-size: 13px; text-align: left;
 }
 .ctx-item:hover { background: #24243a; }
+.ctx-item:disabled { color: var(--dim); cursor: default; background: none; }
 .ctx-item.danger { color: #ff8095; }
 .ctx-item.danger:hover { background: #2c1620; }
 .ctx-sep { height: 1px; margin: 4px 6px; background: var(--line-solid); }

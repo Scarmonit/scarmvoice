@@ -729,13 +729,19 @@
         act('edit', () => startEdit(p, el));
         act('delete', () => deletePost(p));
 
-        // Right-click anywhere on the message opens the same actions — except on
-        // an image, which gets the image actions without having to be expanded
-        // first. Text beside an image still gets the message menu.
+        // Right-click anywhere on the message opens the message actions — except
+        // on an image or a link, which get their own without having to be
+        // expanded or opened first. Text beside either still gets the message
+        // menu. Images win over links so a preview image's own actions aren't
+        // shadowed by the url it came from.
         el.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             const ref = imageRef(e.target.closest('.msg-att img, img.link-image'));
-            openCtxMenu(ref ? imageMenuItems(ref) : messageMenuItems(p, el), e.clientX, e.clientY);
+            const url = ref ? null : linkTarget(e.target);
+            const items = ref ? imageMenuItems(ref)
+                : url ? linkMenuItems(url)
+                    : messageMenuItems(p, el);
+            openCtxMenu(items, e.clientX, e.clientY);
         });
 
         // Swap the audio placeholder for a real player (needs JS wiring, so it
@@ -1413,6 +1419,30 @@
         if (!items.length) return;
         e.preventDefault();
         stageFiles(items);
+    });
+
+    // Right-click the composer for the standard editing actions. Electron ships
+    // no context menu of its own, so without this the only way to paste is the
+    // keyboard. The commands run in the main process as native editing commands
+    // on the focused element — that's what makes Paste behave exactly like
+    // Ctrl+V, image-on-the-clipboard included, instead of being a second
+    // half-implementation of it.
+    input.addEventListener('contextmenu', async (e) => {
+        e.preventDefault();
+        const selected = input.selectionStart !== input.selectionEnd;
+        const clip = await L.edit.clipboard();
+        const canPaste = !!(clip && (clip.text || clip.image));
+        // The menu takes the click, so put the caret back before the command
+        // runs — otherwise it lands on nothing.
+        const on = (fn) => () => { input.focus(); fn(); };
+
+        openCtxMenu([
+            { label: 'Cut', icon: '✂', disabled: !selected, onClick: on(() => L.edit.cut()) },
+            { label: 'Copy', icon: '⧉', disabled: !selected, onClick: on(() => L.edit.copy()) },
+            { label: 'Paste', icon: '📋', disabled: !canPaste, onClick: on(() => L.edit.paste()) },
+            'sep',
+            { label: 'Select all', icon: '▤', disabled: !input.value.length, onClick: on(() => L.edit.selectAll()) }
+        ], e.clientX, e.clientY);
     });
 
     // ---------- typing ----------------------------------------------------
@@ -2457,7 +2487,7 @@
 
     function closeCtxMenu() { $('ctx-menu').hidden = true; }
 
-    // items: [{ label, icon, danger, onClick } | 'sep']
+    // items: [{ label, icon, danger, disabled, onClick } | 'sep']
     function openCtxMenu(items, x, y) {
         const menu = $('ctx-menu');
         menu.innerHTML = '';
@@ -2473,9 +2503,16 @@
             b.type = 'button';
             b.className = 'ctx-item' + (it.danger ? ' danger' : '');
             b.innerHTML = `<span>${esc(it.icon || '')}</span><span>${esc(it.label)}</span>`;
-            b.addEventListener('click', () => { closeCtxMenu(); it.onClick(); });
+            // Greyed out rather than hidden: a Paste that would do nothing still
+            // tells you the menu has a Paste.
+            if (it.disabled) b.disabled = true;
+            else b.addEventListener('click', () => { closeCtxMenu(); it.onClick(); });
             menu.appendChild(b);
         });
+
+        // A menu should never steal focus — the composer's Cut/Copy/Paste act on
+        // whatever was focused when it opened.
+        menu.onmousedown = (ev) => ev.preventDefault();
 
         // Show off-screen first so the size is measurable, then clamp on-screen.
         menu.hidden = false;
@@ -2501,6 +2538,39 @@
             mine && 'sep',
             mine && { label: 'Edit message', icon: '✎', onClick: () => startEdit(p, el) },
             mine && { label: 'Delete message', icon: '🗑', danger: true, onClick: () => deletePost(p) }
+        ];
+    }
+
+    // ---------- links -------------------------------------------------------
+
+    // Anything we might hand to the shell is parsed and scheme-checked first.
+    // A message body is attacker-controlled, and openExternal on a file:// or a
+    // registered custom protocol is a way to run code on this machine — so
+    // anything that isn't plainly http(s) is not offered at all.
+    function safeHttpUrl(raw) {
+        const s = String(raw || '').trim();
+        try {
+            const u = new URL(s);
+            return (u.protocol === 'http:' || u.protocol === 'https:') ? s : null;
+        } catch (e) { return null; }
+    }
+
+    // The url behind whatever was right-clicked: a linkified url in the text, or
+    // anywhere on a preview card (the whole card carries the url, so the
+    // thumbnail and the padding work as well as the title).
+    function linkTarget(el) {
+        if (!el) return null;
+        const a = el.closest('a[data-external]');
+        if (a) return safeHttpUrl(a.getAttribute('href'));
+        const card = el.closest('[data-link-url]');
+        if (card) return safeHttpUrl(card.dataset.linkUrl);
+        return null;
+    }
+
+    function linkMenuItems(url) {
+        return [
+            { label: 'Open link', icon: '↗', onClick: () => L.app.openExternal(url) },
+            { label: 'Copy link address', icon: '🔗', onClick: () => copyLink(url) }
         ];
     }
 
@@ -2540,7 +2610,7 @@
             { label: 'Save image as…', icon: '💾', onClick: () => saveImageAs(ref) },
             { label: 'Download image', icon: '⤓', onClick: () => downloadImage(ref) },
             link && 'sep',
-            link && { label: 'Copy image link', icon: '🔗', onClick: () => copyImageLink(link) }
+            link && { label: 'Copy image link', icon: '🔗', onClick: () => copyLink(link) }
         ];
     }
 
@@ -2616,7 +2686,7 @@
 
     function saveImageAs(ref) { return saveAttachment(ref.key, ref.name, ref.url); }
 
-    function copyImageLink(url) {
+    function copyLink(url) {
         navigator.clipboard.writeText(url).then(
             () => toast('Link copied'),
             () => toast('Could not copy', true)
@@ -2781,6 +2851,9 @@
             (info.author ? `<div class="yt-author">${esc(info.author)}</div>` : '') +
             '</div>';
         card.title = 'Open on YouTube';
+        // On the card, not just the title, so right-clicking the thumbnail or
+        // the padding offers the link too.
+        card.dataset.linkUrl = info.url;
         card.addEventListener('click', () => L.app.openExternal(info.url));
         const img = card.querySelector('img');
         // If the thumbnail 404s, fall back to the well-known static path.
@@ -2814,6 +2887,7 @@
             (preview.description ? `<div class="lc-desc">${esc(preview.description)}</div>` : '') +
             '</div>' +
             (preview.image ? `<img class="lc-thumb" src="${esc(preview.image)}" alt="" loading="lazy">` : '');
+        card.dataset.linkUrl = preview.url;
         card.addEventListener('click', () => L.app.openExternal(preview.url));
         const thumb = card.querySelector('.lc-thumb');
         if (thumb) thumb.addEventListener('error', () => thumb.remove());
