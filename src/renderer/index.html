@@ -16,6 +16,9 @@
   form-action 'none';
 ">
 <title>ScarmVoice</title>
+<!-- Same highlight.js theme the website pulls from its CDN; vendored because the
+     CSP above allows no remote script or style. -->
+<link rel="stylesheet" href="vendor/hljs-theme.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -67,7 +70,6 @@
             <span class="vr-name">VoiceChat</span>
             <span class="vr-count" id="voice-count"></span>
           </div>
-          <ul id="voice-roster" class="voice-roster"></ul>
           <button id="btn-join-voice" class="btn-voice">Join Voice</button>
           <div id="voice-live" class="voice-live" hidden>
             <div class="vl-status">
@@ -76,19 +78,34 @@
             </div>
             <button id="btn-leave-voice" class="btn-leave" title="Disconnect">Leave</button>
           </div>
+          <button id="btn-cam" class="btn-share" hidden>
+            <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+            <span id="btn-cam-label">Turn on camera</span>
+          </button>
           <button id="btn-share" class="btn-share" hidden>
             <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
             <span id="btn-share-label">Share screen</span>
           </button>
         </div>
       </div>
+
+      <!-- Everyone present, not just the call: people in voice sort to the top
+           and keep the per-person volume controls. -->
+      <div class="side-section" id="members-section">
+        <div class="side-head">
+          <span>Members</span>
+          <span id="members-count" class="side-count"></span>
+        </div>
+        <ul id="members-list" class="voice-roster"></ul>
+      </div>
     </div>
 
     <div id="me-bar">
       <div class="me-id">
         <span class="me-avatar" id="me-avatar"></span>
-        <button class="me-name" id="btn-name" title="Change your display name">
+        <button class="me-name" id="btn-name" title="Change your display name or status">
           <span id="me-name-text">Anonymous</span>
+          <span id="me-status" class="me-status" hidden></span>
         </button>
       </div>
       <div class="me-actions">
@@ -126,11 +143,15 @@
     <div id="filter-bar" hidden>
       <div class="fb-top">
         <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input type="text" id="filter-input" placeholder="Filter or search this channel…" autocomplete="off">
+        <input type="text" id="filter-input" placeholder="Filter loaded messages, or search the archive…" autocomplete="off">
+        <button type="button" class="fb-menu-btn" id="filter-scope" title="Search the whole archive in this channel, or every channel">This channel</button>
         <button type="button" class="fb-menu-btn" id="filter-menu-btn">Filters <span class="fb-caret">▾</span></button>
         <span id="filter-count"></span>
         <button class="icon-btn" id="filter-close" title="Close (Esc)">✕</button>
       </div>
+      <!-- Server-side results from /api/board/search, over the whole archive
+           rather than only what's loaded. -->
+      <div id="search-results" hidden></div>
       <div id="filter-chips" class="fb-chips"></div>
       <div id="filter-menu" class="fb-menu" hidden>
         <div class="fb-menu-head">Show only messages with</div>
@@ -179,6 +200,9 @@
       </div>
     </section>
 
+    <!-- Camera tiles for everyone with video on, above the message list. -->
+    <div id="camera-strip" hidden></div>
+
     <!-- The wrapper exists so the jump button can float over the bottom of the
          list without covering the composer. -->
     <div id="messages-wrap">
@@ -198,10 +222,20 @@
         <button type="button" id="reply-chip-cancel" title="Cancel reply">✕</button>
       </div>
       <div id="upload-list"></div>
+      <!-- Voice message recorder; replaces the composer row while recording. -->
+      <div id="voice-rec" hidden>
+        <span class="vrec-dot" aria-hidden="true"></span>
+        <span id="vrec-time" class="vrec-time">0:00</span>
+        <span class="vrec-label">Recording voice message…</span>
+        <button type="button" id="vrec-cancel" class="vrec-btn">Discard</button>
+        <button type="button" id="vrec-send" class="vrec-btn vrec-send">Send</button>
+      </div>
       <div class="composer-row">
         <button type="button" id="btn-attach" title="Attach a file (max 25 MB)">
           <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M21.4 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/></svg>
         </button>
+        <button type="button" id="btn-emoji" title="Emoji">🙂</button>
+        <button type="button" id="btn-mic" title="Record a voice message">🎤</button>
         <textarea id="composer-input" rows="1" placeholder="Message #general" maxlength="2000"></textarea>
         <button type="submit" id="btn-send" title="Send (Enter)">
           <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M3 20l18-8L3 4l4 8-4 8z"/></svg>
@@ -209,6 +243,21 @@
       </div>
       <input type="file" id="file-input" multiple hidden>
     </form>
+
+    <!-- Thread panel: a drawer over the right of the message list. -->
+    <aside id="thread-panel" hidden>
+      <div class="thread-head">
+        <span id="thread-title">Thread</span>
+        <button class="icon-btn" id="thread-close" title="Close thread (Esc)">✕</button>
+      </div>
+      <div id="thread-list"></div>
+      <form id="thread-composer" autocomplete="off">
+        <textarea id="thread-input" rows="1" placeholder="Reply in thread…" maxlength="2000"></textarea>
+        <button type="submit" id="thread-send" title="Send (Enter)">
+          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M3 20l18-8L3 4l4 8-4 8z"/></svg>
+        </button>
+      </form>
+    </aside>
 
     <div id="drop-hint" hidden>
       <div class="drop-inner">
@@ -431,6 +480,9 @@
     <h2 id="dialog-title"></h2>
     <p id="dialog-msg" hidden></p>
     <input type="text" id="dialog-input" maxlength="60" autocomplete="off">
+    <!-- Second field, used by the name editor for the custom status line. -->
+    <label id="dialog-label2" for="dialog-input2" hidden></label>
+    <input type="text" id="dialog-input2" maxlength="80" autocomplete="off" hidden>
     <div class="dialog-actions">
       <button type="button" id="dialog-cancel">Cancel</button>
       <button type="submit" id="dialog-ok">OK</button>
@@ -460,6 +512,7 @@
      getDisplayMedia, and the SDK captures those references when it evaluates.
      Loading it second would leave the patches installed too late to ever see
      the SDK's peer connections. -->
+<script src="vendor/hljs.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
 <script src="vendor/realtimekit.js"></script>

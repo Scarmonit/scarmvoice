@@ -49,6 +49,12 @@
         };
     }
 
+    // Which outgoing video track is the screen share. Set when the local share
+    // starts, cleared when it stops; null means "no share, don't tune anything
+    // as one". The camera track must never match this.
+    let SHARE_TRACK_ID = null;
+    function shareVideoTrackId() { return SHARE_TRACK_ID; }
+
     function shareProfile() {
         const smooth = isSmooth();
         return {
@@ -104,10 +110,13 @@
         } catch (e) {}
     })();
 
-    // Pin every outgoing video sender (this app sends no camera, so video ==
-    // screen share) to full resolution and the active tier's bitrate.
+    // Pin the outgoing SCREEN SHARE sender to full resolution and the active
+    // tier's bitrate. Once the camera can also be on, "the video sender" is no
+    // longer unambiguous — matching on the share track's own id keeps these
+    // settings off the camera, which wants none of them.
     function forceScreenQuality() {
         const prof = shareProfile();
+        const shareTrackId = shareVideoTrackId();
         let found = 0;
         PCS.forEach((pc) => {
             if (!pc || typeof pc.getSenders !== 'function') return;
@@ -115,6 +124,9 @@
             try { senders = pc.getSenders(); } catch (e) { return; }
             senders.forEach((sender) => {
                 if (!sender || !sender.track || sender.track.kind !== 'video') return;
+                // No share track id yet (the sender can appear first) → fall back
+                // to tuning any video sender, which is the old behaviour.
+                if (shareTrackId && sender.track.id !== shareTrackId) return;
                 found++;
                 try { sender.track.contentHint = prof.contentHint; } catch (e) {}
                 try {
@@ -185,6 +197,7 @@
             onParticipants: () => {},
             onSpeaking: () => {},
             onShare: () => {},
+            onCams: () => {},
             onError: () => {}
         }, opts || {});
 
@@ -229,7 +242,8 @@
                 transmitting: lastTransmit === true,
                 sharing: localSharing,
                 sharer: currentSharer ? { id: currentSharer.id, name: currentSharer.name, isLocal: currentSharer.isLocal } : null,
-                shareQuality, shareMotion
+                shareQuality, shareMotion,
+                cam: isCamOn()
             };
         }
 
@@ -468,12 +482,91 @@
             try { if (m.self && m.self.on) m.self.on('audioUpdate', render); } catch (e) {}
             const pj = m.participants && m.participants.joined;
             if (pj && pj.on) {
-                pj.on('participantJoined', (p) => { attachAudio(p); render(); });
-                pj.on('participantLeft', (p) => { detachAudio(p); render(); });
+                pj.on('participantJoined', (p) => { attachAudio(p); render(); pushCams(); });
+                pj.on('participantLeft', (p) => { detachAudio(p); render(); pushCams(); });
                 pj.on('audioUpdate', (p) => { attachAudio(p); render(); });
+                pj.on('videoUpdate', () => pushCams());
                 try { (pj.toArray ? pj.toArray() : []).forEach(attachAudio); } catch (e) {}
             }
+            try { if (m.self && m.self.on) m.self.on('videoUpdate', () => pushCams()); } catch (e) {}
             wireShare(m);
+        }
+
+        // ---- camera ------------------------------------------------------
+        // Plain RealtimeKit video on the same meeting the website uses, so a
+        // camera turned on here shows up there and vice versa. The screen share
+        // is a separate track pair and is unaffected.
+
+        function camStream(track) {
+            const s = new MediaStream();
+            try { if (track) s.addTrack(track); } catch (e) {}
+            return s;
+        }
+
+        // Everyone with a live camera, me first.
+        function camList() {
+            if (!meeting) return [];
+            const out = [];
+            try {
+                const self = meeting.self;
+                if (self && self.videoEnabled && self.videoTrack) {
+                    out.push({
+                        id: selfCid(),
+                        name: (self.name || settings.displayName || 'You'),
+                        isMe: true,
+                        stream: camStream(self.videoTrack)
+                    });
+                }
+            } catch (e) {}
+            try {
+                const pj = meeting.participants && meeting.participants.joined;
+                (pj && pj.toArray ? pj.toArray() : []).forEach((p) => {
+                    if (!p.videoEnabled || !p.videoTrack) return;
+                    out.push({
+                        id: cidOf(p),
+                        name: p.name || 'Someone',
+                        isMe: false,
+                        stream: camStream(p.videoTrack)
+                    });
+                });
+            } catch (e) {}
+            return out;
+        }
+
+        function pushCams() {
+            try { on.onCams(camList()); } catch (e) {}
+            pushState();
+        }
+
+        function isCamOn() {
+            try { return !!(meeting && meeting.self && meeting.self.videoEnabled); } catch (e) { return false; }
+        }
+
+        function enableCam() {
+            if (!meeting || !meeting.self || !meeting.self.enableVideo) {
+                on.onError('the camera needs an active call — join voice first');
+                return Promise.resolve(false);
+            }
+            return Promise.resolve(meeting.self.enableVideo())
+                .then(() => { pushCams(); return true; })
+                .catch((e) => {
+                    const msg = (e && e.message) || String(e);
+                    if (!/denied|cancel|abort|NotAllowed/i.test(msg)) on.onError('could not start the camera — ' + msg);
+                    else on.onError('camera access was denied');
+                    return false;
+                });
+        }
+
+        function disableCam() {
+            try {
+                if (meeting && meeting.self && meeting.self.disableVideo) {
+                    return Promise.resolve(meeting.self.disableVideo())
+                        .then(() => { pushCams(); return true; })
+                        .catch(() => { pushCams(); return false; });
+                }
+            } catch (e) {}
+            pushCams();
+            return Promise.resolve(false);
         }
 
         // ---- screen share ------------------------------------------------
@@ -546,11 +639,14 @@
                     m.self.on('screenShareUpdate', (d) => {
                         if (d && d.screenShareEnabled) {
                             localSharing = true;
+                            const st = (d.screenShareTracks || m.self.screenShareTracks || {}).video;
+                            SHARE_TRACK_ID = (st && st.id) || null;
                             tuneLocalShare();
                             setSharer(selfCid(), m.self.name || settings.displayName || 'You', true,
                                 buildShareStream(d.screenShareTracks || m.self.screenShareTracks));
                         } else {
                             localSharing = false;
+                            SHARE_TRACK_ID = null;
                             if (currentSharer && currentSharer.isLocal) clearSharer();
                             else pushState();
                         }
@@ -779,6 +875,12 @@
             startShare,
             stopShare,
             isSharing: () => localSharing,
+
+            enableCam,
+            disableCam,
+            isCamOn,
+            toggleCam: () => (isCamOn() ? disableCam() : enableCam()),
+            cams: camList,
 
             // Changing tier/motion mid-share re-applies capture + encoder params
             // without interrupting the stream.

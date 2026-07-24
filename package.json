@@ -1,16 +1,19 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/Scarmonit/scarmvoice.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Scarmonit/scarmvoice.git"
+  },
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
-    "postinstall": "node scripts/vendor-sdk.js && node scripts/make-icon.js",
-    "vendor": "node scripts/vendor-sdk.js",
+    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/make-icon.js",
+    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js",
     "icon": "node scripts/make-icon.js",
     "start": "electron .",
     "dev": "electron . --dev",
@@ -28,7 +31,8 @@
   "devDependencies": {
     "@cloudflare/realtimekit": "2.0.0",
     "electron": "33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "highlight.js": "^11.9.0"
   },
   "build": {
     "appId": "com.scarmonit.scarmvoice",

@@ -101,12 +101,222 @@
         toastTimer = setTimeout(() => { el.hidden = true; }, isError ? 5200 : 2600);
     }
 
-    // Linkify + escape in one pass. Escaping happens first, so no markup from a
-    // message body can ever reach the DOM.
-    function renderText(body) {
-        const safe = esc(body);
-        return safe.replace(/https?:\/\/[^\s<]+/g, (url) =>
-            `<a href="${url}" data-external="1">${url}</a>`);
+    // ---------- message formatting ----------------------------------------
+    // Ported from the website's board.js so the same message reads identically
+    // in both clients. Every piece of user text lands via textContent and every
+    // element is built with createElement — no HTML string ever carries a
+    // message body, so adding formatting adds no injection path.
+
+    // Names seen in this session, for @mention matching and autocomplete.
+    const rosterSet = new Set();
+    function addRosterName(name) {
+        const n = String(name || '').trim();
+        if (!n || n.toLowerCase() === 'anonymous') return;
+        rosterSet.add(n);
+    }
+    // Longest first, so greedy matching prefers "Ann Marie" over "Ann".
+    function getRoster() {
+        return [...rosterSet].sort((a, b) => b.length - a.length);
+    }
+
+    function appendTextWithLinks(container, text) {
+        const re = /https?:\/\/[^\s<>"']+/g;
+        let last = 0, m;
+        while ((m = re.exec(text)) !== null) {
+            if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
+            const a = document.createElement('a');
+            a.href = m[0];
+            a.dataset.external = '1';        // opened in the browser by the click handler
+            a.textContent = m[0];
+            container.appendChild(a);
+            last = m.index + m[0].length;
+        }
+        if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+    }
+
+    // Longest roster name that begins `rest` at a word boundary.
+    function matchRosterName(rest, roster) {
+        let best = null;
+        for (const nm of roster) {
+            if (rest.length < nm.length) continue;
+            if (rest.slice(0, nm.length).toLowerCase() !== nm.toLowerCase()) continue;
+            const after = rest.charAt(nm.length);
+            if (after && /[A-Za-z0-9]/.test(after)) continue;
+            if (!best || nm.length > best.length) best = rest.slice(0, nm.length);
+        }
+        return best;
+    }
+
+    function appendTextWithMentions(container, text, ctx) {
+        let i = 0;
+        while (i < text.length) {
+            const at = text.indexOf('@', i);
+            if (at === -1) { appendTextWithLinks(container, text.slice(i)); break; }
+            if (at > i) appendTextWithLinks(container, text.slice(i, at));
+            const rest = text.slice(at + 1);
+            let matched = matchRosterName(rest, ctx.roster);
+            if (!matched) { const g = /^[A-Za-z0-9_]+/.exec(rest); if (g) matched = g[0]; }
+            if (matched) {
+                const chip = document.createElement('span');
+                chip.className = 'mention' +
+                    (ctx.me && matched.toLowerCase() === ctx.me ? ' mention-self' : '');
+                chip.textContent = '@' + matched;
+                container.appendChild(chip);
+                i = at + 1 + matched.length;
+            } else {
+                container.appendChild(document.createTextNode('@'));
+                i = at + 1;
+            }
+        }
+    }
+
+    // Inline: **bold**, *italic*, ~~strike~~, ||spoiler|| (recursive).
+    const FMT = [
+        { re: /\|\|([\s\S]+?)\|\|/, kind: 'spoiler' },
+        { re: /\*\*([\s\S]+?)\*\*/, kind: 'strong' },
+        { re: /~~([\s\S]+?)~~/, kind: 'del' },
+        { re: /\*([\s\S]+?)\*/, kind: 'em' }
+    ];
+
+    function renderFormatted(container, text, ctx) {
+        let best = null;
+        for (const f of FMT) {
+            const m = f.re.exec(text);
+            if (m && (!best || m.index < best.m.index)) best = { f, m };
+        }
+        if (!best) { appendTextWithMentions(container, text, ctx); return; }
+        const { m } = best;
+        if (m.index > 0) appendTextWithMentions(container, text.slice(0, m.index), ctx);
+        if (best.f.kind === 'spoiler') {
+            const sp = document.createElement('span');
+            sp.className = 'spoiler';
+            sp.setAttribute('role', 'button');
+            sp.setAttribute('tabindex', '0');
+            sp.title = 'Click to reveal spoiler';
+            sp.addEventListener('click', () => sp.classList.add('revealed'));
+            sp.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sp.classList.add('revealed'); }
+            });
+            renderFormatted(sp, m[1], ctx);
+            container.appendChild(sp);
+        } else {
+            const el = document.createElement(best.f.kind);
+            renderFormatted(el, m[1], ctx);
+            container.appendChild(el);
+        }
+        const after = text.slice(m.index + m[0].length);
+        if (after) renderFormatted(container, after, ctx);
+    }
+
+    // `code` spans first, so formatting characters inside them stay literal.
+    function renderInline(container, text, ctx) {
+        text.split('`').forEach((seg, j) => {
+            if (j % 2 === 1) {
+                const c = document.createElement('code');
+                c.className = 'inline-code';
+                c.textContent = seg;
+                container.appendChild(c);
+            } else if (seg) {
+                renderFormatted(container, seg, ctx);
+            }
+        });
+    }
+
+    // Blocks within a non-code segment: lists, blockquotes, paragraphs.
+    function renderTextBlock(text, container, ctx) {
+        const lines = text.split('\n');
+        let i = 0, para = null;
+        const flush = () => { if (para) { container.appendChild(para); para = null; } };
+        const startPara = () => {
+            if (!para) { para = document.createElement('span'); para.className = 'msg-para'; }
+            else para.appendChild(document.createElement('br'));
+        };
+
+        while (i < lines.length) {
+            const line = lines[i];
+            const isUL = /^\s*[-*+]\s+(.*)$/.test(line);
+            const isOL = /^\s*\d+[.)]\s+(.*)$/.test(line);
+            const bq = /^\s*>\s?(.*)$/.exec(line);
+
+            if (isUL || isOL) {
+                flush();
+                const ordered = isOL && !isUL;
+                const listEl = document.createElement(ordered ? 'ol' : 'ul');
+                listEl.className = 'msg-list';
+                while (i < lines.length) {
+                    const lm = ordered
+                        ? /^\s*\d+[.)]\s+(.*)$/.exec(lines[i])
+                        : /^\s*[-*+]\s+(.*)$/.exec(lines[i]);
+                    if (!lm) break;
+                    const li = document.createElement('li');
+                    renderInline(li, lm[1], ctx);
+                    listEl.appendChild(li);
+                    i++;
+                }
+                container.appendChild(listEl);
+                continue;
+            }
+            if (bq) {
+                flush();
+                // .msg-bq, not .msg-quote — that class is the reply quote box here.
+                const q = document.createElement('blockquote');
+                q.className = 'msg-bq';
+                let first = true;
+                while (i < lines.length) {
+                    const qm = /^\s*>\s?(.*)$/.exec(lines[i]);
+                    if (!qm) break;
+                    if (!first) q.appendChild(document.createElement('br'));
+                    renderInline(q, qm[1], ctx);
+                    first = false;
+                    i++;
+                }
+                container.appendChild(q);
+                continue;
+            }
+            if (line === '') { flush(); i++; continue; }
+            startPara();
+            renderInline(para, line, ctx);
+            i++;
+        }
+        flush();
+    }
+
+    // Fenced ```code``` blocks split the body; everything else is prose.
+    function renderBody(raw, container) {
+        const ctx = { roster: getRoster(), me: (settings.displayName || '').toLowerCase() };
+        String(raw || '').split('```').forEach((part, i) => {
+            if (i % 2 === 1) {
+                let content = part, lang = '';
+                const nl = content.indexOf('\n');
+                if (nl !== -1) {
+                    const first = content.slice(0, nl).trim();
+                    if (first && /^[a-zA-Z0-9+#._-]{1,20}$/.test(first)) {
+                        lang = first.toLowerCase();
+                        content = content.slice(nl + 1);
+                    }
+                }
+                content = content.replace(/^\n/, '').replace(/\n+$/, '');
+                const pre = document.createElement('pre');
+                pre.className = 'msg-code';
+                const code = document.createElement('code');
+                if (lang) code.className = 'language-' + lang;
+                code.textContent = content;
+                pre.appendChild(code);
+                container.appendChild(pre);
+            } else if (part) {
+                renderTextBlock(part, container, ctx);
+            }
+        });
+    }
+
+    // highlight.js is vendored and already loaded, so this is synchronous —
+    // unlike the website, which lazy-loads it from a CDN.
+    function highlightCodeBlocks(container) {
+        if (!container || !window.hljs) return;
+        container.querySelectorAll('pre.msg-code code:not([data-hl])').forEach((code) => {
+            code.setAttribute('data-hl', '1');
+            try { window.hljs.highlightElement(code); } catch (e) { /* leave it plain */ }
+        });
     }
 
     // ---------- chat font size --------------------------------------------
@@ -154,7 +364,7 @@
 
     let dialogDone = null;
 
-    function openDialog({ title, message, value, ok, danger, withInput }) {
+    function openDialog({ title, message, value, ok, danger, withInput, label2, value2 }) {
         return new Promise((resolve) => {
             dialogDone = resolve;
             $('dialog-title').textContent = title;
@@ -164,6 +374,12 @@
             const inp = $('dialog-input');
             inp.hidden = !withInput;
             inp.value = value || '';
+            // Optional second field (the name editor uses it for the status).
+            const lab2 = $('dialog-label2'), inp2 = $('dialog-input2');
+            lab2.textContent = label2 || '';
+            lab2.hidden = !label2;
+            inp2.hidden = !label2;
+            inp2.value = value2 || '';
             $('dialog-ok').textContent = ok || 'OK';
             $('dialog-ok').classList.toggle('danger', !!danger);
             $('dialog').hidden = false;
@@ -181,6 +397,13 @@
     // Resolves to the entered string, or null if cancelled.
     function askText(title, value, ok) {
         return openDialog({ title, value, ok, withInput: true });
+    }
+    // Resolves { name, status } or null.
+    function askNameAndStatus(name, status) {
+        return openDialog({
+            title: 'You', value: name, ok: 'Save', withInput: true,
+            label2: 'Status (optional)', value2: status
+        }).then((v) => (v === null || v === false ? null : { name: v, status: $('dialog-input2').value }));
     }
     // Resolves true/false.
     function askConfirm(title, message, ok, danger) {
@@ -283,6 +506,7 @@
         await loadChannels();
         await loadMessages(true);
         startPolling();
+        startTextPresence();
         await L.ptt.apply();
         refreshPttHint();
 
@@ -324,6 +548,8 @@
         posts = [];
         following = true;
         seenTopId = 0;
+        clearReply();            // the quoted message lives in the old channel
+        if (threadOpen()) closeThread();
         renderMessages();
         renderChannels();
         await loadMessages(true);
@@ -420,7 +646,10 @@
             }
         }
         hasMore = !!res.hasMore;
+        // Names seen in history feed @mention matching and autocomplete.
+        posts.forEach((p) => addRosterName(p.name));
         typingUsers = (res.typing || []).filter((t) => t.client_id !== settings.clientId);
+        typingUsers.forEach((t) => addRosterName(t.name));
         voicePresence = res.voice || [];
 
         if (res.maxId) {
@@ -662,11 +891,9 @@
             parts.push('<div class="msg-head"><span class="msg-pinned-tag">📌 pinned</span></div>');
         }
 
-        if (p.body) {
-            parts.push(`<div class="msg-text">${renderText(p.body)}` +
-                (p.edited_at ? '<span class="msg-edited">(edited)</span>' : '') +
-                '</div>');
-        }
+        // Filled in after innerHTML by renderBody, which builds nodes rather
+        // than markup.
+        if (p.body) parts.push('<div class="msg-text"></div>');
 
         if (p.att_key) {
             const url = L.fileUrl(p.att_key);
@@ -712,6 +939,8 @@
         // entirely on other people's messages rather than shown and rejected.
         const mine = p.client_id && p.client_id === settings.clientId;
         parts.push('<div class="msg-actions">' +
+            '<button class="msg-act" data-act="react" title="Add a reaction">🙂</button>' +
+            '<button class="msg-act" data-act="reply" title="Reply">↩</button>' +
             `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">📌</button>` +
             '<button class="msg-act" data-act="copy" title="Copy text">⧉</button>' +
             (mine ? '<button class="msg-act" data-act="edit" title="Edit message">✎</button>' : '') +
@@ -720,10 +949,29 @@
 
         el.innerHTML = parts.join('');
 
+        // The body is DOM, not markup: bold/italic/code/lists/quotes/mentions.
+        const textEl = el.querySelector('.msg-text');
+        if (textEl) {
+            renderBody(p.body, textEl);
+            if (p.edited_at) {
+                const ed = document.createElement('span');
+                ed.className = 'msg-edited';
+                ed.textContent = '(edited)';
+                textEl.appendChild(ed);
+            }
+            highlightCodeBlocks(textEl);
+        }
+
         const act = (name, fn) => {
             const b = el.querySelector(`[data-act="${name}"]`);
             if (b) b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
         };
+        act('react', () => openEmojiPicker(el.querySelector('[data-act="react"]'), (em) => react(p.id, em)));
+        // Inside the thread panel, replying means the thread composer.
+        act('reply', () => {
+            if (el.closest('#thread-list')) $('thread-input').focus();
+            else setReplyTarget(p);
+        });
         act('pin', () => pinPost(p.id, !p.pinned));
         act('copy', () => copyMessage(p));
         act('edit', () => startEdit(p, el));
@@ -754,12 +1002,8 @@
         el.querySelectorAll('.reaction').forEach((b) => {
             b.addEventListener('click', () => react(p.id, b.dataset.emoji));
         });
-        // Thread view isn't ported yet — say so rather than leaving a dead button.
         const thread = el.querySelector('.msg-thread');
-        if (thread) {
-            thread.addEventListener('click', () =>
-                toast('Threads aren\'t in the desktop app yet — open this one on the website'));
-        }
+        if (thread) thread.addEventListener('click', (e) => { e.stopPropagation(); openThread(p.id); });
         return el;
     }
 
@@ -828,14 +1072,20 @@
 
     $('composer').addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (mentionPopOpen()) return;        // Enter is the autocomplete's
         const body = input.value.trim();
         const attachments = validStaged();   // errored items are never sent
         if (!body && !attachments.length) return;
+
+        // Captured before the chip is cleared, and sent with the post the same
+        // way the website does it.
+        const quoteId = replyTarget ? replyTarget.id : null;
 
         input.value = '';
         autosize();
         $('btn-send').disabled = true;
         clearStaged();
+        clearReply();
         L.rt.sendTyping(channel, true);
 
         // With attachments, the text becomes the first one's caption so a
@@ -843,7 +1093,7 @@
         if (attachments.length) {
             let ok = 0;
             for (let i = 0; i < attachments.length; i++) {
-                if (await uploadOne(attachments[i], i === 0 ? body : '')) ok++;
+                if (await uploadOne(attachments[i], i === 0 ? body : '', i === 0 ? quoteId : null)) ok++;
             }
             if (ok) {
                 L.rt.notifyPosted(channel);
@@ -857,7 +1107,7 @@
 
         const res = await L.board('post', {
             method: 'POST',
-            body: { body, name: settings.displayName || 'Anonymous', clientId: settings.clientId, channel }
+            body: { body, name: settings.displayName || 'Anonymous', clientId: settings.clientId, channel, quoteId }
         });
 
         if (res && res.needsAuth) return relogin();
@@ -924,7 +1174,7 @@
 
     // Uploads one staged item and posts it. `caption` rides on the first
     // attachment only, matching the website.
-    async function uploadOne(item, caption) {
+    async function uploadOne(item, caption, quoteId) {
         const row = addUploadRow(item.name, item.size);
 
         let buf = item.bytes;
@@ -951,6 +1201,7 @@
                 name: settings.displayName || 'Anonymous',
                 clientId: settings.clientId,
                 channel,
+                quoteId: quoteId || null,
                 attachment: { key: up.key, name: up.name, type: up.type, size: up.size }
             }
         });
@@ -1445,6 +1696,232 @@
         ], e.clientX, e.clientY);
     });
 
+    // ---------- composer emoji, mentions, reply ---------------------------
+
+    function insertAtCursor(el, text) {
+        const start = el.selectionStart || 0, end = el.selectionEnd || 0;
+        el.value = el.value.slice(0, start) + text + el.value.slice(end);
+        const caret = start + text.length;
+        el.setSelectionRange(caret, caret);
+        el.focus();
+        autosize();
+        updateSendEnabled();
+    }
+
+    $('btn-emoji').addEventListener('click', () => {
+        openEmojiPicker($('btn-emoji'), (em) => insertAtCursor(input, em));
+    });
+
+    // @mention autocomplete over the names seen this session.
+    let mentionPop = null, mentionItems = [], mentionActive = 0, mentionStart = -1;
+
+    function mentionPopOpen() { return !!(mentionPop && !mentionPop.hidden); }
+
+    function closeMentionPop() {
+        if (mentionPop) mentionPop.hidden = true;
+        mentionItems = [];
+        mentionStart = -1;
+    }
+
+    function updateMentionPop() {
+        const pos = input.selectionStart || 0;
+        const before = input.value.slice(0, pos);
+        const m = /(^|\s)@([^@\s]{0,30})$/.exec(before);
+        if (!m) { closeMentionPop(); return; }
+
+        mentionStart = pos - m[2].length - 1;     // index of the '@'
+        const q = m[2].toLowerCase();
+        const me = (settings.displayName || '').toLowerCase();
+        const matches = getRoster()
+            .filter((nm) => nm.toLowerCase() !== me)
+            .filter((nm) => !q || nm.toLowerCase().includes(q))
+            .slice(0, 8);
+        if (!matches.length) { closeMentionPop(); return; }
+
+        if (!mentionPop) {
+            mentionPop = document.createElement('div');
+            mentionPop.className = 'mention-pop';
+            mentionPop.hidden = true;
+            document.body.appendChild(mentionPop);
+        }
+        mentionItems = matches;
+        mentionPop.innerHTML = '';
+        matches.forEach((nm, i) => {
+            const it = document.createElement('button');
+            it.type = 'button';
+            it.className = 'mention-item' + (i === 0 ? ' active' : '');
+            const av = document.createElement('span');
+            av.className = 'mention-av';
+            av.setAttribute('style', avatarStyle(nm));
+            av.textContent = initials(nm);
+            const t = document.createElement('span');
+            t.textContent = nm;
+            it.appendChild(av);
+            it.appendChild(t);
+            // mousedown, not click: the composer must not lose the caret.
+            it.addEventListener('mousedown', (e) => { e.preventDefault(); chooseMention(i); });
+            mentionPop.appendChild(it);
+        });
+        mentionActive = 0;
+
+        // Above the composer — there's nothing but the input below it.
+        mentionPop.hidden = false;
+        const r = input.getBoundingClientRect();
+        const h = mentionPop.offsetHeight;
+        mentionPop.style.left = Math.max(8, r.left) + 'px';
+        mentionPop.style.top = Math.max(8, r.top - h - 6) + 'px';
+    }
+
+    function setMentionActive(i) {
+        if (!mentionItems.length) return;
+        mentionActive = (i + mentionItems.length) % mentionItems.length;
+        [...mentionPop.children].forEach((c, idx) => c.classList.toggle('active', idx === mentionActive));
+    }
+
+    function chooseMention(i) {
+        if (!mentionItems.length || mentionStart < 0) { closeMentionPop(); return; }
+        const nm = mentionItems[i] || mentionItems[0];
+        const pos = input.selectionStart || 0;
+        const v = input.value;
+        input.value = v.slice(0, mentionStart) + '@' + nm + ' ' + v.slice(pos);
+        const caret = mentionStart + nm.length + 2;
+        closeMentionPop();
+        input.focus();
+        input.setSelectionRange(caret, caret);
+        autosize();
+        updateSendEnabled();
+    }
+
+    // Capture on the document so this beats the composer's own Enter handler —
+    // on the input itself, listener order would decide it, which is fragile.
+    document.addEventListener('keydown', (e) => {
+        if (e.target !== input || !mentionPopOpen()) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive - 1); }
+        else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); chooseMention(mentionActive); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMentionPop(); }
+    }, true);
+
+    input.addEventListener('input', updateMentionPop);
+    input.addEventListener('blur', () => setTimeout(closeMentionPop, 120));
+
+    // Reply target, shown as a chip above the composer until sent or cancelled.
+    let replyTarget = null;
+
+    function setReplyTarget(p) {
+        replyTarget = p;
+        renderReplyChip();
+        input.focus();
+    }
+
+    function clearReply() {
+        replyTarget = null;
+        renderReplyChip();
+    }
+
+    function renderReplyChip() {
+        const chip = $('reply-chip');
+        const txt = $('reply-chip-text');
+        if (!replyTarget) { chip.hidden = true; txt.textContent = ''; return; }
+        const snippet = (replyTarget.body || (replyTarget.att_name ? '📎 ' + replyTarget.att_name : '')).slice(0, 90);
+        txt.textContent = '';
+        const b = document.createElement('b');
+        b.textContent = 'Replying to ' + (replyTarget.name || 'Anonymous');
+        txt.appendChild(b);
+        if (snippet) txt.appendChild(document.createTextNode(' — ' + snippet));
+        chip.hidden = false;
+    }
+
+    $('reply-chip-cancel').addEventListener('click', clearReply);
+
+    // ---------- voice messages --------------------------------------------
+    // Record with MediaRecorder and stage the clip as an ordinary attachment —
+    // same opus/webm the website produces, so both clients play each other's.
+
+    const REC_MAX_MS = 5 * 60 * 1000;
+
+    let mediaRec = null, recChunks = [], recStream = null, recStart = 0, recTimer = null, recSend = true;
+
+    function recording() { return !!mediaRec; }
+
+    function showRecBar(on) {
+        $('voice-rec').hidden = !on;
+        document.querySelector('.composer-row').style.display = on ? 'none' : '';
+    }
+
+    function updateRecTime() {
+        const s = Math.floor((Date.now() - recStart) / 1000);
+        $('vrec-time').textContent = Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+    }
+
+    async function startRecording() {
+        if (recording()) return;
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+            toast(e && e.name === 'NotAllowedError'
+                ? 'Microphone access is needed to record a voice message'
+                : 'Could not open the microphone', true);
+            return;
+        }
+        recStream = stream;
+        recChunks = [];
+        recSend = true;
+
+        const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported &&
+            MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus' : '';
+        try { mediaRec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+        catch (e) { mediaRec = new MediaRecorder(stream); }
+
+        mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+        mediaRec.onstop = finishRecording;
+        mediaRec.start();
+
+        recStart = Date.now();
+        updateRecTime();
+        showRecBar(true);
+        recTimer = setInterval(updateRecTime, 250);
+        setTimeout(() => { if (recording()) stopRecording(true); }, REC_MAX_MS);
+    }
+
+    function stopRecording(send) {
+        recSend = !!send;
+        if (mediaRec && mediaRec.state !== 'inactive') { try { mediaRec.stop(); } catch (e) {} }
+    }
+
+    function finishRecording() {
+        if (recTimer) { clearInterval(recTimer); recTimer = null; }
+        if (recStream) {
+            try { recStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+            recStream = null;
+        }
+        showRecBar(false);
+
+        const chunks = recChunks; recChunks = [];
+        const rec = mediaRec; mediaRec = null;
+        if (!recSend || !chunks.length) return;
+
+        const type = (rec && rec.mimeType) || 'audio/webm';
+        const blob = new Blob(chunks, { type });
+        if (blob.size < 800) { toast('That recording was too short'); return; }   // a tap, not a message
+
+        const ext = type.includes('ogg') ? 'ogg' : 'webm';
+        const name = `voice-${Date.now()}.${ext}`;
+        let file;
+        try { file = new File([blob], name, { type }); }
+        catch (e) { file = blob; file.name = name; }
+
+        stageFiles([itemFromFile(file, name)]);
+        $('composer').requestSubmit();     // send it, with whatever caption was typed
+    }
+
+    $('btn-mic').addEventListener('click', () => {
+        if (recording()) stopRecording(true); else startRecording();
+    });
+    $('vrec-send').addEventListener('click', () => stopRecording(true));
+    $('vrec-cancel').addEventListener('click', () => stopRecording(false));
+
     // ---------- typing ----------------------------------------------------
 
     function renderTyping() {
@@ -1480,10 +1957,14 @@
                 else if (settings.voiceMode === 'ptt') label = st.transmitting ? 'Transmitting' : 'Push to talk';
                 $('vl-label').textContent = label;
 
-                // Share controls only make sense while connected.
+                // Share and camera controls only make sense while connected.
                 $('btn-share').hidden = !st.joined;
                 $('btn-share').classList.toggle('on', st.sharing);
                 $('btn-share-label').textContent = st.sharing ? 'Stop sharing' : 'Share screen';
+
+                $('btn-cam').hidden = !st.joined;
+                $('btn-cam').classList.toggle('on', !!st.cam);
+                $('btn-cam-label').textContent = st.cam ? 'Turn off camera' : 'Turn on camera';
 
                 // Remote share audio has to follow the deafen state too.
                 const sv = $('stage-video');
@@ -1498,6 +1979,7 @@
                 if (st.joined) startPresence(); else stopPresence();
             },
             onShare: (info) => renderStage(info),
+            onCams: (list) => renderCams(list),
             onParticipants: () => renderVoiceRoster(),
             onSpeaking: (cid, on) => {
                 speaking[cid] = on;
@@ -1571,6 +2053,54 @@
 
         video.play().catch(() => {});
     }
+
+    // Camera tiles. Kept keyed by participant so a re-render doesn't tear down
+    // and re-attach a <video> that's already playing — that flashes black.
+    const camTiles = new Map();
+
+    function renderCams(list) {
+        const strip = $('camera-strip');
+        const seen = new Set();
+
+        (list || []).forEach((c) => {
+            seen.add(c.id);
+            let tile = camTiles.get(c.id);
+            if (!tile) {
+                const wrap = document.createElement('div');
+                wrap.className = 'cam-tile';
+                const video = document.createElement('video');
+                video.autoplay = true;
+                video.playsInline = true;
+                video.muted = true;              // camera tiles carry no audio
+                const label = document.createElement('span');
+                label.className = 'cam-name';
+                wrap.appendChild(video);
+                wrap.appendChild(label);
+                strip.appendChild(wrap);
+                tile = { wrap, video, label, streamId: null };
+                camTiles.set(c.id, tile);
+            }
+            tile.label.textContent = c.isMe ? 'You' : c.name;
+            tile.wrap.classList.toggle('me', !!c.isMe);
+            const sid = c.stream && c.stream.id;
+            if (sid !== tile.streamId) {
+                tile.streamId = sid;
+                try { tile.video.srcObject = c.stream; } catch (e) {}
+                tile.video.play().catch(() => {});
+            }
+        });
+
+        camTiles.forEach((tile, id) => {
+            if (seen.has(id)) return;
+            try { tile.video.srcObject = null; } catch (e) {}
+            tile.wrap.remove();
+            camTiles.delete(id);
+        });
+
+        strip.hidden = camTiles.size === 0;
+    }
+
+    $('btn-cam').addEventListener('click', () => { if (voice) voice.toggleCam(); });
 
     let pickerSources = [];
     let pickerTab = 'screen';
@@ -1723,7 +2253,6 @@
     // when we're in the call) and the server's voice_presence table (so people who
     // haven't joined still see who is in there, including browser users).
     function renderVoiceRoster() {
-        const ul = $('voice-roster');
         const inCall = voice && voice.isJoined();
         const live = inCall ? voice.roster() : [];
         const byId = new Map();
@@ -1748,24 +2277,79 @@
         // never audible to someone who is only watching the roster.
         window.loungeSounds.voiceRoster(list, inCall, settings.clientId);
 
+        list.forEach((p) => addRosterName(p.name));
+        renderMembers(list, inCall);
+    }
+
+    // One list for everyone present — people in the call sort to the top and
+    // keep the per-person volume controls, rather than living in a second
+    // roster of their own. Mirrors the website's members sidebar.
+    function renderMembers(voiceList, inCall) {
+        const ul = $('members-list');
+        const inVoice = new Map(voiceList.map((p) => [p.id, p]));
+        const seen = new Set();
+        const rows = [];
+
+        // Everyone the presence table knows about, plus anyone in the call who
+        // hasn't heartbeated yet (a website user who only joined voice).
+        members.forEach((m) => {
+            seen.add(m.client_id);
+            rows.push({
+                id: m.client_id,
+                name: m.name || 'Anonymous',
+                status: m.status === 'away' ? 'away' : 'online',
+                custom: m.custom || '',
+                voice: inVoice.get(m.client_id) || null
+            });
+        });
+        voiceList.forEach((p) => {
+            if (seen.has(p.id)) return;
+            rows.push({ id: p.id, name: p.name, status: 'online', custom: '', voice: p });
+        });
+
+        rows.sort((a, b) =>
+            (a.voice ? 0 : 1) - (b.voice ? 0 : 1) ||
+            (a.status === 'away' ? 1 : 0) - (b.status === 'away' ? 1 : 0) ||
+            a.name.localeCompare(b.name));
+
+        $('members-count').textContent = rows.length ? String(rows.length) : '';
+
         ul.innerHTML = '';
-        list.forEach((p) => {
+        if (!rows.length) {
+            const e = document.createElement('div');
+            e.className = 'members-empty';
+            e.textContent = 'No one else here right now.';
+            ul.appendChild(e);
+            return;
+        }
+
+        rows.forEach((r) => {
+            const p = r.voice;
+            const isMe = r.id === settings.clientId;
             const li = document.createElement('li');
-            li.className = 'vp' + (p.isMe ? ' me' : '') + (speaking[p.id] ? ' speaking' : '');
-            li.dataset.cid = p.id;
-            const localMuted = !p.isMe && settings.localMuted && settings.localMuted[p.id];
+            li.className = 'vp' + (isMe ? ' me' : '') +
+                (r.status === 'away' ? ' away' : '') +
+                (p && speaking[p.id] ? ' speaking' : '');
+            li.dataset.cid = r.id;
+
+            const localMuted = p && !isMe && settings.localMuted && settings.localMuted[p.id];
             // Someone listed in the shared presence table but absent from our SFU
             // peer list is in the room yet cannot exchange media with us — the
             // exact failure mode that hid a broken call behind a correct-looking
             // roster. Say so instead of showing them as a normal participant.
-            const unreachable = inCall && p.remoteOnly && !p.isMe;
+            const unreachable = !!(inCall && p && p.remoteOnly && !isMe);
             if (unreachable) li.classList.add('unreachable');
+
+            const sub = r.custom || (r.status === 'away' ? 'Away' : '');
             li.innerHTML =
-                `<span class="av" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</span>` +
-                `<span class="vp-name">${esc(p.name)}${p.isMe ? ' (you)' : ''}</span>` +
+                `<span class="av" style="${avatarStyle(r.name)}">${esc(initials(r.name))}</span>` +
+                '<span class="vp-name">' + esc(r.name) + (isMe ? ' (you)' : '') +
+                (sub ? `<span class="vp-sub">${esc(sub)}</span>` : '') + '</span>' +
+                (p ? '<span class="vp-invoice" title="In voice">🔊</span>' : '') +
                 (unreachable ? '<span class="vp-flag" title="In voice, but not connected to you — they may need to reload the website">⚠</span>' : '') +
-                (p.muted || localMuted ? '<span class="vp-flag">🔇</span>' : '');
-            if (!p.isMe && inCall && !p.remoteOnly) {
+                (p && (p.muted || localMuted) ? '<span class="vp-flag">🔇</span>' : '');
+
+            if (p && !isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
             }
             ul.appendChild(li);
@@ -1817,6 +2401,56 @@
         if ($('popover').hidden) return;
         if (!e.target.closest('#popover') && !e.target.closest('.vp')) closePopover();
     });
+
+    // ---------- text presence (members + custom status) --------------------
+    // Separate from the voice heartbeat below: this one says "I'm here in the
+    // board", which is true whether or not you're in the call. Same endpoint,
+    // cadence and away rule as the website, so both clients populate one list.
+
+    const TEXT_PRESENCE_MS = 20000;
+    const AWAY_AFTER_MS = 5 * 60 * 1000;
+
+    let members = [];
+    let textPresenceTimer = null;
+    let lastActivity = Date.now();
+
+    ['mousemove', 'keydown', 'pointerdown'].forEach((ev) => {
+        window.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true });
+    });
+
+    function myPresenceStatus() {
+        if (document.hidden || !windowFocused) return 'away';
+        if (Date.now() - lastActivity > AWAY_AFTER_MS) return 'away';
+        return 'online';
+    }
+
+    async function sendTextPresence(leaving) {
+        const res = await L.board('presence', {
+            method: 'POST',
+            body: {
+                clientId: settings.clientId,
+                name: settings.displayName || 'Anonymous',
+                status: myPresenceStatus(),
+                custom: settings.status || '',
+                leaving: !!leaving
+            }
+        });
+        if (res && res.success && res.members) {
+            members = res.members;
+            members.forEach((m) => addRosterName(m.name));
+            renderVoiceRoster();
+        }
+    }
+
+    function startTextPresence() {
+        stopTextPresence();
+        sendTextPresence(false);
+        textPresenceTimer = setInterval(() => sendTextPresence(false), TEXT_PRESENCE_MS);
+    }
+
+    function stopTextPresence() {
+        if (textPresenceTimer) { clearInterval(textPresenceTimer); textPresenceTimer = null; }
+    }
 
     // ---------- voice presence heartbeat ----------------------------------
 
@@ -2056,6 +2690,7 @@
     async function relogin() {
         stopPolling();
         stopPresence();
+        stopTextPresence();
         if (voice) voice.leave();
         $('app').hidden = true;
         $('login').hidden = false;
@@ -2128,14 +2763,23 @@
         $('me-name-text').textContent = name;
         $('me-avatar').textContent = initials(name);
         $('me-avatar').setAttribute('style', avatarStyle(name));
+        const st = $('me-status');
+        st.textContent = settings.status || '';
+        st.hidden = !settings.status;
     }
 
+    // Name and status together, like the website's name pill — they're the two
+    // things that describe you to everyone else.
     async function changeName() {
-        const n = await askText('Display name', settings.displayName || '', 'Save');
-        if (n === null) return;
-        await saveSettings({ displayName: n.trim().slice(0, 40) });
+        const r = await askNameAndStatus(settings.displayName || '', settings.status || '');
+        if (r === null) return;
+        await saveSettings({
+            displayName: r.name.trim().slice(0, 40),
+            status: r.status.trim().slice(0, 80)
+        });
         renderMe();
         $('set-name').value = settings.displayName;
+        sendTextPresence(false);      // publish it now rather than up to 20s later
     }
     $('btn-name').addEventListener('click', changeName);
 
@@ -2375,6 +3019,8 @@
         if (voice.isJoined()) { heartbeatPresence(true); voice.leave(); }
         stopPolling();
         stopPresence();
+        await sendTextPresence(true);      // drop out of the members list now
+        stopTextPresence();
         await L.auth.logout();
         await L.rt.stop();
         $('settings').hidden = true;
@@ -2487,8 +3133,13 @@
 
     function closeCtxMenu() { $('ctx-menu').hidden = true; }
 
+    // Where the last menu was opened, so an action that opens a popup of its own
+    // (React…) can anchor it at the cursor after the menu has closed.
+    let lastMenuAt = { x: 0, y: 0 };
+
     // items: [{ label, icon, danger, disabled, onClick } | 'sep']
     function openCtxMenu(items, x, y) {
+        lastMenuAt = { x, y };
         const menu = $('ctx-menu');
         menu.innerHTML = '';
 
@@ -2531,7 +3182,17 @@
 
     function messageMenuItems(p, el) {
         const mine = p.client_id && p.client_id === settings.clientId;
+        // In a thread, "Reply" means the thread composer — quoting a reply back
+        // into the same thread would just be noise.
+        const inThread = !!el.closest('#thread-list');
         return [
+            inThread
+                ? { label: 'Reply', icon: '↩', onClick: () => $('thread-input').focus() }
+                : { label: 'Reply', icon: '↩', onClick: () => setReplyTarget(p) },
+            !inThread && { label: 'Reply in thread', icon: '🧵', onClick: () => openThread(p.id) },
+            // Anchored at the cursor, since the menu itself is gone by then.
+            { label: 'React…', icon: '🙂', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p.id, em)) },
+            'sep',
             { label: 'Copy text', icon: '⧉', onClick: () => copyMessage(p) },
             p.att_key && { label: 'Save attachment…', icon: '⤓', onClick: () => saveAttachment(p.att_key, p.att_name) },
             { label: p.pinned ? 'Unpin' : 'Pin', icon: '📌', onClick: () => pinPost(p.id, !p.pinned) },
@@ -2540,6 +3201,85 @@
             mine && { label: 'Delete message', icon: '🗑', danger: true, onClick: () => deletePost(p) }
         ];
     }
+
+    // ---------- emoji picker ------------------------------------------------
+    // Same set and order as the website, so the reactions people pick match
+    // across clients.
+
+    const EMOJIS = {
+        Smileys: ['😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😜', '🤪', '😎', '🤩', '🥳', '😏', '🙄', '😴', '🤔', '🤗', '🤭', '😬', '😭', '🥺'],
+        Gestures: ['👍', '👎', '👏', '🙌', '👋', '🤝', '✊', '👊', '🤞', '✌️', '🤟', '👌', '🤌', '🙏', '💪', '👀', '🫶', '🤙'],
+        Hearts: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💖', '💗', '💕', '💞', '💔', '❣️'],
+        Fun: ['🔥', '✨', '🎉', '🚀', '💯', '⭐', '🌟', '💥', '⚡', '🌈', '🎯', '🏆', '🎈', '👑', '💎', '🍻', '🎮', '🍕'],
+        Symbols: ['💬', '📌', '📎', '✅', '❌', '⚠️', '💡', '🔑', '🔒', '🔔', '➡️', '⬆️', '⭐']
+    };
+
+    let emojiPop = null;
+    let emojiCb = null;
+
+    // Lets a popup be positioned at a bare cursor position.
+    function pointAnchor(x, y) {
+        return { getBoundingClientRect: () => ({ top: y, bottom: y, left: x, right: x, width: 0, height: 0 }) };
+    }
+
+    function buildEmojiPop() {
+        const pop = document.createElement('div');
+        pop.className = 'emoji-pop';
+        pop.hidden = true;
+        const grid = document.createElement('div');
+        grid.className = 'emoji-grid';
+        Object.keys(EMOJIS).forEach((cat) => {
+            const c = document.createElement('div');
+            c.className = 'emoji-cat';
+            c.textContent = cat;
+            grid.appendChild(c);
+            EMOJIS[cat].forEach((em) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = em;
+                b.addEventListener('click', () => { const cb = emojiCb; closeEmojiPop(); if (cb) cb(em); });
+                grid.appendChild(b);
+            });
+        });
+        pop.appendChild(grid);
+        // Keep the composer's caret where it was when picking for insertion.
+        pop.addEventListener('mousedown', (e) => e.preventDefault());
+        document.body.appendChild(pop);
+        return pop;
+    }
+
+    // Below the anchor, flipped above when there's no room.
+    function positionPop(pop, anchor) {
+        const r = anchor.getBoundingClientRect();
+        pop.hidden = false;
+        const w = pop.offsetWidth, h = pop.offsetHeight;
+        let left = Math.min(r.left, window.innerWidth - w - 8);
+        let top = r.bottom + 6;
+        if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+        pop.style.left = Math.max(8, left) + 'px';
+        pop.style.top = top + 'px';
+    }
+
+    function openEmojiPicker(anchor, cb) {
+        if (!anchor) return;
+        closeCtxMenu();
+        if (!emojiPop) emojiPop = buildEmojiPop();
+        emojiCb = cb;
+        positionPop(emojiPop, anchor);
+    }
+
+    function closeEmojiPop() {
+        if (emojiPop) emojiPop.hidden = true;
+        emojiCb = null;
+    }
+
+    function emojiPopOpen() { return !!(emojiPop && !emojiPop.hidden); }
+
+    document.addEventListener('mousedown', (e) => {
+        if (emojiPopOpen() && !e.target.closest('.emoji-pop')) closeEmojiPop();
+    });
+    document.addEventListener('scroll', closeEmojiPop, true);
+    window.addEventListener('blur', closeEmojiPop);
 
     // ---------- links -------------------------------------------------------
 
@@ -2980,6 +3720,7 @@
         } else {
             clearFilters();
             $('filter-menu').hidden = true;
+            hideSearchResults();
         }
     }
 
@@ -3112,8 +3853,117 @@
 
     $('filter-input').addEventListener('input', () => {
         clearTimeout(filterTimer);
-        filterTimer = setTimeout(() => { filter.text = $('filter-input').value.trim(); applyFilter(); }, 200);
+        filterTimer = setTimeout(() => {
+            filter.text = $('filter-input').value.trim();
+            applyFilter();
+            runSearch(filter.text);      // the archive, not just what's loaded
+        }, 200);
     });
+
+    // ---------- archive search --------------------------------------------
+    // The filter above narrows the messages already on screen; this asks the
+    // server about everything ever posted, the same endpoint and scopes the
+    // website uses. Both run off the one Ctrl+F box.
+
+    let searchScope = 'channel';
+    let searchSeq = 0;
+
+    $('filter-scope').addEventListener('click', () => {
+        searchScope = searchScope === 'channel' ? 'all' : 'channel';
+        $('filter-scope').textContent = searchScope === 'all' ? 'All channels' : 'This channel';
+        runSearch(filter.text);
+    });
+
+    function hideSearchResults() {
+        $('search-results').hidden = true;
+        $('search-results').innerHTML = '';
+    }
+
+    async function runSearch(q) {
+        q = (q || '').trim();
+        if (q.length < 2) { hideSearchResults(); return; }
+
+        // Only the newest query gets to render — a slow reply must not overwrite
+        // results for what's now in the box.
+        const seq = ++searchSeq;
+        const res = await L.board('search', {
+            query: { q, channel, scope: searchScope, limit: 40 }
+        });
+        if (seq !== searchSeq) return;
+        if (res && res.needsAuth) return relogin();
+        if (!res || !res.success) { hideSearchResults(); return; }
+        renderSearchResults(res.results || [], q);
+    }
+
+    function searchTime(ts) {
+        const d = new Date(ts);
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + timeStr(ts);
+    }
+
+    // The matched term in context, marked — built as nodes, never markup.
+    function highlightSnippet(text, q) {
+        const frag = document.createDocumentFragment();
+        const idx = text.toLowerCase().indexOf(q.toLowerCase());
+        if (idx === -1) { frag.appendChild(document.createTextNode(text.slice(0, 160))); return frag; }
+        const start = Math.max(0, idx - 40);
+        if (start > 0) frag.appendChild(document.createTextNode('…'));
+        frag.appendChild(document.createTextNode(text.slice(start, idx)));
+        const mark = document.createElement('mark');
+        mark.textContent = text.slice(idx, idx + q.length);
+        frag.appendChild(mark);
+        frag.appendChild(document.createTextNode(text.slice(idx + q.length, idx + q.length + 80)));
+        return frag;
+    }
+
+    function renderSearchResults(list, q) {
+        const box = $('search-results');
+        box.innerHTML = '';
+
+        const head = document.createElement('div');
+        head.className = 'sr-head';
+        head.textContent = list.length
+            ? `${list.length} result${list.length === 1 ? '' : 's'} in the archive` +
+              (searchScope === 'all' ? ' (all channels)' : ` (#${channel})`)
+            : 'Nothing in the archive matches that';
+        box.appendChild(head);
+
+        list.forEach((r) => {
+            const it = document.createElement('button');
+            it.type = 'button';
+            it.className = 'search-result';
+
+            const top = document.createElement('div');
+            top.className = 'sr-top';
+            const nm = document.createElement('span');
+            nm.className = 'sr-name';
+            nm.textContent = r.client_id === settings.clientId ? 'You' : (r.name || 'Anonymous');
+            const ch = document.createElement('span');
+            ch.className = 'sr-ch';
+            ch.textContent = '#' + r.channel + (r.thread_root_id ? ' · thread' : '');
+            const tm = document.createElement('span');
+            tm.className = 'sr-time';
+            tm.textContent = searchTime(r.created_at);
+            top.appendChild(nm); top.appendChild(ch); top.appendChild(tm);
+
+            const bd = document.createElement('div');
+            bd.className = 'sr-body';
+            bd.appendChild(highlightSnippet(r.body || (r.att_name ? '📎 ' + r.att_name : ''), q));
+
+            it.appendChild(top);
+            it.appendChild(bd);
+            it.addEventListener('click', () => {
+                hideSearchResults();
+                $('filter-input').value = '';
+                filter.text = '';
+                // A reply lives in its thread, not the main list.
+                if (r.thread_root_id) openThread(r.thread_root_id, r.channel);
+                else jumpToPost(r);
+            });
+            box.appendChild(it);
+        });
+
+        box.hidden = false;
+    }
     $('filter-input').addEventListener('keydown', (e) => {
         if (e.key === 'Escape') { e.preventDefault(); toggleFilter(false); }
     });
@@ -3157,6 +4007,121 @@
         void el.offsetWidth;                 // restart the animation
         el.classList.add('flash');
     }
+
+    // ---------- threads ----------------------------------------------------
+    // The server already models these: a reply carries parentId and the root's
+    // thread_root_id, and /api/board/thread returns root + replies oldest-first.
+    // The panel polls while open, like the website's.
+
+    const THREAD_POLL_MS = 2500;
+
+    let threadRootId = 0;
+    let threadPosts = [];
+    let threadTimer = null;
+    let threadSig = '';
+
+    async function openThread(rootId, chan) {
+        if (!rootId) return;
+        // A result from another channel: switch first so replies post to the
+        // right place and closing the thread lands somewhere sensible.
+        if (chan && chan !== channel) await switchChannel(chan);
+
+        threadRootId = rootId;
+        threadSig = '';
+        threadPosts = [];
+        $('thread-panel').hidden = false;
+        $('thread-list').innerHTML = '<div class="thread-loading">Loading thread…</div>';
+        await loadThread(true);
+        $('thread-input').focus();
+        if (threadTimer) clearInterval(threadTimer);
+        threadTimer = setInterval(() => loadThread(false), THREAD_POLL_MS);
+    }
+
+    function closeThread() {
+        threadRootId = 0;
+        threadPosts = [];
+        if (threadTimer) { clearInterval(threadTimer); threadTimer = null; }
+        $('thread-panel').hidden = true;
+    }
+
+    function threadOpen() { return !$('thread-panel').hidden; }
+
+    async function loadThread(force) {
+        if (!threadRootId) return;
+        const root = threadRootId;
+        const res = await L.board('thread', { query: { root } });
+        if (root !== threadRootId) return;               // switched while in flight
+        if (res && res.needsAuth) return relogin();
+        if (!res || !res.success) return;
+
+        threadPosts = res.posts || [];
+        if (!threadPosts.length) { closeThread(); return; }   // root was deleted
+        threadPosts.forEach((p) => addRosterName(p.name));
+
+        const sig = JSON.stringify(threadPosts);
+        if (!force && sig === threadSig) return;
+        threadSig = sig;
+        renderThread();
+    }
+
+    function renderThread() {
+        const list = $('thread-list');
+        const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+
+        const replies = threadPosts.length - 1;
+        $('thread-title').textContent = 'Thread · ' +
+            (replies > 0 ? `${replies} ${replies === 1 ? 'reply' : 'replies'}` : 'no replies yet');
+
+        list.innerHTML = '';
+        let prev = null;
+        threadPosts.forEach((p, i) => {
+            const row = renderMessage(p, i === 0 ? null : prev);
+            if (i === 0) row.classList.add('thread-root');
+            list.appendChild(row);
+            prev = p;
+        });
+        if (atBottom) list.scrollTop = list.scrollHeight;
+    }
+
+    $('thread-close').addEventListener('click', closeThread);
+
+    $('thread-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            $('thread-composer').requestSubmit();
+        }
+    });
+
+    $('thread-composer').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const body = $('thread-input').value.trim();
+        if (!body || !threadRootId) return;
+        $('thread-send').disabled = true;
+        $('thread-input').value = '';
+
+        const res = await L.board('post', {
+            method: 'POST',
+            body: {
+                body,
+                name: settings.displayName || 'Anonymous',
+                clientId: settings.clientId,
+                channel,
+                parentId: threadRootId          // what makes it a thread reply
+            }
+        });
+        $('thread-send').disabled = false;
+
+        if (res && res.needsAuth) return relogin();
+        if (!res || !res.success) {
+            $('thread-input').value = body;     // hand the text back
+            return toast((res && res.error) || 'Could not reply', true);
+        }
+        L.rt.notifyPosted(channel);
+        await loadThread(true);
+        $('thread-list').scrollTop = $('thread-list').scrollHeight;
+        await loadMessages(nearBottom());       // refresh the reply count
+        $('thread-input').focus();
+    });
 
     // ---------- pinned ----------------------------------------------------
 
@@ -3220,7 +4185,9 @@
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-            if (!$('ctx-menu').hidden) closeCtxMenu();
+            if (emojiPopOpen()) closeEmojiPop();
+            else if (!$('ctx-menu').hidden) closeCtxMenu();
+            else if (threadOpen()) closeThread();
             else if (!$('lightbox').hidden) closeLightbox();
             else if (!$('dialog').hidden) closeDialog(inp_null());
             else if (!$('picker').hidden) closePicker();

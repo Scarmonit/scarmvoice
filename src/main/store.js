@@ -11,6 +11,7 @@ const DEFAULTS = {
     baseUrl: 'https://scarmonit.com',
     room: 'lounge',
     displayName: '',
+    status: '',                 // free-text status shown beside your name
     clientId: '',
     channel: 'general',
 

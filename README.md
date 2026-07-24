@@ -49,19 +49,44 @@ Start-menu entry and desktop shortcut.
 - Mute, deafen, and per-person local volume (0–200%) and mute, remembered
   between sessions
 - Live speaking indicators
+- **Camera** — turn on video in a call; everyone's tiles appear in a strip above
+  the message list. Plain RealtimeKit video on the same meeting, so it works
+  across desktop and web
 - Microphone and speaker selection, echo cancellation / noise suppression /
   AGC toggles
+
+**Presence**
+- **Members list** — everyone here, not just the call: online / away, their
+  status line, and who's in voice, in one list. People in voice keep the
+  per-person volume controls
+- **Custom status** — set a status beside your name, shared with the website
 
 **Chat**
 - Channels with unread badges; create, rename, delete
 - Full history with infinite scroll, day separators, and message grouping
-- **Search** across the whole archive (Ctrl+F), scoped to this channel or all
-  channels, with highlighted matches and click-to-jump
+- **Search** across the whole archive (Ctrl+F) via `/api/board/search`, scoped to
+  this channel or all channels, with the match highlighted and click-to-jump
+  (into the thread, if the hit is a reply). The same box also filters the
+  messages already loaded by type, sender, pinned, mentions or edited
+- **Message formatting** — `**bold**`, `*italic*`, `~~strike~~`, `||spoiler||`,
+  `` `code` ``, ```` ```fenced blocks``` ```` with syntax highlighting, lists and
+  blockquotes. Same renderer as the website, so a message reads identically in
+  both; see [Formatting is DOM, not markup](#formatting-is-dom-not-markup)
+- **Emoji picker** — react with any emoji from the message menu or the hover
+  bar, and insert emoji into the composer. Same set as the website
+- **Replies and threads** — reply to quote a message above your own, or open a
+  thread panel to read and post replies in place. Reply counts on the message
+  open the thread
+- **@mention autocomplete** — a name picker as you type `@`, over everyone seen
+  this session; mentions render as chips, highlighted when they're you
+- **Voice messages** — record in the composer and send as an audio attachment
+  (opus/webm, same as the website), with elapsed time and discard
 - **Pin / unpin** messages, a pinned tag in the feed, and a pinned panel per
   channel — the same `pinned` column the website uses, so pins are shared
-- **Message actions** via hover menu or right-click: copy (any message), and
-  edit / delete on your own only — edit is an inline editor (Enter saves,
-  Shift+Enter newlines, Esc cancels) and delete asks first
+- **Message actions** via hover menu or right-click: react, reply, reply in
+  thread, copy (any message), and edit / delete on your own only — edit is an
+  inline editor (Enter saves, Shift+Enter newlines, Esc cancels) and delete asks
+  first
 - **Image lightbox** — click any posted image to expand it; close with the X,
   Esc, or a backdrop click
 - **Image actions** on right-click — Copy image (real bitmap to the clipboard) /
@@ -230,6 +255,32 @@ link with no metadata is asked about exactly once and silently stays a plain
 link. Direct image URLs skip the round trip entirely and render inline, and a
 hotlinked image that fails to load removes itself instead of leaving a broken
 icon. `img-src` allows `https:` for the thumbnails, matching the website's CSP.
+
+### Formatting is DOM, not markup
+
+The message renderer is ported from the website's `board.js` and keeps its
+defining property: every node is built with `createElement` and every piece of
+user text lands via `textContent`. No HTML string ever carries a message body,
+so adding bold/code/lists/mentions added no injection path — `<script>` in a
+message is text, in a code fence it's text, and inside `**bold**` it's text.
+Only `http`/`https` becomes a link.
+
+highlight.js is **vendored, not fetched**: the website pulls it from cdnjs, but
+the renderer runs from `file://` under a CSP that forbids remote script, and a
+`file://` page can't load ES modules either — so the package's `es/` build is
+unusable as-is. `scripts/vendor-hljs.js` generates a classic-script bundle from
+the npm package (core plus the same "common" language set, read out of
+`lib/common.js` rather than hard-coded, so it tracks the pinned version) and
+copies the same atom-one-dark theme. That keeps highlighting identical to the
+website with no network at runtime.
+
+### The camera and the screen share are different tracks
+
+`forceScreenQuality()` pins the outgoing share to the active tier's bitrate,
+resolution and framerate. It used to tune *every* outgoing video sender, which
+was safe only while the app had no camera — now it matches on the share track's
+own id, so camera video is left alone. Get this wrong and turning the camera on
+silently re-tunes the screen share (or vice versa).
 
 ### Opening links
 
@@ -403,7 +454,6 @@ wraps `RTCPeerConnection` to keep a registry of peer connections and calls
 
 Carried by the website but not yet ported:
 
-- Webcam video
-- Threads — reply counts show, but the thread view doesn't open yet
-- Message editing, deleting, pinning, and search
 - RNNoise voice isolation (the browser's own noise suppression is used instead)
+- Web Push — the app uses native OS notifications instead, which is the better
+  mechanism for a desktop client
