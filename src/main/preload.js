@@ -22,9 +22,11 @@ contextBridge.exposeInMainWorld('lounge', {
 
     // Attachments. `data` is an ArrayBuffer of the raw file bytes.
     uploadFile: (name, type, data) => ipcRenderer.invoke('board:upload', { name, type, data }),
-    saveAttachment: (key, name) => ipcRenderer.invoke('board:saveAttachment', { key, name }),
-    downloadAttachment: (key, name) => ipcRenderer.invoke('board:downloadAttachment', { key, name }),
-    copyImage: (key) => ipcRenderer.invoke('board:copyImage', { key }),
+    // `url` is the fallback for images that aren't ours (link previews): pass a
+    // key for an attachment, or a remote http(s) url, not both.
+    saveAttachment: (key, name, url) => ipcRenderer.invoke('board:saveAttachment', { key, name, url }),
+    downloadAttachment: (key, name, url) => ipcRenderer.invoke('board:downloadAttachment', { key, name, url }),
+    copyImage: (key, url) => ipcRenderer.invoke('board:copyImage', { key, url }),
     revealFile: (filePath) => ipcRenderer.invoke('board:revealFile', filePath),
 
     // Open Graph metadata for a link, via the cookie-gated unfurl endpoint.

@@ -179,7 +179,16 @@
       </div>
     </section>
 
-    <div id="messages" role="log" aria-live="polite"></div>
+    <!-- The wrapper exists so the jump button can float over the bottom of the
+         list without covering the composer. -->
+    <div id="messages-wrap">
+      <div id="messages" role="log" aria-live="polite"></div>
+      <button type="button" id="jump-latest" class="jump-latest" aria-hidden="true" title="Jump to the newest messages">
+        <span class="jump-count" id="jump-count" hidden></span>
+        <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        <span>Jump to present</span>
+      </button>
+    </div>
 
     <div id="typing-line"></div>
 

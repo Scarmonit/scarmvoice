@@ -63,8 +63,15 @@ Start-menu entry and desktop shortcut.
   edit / delete on your own only — edit is an inline editor (Enter saves,
   Shift+Enter newlines, Esc cancels) and delete asks first
 - **Image lightbox** — click any posted image to expand it; close with the X,
-  Esc, or a backdrop click. Right-click the expanded image for Download image /
-  Copy image (real bitmap to the clipboard) / Save image as…
+  Esc, or a backdrop click
+- **Image actions** on right-click — Copy image (real bitmap to the clipboard) /
+  Save image as… / Download image / Copy image link. The same menu on the inline
+  image in chat and on the expanded one, so expanding first is never required;
+  right-clicking the text beside an image still gives the message menu
+- **Jump to present** — a floating button appears once you scroll away from the
+  bottom, badged with how many messages arrived while you were up there. New
+  messages never yank your scroll position, including when images and link
+  previews above the viewport finish loading
 - **YouTube previews** — thumbnail, title and channel with a play overlay, for
   `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/` and `m.`/`music.`
   hosts, ignoring any `&t=`/playlist/tracking params. Clicking opens the video in
@@ -215,6 +222,32 @@ link with no metadata is asked about exactly once and silently stays a plain
 link. Direct image URLs skip the round trip entirely and render inline, and a
 hotlinked image that fails to load removes itself instead of leaving a broken
 icon. `img-src` allows `https:` for the thumbnails, matching the website's CSP.
+
+### Holding the reader's place
+
+Rendering the list is a full `innerHTML` rebuild, and clearing a scroll container
+resets `scrollTop` to 0 — so anyone reading history got thrown to the top by the
+next background poll. Three things keep the view still:
+
+- **Polls that change nothing render nothing.** The displayed list is signed
+  (channel + filter state + the posts themselves); an identical signature skips
+  the rebuild entirely, which also stops every image restarting its load.
+- **A real rebuild restores an anchor** — the topmost still-visible message and
+  its offset from the top of the viewport — instead of a raw `scrollTop`, so
+  changes in the content above it don't matter.
+- **A refresh only speaks for the newest page.** It used to replace `posts`
+  wholesale, silently discarding history someone had paged back to; now older
+  loaded messages are kept and only the newest window is replaced.
+
+Late-loading images are the fourth case: they have no height until they load, so
+one finishing above the viewport shifts everything below it. A capture-phase
+`load` listener on `#messages` gives the scroll back exactly the height that just
+appeared — or re-pins to the bottom if the reader was following the live edge.
+
+Auto-scroll happens only when already at the bottom (within 120 px). Past 400 px
+away, the **Jump to present** button fades in, badged with the number of messages
+from other people since the reader was last caught up; past 4000 px it jumps
+instantly rather than animating through thousands of messages.
 
 ### Window state and the lightbox
 

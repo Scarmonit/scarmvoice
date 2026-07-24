@@ -367,18 +367,31 @@ function registerIpc() {
         return net.upload(name, type, data);
     });
 
+    // Bytes for an image the renderer can name two ways: by attachment key
+    // (ours, cookie-gated) or by remote URL (a link preview). Everything that
+    // saves or copies an image goes through here so both kinds work the same.
+    async function imageBytes({ key, url }) {
+        if (key) {
+            const res = await net.fileStream(key);
+            if (!res.ok) throw new Error(`Server returned ${res.status}`);
+            return Buffer.from(await res.arrayBuffer());
+        }
+        if (!/^https?:\/\//i.test(url || '')) throw new Error('unsupported url');
+        const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        return Buffer.from(await res.arrayBuffer());
+    }
+
     // Save an attachment to disk. The bytes have to come through the
     // authenticated client, so the renderer can't just download the URL.
-    ipcMain.handle('board:saveAttachment', async (_e, { key, name }) => {
+    ipcMain.handle('board:saveAttachment', async (_e, { key, name, url }) => {
         const target = await dialog.showSaveDialog(win, {
             defaultPath: name || 'attachment',
             title: 'Save attachment'
         });
         if (target.canceled || !target.filePath) return { success: false, canceled: true };
         try {
-            const res = await net.fileStream(key);
-            if (!res.ok) return { success: false, error: `Server returned ${res.status}` };
-            await fsp.writeFile(target.filePath, Buffer.from(await res.arrayBuffer()));
+            await fsp.writeFile(target.filePath, await imageBytes({ key, url }));
             return { success: true, path: target.filePath };
         } catch (e) {
             return { success: false, error: e.message };
@@ -391,11 +404,9 @@ function registerIpc() {
 
     // Straight to the Downloads folder, no dialog. Never silently clobbers an
     // existing file — it disambiguates with " (2)", " (3)", …
-    ipcMain.handle('board:downloadAttachment', async (_e, { key, name }) => {
+    ipcMain.handle('board:downloadAttachment', async (_e, { key, name, url }) => {
         try {
-            const res = await net.fileStream(key);
-            if (!res.ok) return { success: false, error: `Server returned ${res.status}` };
-            const buf = Buffer.from(await res.arrayBuffer());
+            const buf = await imageBytes({ key, url });
 
             const dir = app.getPath('downloads');
             const safe = (name || 'attachment').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
@@ -416,11 +427,9 @@ function registerIpc() {
 
     // Put the actual image on the clipboard (not just its URL), so it can be
     // pasted straight into another app.
-    ipcMain.handle('board:copyImage', async (_e, { key }) => {
+    ipcMain.handle('board:copyImage', async (_e, { key, url }) => {
         try {
-            const res = await net.fileStream(key);
-            if (!res.ok) return { success: false, error: `Server returned ${res.status}` };
-            const img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer()));
+            const img = nativeImage.createFromBuffer(await imageBytes({ key, url }));
             if (img.isEmpty()) return { success: false, error: 'Not a decodable image' };
             clipboard.writeImage(img);
             return { success: true };

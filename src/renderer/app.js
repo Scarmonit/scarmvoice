@@ -322,6 +322,8 @@
         $('chan-title').textContent = '# ' + name;
         $('composer-input').placeholder = 'Message #' + name;
         posts = [];
+        following = true;
+        seenTopId = 0;
         renderMessages();
         renderChannels();
         await loadMessages(true);
@@ -394,7 +396,12 @@
             const seen = new Set(posts.map((p) => p.id));
             posts = (res.posts || []).filter((p) => !seen.has(p.id)).concat(posts);
         } else {
-            posts = res.posts || [];
+            // A refresh only speaks for the newest page. Older history someone
+            // paged back to stays put — dropping it would yank them out of the
+            // part of the conversation they're reading.
+            const fresh = res.posts || [];
+            const oldest = fresh.length ? fresh[0].id : Infinity;
+            posts = posts.filter((p) => p.id < oldest).concat(fresh);
         }
 
         // Chime + notify for messages from other people, exactly where the
@@ -424,6 +431,7 @@
         const box = $('messages');
         const prevHeight = box.scrollHeight;
         const prevTop = box.scrollTop;
+        const anchor = scrollAnchor();
 
         renderMessages();
         renderTyping();
@@ -435,13 +443,108 @@
         } else if (scrollToEnd && !filterActive()) {
             // Never yank a filtered view to the bottom on a poll.
             box.scrollTop = box.scrollHeight;
+            following = true;
+        } else if (!restoreAnchor(anchor)) {
+            // A re-render wipes the list, which resets scrollTop to 0. Someone
+            // reading history must not be thrown to the top by a poll.
+            box.scrollTop = prevTop;
         }
+        settleScroll();
     }
 
     function nearBottom() {
         const box = $('messages');
         return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     }
+
+    // ---------- scroll position --------------------------------------------
+
+    // Show the jump button only well clear of the bottom, so a stray wheel
+    // notch can't make it flicker in and out.
+    const JUMP_SHOW_PX = 400;
+    // Past this, smooth-scrolling means watching thousands of messages blur by.
+    const JUMP_INSTANT_PX = 4000;
+
+    let following = true;       // is the view tracking new messages?
+    let seenTopId = 0;          // newest post id the reader had caught up to
+    let lastHeight = 0;         // content height, to spot late-loading images
+
+    // The first message still visible, and where it sits — enough to put the
+    // reader back after the list is rebuilt or something above it resizes.
+    function scrollAnchor() {
+        const box = $('messages');
+        const top = box.getBoundingClientRect().top;
+        for (const el of box.querySelectorAll('.msg')) {
+            const r = el.getBoundingClientRect();
+            if (r.bottom > top) return { id: el.dataset.id, offset: r.top - top };
+        }
+        return null;
+    }
+
+    function restoreAnchor(a) {
+        if (!a) return false;
+        const box = $('messages');
+        const el = box.querySelector(`.msg[data-id="${a.id}"]`);
+        if (!el) return false;
+        box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - a.offset;
+        return true;
+    }
+
+    function newestId() { return posts.length ? posts[posts.length - 1].id : 0; }
+
+    // Record the height we settled at so image loads can be told apart from
+    // ordinary scrolling, and refresh the button.
+    function settleScroll() {
+        lastHeight = $('messages').scrollHeight;
+        updateJump();
+    }
+
+    function updateJump() {
+        const box = $('messages');
+        const btn = $('jump-latest');
+        if (nearBottom()) seenTopId = newestId();       // caught up
+        const away = box.scrollHeight - box.scrollTop - box.clientHeight > JUMP_SHOW_PX;
+
+        const n = away
+            ? posts.filter((p) => p.id > seenTopId && p.client_id !== settings.clientId).length
+            : 0;
+        const badge = $('jump-count');
+        badge.textContent = n > 99 ? '99+' : String(n);
+        badge.hidden = !n;
+
+        btn.classList.toggle('show', away);
+        btn.setAttribute('aria-hidden', away ? 'false' : 'true');
+    }
+
+    function jumpToLatest() {
+        const box = $('messages');
+        const far = box.scrollHeight - box.scrollTop - box.clientHeight > JUMP_INSTANT_PX;
+        box.scrollTo({ top: box.scrollHeight, behavior: far ? 'auto' : 'smooth' });
+        following = true;
+        seenTopId = newestId();
+        updateJump();
+    }
+
+    $('jump-latest').addEventListener('click', jumpToLatest);
+
+    // Images and link previews have no height until they load, so one finishing
+    // above the viewport shifts everything below it. Give the scroll back the
+    // height it just gained — this is the classic "my place jumped" bug.
+    $('messages').addEventListener('load', (e) => {
+        const box = $('messages');
+        if (!(e.target instanceof HTMLImageElement)) return;
+        const grew = box.scrollHeight - lastHeight;
+        lastHeight = box.scrollHeight;
+        if (grew <= 0) return;
+
+        if (following && !filterActive()) {
+            box.scrollTop = box.scrollHeight;      // stay pinned to the newest
+        } else if (e.target.getBoundingClientRect().top < box.getBoundingClientRect().top) {
+            box.scrollTop += grew;                 // it grew above us
+        }
+        lastHeight = box.scrollHeight;
+        updateJump();
+    }, true);
 
     // Which type(s) a post satisfies, for filtering.
     function postMatchesFilter(p) {
@@ -469,6 +572,8 @@
         return filterActive() ? posts.filter(postMatchesFilter) : posts;
     }
 
+    let renderedSig = null;
+
     function renderMessages() {
         // A background poll must not rip the inline editor out from under
         // someone mid-sentence. The list resyncs when the edit finishes.
@@ -477,6 +582,14 @@
         const box = $('messages');
         const active = filterActive();
         const list = displayedPosts();
+
+        // Most polls return exactly what's already on screen. Rebuilding it
+        // anyway would reset the scroll, restart every image load and throw away
+        // the previews — so when nothing changed, leave the DOM alone.
+        const sig = JSON.stringify([channel, active, hasMore, list]);
+        if (sig === renderedSig && box.firstChild) return;
+        renderedSig = sig;
+
         box.classList.toggle('filtering', active);
         box.innerHTML = '';
 
@@ -616,11 +729,13 @@
         act('edit', () => startEdit(p, el));
         act('delete', () => deletePost(p));
 
-        // Right-click anywhere on the message opens the same actions.
+        // Right-click anywhere on the message opens the same actions — except on
+        // an image, which gets the image actions without having to be expanded
+        // first. Text beside an image still gets the message menu.
         el.addEventListener('contextmenu', (e) => {
-            if (e.target.closest('[data-lightbox]')) return;   // image has its own menu
             e.preventDefault();
-            openCtxMenu(messageMenuItems(p, el), e.clientX, e.clientY);
+            const ref = imageRef(e.target.closest('.msg-att img, img.link-image'));
+            openCtxMenu(ref ? imageMenuItems(ref) : messageMenuItems(p, el), e.clientX, e.clientY);
         });
 
         // Swap the audio placeholder for a real player (needs JS wiring, so it
@@ -656,7 +771,7 @@
         if (a) { e.preventDefault(); L.app.openExternal(a.getAttribute('href')); return; }
 
         const img = e.target.closest('img[data-lightbox]');
-        if (img) { openLightbox(img.src, img.dataset.attKey, img.dataset.attName); return; }
+        if (img) { openLightbox(img.src, imageRef(img)); return; }
 
         const save = e.target.closest('.att-save');
         if (!save) return;
@@ -670,6 +785,9 @@
 
     $('messages').addEventListener('scroll', () => {
         const box = $('messages');
+        following = nearBottom();
+        lastHeight = box.scrollHeight;
+        updateJump();
         if (box.scrollTop < 60 && hasMore && !loading && posts.length) {
             loadMessages(false, posts[0].id);
         }
@@ -2386,12 +2504,53 @@
         ];
     }
 
+    // ---------- images ------------------------------------------------------
+
+    // Everything that acts on an image takes one of these: an attachment key
+    // (ours) or a remote url (a link preview), plus a display name.
+    function imageRef(el) {
+        if (!el || el.tagName !== 'IMG') return null;
+        if (el.dataset.attKey) return { key: el.dataset.attKey, name: el.dataset.attName || 'image' };
+        if (/^https?:/i.test(el.src)) return { url: el.src, name: urlFileName(el.src) };
+        return null;
+    }
+
+    function urlFileName(url) {
+        try {
+            const n = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+            return n || 'image';
+        } catch (e) { return 'image'; }
+    }
+
+    // A link others can actually open: our attachments live behind the board's
+    // gated file endpoint, link previews are already public urls.
+    function shareableUrl(ref) {
+        if (ref.url) return ref.url;
+        if (!ref.key) return null;
+        const base = (settings.baseUrl || 'https://scarmonit.com').replace(/\/+$/, '');
+        return base + '/api/board/file?key=' + encodeURIComponent(ref.key);
+    }
+
+    // The one definition of the image actions. The inline image in chat and the
+    // expanded lightbox both open this, so they can't drift apart.
+    function imageMenuItems(ref) {
+        const link = shareableUrl(ref);
+        return [
+            { label: 'Copy image', icon: '⧉', onClick: () => copyImage(ref) },
+            { label: 'Save image as…', icon: '💾', onClick: () => saveImageAs(ref) },
+            { label: 'Download image', icon: '⤓', onClick: () => downloadImage(ref) },
+            link && 'sep',
+            link && { label: 'Copy image link', icon: '🔗', onClick: () => copyImageLink(link) }
+        ];
+    }
+
     // ---------- image lightbox --------------------------------------------
 
-    let lightboxImage = null;   // { key, name }
+    let lightboxImage = null;   // an imageRef
 
-    function openLightbox(src, key, name) {
-        lightboxImage = { key, name };
+    function openLightbox(src, ref) {
+        lightboxImage = ref;
+        const name = ref && ref.name;
         const img = $('lb-image');
         img.src = src;
         setZoom(false);                       // always open fitted
@@ -2441,27 +2600,31 @@
     $('lb-image').addEventListener('contextmenu', (e) => {
         e.preventDefault();
         if (!lightboxImage) return;
-        const { key, name } = lightboxImage;
-        openCtxMenu([
-            { label: 'Download image', icon: '⤓', onClick: () => downloadImage(key, name) },
-            { label: 'Copy image', icon: '⧉', onClick: () => copyImage(key) },
-            { label: 'Save image as…', icon: '💾', onClick: () => saveAttachment(key, name) }
-        ], e.clientX, e.clientY);
+        openCtxMenu(imageMenuItems(lightboxImage), e.clientX, e.clientY);
     });
 
-    async function downloadImage(key, name) {
-        const res = await L.downloadAttachment(key, name);
+    async function downloadImage(ref) {
+        const res = await L.downloadAttachment(ref.key, ref.name, ref.url);
         if (res && res.success) { toast('Saved to ' + res.path); L.revealFile(res.path); }
         else toast('Could not download: ' + ((res && res.error) || 'unknown error'), true);
     }
 
-    async function copyImage(key) {
-        const res = await L.copyImage(key);
+    async function copyImage(ref) {
+        const res = await L.copyImage(ref.key, ref.url);
         toast(res && res.success ? 'Image copied' : 'Could not copy: ' + ((res && res.error) || 'unknown'), !(res && res.success));
     }
 
-    async function saveAttachment(key, name) {
-        const res = await L.saveAttachment(key, name);
+    function saveImageAs(ref) { return saveAttachment(ref.key, ref.name, ref.url); }
+
+    function copyImageLink(url) {
+        navigator.clipboard.writeText(url).then(
+            () => toast('Link copied'),
+            () => toast('Could not copy', true)
+        );
+    }
+
+    async function saveAttachment(key, name, url) {
+        const res = await L.saveAttachment(key, name, url);
         if (res && res.success) { toast('Saved to ' + res.path); L.revealFile(res.path); }
         else if (res && !res.canceled) toast('Could not save: ' + ((res && res.error) || 'unknown error'), true);
     }
@@ -2634,7 +2797,7 @@
         img.src = url;
         img.loading = 'lazy';
         img.alt = '';
-        img.addEventListener('click', () => openLightbox(url, null, url.split('/').pop()));
+        img.addEventListener('click', () => openLightbox(url, imageRef(img)));
         // A hotlinked image that 404s shouldn't leave a broken icon behind.
         img.addEventListener('error', () => img.remove());
         return img;
@@ -2768,9 +2931,10 @@
             $('filter-count').textContent = '';
             if (filterScrollTop !== null) {
                 const t = filterScrollTop; filterScrollTop = null;
-                requestAnimationFrame(() => { $('messages').scrollTop = t; });
+                requestAnimationFrame(() => { $('messages').scrollTop = t; settleScroll(); });
             }
         }
+        settleScroll();
     }
 
     function updateFilterCount(n) {
