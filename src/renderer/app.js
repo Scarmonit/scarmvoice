@@ -2538,23 +2538,73 @@
     }
 
     // ---------- per-participant popover -----------------------------------
+    // Opened from either voice list. Same floating surface as the context menu,
+    // but it needs a switch and a slider, which a menu of items cannot express.
 
     let popFor = null;
+    // Matches --tb and titleBarOverlay's height: the popover is position:fixed,
+    // so without this clamp it can slide under the native caption buttons.
+    const POP_TITLEBAR = 38;
+
+    // Flip to whichever side has room. This matters because the two lists that
+    // open it sit on OPPOSITE window edges — the members sidebar is hard against
+    // the right, so there the popover has to open leftwards.
+    function placePopover(pop, anchor) {
+        const r = anchor.getBoundingClientRect();
+        const w = pop.offsetWidth;
+        const h = pop.offsetHeight;
+        const M = 10;
+
+        let left = r.right + 8;
+        if (left + w > window.innerWidth - M) left = r.left - 8 - w;
+        left = Math.max(M, Math.min(left, window.innerWidth - w - M));
+
+        let top = Math.min(r.top - 6, window.innerHeight - h - M);
+        top = Math.max(POP_TITLEBAR + 6, top);
+
+        pop.style.left = Math.round(left) + 'px';
+        pop.style.top = Math.round(top) + 'px';
+    }
+
+    // 0-200 maps onto the track, so 100% lands dead centre and the accent fill
+    // reads as "how far from normal".
+    function paintPopVolume(pct) {
+        $('pop-vol-val').textContent = pct + '%';
+        $('pop-vol').style.setProperty('--fill', (pct / 2) + '%');
+    }
 
     function openPopover(p, anchor) {
-        popFor = p.id;
         const pop = $('popover');
+        // Clicking the same person again closes it, like every other toggle.
+        if (popFor === p.id && !pop.hidden) { closePopover(); return; }
+        popFor = p.id;
+
+        $('pop-avatar').textContent = initials(p.name);
+        $('pop-avatar').setAttribute('style', avatarStyle(p.name));
         $('pop-name').textContent = p.name;
+
+        // The custom status lives in the presence list, not the SFU roster.
+        const m = members.find((x) => x.client_id === p.id);
+        const away = !!(m && m.status === 'away');
+        const sub = (m && m.custom) || (p.muted ? 'Microphone muted' : (away ? 'Away' : ''));
+        const st = $('pop-status');
+        st.textContent = sub;
+        st.hidden = !sub;
+        $('pop-presence').className = 'pop-presence' + (away ? ' away' : '');
+
         const vol = settings.localVolumes && settings.localVolumes[p.id] !== undefined
             ? Number(settings.localVolumes[p.id]) : 1;
-        $('pop-vol').value = Math.round(vol * 100);
-        $('pop-vol-val').textContent = Math.round(vol * 100) + '%';
+        const pct = Math.round(vol * 100);
+        $('pop-vol').value = pct;
+        paintPopVolume(pct);
         $('pop-mute').checked = !!(settings.localMuted && settings.localMuted[p.id]);
 
-        const r = anchor.getBoundingClientRect();
-        pop.hidden = false;
-        pop.style.left = Math.min(r.right + 8, window.innerWidth - 232) + 'px';
-        pop.style.top = Math.min(r.top, window.innerHeight - pop.offsetHeight - 12) + 'px';
+        const blocked = isBlocked(p.id);
+        $('pop-block-label').textContent = blocked ? 'Unblock' : 'Block';
+        $('pop-block').classList.toggle('danger', !blocked);
+
+        pop.hidden = false;              // shown before measuring, so it has a size
+        placePopover(pop, anchor);
     }
 
     function closePopover() { $('popover').hidden = true; popFor = null; }
@@ -2562,7 +2612,7 @@
     $('pop-vol').addEventListener('input', async (e) => {
         if (!popFor) return;
         const v = Number(e.target.value) / 100;
-        $('pop-vol-val').textContent = e.target.value + '%';
+        paintPopVolume(Number(e.target.value));
         const volumes = Object.assign({}, settings.localVolumes || {});
         volumes[popFor] = v;
         await saveSettings({ localVolumes: volumes });
@@ -2576,6 +2626,20 @@
         await saveSettings({ localMuted: muted });
         voice.setLocalMuted(popFor, e.target.checked);
         renderVoiceRoster();
+    });
+
+    $('pop-mention').addEventListener('click', () => {
+        const name = $('pop-name').textContent;
+        closePopover();
+        if (name) insertAtCursor(input, '@' + name + ' ');
+    });
+
+    $('pop-block').addEventListener('click', () => {
+        const cid = popFor;
+        const name = $('pop-name').textContent;
+        closePopover();
+        if (!cid) return;
+        if (isBlocked(cid)) unblockPerson(cid); else blockPerson(cid, name);
     });
 
     document.addEventListener('mousedown', (e) => {

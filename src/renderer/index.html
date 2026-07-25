@@ -607,17 +607,45 @@
   </div>
 </div>
 
-<!-- per-participant volume popover -->
+<!-- Per-participant popover, opened from either voice list. Same floating
+     surface as the context menu, with controls a menu can't express. -->
 <div id="popover" class="popover" hidden>
-  <div class="pop-name" id="pop-name"></div>
+  <header class="pop-head">
+    <span class="pop-av-wrap">
+      <span class="pop-avatar" id="pop-avatar"></span>
+      <i class="pop-presence" id="pop-presence" aria-hidden="true"></i>
+    </span>
+    <span class="pop-id">
+      <span class="pop-name" id="pop-name"></span>
+      <span class="pop-status" id="pop-status" hidden></span>
+    </span>
+  </header>
+
+  <div class="pop-sep"></div>
+
   <label class="pop-row">
-    <input type="checkbox" id="pop-mute"><span>Mute for me</span>
+    <span class="pop-label">Mute for me</span>
+    <span class="switch">
+      <input type="checkbox" id="pop-mute">
+      <i aria-hidden="true"></i>
+    </span>
   </label>
-  <label class="pop-row">
-    <span>Volume</span>
-    <input type="range" id="pop-vol" min="0" max="200" step="1">
-    <output id="pop-vol-val"></output>
-  </label>
+
+  <div class="pop-row pop-vol-head">
+    <span class="pop-label">Volume</span>
+    <output id="pop-vol-val" for="pop-vol">100%</output>
+  </div>
+  <input type="range" id="pop-vol" class="pop-slider" min="0" max="200" step="1"
+         aria-label="Volume for this person">
+
+  <div class="pop-sep"></div>
+
+  <button type="button" class="pop-action" id="pop-mention">
+    <span class="ico" data-icon="at"></span><span>Mention in chat</span>
+  </button>
+  <button type="button" class="pop-action danger" id="pop-block">
+    <span class="ico" data-icon="ban"></span><span id="pop-block-label">Block</span>
+  </button>
 </div>
 
 <!-- Screen-share source picker. Electron on Windows has no system picker, so
