@@ -3855,10 +3855,30 @@
 
     function emojiPopOpen() { return !!(emojiPop && !emojiPop.hidden); }
 
+    // The picker's own scrollbar and its scrolling list are part of the picker,
+    // so "outside" has to be measured against the element — including for scroll
+    // events, whose target is the grid rather than a clicked node.
+    function insideEmojiPop(node) {
+        return !!(emojiPop && node && emojiPop.contains(node));
+    }
+
     document.addEventListener('mousedown', (e) => {
-        if (emojiPopOpen() && !e.target.closest('.emoji-pop')) closeEmojiPop();
+        if (emojiPopOpen() && !insideEmojiPop(e.target)) closeEmojiPop();
     });
-    document.addEventListener('scroll', closeEmojiPop, true);
+
+    // Dismiss when the PAGE scrolls, because the picker is positioned against an
+    // anchor that has just moved out from under it.
+    //
+    // Scroll events do not bubble, but a capture listener on document still sees
+    // every one of them — so this used to fire for the picker scrolling its own
+    // emoji list and close it the instant you touched the wheel or the scrollbar.
+    // Scrolls originating inside the picker are not the page moving.
+    document.addEventListener('scroll', (e) => {
+        if (!emojiPopOpen() || insideEmojiPop(e.target)) return;
+        closeEmojiPop();
+    }, true);
+
+    // Whole-window blur only — the scrollbar never takes focus off the window.
     window.addEventListener('blur', closeEmojiPop);
 
     // ---------- links -------------------------------------------------------
