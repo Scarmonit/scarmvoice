@@ -48,7 +48,12 @@ const DEFAULTS = {
     voiceSounds: true,           // join / leave chimes while in a call
     windowBounds: null,          // restored geometry (never the maximised rect)
     windowMaximized: false,
-    chatFontSize: 'medium'       // small | medium | large | xlarge
+    chatFontSize: 'medium',      // small | medium | large | xlarge
+
+    // Shell layout
+    showMembers: true,           // right-hand members sidebar
+    catTextOpen: true,           // "Text Channels" category expanded
+    catVoiceOpen: true           // "Voice Channels" category expanded
 };
 
 // The app used to be called "The Lounge", and productName decides

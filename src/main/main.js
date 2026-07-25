@@ -6,6 +6,7 @@
 //   • global push-to-talk (ptt.js)
 //   • a lounge:// protocol that proxies cookie-gated attachments to the renderer
 const path = require('path');
+const fs = require('fs');
 const fsp = require('fs/promises');
 const {
     app, BrowserWindow, Tray, Menu, ipcMain, shell, protocol, session, Notification, nativeImage,
@@ -29,16 +30,30 @@ let pendingShareSource = null;   // { id, audio } chosen in the renderer's picke
 const youtubeCache = new Map();  // videoId -> { value, until }
 let isElevated = false;          // see the app:isElevated handler
 
-// `net session` needs administrator rights, so its exit code is a reliable
-// elevation probe on Windows. Async so it never delays startup.
+// Elevation matters because Windows silently blocks drag-and-drop from Explorer
+// into an elevated window, so we warn about it.
+//
+// Listing %SystemRoot%\System32\config requires administrator rights, which
+// makes it a reliable probe costing one syscall (~0.1 ms). This replaced
+// `child_process.exec('net session')`, which shelled through cmd.exe and spawned
+// conhost + net + net1 on every launch — wasteful, and a GUI app invoking
+// net.exe at startup is exactly the recon pattern EDR heuristics flag.
+//
+// Do NOT "simplify" this to fs.accessSync(dir, R_OK): on Windows that returns
+// success for a NON-elevated process too, so it reports everyone as elevated.
+// Verified both ways — readdir throws EPERM unelevated, succeeds elevated.
+//
+// Synchronous on purpose: the old async probe left a window where the renderer
+// could ask app:isElevated before the answer existed and get a wrong `false`.
 function detectElevation() {
     if (process.platform !== 'win32') return;
-    require('child_process').exec('net session', { windowsHide: true }, (err) => {
-        isElevated = !err;
-        if (isElevated) {
-            console.warn('[app] running elevated — Windows will block drag-and-drop from Explorer');
-        }
-    });
+    try {
+        fs.readdirSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'config'));
+        isElevated = true;
+        console.warn('[app] running elevated — Windows will block drag-and-drop from Explorer');
+    } catch (e) {
+        isElevated = false;
+    }
 }
 
 // Single instance: a second launch focuses the running window instead of
@@ -104,12 +119,14 @@ function createWindow() {
         minWidth: 900,
         minHeight: 560,
         show: false,
-        backgroundColor: '#0a0a0f',
+        backgroundColor: '#101218',
         icon: ICON,
         autoHideMenuBar: true,
-        // Native window buttons drawn over our own title bar.
+        // Native window buttons drawn over our own title bar. The colour must
+        // track the renderer's title bar (--rail) or the caption buttons sit on a
+        // visible patch of the wrong shade.
         titleBarStyle: 'hidden',
-        titleBarOverlay: { color: '#0d0d14', symbolColor: '#e8e8f0', height: 38 },
+        titleBarOverlay: { color: '#08090c', symbolColor: '#e9ebf0', height: 38 },
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,

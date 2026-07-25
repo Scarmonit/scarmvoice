@@ -324,8 +324,8 @@
     // and avatars are all sized in em against it, so they scale together.
 
     const FONT_SIZES = [
-        { key: 'small', px: 13, label: 'Small' },
-        { key: 'medium', px: 15, label: 'Medium' },
+        { key: 'small', px: 14, label: 'Small' },
+        { key: 'medium', px: 16, label: 'Medium' },
         { key: 'large', px: 18, label: 'Large' },
         { key: 'xlarge', px: 21, label: 'Extra Large' }
     ];
@@ -498,6 +498,8 @@
         try { reads = JSON.parse(localStorage.getItem('lounge_reads') || '{}'); } catch (e) { reads = {}; }
 
         applyChatFontSize(settings.chatFontSize);
+        applyChrome();
+        setChannelTitle(channel);
         warnIfElevated();
         window.loungeSounds.init(settings);
         setupVoice();
@@ -527,24 +529,36 @@
     function renderChannels() {
         const list = $('channel-list');
         list.innerHTML = '';
+        let total = 0;
         channels.forEach((c) => {
             const b = document.createElement('button');
-            b.className = 'chan' + (c.name === channel ? ' active' : '');
-            b.dataset.channel = c.name;
             const unread = c.name === channel ? 0 : (c.unread || 0);
+            total += unread;
+            b.className = 'chan' + (c.name === channel ? ' active' : '') + (unread ? ' unread' : '');
+            b.dataset.channel = c.name;
             b.innerHTML = `<span class="hash">#</span><span class="chan-name">${esc(c.name)}</span>` +
                 (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
             b.addEventListener('click', () => switchChannel(c.name));
             list.appendChild(b);
         });
+        // The rail's server icon carries the total, the way Discord badges a
+        // server you aren't currently looking at.
+        const badge = $('rail-badge');
+        badge.textContent = total > 99 ? '99+' : String(total);
+        badge.hidden = !total;
+    }
+
+    // Channel name only — the '#' is a separate glyph in the header.
+    function setChannelTitle(name) {
+        $('chan-title').textContent = name;
+        $('composer-input').placeholder = 'Message #' + name;
     }
 
     async function switchChannel(name) {
         if (name === channel) return;
         channel = name;
         await saveSettings({ channel: name });
-        $('chan-title').textContent = '# ' + name;
-        $('composer-input').placeholder = 'Message #' + name;
+        setChannelTitle(name);
         posts = [];
         following = true;
         seenTopId = 0;
@@ -574,7 +588,7 @@
         channels = res.channels || channels;
         const clean = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 24);
         channel = clean;
-        $('chan-title').textContent = '# ' + channel;
+        setChannelTitle(channel);
         renderChannels();
         loadMessages(true);
     });
@@ -594,7 +608,7 @@
         if (!res || !res.success) return toast((res && res.error) || 'Delete failed', true);
         channels = res.channels || [];
         channel = 'general';
-        $('chan-title').textContent = '# general';
+        setChannelTitle('general');
         renderChannels();
         loadMessages(true);
     });
@@ -870,7 +884,12 @@
         el.dataset.id = p.id;
 
         const parts = [];
-        parts.push(`<div class="msg-avatar" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</div>`);
+        // The gutter holds the avatar, and — on a grouped message — the timestamp
+        // that takes its place on hover.
+        parts.push('<div class="msg-gutter">' +
+            `<div class="msg-avatar" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</div>` +
+            (grouped ? `<span class="msg-gutter-time">${esc(timeStr(p.created_at))}</span>` : '') +
+            '</div>');
         parts.push('<div class="msg-body">');
 
         if (p.quote) {
@@ -1938,10 +1957,14 @@
     function setupVoice() {
         voice = window.createVoice({
             onState: (st) => {
-                $('btn-join-voice').hidden = st.joined || st.joining;
+                // The voice channel row is a channel, not a button that vanishes:
+                // it stays put while connected and shows who is in it beneath.
+                const vchan = $('btn-join-voice');
+                vchan.classList.toggle('connected', !!st.joined);
+                vchan.classList.toggle('connecting', !!st.joining);
+                vchan.disabled = !!st.joining;
+                vchan.title = st.joining ? 'Connecting…' : (st.joined ? 'You are in VoiceChat' : 'Join VoiceChat');
                 $('voice-live').hidden = !st.joined;
-                $('btn-join-voice').disabled = st.joining;
-                $('btn-join-voice').textContent = st.joining ? 'Connecting…' : 'Join Voice';
 
                 $('btn-mute').setAttribute('aria-pressed', String(st.muted));
                 $('btn-mute').title = st.muted ? 'Unmute microphone' : 'Mute microphone';
@@ -1966,6 +1989,11 @@
                 $('btn-cam').classList.toggle('on', !!st.cam);
                 $('btn-cam-label').textContent = st.cam ? 'Turn off camera' : 'Turn on camera';
 
+                // Both tray buttons are icon-only, so the label doubles as the
+                // tooltip rather than being read off the button face.
+                $('btn-cam').title = $('btn-cam-label').textContent;
+                $('btn-share').title = $('btn-share-label').textContent;
+
                 // Remote share audio has to follow the deafen state too.
                 const sv = $('stage-video');
                 if (sv) sv.muted = st.deafened || !!(st.sharer && st.sharer.isLocal);
@@ -1983,8 +2011,10 @@
             onParticipants: () => renderVoiceRoster(),
             onSpeaking: (cid, on) => {
                 speaking[cid] = on;
-                const el = document.querySelector(`.vp[data-cid="${CSS.escape(cid)}"]`);
-                if (el) el.classList.toggle('speaking', on);
+                // The same person is listed twice — under the voice channel and in
+                // the members sidebar — so light every copy, not just the first.
+                document.querySelectorAll(`.vp[data-cid="${CSS.escape(cid)}"]`)
+                    .forEach((el) => el.classList.toggle('speaking', on));
                 markCamSpeaking(cid, on);
             },
             onError: (msg) => toast('Voice: ' + msg, true)
@@ -2015,7 +2045,12 @@
         toast('Left voice');
     }
 
-    $('btn-join-voice').addEventListener('click', joinVoice);
+    // Clicking the channel you're already in is a no-op, as in Discord — leaving
+    // is the disconnect button in the voice panel.
+    $('btn-join-voice').addEventListener('click', () => {
+        if (voice && voice.isJoined()) return;
+        joinVoice();
+    });
     $('btn-leave-voice').addEventListener('click', leaveVoice);
 
     $('btn-mute').addEventListener('click', () => {
@@ -2341,12 +2376,45 @@
         window.loungeSounds.voiceRoster(list, inCall, settings.clientId);
 
         list.forEach((p) => addRosterName(p.name));
+        renderVoiceUsers(list, inCall);
         renderMembers(list, inCall);
     }
 
-    // One list for everyone present — people in the call sort to the top and
-    // keep the per-person volume controls, rather than living in a second
-    // roster of their own. Mirrors the website's members sidebar.
+    // Who is in the call, listed under the voice channel in the sidebar. Rows
+    // carry .vp so the speaking highlight and the per-person volume popover work
+    // exactly as they do in the members sidebar.
+    function renderVoiceUsers(list, inCall) {
+        const ul = $('voice-users');
+        ul.innerHTML = '';
+
+        list.forEach((p) => {
+            const isMe = p.id === settings.clientId;
+            const localMuted = !isMe && settings.localMuted && settings.localMuted[p.id];
+            // In the room but absent from our SFU peer list: present, yet unable
+            // to exchange media with us.
+            const unreachable = !!(inCall && p.remoteOnly && !isMe);
+
+            const li = document.createElement('li');
+            li.className = 'vp vu' + (isMe ? ' me' : '') +
+                (speaking[p.id] ? ' speaking' : '') +
+                (unreachable ? ' unreachable' : '');
+            li.dataset.cid = p.id;
+            li.innerHTML =
+                `<span class="av" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</span>` +
+                `<span class="vp-name">${esc(p.name)}${isMe ? ' (you)' : ''}</span>` +
+                (unreachable ? '<span class="vp-flag" title="In voice, but not connected to you — they may need to reload the website">⚠</span>' : '') +
+                (p.muted || localMuted ? '<span class="vp-flag">🔇</span>' : '');
+
+            if (!isMe && inCall && !p.remoteOnly) {
+                li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
+            }
+            ul.appendChild(li);
+        });
+    }
+
+    // Everyone present, grouped online / away like Discord's members sidebar.
+    // People in the call sort to the top of their group and keep the per-person
+    // volume controls.
     function renderMembers(voiceList, inCall) {
         const ul = $('members-list');
         const inVoice = new Map(voiceList.map((p) => [p.id, p]));
@@ -2370,10 +2438,11 @@
             rows.push({ id: p.id, name: p.name, status: 'online', custom: '', voice: p });
         });
 
-        rows.sort((a, b) =>
-            (a.voice ? 0 : 1) - (b.voice ? 0 : 1) ||
-            (a.status === 'away' ? 1 : 0) - (b.status === 'away' ? 1 : 0) ||
-            a.name.localeCompare(b.name));
+        // Within a group, whoever is in the call comes first, then alphabetical.
+        const byPresence = (a, b) =>
+            (a.voice ? 0 : 1) - (b.voice ? 0 : 1) || a.name.localeCompare(b.name);
+        const online = rows.filter((r) => r.status !== 'away').sort(byPresence);
+        const away = rows.filter((r) => r.status === 'away').sort(byPresence);
 
         $('members-count').textContent = rows.length ? String(rows.length) : '';
 
@@ -2386,7 +2455,7 @@
             return;
         }
 
-        rows.forEach((r) => {
+        const memberRow = (r) => {
             const p = r.voice;
             const isMe = r.id === settings.clientId;
             const li = document.createElement('li');
@@ -2405,7 +2474,10 @@
 
             const sub = r.custom || (r.status === 'away' ? 'Away' : '');
             li.innerHTML =
+                '<span class="av-wrap">' +
                 `<span class="av" style="${avatarStyle(r.name)}">${esc(initials(r.name))}</span>` +
+                `<i class="presence${r.status === 'away' ? ' away' : ''}" aria-hidden="true"></i>` +
+                '</span>' +
                 '<span class="vp-name">' + esc(r.name) + (isMe ? ' (you)' : '') +
                 (sub ? `<span class="vp-sub">${esc(sub)}</span>` : '') + '</span>' +
                 (p ? '<span class="vp-invoice" title="In voice">🔊</span>' : '') +
@@ -2415,8 +2487,19 @@
             if (p && !isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
             }
-            ul.appendChild(li);
-        });
+            return li;
+        };
+
+        const group = (label, list) => {
+            if (!list.length) return;
+            const head = document.createElement('li');
+            head.className = 'mp-group';
+            head.textContent = `${label} — ${list.length}`;
+            ul.appendChild(head);
+            list.forEach((r) => ul.appendChild(memberRow(r)));
+        };
+        group('Online', online);
+        group('Away', away);
     }
 
     // ---------- per-participant popover -----------------------------------
@@ -2846,6 +2929,53 @@
     }
     $('btn-name').addEventListener('click', changeName);
 
+    // ---------- layout chrome: rail, categories, members sidebar ----------
+
+    function applyMembersPanel(show) {
+        $('members-panel').hidden = !show;
+        const btn = $('btn-members');
+        btn.classList.toggle('on', show);
+        btn.setAttribute('aria-pressed', String(show));
+        btn.title = show ? 'Hide member list' : 'Show member list';
+    }
+
+    $('btn-members').addEventListener('click', async () => {
+        const show = $('members-panel').hidden;      // toggling to
+        applyMembersPanel(show);
+        await saveSettings({ showMembers: show });
+    });
+
+    // Collapsible channel categories, remembered across launches.
+    const CATS = { text: { sec: 'text-section', key: 'catTextOpen' }, voice: { sec: 'voice-section', key: 'catVoiceOpen' } };
+
+    function applyCategory(which, open) {
+        $(CATS[which].sec).classList.toggle('collapsed', !open);
+        $('cat-' + which).setAttribute('aria-expanded', String(open));
+    }
+
+    Object.keys(CATS).forEach((which) => {
+        $('cat-' + which).addEventListener('click', async () => {
+            const open = $(CATS[which].sec).classList.contains('collapsed');   // toggling to
+            applyCategory(which, open);
+            await saveSettings({ [CATS[which].key]: open });
+        });
+    });
+
+    // The rail's server mark: back to the live end of the conversation.
+    $('rail-home').addEventListener('click', () => { jumpToLatest(); input.focus(); });
+    $('rail-settings').addEventListener('click', openSettings);
+
+    // Everything about the shell that comes out of saved settings.
+    function applyChrome() {
+        applyMembersPanel(settings.showMembers !== false);
+        applyCategory('text', settings.catTextOpen !== false);
+        applyCategory('voice', settings.catVoiceOpen !== false);
+        let host = '';
+        try { host = new URL(settings.baseUrl || 'https://scarmonit.com').host; }
+        catch (e) { host = settings.baseUrl || ''; }
+        $('sh-host').textContent = host;
+    }
+
     // ---------- settings modal --------------------------------------------
 
     let recordingPtt = false;
@@ -2891,6 +3021,44 @@
 
     $('btn-settings').addEventListener('click', openSettings);
     $('settings-close').addEventListener('click', () => { $('settings').hidden = true; });
+
+    // Section nav down the left of the settings sheet, built from the sheet's own
+    // headings so adding a section needs no extra wiring.
+    (function buildSettingsNav() {
+        const modal = document.querySelector('#settings .modal');
+        const body = $('settings-body');
+        const nav = document.createElement('nav');
+        nav.className = 'set-nav';
+        const items = [];
+
+        body.querySelectorAll('.set-group').forEach((g) => {
+            const h = g.querySelector('h3');
+            if (!h) return;                      // the sign-out row has no heading
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'set-nav-item';
+            b.textContent = h.textContent;
+            // Rects, not offsetTop: the modal is a centred grid item, so offset
+            // parents here are not the scroll container.
+            b.addEventListener('click', () => {
+                body.scrollTop += g.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+            });
+            nav.appendChild(b);
+            items.push({ g, b });
+        });
+
+        modal.insertBefore(nav, modal.firstChild);
+        if (items.length) items[0].b.classList.add('on');
+
+        body.addEventListener('scroll', () => {
+            const top = body.getBoundingClientRect().top;
+            let active = items[0];
+            items.forEach((it) => {
+                if (it.g.getBoundingClientRect().top - top <= 24) active = it;
+            });
+            items.forEach((it) => it.b.classList.toggle('on', it === active));
+        });
+    })();
     $('settings').addEventListener('mousedown', (e) => {
         if (e.target === $('settings')) $('settings').hidden = true;
     });
