@@ -23,6 +23,10 @@
 </head>
 <body>
 
+<!-- Every <span data-icon="…"> below is swapped for its glyph by icons.js, which
+     is the single source for every icon in the app. Emoji never appear as
+     controls — they are content only (reactions, the picker, message text). -->
+
 <!-- Draggable title bar. Native window buttons are overlaid on the right by
      Electron's titleBarOverlay, so we keep that area clear. -->
 <header id="titlebar">
@@ -36,7 +40,7 @@
 
 <!-- Non-blocking update banner. Sits under the title bar, above the app. -->
 <div id="update-banner" hidden>
-  <span class="ub-icon" aria-hidden="true">⬆</span>
+  <span class="ub-icon" aria-hidden="true"><span class="ico" data-icon="arrow-up"></span></span>
   <div class="ub-body">
     <span class="ub-text" id="ub-text"></span>
     <button class="ub-notes-toggle" id="ub-notes-toggle" hidden>release notes</button>
@@ -45,7 +49,7 @@
   </div>
   <div class="ub-actions">
     <button class="ub-btn" id="ub-action"></button>
-    <button class="ub-x" id="ub-dismiss" title="Dismiss">✕</button>
+    <button class="ub-x" id="ub-dismiss" title="Dismiss"><span class="ico" data-icon="x"></span></button>
   </div>
 </div>
 
@@ -61,7 +65,7 @@
     <div class="rail-sep"></div>
     <div class="rail-spacer"></div>
     <button type="button" class="rail-btn" id="rail-settings" title="Settings">
-      <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 3V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 17 4.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1z"/></svg>
+      <span class="ico" data-icon="gear"></span>
     </button>
   </nav>
 
@@ -76,11 +80,11 @@
       <section class="side-section" id="text-section">
         <div class="cat-head">
           <button type="button" class="cat-toggle" id="cat-text" aria-expanded="true">
-            <svg viewBox="0 0 24 24" class="cat-arrow" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            <span class="cat-arrow" data-icon="chevron"></span>
             <span>Text Channels</span>
           </button>
           <button type="button" class="cat-add" id="btn-add-channel" title="Create a channel">
-            <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span class="ico" data-icon="plus"></span>
           </button>
         </div>
         <nav id="channel-list"></nav>
@@ -89,7 +93,7 @@
       <section class="side-section" id="voice-section">
         <div class="cat-head">
           <button type="button" class="cat-toggle" id="cat-voice" aria-expanded="true">
-            <svg viewBox="0 0 24 24" class="cat-arrow" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            <span class="cat-arrow" data-icon="chevron"></span>
             <span>Voice Channels</span>
           </button>
         </div>
@@ -99,7 +103,7 @@
                Display label only: the room *id* stays "lounge" (settings.room),
                because that's the /api/rt/<room> path shared with the website. -->
           <button id="btn-join-voice" class="vchan" title="Join VoiceChat">
-            <svg viewBox="0 0 24 24" class="vchan-ico" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+            <span class="vchan-ico" data-icon="speaker"></span>
             <span class="vchan-name">VoiceChat</span>
             <span class="vchan-count" id="voice-count"></span>
           </button>
@@ -117,16 +121,16 @@
           <span id="vl-label">Voice connected</span>
         </div>
         <button id="btn-leave-voice" class="btn-leave" title="Disconnect">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M3.5 9a14 14 0 0 1 17 0v3.2a1.6 1.6 0 0 1-1.6 1.6h-2.1a1.6 1.6 0 0 1-1.6-1.4l-.2-1.6a11 11 0 0 0-6 0l-.2 1.6a1.6 1.6 0 0 1-1.6 1.4H5.1a1.6 1.6 0 0 1-1.6-1.6z"/><path d="M3 21L21 3"/></svg>
+          <span class="ico" data-icon="phone-off"></span>
         </button>
       </div>
       <div class="vp-actions">
         <button id="btn-cam" class="btn-share" hidden>
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          <span class="ico" data-icon="camera"></span>
           <span id="btn-cam-label">Turn on camera</span>
         </button>
         <button id="btn-share" class="btn-share" hidden>
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          <span class="ico" data-icon="screen"></span>
           <span id="btn-share-label">Share screen</span>
         </button>
       </div>
@@ -136,7 +140,7 @@
       <button class="me-id" id="btn-name" title="Change your display name or status">
         <span class="me-av-wrap">
           <span class="me-avatar" id="me-avatar"></span>
-          <i class="me-presence" aria-hidden="true"></i>
+          <i class="me-presence" id="me-presence" aria-hidden="true"></i>
         </span>
         <span class="me-text">
           <span class="me-name" id="me-name-text">Anonymous</span>
@@ -145,15 +149,15 @@
       </button>
       <div class="me-actions">
         <button class="icon-btn" id="btn-mute" title="Mute microphone" aria-pressed="false">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-          <svg viewBox="0 0 24 24" class="ico ico-off" aria-hidden="true" hidden><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><path d="M4 3l16 18"/></svg>
+          <span class="ico" data-icon="mic"></span>
+          <span class="ico ico-off" data-icon="mic-off" hidden></span>
         </button>
         <button class="icon-btn" id="btn-deafen" title="Deafen" aria-pressed="false">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2v-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2v-2z"/></svg>
-          <svg viewBox="0 0 24 24" class="ico ico-off" aria-hidden="true" hidden><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2v-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2v-2z"/><path d="M4 3l16 18"/></svg>
+          <span class="ico" data-icon="headset"></span>
+          <span class="ico ico-off" data-icon="headset-off" hidden></span>
         </button>
         <button class="icon-btn" id="btn-settings" title="Settings">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 3V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 17 4.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a2 2 0 1 1 0 4h-.1z"/></svg>
+          <span class="ico" data-icon="gear"></span>
         </button>
       </div>
     </div>
@@ -166,21 +170,21 @@
       <span id="chan-meta"></span>
       <div class="chan-actions">
         <button class="icon-btn" id="btn-pinned" title="Pinned messages">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M9 4h6l-1 5 4 4v2H6v-2l4-4-1-5z"/><path d="M12 15v5"/></svg>
+          <span class="ico" data-icon="pin"></span>
         </button>
-        <button class="icon-btn" id="btn-members" title="Show member list" aria-pressed="true">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17.5" cy="9" r="2.4"/><path d="M16 20a5.5 5.5 0 0 1 5.5-4.4"/></svg>
+        <button class="icon-btn" id="btn-members" title="Hide member list" aria-pressed="true">
+          <span class="ico" data-icon="users"></span>
         </button>
         <button class="ch-search" id="btn-search" title="Search messages (Ctrl+F)">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <span class="ico" data-icon="search"></span>
           <span>Search</span>
         </button>
         <span class="ch-sep" aria-hidden="true"></span>
         <button class="icon-btn" id="btn-rename-channel" title="Rename this channel">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16z"/><path d="M14 6l4 4"/></svg>
+          <span class="ico" data-icon="pencil"></span>
         </button>
         <button class="icon-btn" id="btn-delete-channel" title="Delete this channel">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
+          <span class="ico" data-icon="trash"></span>
         </button>
       </div>
     </header>
@@ -189,12 +193,12 @@
          over them too, so "images from Alice matching 'logo'" all combine. -->
     <div id="filter-bar" hidden>
       <div class="fb-top">
-        <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <span class="ico" data-icon="search"></span>
         <input type="text" id="filter-input" placeholder="Filter loaded messages, or search the archive…" autocomplete="off">
         <button type="button" class="fb-menu-btn" id="filter-scope" title="Search the whole archive in this channel, or every channel">This channel</button>
-        <button type="button" class="fb-menu-btn" id="filter-menu-btn">Filters <span class="fb-caret">▾</span></button>
+        <button type="button" class="fb-menu-btn" id="filter-menu-btn">Filters <span class="fb-caret ico" data-icon="chevron"></span></button>
         <span id="filter-count"></span>
-        <button class="icon-btn" id="filter-close" title="Close (Esc)">✕</button>
+        <button class="icon-btn" id="filter-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
       </div>
       <!-- Server-side results from /api/board/search, over the whole archive
            rather than only what's loaded. -->
@@ -202,15 +206,15 @@
       <div id="filter-chips" class="fb-chips"></div>
       <div id="filter-menu" class="fb-menu" hidden>
         <div class="fb-menu-head">Show only messages with</div>
-        <button class="fb-opt" type="button" data-type="links"><span>🔗</span> Links</button>
-        <button class="fb-opt" type="button" data-type="images"><span>🖼️</span> Images</button>
-        <button class="fb-opt" type="button" data-type="videos"><span>🎬</span> Videos</button>
-        <button class="fb-opt" type="button" data-type="audio"><span>🎵</span> Audio</button>
-        <button class="fb-opt" type="button" data-type="files"><span>📎</span> Any file</button>
+        <button class="fb-opt" type="button" data-type="links"><span class="ico" data-icon="link"></span> Links</button>
+        <button class="fb-opt" type="button" data-type="images"><span class="ico" data-icon="image"></span> Images</button>
+        <button class="fb-opt" type="button" data-type="videos"><span class="ico" data-icon="video"></span> Videos</button>
+        <button class="fb-opt" type="button" data-type="audio"><span class="ico" data-icon="music"></span> Audio</button>
+        <button class="fb-opt" type="button" data-type="files"><span class="ico" data-icon="paperclip"></span> Any file</button>
         <div class="fb-menu-sep"></div>
-        <button class="fb-opt" type="button" data-flag="pinned"><span>📌</span> Pinned</button>
-        <button class="fb-opt" type="button" data-flag="mentions"><span>@</span> Mentions of me</button>
-        <button class="fb-opt" type="button" data-flag="edited"><span>✎</span> Edited</button>
+        <button class="fb-opt" type="button" data-flag="pinned"><span class="ico" data-icon="pin"></span> Pinned</button>
+        <button class="fb-opt" type="button" data-flag="mentions"><span class="ico" data-icon="at"></span> Mentions of me</button>
+        <button class="fb-opt" type="button" data-flag="edited"><span class="ico" data-icon="pencil"></span> Edited</button>
         <div class="fb-menu-sep"></div>
         <label class="fb-from-row">From <select id="filter-from"><option value="">anyone</option></select></label>
       </div>
@@ -219,8 +223,8 @@
     <!-- Pinned messages for this channel. -->
     <div id="pinned-panel" hidden>
       <div class="pinned-head">
-        <span>📌 Pinned in #<span id="pinned-channel">general</span></span>
-        <button class="icon-btn" id="pinned-close" title="Close">✕</button>
+        <span class="pinned-title"><span class="ico" data-icon="pin"></span> Pinned in #<span id="pinned-channel">general</span></span>
+        <button class="icon-btn" id="pinned-close" title="Close"><span class="ico" data-icon="x"></span></button>
       </div>
       <div id="pinned-list"></div>
     </div>
@@ -259,7 +263,7 @@
       <div id="messages" role="log" aria-live="polite"></div>
       <button type="button" id="jump-latest" class="jump-latest" aria-hidden="true" title="Jump to the newest messages">
         <span class="jump-count" id="jump-count" hidden></span>
-        <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        <span class="ico" data-icon="arrow-down"></span>
         <span>Jump to present</span>
       </button>
     </div>
@@ -269,7 +273,7 @@
     <form id="composer" autocomplete="off">
       <div id="reply-chip" hidden>
         <span id="reply-chip-text"></span>
-        <button type="button" id="reply-chip-cancel" title="Cancel reply">✕</button>
+        <button type="button" id="reply-chip-cancel" title="Cancel reply"><span class="ico" data-icon="x"></span></button>
       </div>
       <div id="upload-list"></div>
       <!-- Voice message recorder; replaces the composer row while recording. -->
@@ -282,14 +286,18 @@
       </div>
       <div class="composer-row">
         <button type="button" id="btn-attach" title="Attach a file (max 25 MB)">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+          <span class="ico" data-icon="plus-circle"></span>
         </button>
         <textarea id="composer-input" rows="1" placeholder="Message #general" maxlength="2000"></textarea>
         <div class="composer-tools">
-          <button type="button" id="btn-mic" title="Record a voice message">🎤</button>
-          <button type="button" id="btn-emoji" title="Emoji">🙂</button>
+          <button type="button" id="btn-mic" title="Record a voice message">
+            <span class="ico" data-icon="mic-record"></span>
+          </button>
+          <button type="button" id="btn-emoji" title="Emoji">
+            <span class="ico" data-icon="smile"></span>
+          </button>
           <button type="submit" id="btn-send" title="Send (Enter)">
-            <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M3 20l18-8L3 4l4 8-4 8z"/></svg>
+            <span class="ico" data-icon="send"></span>
           </button>
         </div>
       </div>
@@ -299,21 +307,22 @@
     <!-- Thread panel: a drawer over the right of the message list. -->
     <aside id="thread-panel" hidden>
       <div class="thread-head">
+        <span class="ico" data-icon="thread"></span>
         <span id="thread-title">Thread</span>
-        <button class="icon-btn" id="thread-close" title="Close thread (Esc)">✕</button>
+        <button class="icon-btn" id="thread-close" title="Close thread (Esc)"><span class="ico" data-icon="x"></span></button>
       </div>
       <div id="thread-list"></div>
       <form id="thread-composer" autocomplete="off">
         <textarea id="thread-input" rows="1" placeholder="Reply in thread…" maxlength="2000"></textarea>
         <button type="submit" id="thread-send" title="Send (Enter)">
-          <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><path d="M3 20l18-8L3 4l4 8-4 8z"/></svg>
+          <span class="ico" data-icon="send"></span>
         </button>
       </form>
     </aside>
 
     <div id="drop-hint" hidden>
       <div class="drop-inner">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg>
+        <span class="drop-ico" data-icon="upload"></span>
         <span>Drop to upload</span>
       </div>
     </div>
@@ -349,25 +358,43 @@
   </form>
 </div>
 
-<!-- ---------- settings ---------- -->
+<!-- ---------- settings ----------
+     Grouped into sections; the left-hand nav is built from these headings, so
+     adding a <section class="set-group"><h3> is all a new group needs. -->
 <div id="settings" class="overlay" hidden>
   <div class="modal settings-modal">
     <header class="modal-head">
       <h2>Settings</h2>
-      <button class="icon-btn" id="settings-close" title="Close">✕</button>
+      <button class="icon-btn" id="settings-close" title="Close"><span class="ico" data-icon="x"></span></button>
     </header>
 
     <div class="modal-body" id="settings-body">
+
       <section class="set-group">
-        <h3>Identity</h3>
+        <h3>Account</h3>
+        <div class="acct-card">
+          <span class="acct-avatar" id="set-avatar"></span>
+          <div class="acct-body">
+            <div class="acct-name" id="set-avatar-name">Anonymous</div>
+            <div class="acct-sub" id="set-avatar-status"></div>
+          </div>
+        </div>
         <label class="row">
           <span>Display name</span>
           <input type="text" id="set-name" maxlength="40">
         </label>
+        <label class="row">
+          <span>Custom status</span>
+          <input type="text" id="set-status" maxlength="80" placeholder="What you're up to">
+        </label>
+        <div class="row note">
+          <span class="hint">Your avatar is generated from your display name, so it looks the same
+            here and on the website. Uploading a picture needs board-side support that doesn't exist yet.</span>
+        </div>
       </section>
 
       <section class="set-group">
-        <h3>Voice</h3>
+        <h3>Voice &amp; Audio</h3>
         <label class="row">
           <span>Microphone</span>
           <select id="set-mic"></select>
@@ -376,6 +403,23 @@
           <span>Speaker</span>
           <select id="set-speaker"></select>
         </label>
+        <div class="row">
+          <span>Mic test</span>
+          <div class="meter" id="mic-meter">
+            <i id="mic-meter-bar"></i>
+            <span class="meter-mark" id="mic-meter-mark"></span>
+          </div>
+          <button type="button" id="btn-mic-test" class="keycap">Test</button>
+        </div>
+        <label class="row">
+          <span>Speaking threshold</span>
+          <input type="range" id="set-vad" min="1" max="30" step="1">
+          <output id="set-vad-val"></output>
+        </label>
+        <div class="row note">
+          <span class="hint">How loud you have to be before ScarmVoice shows you as speaking — the marker
+            on the meter above. To gate your microphone itself, use Push to talk.</span>
+        </div>
         <label class="row">
           <span>Output volume</span>
           <input type="range" id="set-outvol" min="0" max="200" step="1">
@@ -406,7 +450,45 @@
       </section>
 
       <section class="set-group">
+        <h3>Notifications</h3>
+        <label class="row check">
+          <input type="checkbox" id="set-dnd">
+          <span>Do not disturb <em class="hint">— silences every notification and sound until you turn it off</em></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-notify"><span>Desktop notifications for new messages</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-notify-sound">
+          <span>Notification sound <em class="hint">— chime when a new message arrives</em></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-voice-sounds">
+          <span>Join &amp; leave sounds <em class="hint">— only audible while you're in the call</em></span>
+        </label>
+        <div class="row stack">
+          <span>Muted channels</span>
+          <div class="chan-mutes" id="set-muted-channels"></div>
+        </div>
+      </section>
+
+      <section class="set-group">
         <h3>Appearance</h3>
+        <label class="row">
+          <span>Theme</span>
+          <select id="set-theme">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">Match Windows</option>
+          </select>
+        </label>
+        <label class="row">
+          <span>Message density</span>
+          <select id="set-density">
+            <option value="cozy">Cozy — avatars, roomy spacing</option>
+            <option value="compact">Compact — one line per message</option>
+          </select>
+        </label>
         <label class="row">
           <span>Chat font size</span>
           <select id="set-font-size">
@@ -442,7 +524,20 @@
       </section>
 
       <section class="set-group">
-        <h3>Application</h3>
+        <h3>Privacy</h3>
+        <div class="row stack">
+          <span>Blocked people</span>
+          <div class="blocked-list" id="set-blocked"></div>
+        </div>
+        <div class="row note">
+          <span class="hint">Blocking hides someone's messages and silences them in voice, on this
+            computer only — the board has no server-side block, so they are not told.
+            Right-click a message to block its author.</span>
+        </div>
+      </section>
+
+      <section class="set-group">
+        <h3>Behaviour</h3>
         <label class="row check">
           <input type="checkbox" id="set-launch"><span>Launch on system startup</span>
         </label>
@@ -451,7 +546,11 @@
           <span>Start minimized to the tray <em class="hint">— open quietly in the background</em></span>
         </label>
         <label class="row check">
-          <input type="checkbox" id="set-tray"><span>Keep running in the tray when closed</span>
+          <input type="checkbox" id="set-tray">
+          <span>Keep running in the tray when closed <em class="hint">— off quits ScarmVoice when you close the window</em></span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-autojoin"><span>Join voice automatically on launch</span>
         </label>
         <label class="row check">
           <input type="checkbox" id="set-autoupdate">
@@ -461,20 +560,6 @@
           <span class="hint" id="update-status">You're on the latest version.</span>
           <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
         </div>
-        <label class="row check">
-          <input type="checkbox" id="set-notify"><span>Desktop notifications for new messages</span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-notify-sound">
-          <span>Notification sound <em class="hint">— chime when a new message arrives</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-voice-sounds">
-          <span>Join &amp; leave sounds <em class="hint">— only audible while you're in the call</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-autojoin"><span>Join voice automatically on launch</span>
-        </label>
         <label class="row">
           <span>Server URL</span>
           <input type="text" id="set-base" spellcheck="false">
@@ -482,6 +567,7 @@
       </section>
 
       <section class="set-group">
+        <h3>About</h3>
         <div class="row between">
           <span class="hint" id="set-version"></span>
           <button type="button" id="btn-logout" class="btn-danger">Sign out</button>
@@ -511,7 +597,7 @@
   <div class="modal picker-modal">
     <header class="modal-head">
       <h2>Share your screen</h2>
-      <button class="icon-btn" id="picker-close" title="Close">✕</button>
+      <button class="icon-btn" id="picker-close" title="Close"><span class="ico" data-icon="x"></span></button>
     </header>
     <div class="picker-tabs">
       <button class="picker-tab active" data-tab="screen">Screens</button>
@@ -556,7 +642,7 @@
 <div id="lightbox" hidden>
   <div class="lb-tools">
     <button class="lb-btn" id="lb-zoom" title="Show at actual size">Actual size</button>
-    <button class="lb-btn lb-close" id="lb-close" title="Close (Esc)">✕</button>
+    <button class="lb-btn lb-close" id="lb-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
   </div>
   <div class="lb-stage" id="lb-stage">
     <img id="lb-image" class="fit" alt="">
@@ -573,11 +659,14 @@
 <!-- voice.js MUST load before the SDK: it patches RTCPeerConnection and
      getDisplayMedia, and the SDK captures those references when it evaluates.
      Loading it second would leave the patches installed too late to ever see
-     the SDK's peer connections. -->
+     the SDK's peer connections.
+     icons.js hydrates every data-icon placeholder above, so it has to run
+     before app.js starts querying and cloning those nodes. -->
 <script src="vendor/hljs.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
 <script src="vendor/realtimekit.js"></script>
+<script src="icons.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -10,7 +10,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const {
     app, BrowserWindow, Tray, Menu, ipcMain, shell, protocol, session, Notification, nativeImage,
-    desktopCapturer, dialog, clipboard, screen, powerMonitor
+    desktopCapturer, dialog, clipboard, screen, powerMonitor, nativeTheme
 } = require('electron');
 
 const store = require('./store');
@@ -632,6 +632,34 @@ function registerIpc() {
     // Handing an arbitrary url to the shell is how a message from someone else
     // gets to run code on this machine, so the scheme is parsed, not pattern
     // matched: only real http(s) urls are ever opened.
+    // ---- theme ----
+    // The renderer owns the choice (dark / light / follow Windows) and asks us
+    // for the system answer. Repainting titleBarOverlay matters: the caption
+    // buttons are drawn by Windows over our title bar, so a light theme with a
+    // dark overlay leaves a black notch in the corner.
+    const OVERLAY = {
+        dark: { color: '#08090c', symbolColor: '#e9ebf0' },
+        light: { color: '#ffffff', symbolColor: '#31343b' }
+    };
+
+    ipcMain.handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
+
+    ipcMain.handle('app:setTheme', (_e, theme) => {
+        const o = OVERLAY[theme === 'light' ? 'light' : 'dark'];
+        if (!win || win.isDestroyed()) return false;
+        try {
+            win.setTitleBarOverlay(Object.assign({ height: 38 }, o));
+            win.setBackgroundColor(theme === 'light' ? '#f4f5f7' : '#101218');
+        } catch (e) { /* not supported on this platform */ }
+        return true;
+    });
+
+    nativeTheme.on('updated', () => {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('app:themeChange', { dark: nativeTheme.shouldUseDarkColors });
+        }
+    });
+
     ipcMain.handle('app:openExternal', (_e, url) => {
         let u;
         try { u = new URL(String(url)); } catch (e) { return false; }

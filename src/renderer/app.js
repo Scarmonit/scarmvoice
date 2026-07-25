@@ -9,6 +9,9 @@
 
     const L = window.lounge;
     const $ = (id) => document.getElementById(id);
+    // Every control glyph comes from the one icon set (see icons.js). Emoji are
+    // reserved for content — reactions, the picker, and message text.
+    const I = (name, cls) => window.ScarmIcons.markup(name, cls || 'ico');
 
     const POLL_ACTIVE_MS = 4000;    // socket down → poll this often
     const POLL_IDLE_MS = 15000;     // socket up → slow safety-net poll
@@ -69,6 +72,17 @@
         const h = hueOf(name || '?');
         return `background:linear-gradient(135deg,hsl(${h},70%,62%),hsl(${(h + 40) % 360},75%,52%))`;
     }
+    // A body that is nothing but a handful of emoji renders large, the way every
+    // other chat client does. Anything that isn't an emoji, a skin-tone modifier,
+    // a ZWJ, a variation selector or whitespace disqualifies it.
+    function isOnlyEmoji(body) {
+        const t = String(body || '').trim();
+        if (!t || t.length > 40) return false;
+        if (!/\p{Extended_Pictographic}/u.test(t)) return false;
+        if (/[^\s\p{Extended_Pictographic}‍️\u{1f3fb}-\u{1f3ff}]/u.test(t)) return false;
+        return [...t].filter((c) => /\p{Extended_Pictographic}/u.test(c)).length <= 6;
+    }
+
     function initials(name) {
         const n = String(name || '?').trim();
         const parts = n.split(/\s+/).filter(Boolean);
@@ -534,7 +548,8 @@
             const b = document.createElement('button');
             const unread = c.name === channel ? 0 : (c.unread || 0);
             total += unread;
-            b.className = 'chan' + (c.name === channel ? ' active' : '') + (unread ? ' unread' : '');
+            b.className = 'chan' + (c.name === channel ? ' active' : '') +
+                (unread ? ' unread' : '') + (channelMuted(c.name) ? ' muted' : '');
             b.dataset.channel = c.name;
             b.innerHTML = `<span class="hash">#</span><span class="chan-name">${esc(c.name)}</span>` +
                 (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
@@ -654,7 +669,7 @@
                 const maxFreshId = fresh[fresh.length - 1].id;
                 if (maxFreshId > lastSoundId) {
                     lastSoundId = maxFreshId;
-                    window.loungeSounds.playMessage();
+                    if (alertsAllowed(channel)) window.loungeSounds.playMessage();
                 }
                 notifyForPosts(fresh);
             }
@@ -812,7 +827,12 @@
         return true;
     }
     function displayedPosts() {
-        return filterActive() ? posts.filter(postMatchesFilter) : posts;
+        // A blocked author's messages are hidden here rather than deleted, so
+        // unblocking brings them straight back without a reload.
+        const base = Object.keys(blockedMap()).length
+            ? posts.filter((p) => !isBlocked(p.client_id))
+            : posts;
+        return filterActive() ? base.filter(postMatchesFilter) : base;
     }
 
     let renderedSig = null;
@@ -829,7 +849,8 @@
         // Most polls return exactly what's already on screen. Rebuilding it
         // anyway would reset the scroll, restart every image load and throw away
         // the previews — so when nothing changed, leave the DOM alone.
-        const sig = JSON.stringify([channel, active, hasMore, list]);
+        const compact = compactMode();
+        const sig = JSON.stringify([channel, active, hasMore, compact, list]);
         if (sig === renderedSig && box.firstChild) return;
         renderedSig = sig;
 
@@ -869,7 +890,8 @@
                 box.appendChild(sep);
                 prev = null;
             }
-            box.appendChild(renderMessage(p, prev));
+            // Compact shows a timestamp and name on every line, so nothing groups.
+            box.appendChild(renderMessage(p, compact ? null : prev));
             prev = p;
         });
     }
@@ -900,19 +922,20 @@
                 '</div>');
         }
 
+        const pinTag = '<span class="msg-pinned-tag">' + I('pin', 'ico tag-ico') + 'pinned</span>';
         if (!grouped) {
             parts.push('<div class="msg-head">' +
                 `<span class="msg-author">${esc(p.name)}</span>` +
                 `<span class="msg-time">${esc(timeStr(p.created_at))}</span>` +
-                (p.pinned ? '<span class="msg-pinned-tag">📌 pinned</span>' : '') +
+                (p.pinned ? pinTag : '') +
                 '</div>');
         } else if (p.pinned) {
-            parts.push('<div class="msg-head"><span class="msg-pinned-tag">📌 pinned</span></div>');
+            parts.push('<div class="msg-head">' + pinTag + '</div>');
         }
 
         // Filled in after innerHTML by renderBody, which builds nodes rather
         // than markup.
-        if (p.body) parts.push('<div class="msg-text"></div>');
+        if (p.body) parts.push('<div class="msg-text' + (isOnlyEmoji(p.body) ? ' jumbo' : '') + '"></div>');
 
         if (p.att_key) {
             const url = L.fileUrl(p.att_key);
@@ -929,12 +952,13 @@
             } else if (kind === 'video') {
                 parts.push(`<video src="${esc(url)}" controls preload="metadata"></video>`);
             } else {
-                parts.push(`<span class="msg-att-file">📎 ${esc(p.att_name || 'attachment')}</span>`);
+                parts.push('<span class="msg-att-file">' + I(fileIcon(p.att_name), 'ico') +
+                    `<span>${esc(p.att_name || 'attachment')}</span></span>`);
             }
             // Download stays available whatever the kind.
             parts.push('<button class="att-save" ' +
                 `data-att-key="${esc(p.att_key)}" data-att-name="${esc(p.att_name || 'attachment')}">` +
-                `⤓ ${label}</button>`);
+                I('download', 'ico') + `<span>${label}</span></button>`);
             parts.push('</div>');
         }
 
@@ -944,7 +968,8 @@
         if (p.reactions && p.reactions.length) {
             parts.push('<div class="msg-reactions">' + p.reactions.map((r) => {
                 const mine = (r.who || []).includes(settings.clientId);
-                return `<button class="reaction${mine ? ' mine' : ''}" data-emoji="${esc(r.emoji)}">${esc(r.emoji)} ${r.count}</button>`;
+                return `<button class="reaction${mine ? ' mine' : ''}" data-emoji="${esc(r.emoji)}">` +
+                    `<span class="rx-emoji">${esc(r.emoji)}</span><span class="rx-n">${r.count}</span></button>`;
             }).join('') + '</div>');
         }
 
@@ -958,12 +983,12 @@
         // entirely on other people's messages rather than shown and rejected.
         const mine = p.client_id && p.client_id === settings.clientId;
         parts.push('<div class="msg-actions">' +
-            '<button class="msg-act" data-act="react" title="Add a reaction">🙂</button>' +
-            '<button class="msg-act" data-act="reply" title="Reply">↩</button>' +
-            `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">📌</button>` +
-            '<button class="msg-act" data-act="copy" title="Copy text">⧉</button>' +
-            (mine ? '<button class="msg-act" data-act="edit" title="Edit message">✎</button>' : '') +
-            (mine ? '<button class="msg-act" data-act="delete" title="Delete message">🗑</button>' : '') +
+            '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>' +
+            '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>' +
+            `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>' +
+            '<button class="msg-act" data-act="copy" title="Copy text">' + I('copy') + '</button>' +
+            (mine ? '<button class="msg-act" data-act="edit" title="Edit message">' + I('pencil') + '</button>' : '') +
+            (mine ? '<button class="msg-act danger" data-act="delete" title="Delete message">' + I('trash') + '</button>' : '') +
             '</div>');
 
         el.innerHTML = parts.join('');
@@ -1044,12 +1069,15 @@
 
         const save = e.target.closest('.att-save');
         if (!save) return;
+        // The label lives in a span beside the icon — writing textContent on the
+        // button itself would delete the icon along with it.
+        const lab = save.querySelector('span');
         save.disabled = true;
-        const original = save.textContent;
-        save.textContent = 'Saving…';
+        const original = lab.textContent;
+        lab.textContent = 'Saving…';
         await saveAttachment(save.dataset.attKey, save.dataset.attName);
         save.disabled = false;
-        save.textContent = original;
+        lab.textContent = original;
     });
 
     $('messages').addEventListener('scroll', () => {
@@ -1392,16 +1420,20 @@
         renderStaged();
     }
 
-    // Icon glyph for a non-media file, by extension.
-    function fileGlyph(name) {
-        const ext = (String(name).split('.').pop() || '').toLowerCase();
+    // Icon name for a non-media file, by extension. Names resolve against the
+    // one icon set, so a staged .pdf and a posted .pdf draw the same glyph.
+    function fileIcon(name) {
+        const ext = (String(name || '').split('.').pop() || '').toLowerCase();
         const map = {
-            pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', ppt: '📙', pptx: '📙',
-            zip: '🗜️', rar: '🗜️', '7z': '🗜️', gz: '🗜️', tar: '🗜️',
-            txt: '📄', md: '📄', rtf: '📄', csv: '📊', json: '🧾', xml: '🧾',
-            exe: '⚙️', msi: '⚙️', dmg: '💿', iso: '💿'
+            pdf: 'doc', doc: 'doc', docx: 'doc', rtf: 'doc', txt: 'doc', md: 'doc',
+            xls: 'sheet', xlsx: 'sheet', csv: 'sheet', tsv: 'sheet',
+            ppt: 'slides', pptx: 'slides', key: 'slides',
+            zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
+            json: 'app', xml: 'app', yml: 'app', yaml: 'app', js: 'app', ts: 'app',
+            exe: 'app', msi: 'app', bat: 'app', ps1: 'app',
+            dmg: 'disc', iso: 'disc', img: 'disc'
         };
-        return map[ext] || '📎';
+        return map[ext] || 'file';
     }
 
     function stageCard(s) {
@@ -1413,27 +1445,24 @@
 
         let thumb = '';
         if (s.error) {
-            thumb = `<div class="sc-thumb sc-icon">${fileGlyph(s.name)}</div>`;
+            thumb = '<div class="sc-thumb sc-icon">' + I(fileIcon(s.name), 'ico sc-glyph') + '</div>';
         } else if (s.kind === 'image' && s.url) {
             // A load error (e.g. HEIC that Chromium can't decode) swaps to an icon;
             // wired in JS below because CSP forbids inline onerror handlers.
             thumb = `<div class="sc-thumb"><img src="${esc(s.url)}" alt=""></div>`;
         } else if (s.kind === 'image') {
-            thumb = `<div class="sc-thumb sc-icon">🖼️</div>`;
+            thumb = '<div class="sc-thumb sc-icon">' + I('image', 'ico sc-glyph') + '</div>';
         } else if (s.kind === 'video' && s.poster) {
             thumb = `<div class="sc-thumb sc-video"><img src="${esc(s.poster)}" alt="">` +
-                `<span class="sc-play">▶</span>` +
+                '<span class="sc-play">' + I('play', 'ico') + '</span>' +
                 (s.duration ? `<span class="sc-badge">${fmtDuration(s.duration)}</span>` : '') + '</div>';
         } else if (s.kind === 'video') {
-            thumb = `<div class="sc-thumb sc-icon sc-video">🎬` +
+            thumb = '<div class="sc-thumb sc-icon sc-video">' + I('video', 'ico sc-glyph') +
                 (s.duration ? `<span class="sc-badge">${fmtDuration(s.duration)}</span>` : '') + '</div>';
         } else if (s.kind === 'audio') {
-            thumb = `<div class="sc-thumb sc-icon sc-audio"><svg viewBox="0 0 24 24" class="sc-wave" aria-hidden="true">` +
-                '<rect x="3" y="9" width="2" height="6"/><rect x="7" y="6" width="2" height="12"/>' +
-                '<rect x="11" y="3" width="2" height="18"/><rect x="15" y="7" width="2" height="10"/>' +
-                '<rect x="19" y="10" width="2" height="4"/></svg></div>';
+            thumb = '<div class="sc-thumb sc-icon sc-audio">' + I('music', 'ico sc-glyph') + '</div>';
         } else {
-            thumb = `<div class="sc-thumb sc-icon">${fileGlyph(s.name)}</div>`;
+            thumb = '<div class="sc-thumb sc-icon">' + I(fileIcon(s.name), 'ico sc-glyph') + '</div>';
         }
 
         const meta = s.error
@@ -1443,7 +1472,7 @@
         card.innerHTML =
             thumb +
             `<div class="sc-body">${nameHtml}${meta}</div>` +
-            '<button class="sc-x" type="button" title="Remove">✕</button>';
+            '<button class="sc-x" type="button" title="Remove">' + I('x') + '</button>';
         card.querySelector('.sc-x').addEventListener('click', () => unstage(s.id));
 
         // Image decode failure → fall back to an icon (CSP-safe, no inline handler).
@@ -1451,7 +1480,7 @@
         if (img && s.kind === 'image') {
             img.addEventListener('error', () => {
                 const t = card.querySelector('.sc-thumb');
-                if (t) { t.classList.add('sc-icon'); t.textContent = '🖼️'; }
+                if (t) { t.classList.add('sc-icon'); t.innerHTML = I('image', 'ico sc-glyph'); }
             });
         }
         return card;
@@ -1707,11 +1736,11 @@
         const on = (fn) => () => { input.focus(); fn(); };
 
         openCtxMenu([
-            { label: 'Cut', icon: '✂', disabled: !selected, onClick: on(() => L.edit.cut()) },
-            { label: 'Copy', icon: '⧉', disabled: !selected, onClick: on(() => L.edit.copy()) },
-            { label: 'Paste', icon: '📋', disabled: !canPaste, onClick: on(() => L.edit.paste()) },
+            { label: 'Cut', icon: 'scissors', disabled: !selected, onClick: on(() => L.edit.cut()) },
+            { label: 'Copy', icon: 'copy', disabled: !selected, onClick: on(() => L.edit.copy()) },
+            { label: 'Paste', icon: 'clipboard', disabled: !canPaste, onClick: on(() => L.edit.paste()) },
             'sep',
-            { label: 'Select all', icon: '▤', disabled: !input.value.length, onClick: on(() => L.edit.selectAll()) }
+            { label: 'Select all', icon: 'list', disabled: !input.value.length, onClick: on(() => L.edit.selectAll()) }
         ], e.clientX, e.clientY);
     });
 
@@ -1842,7 +1871,7 @@
         const chip = $('reply-chip');
         const txt = $('reply-chip-text');
         if (!replyTarget) { chip.hidden = true; txt.textContent = ''; return; }
-        const snippet = (replyTarget.body || (replyTarget.att_name ? '📎 ' + replyTarget.att_name : '')).slice(0, 90);
+        const snippet = (replyTarget.body || replyTarget.att_name || '').slice(0, 90);
         txt.textContent = '';
         const b = document.createElement('b');
         b.textContent = 'Replying to ' + (replyTarget.name || 'Anonymous');
@@ -1865,6 +1894,9 @@
 
     function showRecBar(on) {
         $('voice-rec').hidden = !on;
+        // The button keeps its recording state even though the row it sits in is
+        // swapped out, so the state is right the moment recording ends.
+        $('btn-mic').classList.toggle('recording', on);
         document.querySelector('.composer-row').style.display = on ? 'none' : '';
     }
 
@@ -2373,7 +2405,7 @@
 
         // Join / leave chimes. Gated on actually being in the call, so they are
         // never audible to someone who is only watching the roster.
-        window.loungeSounds.voiceRoster(list, inCall, settings.clientId);
+        window.loungeSounds.voiceRoster(list, inCall && !settings.dnd, settings.clientId);
 
         list.forEach((p) => addRosterName(p.name));
         renderVoiceUsers(list, inCall);
@@ -2402,8 +2434,8 @@
             li.innerHTML =
                 `<span class="av" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</span>` +
                 `<span class="vp-name">${esc(p.name)}${isMe ? ' (you)' : ''}</span>` +
-                (unreachable ? '<span class="vp-flag" title="In voice, but not connected to you — they may need to reload the website">⚠</span>' : '') +
-                (p.muted || localMuted ? '<span class="vp-flag">🔇</span>' : '');
+                (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
+                (p.muted || localMuted ? '<span class="vp-flag">' + I('volume-off') + '</span>' : '');
 
             if (!isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
@@ -2472,7 +2504,9 @@
             const unreachable = !!(inCall && p && p.remoteOnly && !isMe);
             if (unreachable) li.classList.add('unreachable');
 
-            const sub = r.custom || (r.status === 'away' ? 'Away' : '');
+            const blocked = isBlocked(r.id);
+            if (blocked) li.classList.add('blocked');
+            const sub = blocked ? 'Blocked' : (r.custom || (r.status === 'away' ? 'Away' : ''));
             li.innerHTML =
                 '<span class="av-wrap">' +
                 `<span class="av" style="${avatarStyle(r.name)}">${esc(initials(r.name))}</span>` +
@@ -2480,9 +2514,10 @@
                 '</span>' +
                 '<span class="vp-name">' + esc(r.name) + (isMe ? ' (you)' : '') +
                 (sub ? `<span class="vp-sub">${esc(sub)}</span>` : '') + '</span>' +
-                (p ? '<span class="vp-invoice" title="In voice">🔊</span>' : '') +
-                (unreachable ? '<span class="vp-flag" title="In voice, but not connected to you — they may need to reload the website">⚠</span>' : '') +
-                (p && (p.muted || localMuted) ? '<span class="vp-flag">🔇</span>' : '');
+                (blocked ? '<span class="vp-flag" title="Blocked">' + I('ban') + '</span>' : '') +
+                (p ? '<span class="vp-invoice" title="In voice">' + I('volume') + '</span>' : '') +
+                (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
+                (p && (p.muted || localMuted) ? '<span class="vp-flag">' + I('volume-off') + '</span>' : '');
 
             if (p && !isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
@@ -2799,6 +2834,7 @@
     // preferred over the newest message, same as the website.
     async function notifyForPosts(fresh) {
         if (!fresh.length || settings.notifications === false) return;
+        if (!alertsAllowed(channel)) return;     // do not disturb, or a muted channel
         if (windowFocused) return;   // you're already looking at it
 
         const mention = fresh.find((p) => mentionsMe(p.body));
@@ -2816,6 +2852,7 @@
     // this stays deliberately terse; the unread badge carries the rest.
     async function notifyOtherChannel(m) {
         if (settings.notifications === false) return;
+        if (!alertsAllowed(m.channel)) return;
         await L.app.notify({
             title: '#' + (m.channel || 'general'),
             body: m.name ? `${m.name} sent a message` : 'New message'
@@ -2912,6 +2949,9 @@
         const st = $('me-status');
         st.textContent = settings.status || '';
         st.hidden = !settings.status;
+        const dot = $('me-presence');
+        dot.classList.toggle('dnd', !!settings.dnd);
+        dot.title = settings.dnd ? 'Do not disturb' : 'Online';
     }
 
     // Name and status together, like the website's name pill — they're the two
@@ -2924,7 +2964,9 @@
             status: r.status.trim().slice(0, 80)
         });
         renderMe();
+        renderAccountCard();
         $('set-name').value = settings.displayName;
+        $('set-status').value = settings.status || '';
         sendTextPresence(false);      // publish it now rather than up to 20s later
     }
     $('btn-name').addEventListener('click', changeName);
@@ -2970,11 +3012,130 @@
         applyMembersPanel(settings.showMembers !== false);
         applyCategory('text', settings.catTextOpen !== false);
         applyCategory('voice', settings.catVoiceOpen !== false);
+        applyTheme();
+        applyDensity();
         let host = '';
         try { host = new URL(settings.baseUrl || 'https://scarmonit.com').host; }
         catch (e) { host = settings.baseUrl || ''; }
         $('sh-host').textContent = host;
     }
+
+    // ---------- theme ------------------------------------------------------
+    // Three states: force dark, force light, or follow Windows. The main process
+    // owns the system answer and pushes changes, and it also restyles the native
+    // caption buttons so they don't sit on a patch of the old theme.
+
+    let systemDark = true;
+
+    function effectiveTheme() {
+        const t = settings.theme || 'dark';
+        if (t === 'system') return systemDark ? 'dark' : 'light';
+        return t === 'light' ? 'light' : 'dark';
+    }
+
+    function applyTheme() {
+        const t = effectiveTheme();
+        document.documentElement.dataset.theme = t;
+        L.app.setTheme(t);
+    }
+
+    L.app.systemTheme().then((s) => {
+        if (s && typeof s.dark === 'boolean') { systemDark = s.dark; applyTheme(); }
+    }).catch(() => {});
+    L.app.onThemeChange((s) => {
+        if (!s || typeof s.dark !== 'boolean') return;
+        systemDark = s.dark;
+        if ((settings.theme || 'dark') === 'system') applyTheme();
+    });
+
+    // ---------- message density -------------------------------------------
+
+    function compactMode() { return settings.density === 'compact'; }
+
+    function applyDensity() {
+        const on = compactMode();
+        $('messages').classList.toggle('compact', on);
+        $('thread-list').classList.toggle('compact', on);
+    }
+
+    // ---------- do not disturb, muted channels, blocked people -------------
+
+    // One place decides whether anything is allowed to make a noise or a toast.
+    function alertsAllowed(channelName) {
+        if (settings.dnd) return false;
+        if (channelName && channelMuted(channelName)) return false;
+        return true;
+    }
+
+    function channelMuted(name) {
+        return Array.isArray(settings.mutedChannels) && settings.mutedChannels.includes(name);
+    }
+
+    async function setChannelMuted(name, muted) {
+        const list = (settings.mutedChannels || []).filter((c) => c !== name);
+        if (muted) list.push(name);
+        await saveSettings({ mutedChannels: list });
+        renderChannels();
+        renderMutedChannels();
+    }
+
+    function blockedMap() { return settings.blocked || {}; }
+    function isBlocked(cid) { return !!(cid && blockedMap()[cid]); }
+
+    // Local only: the board has no server-side block, so this hides their
+    // messages here and silences them in voice. Nothing is sent anywhere.
+    async function blockPerson(cid, name) {
+        if (!cid || cid === settings.clientId) return;
+        const who = name || 'this person';
+        const ok = await askConfirm('Block ' + who + '?',
+            'Their messages will be hidden and they will be silenced in voice, on this ' +
+            'computer only. They are not told, and nothing is sent to the server.',
+            'Block', true);
+        if (!ok) return;
+
+        const blocked = Object.assign({}, blockedMap());
+        blocked[cid] = name || 'Someone';
+        const muted = Object.assign({}, settings.localMuted || {});
+        muted[cid] = true;
+        await saveSettings({ blocked, localMuted: muted });
+        if (voice) voice.setLocalMuted(cid, true);
+        renderMessages();
+        renderVoiceRoster();
+        renderBlocked();
+        toast('Blocked ' + who);
+    }
+
+    async function unblockPerson(cid) {
+        const blocked = Object.assign({}, blockedMap());
+        const name = blocked[cid];
+        delete blocked[cid];
+        const muted = Object.assign({}, settings.localMuted || {});
+        delete muted[cid];
+        await saveSettings({ blocked, localMuted: muted });
+        if (voice) voice.setLocalMuted(cid, false);
+        renderMessages();
+        renderVoiceRoster();
+        renderBlocked();
+        toast('Unblocked ' + (name || 'them'));
+    }
+
+    // Right-click a channel for the things Discord puts there.
+    $('channel-list').addEventListener('contextmenu', (e) => {
+        const row = e.target.closest('.chan');
+        if (!row) return;
+        e.preventDefault();
+        const name = row.dataset.channel;
+        const muted = channelMuted(name);
+        openCtxMenu([
+            { label: muted ? 'Unmute #' + name : 'Mute #' + name, icon: muted ? 'bell' : 'bell-off',
+                onClick: () => setChannelMuted(name, !muted) },
+            'sep',
+            { label: 'Rename channel', icon: 'pencil', disabled: name === 'general',
+                onClick: () => { switchChannel(name).then(() => $('btn-rename-channel').click()); } },
+            { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
+                onClick: () => { switchChannel(name).then(() => $('btn-delete-channel').click()); } }
+        ], e.clientX, e.clientY);
+    });
 
     // ---------- settings modal --------------------------------------------
 
@@ -3014,13 +3175,164 @@
         $('set-share-audio').checked = settings.shareAudio !== false;
         $('set-ptt').textContent = (await L.ptt.describe(settings.pttBinding)) || 'Click to set';
         $('row-ptt').style.display = settings.voiceMode === 'ptt' ? '' : 'none';
+
+        // Account / notifications / appearance / privacy
+        $('set-status').value = settings.status || '';
+        $('set-dnd').checked = !!settings.dnd;
+        $('set-theme').value = settings.theme || 'dark';
+        $('set-density').value = settings.density || 'cozy';
+        $('set-vad').value = String(vadValue());
+        paintThreshold();
+        renderAccountCard();
+        renderMutedChannels();
+        renderBlocked();
+
         await populateDevices();
         refreshPttHint();
         $('settings').hidden = false;
     }
 
+    // Closing has to stop the mic test, whichever way it happens.
+    function closeSettings() {
+        stopMicTest();
+        $('settings').hidden = true;
+    }
+
     $('btn-settings').addEventListener('click', openSettings);
-    $('settings-close').addEventListener('click', () => { $('settings').hidden = true; });
+    $('settings-close').addEventListener('click', closeSettings);
+
+    // ---- account card ----
+    function renderAccountCard() {
+        const name = settings.displayName || 'Anonymous';
+        const av = $('set-avatar');
+        av.textContent = initials(name);
+        av.setAttribute('style', avatarStyle(name));
+        $('set-avatar-name').textContent = name;
+        const sub = $('set-avatar-status');
+        sub.textContent = settings.status || '';
+        sub.hidden = !settings.status;
+    }
+
+    // ---- muted channels ----
+    function renderMutedChannels() {
+        const box = $('set-muted-channels');
+        box.innerHTML = '';
+        if (!channels.length) {
+            box.innerHTML = '<span class="hint">No channels loaded yet.</span>';
+            return;
+        }
+        channels.forEach((c) => {
+            const lab = document.createElement('label');
+            lab.className = 'chan-mute';
+            lab.innerHTML = '<input type="checkbox">' + I('bell-off', 'ico') +
+                `<span>#${esc(c.name)}</span>`;
+            const cb = lab.querySelector('input');
+            cb.checked = channelMuted(c.name);
+            cb.addEventListener('change', () => setChannelMuted(c.name, cb.checked));
+            box.appendChild(lab);
+        });
+    }
+
+    // ---- blocked people ----
+    function renderBlocked() {
+        const box = $('set-blocked');
+        box.innerHTML = '';
+        const entries = Object.entries(blockedMap());
+        if (!entries.length) {
+            box.innerHTML = '<span class="hint">You haven\'t blocked anyone.</span>';
+            return;
+        }
+        entries.forEach(([cid, name]) => {
+            const row = document.createElement('div');
+            row.className = 'blocked-row';
+            row.innerHTML =
+                `<span class="av" style="${avatarStyle(name)}">${esc(initials(name))}</span>` +
+                `<span class="blocked-name">${esc(name)}</span>` +
+                '<button type="button" class="keycap">Unblock</button>';
+            row.querySelector('button').addEventListener('click', () => unblockPerson(cid));
+            box.appendChild(row);
+        });
+    }
+
+    // ---- microphone test + speaking threshold ----
+    // The meter runs off its own short-lived capture, so it works whether or not
+    // you are in a call and never touches the published track.
+
+    let micTest = null;
+
+    function vadValue() { return Number(settings.speakThreshold) || 6; }
+    function vadRms() { return vadValue() / 100; }
+    const METER_MAX = 0.3;      // full-scale RMS, shared by the bar and the marker
+
+    function paintThreshold() {
+        $('set-vad-val').textContent = String(vadValue());
+        $('mic-meter-mark').style.left = Math.min(100, (vadRms() / METER_MAX) * 100) + '%';
+    }
+
+    function stopMicTest() {
+        if (!micTest) return;
+        cancelAnimationFrame(micTest.raf);
+        try { micTest.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+        try { micTest.ctx.close(); } catch (e) {}
+        micTest = null;
+        $('btn-mic-test').textContent = 'Test';
+        $('btn-mic-test').classList.remove('recording');
+        $('mic-meter-bar').style.width = '0%';
+        $('mic-meter-bar').classList.remove('over');
+    }
+
+    async function startMicTest() {
+        stopMicTest();
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: settings.micDeviceId ? { deviceId: { exact: settings.micDeviceId } } : true
+            });
+        } catch (e) {
+            toast(e && e.name === 'NotAllowedError'
+                ? 'Microphone access is needed to test your mic'
+                : 'Could not open the microphone', true);
+            return;
+        }
+
+        let ctx, analyser;
+        try {
+            ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const src = ctx.createMediaStreamSource(stream);
+            analyser = ctx.createAnalyser();
+            analyser.fftSize = 512;
+            analyser.smoothingTimeConstant = 0.6;
+            src.connect(analyser);       // analysis only — never to the destination
+        } catch (e) {
+            try { stream.getTracks().forEach((t) => t.stop()); } catch (e2) {}
+            return toast('Could not read the microphone level', true);
+        }
+
+        const data = new Uint8Array(analyser.fftSize);
+        micTest = { stream, ctx, raf: 0 };
+        $('btn-mic-test').textContent = 'Stop';
+        $('btn-mic-test').classList.add('recording');
+
+        const tick = () => {
+            if (!micTest) return;
+            analyser.getByteTimeDomainData(data);
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) {
+                const v = (data[i] - 128) / 128;
+                sum += v * v;
+            }
+            const rms = Math.sqrt(sum / data.length);
+            const bar = $('mic-meter-bar');
+            bar.style.width = Math.min(100, (rms / METER_MAX) * 100).toFixed(1) + '%';
+            bar.classList.toggle('over', rms >= vadRms());
+            micTest.raf = requestAnimationFrame(tick);
+        };
+        micTest.raf = requestAnimationFrame(tick);
+    }
+
+    $('btn-mic-test').addEventListener('click', () => {
+        if (micTest) stopMicTest(); else startMicTest();
+    });
 
     // Section nav down the left of the settings sheet, built from the sheet's own
     // headings so adding a section needs no extra wiring.
@@ -3060,7 +3372,35 @@
         });
     })();
     $('settings').addEventListener('mousedown', (e) => {
-        if (e.target === $('settings')) $('settings').hidden = true;
+        if (e.target === $('settings')) closeSettings();
+    });
+
+    // ---- new settings controls ----
+    $('set-status').addEventListener('change', async (e) => {
+        await saveSettings({ status: e.target.value.trim().slice(0, 80) });
+        renderMe();
+        renderAccountCard();
+        sendTextPresence(false);        // publish it now rather than up to 20s later
+    });
+    $('set-dnd').addEventListener('change', async (e) => {
+        await saveSettings({ dnd: e.target.checked });
+        renderMe();
+        toast(e.target.checked ? 'Do not disturb on — everything is silenced' : 'Do not disturb off');
+    });
+    $('set-theme').addEventListener('change', async (e) => {
+        await saveSettings({ theme: e.target.value });
+        applyTheme();
+    });
+    $('set-density').addEventListener('change', async (e) => {
+        await saveSettings({ density: e.target.value });
+        applyDensity();
+        renderedSig = null;             // grouping differs between densities
+        renderMessages();
+    });
+    $('set-vad').addEventListener('input', async (e) => {
+        await saveSettings({ speakThreshold: Number(e.target.value) });
+        if (voice) voice.setSettings(settings);
+        paintThreshold();
     });
 
     async function populateDevices() {
@@ -3093,6 +3433,7 @@
     $('set-name').addEventListener('change', async (e) => {
         await saveSettings({ displayName: e.target.value.trim().slice(0, 40) });
         renderMe();
+        renderAccountCard();
     });
     $('set-base').addEventListener('change', async (e) => {
         await saveSettings({ baseUrl: e.target.value.trim().replace(/\/+$/, '') });
@@ -3285,7 +3626,8 @@
         const wrap = document.createElement('div');
         wrap.className = 'audio-card';
         wrap.innerHTML =
-            `<div class="au-name" title="${esc(name || '')}">♪ ${esc(name || 'audio')}</div>` +
+            `<div class="au-name" title="${esc(name || '')}">` + I('music', 'ico au-note') +
+            `<span>${esc(name || 'audio')}</span></div>` +
             '<div class="au-row">' +
             '<button class="au-play" type="button" title="Play"><svg viewBox="0 0 24 24" class="au-ico-play"><path d="M8 5v14l11-7z"/></svg>' +
             '<svg viewBox="0 0 24 24" class="au-ico-pause" hidden><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>' +
@@ -3384,7 +3726,9 @@
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'ctx-item' + (it.danger ? ' danger' : '');
-            b.innerHTML = `<span>${esc(it.icon || '')}</span><span>${esc(it.label)}</span>`;
+            // it.icon is a name in the icon set, never a glyph.
+            b.innerHTML = (it.icon ? I(it.icon, 'ico ctx-ico') : '<span class="ctx-ico"></span>') +
+                `<span class="ctx-label">${esc(it.label)}</span>`;
             // Greyed out rather than hidden: a Paste that would do nothing still
             // tells you the menu has a Paste.
             if (it.disabled) b.disabled = true;
@@ -3418,18 +3762,23 @@
         const inThread = !!el.closest('#thread-list');
         return [
             inThread
-                ? { label: 'Reply', icon: '↩', onClick: () => $('thread-input').focus() }
-                : { label: 'Reply', icon: '↩', onClick: () => setReplyTarget(p) },
-            !inThread && { label: 'Reply in thread', icon: '🧵', onClick: () => openThread(p.id) },
+                ? { label: 'Reply', icon: 'reply', onClick: () => $('thread-input').focus() }
+                : { label: 'Reply', icon: 'reply', onClick: () => setReplyTarget(p) },
+            !inThread && { label: 'Reply in thread', icon: 'thread', onClick: () => openThread(p.id) },
             // Anchored at the cursor, since the menu itself is gone by then.
-            { label: 'React…', icon: '🙂', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p.id, em)) },
+            { label: 'React…', icon: 'smile', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p.id, em)) },
             'sep',
-            { label: 'Copy text', icon: '⧉', onClick: () => copyMessage(p) },
-            p.att_key && { label: 'Save attachment…', icon: '⤓', onClick: () => saveAttachment(p.att_key, p.att_name) },
-            { label: p.pinned ? 'Unpin' : 'Pin', icon: '📌', onClick: () => pinPost(p.id, !p.pinned) },
+            { label: 'Copy text', icon: 'copy', onClick: () => copyMessage(p) },
+            p.att_key && { label: 'Save attachment…', icon: 'download', onClick: () => saveAttachment(p.att_key, p.att_name) },
+            { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p.id, !p.pinned) },
             mine && 'sep',
-            mine && { label: 'Edit message', icon: '✎', onClick: () => startEdit(p, el) },
-            mine && { label: 'Delete message', icon: '🗑', danger: true, onClick: () => deletePost(p) }
+            mine && { label: 'Edit message', icon: 'pencil', onClick: () => startEdit(p, el) },
+            mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
+            !mine && p.client_id && 'sep',
+            !mine && p.client_id && {
+                label: 'Block ' + (p.name || 'this person'), icon: 'ban', danger: true,
+                onClick: () => blockPerson(p.client_id, p.name)
+            }
         ];
     }
 
@@ -3540,8 +3889,8 @@
 
     function linkMenuItems(url) {
         return [
-            { label: 'Open link', icon: '↗', onClick: () => L.app.openExternal(url) },
-            { label: 'Copy link address', icon: '🔗', onClick: () => copyLink(url) }
+            { label: 'Open link', icon: 'external', onClick: () => L.app.openExternal(url) },
+            { label: 'Copy link address', icon: 'link', onClick: () => copyLink(url) }
         ];
     }
 
@@ -3577,11 +3926,11 @@
     function imageMenuItems(ref) {
         const link = shareableUrl(ref);
         return [
-            { label: 'Copy image', icon: '⧉', onClick: () => copyImage(ref) },
-            { label: 'Save image as…', icon: '💾', onClick: () => saveImageAs(ref) },
-            { label: 'Download image', icon: '⤓', onClick: () => downloadImage(ref) },
+            { label: 'Copy image', icon: 'copy', onClick: () => copyImage(ref) },
+            { label: 'Save image as…', icon: 'save', onClick: () => saveImageAs(ref) },
+            { label: 'Download image', icon: 'download', onClick: () => downloadImage(ref) },
             link && 'sep',
-            link && { label: 'Copy image link', icon: '🔗', onClick: () => copyLink(link) }
+            link && { label: 'Copy image link', icon: 'link', onClick: () => copyLink(link) }
         ];
     }
 
@@ -3987,26 +4336,34 @@
         $('filter-count').textContent = n + (n === 1 ? ' match' : ' matches');
     }
 
-    const TYPE_LABELS = { links: '🔗 Links', images: '🖼️ Images', videos: '🎬 Videos', audio: '🎵 Audio', files: '📎 Files' };
+    // [icon name, label] — icons resolve against the one icon set.
+    const TYPE_LABELS = {
+        links: ['link', 'Links'], images: ['image', 'Images'], videos: ['video', 'Videos'],
+        audio: ['music', 'Audio'], files: ['paperclip', 'Files']
+    };
 
     // Active filters as removable chips, plus a Clear all.
     function renderChips() {
         const box = $('filter-chips');
         box.innerHTML = '';
         const chips = [];
-        filter.types.forEach((t) => chips.push({ label: TYPE_LABELS[t] || t, off: () => filter.types.delete(t) }));
-        if (filter.pinned) chips.push({ label: '📌 Pinned', off: () => { filter.pinned = false; } });
-        if (filter.mentions) chips.push({ label: '@ Mentions me', off: () => { filter.mentions = false; } });
-        if (filter.edited) chips.push({ label: '✎ Edited', off: () => { filter.edited = false; } });
-        if (filter.fromIds) chips.push({ label: 'From ' + (filter.fromName || 'user'), off: () => { filter.fromIds = filter.fromName = null; const fs = $('filter-from'); if (fs) fs.value = ''; } });
-        if (filter.text) chips.push({ label: '“' + filter.text + '”', off: () => { filter.text = ''; $('filter-input').value = ''; } });
+        filter.types.forEach((t) => {
+            const d = TYPE_LABELS[t] || ['file', t];
+            chips.push({ icon: d[0], label: d[1], off: () => filter.types.delete(t) });
+        });
+        if (filter.pinned) chips.push({ icon: 'pin', label: 'Pinned', off: () => { filter.pinned = false; } });
+        if (filter.mentions) chips.push({ icon: 'at', label: 'Mentions me', off: () => { filter.mentions = false; } });
+        if (filter.edited) chips.push({ icon: 'pencil', label: 'Edited', off: () => { filter.edited = false; } });
+        if (filter.fromIds) chips.push({ icon: 'users', label: 'From ' + (filter.fromName || 'user'), off: () => { filter.fromIds = filter.fromName = null; const fs = $('filter-from'); if (fs) fs.value = ''; } });
+        if (filter.text) chips.push({ icon: 'search', label: filter.text, off: () => { filter.text = ''; $('filter-input').value = ''; } });
 
         box.hidden = chips.length === 0;
         chips.forEach((c) => {
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'fb-chip';
-            chip.innerHTML = '<span>' + esc(c.label) + '</span><span class="fb-chip-x">✕</span>';
+            chip.innerHTML = (c.icon ? I(c.icon, 'ico chip-ico') : '') +
+                '<span>' + esc(c.label) + '</span>' + I('x', 'ico fb-chip-x');
             chip.addEventListener('click', () => { c.off(); applyFilter(); });
             box.appendChild(chip);
         });
@@ -4178,7 +4535,9 @@
 
             const bd = document.createElement('div');
             bd.className = 'sr-body';
-            bd.appendChild(highlightSnippet(r.body || (r.att_name ? '📎 ' + r.att_name : ''), q));
+            // An attachment-only hit gets its file icon rather than a stray emoji.
+            if (!r.body && r.att_name) bd.insertAdjacentHTML('beforeend', I(fileIcon(r.att_name), 'ico inline-ico'));
+            bd.appendChild(highlightSnippet(r.body || r.att_name || '', q));
 
             it.appendChild(top);
             it.appendChild(bd);
@@ -4395,14 +4754,15 @@
         pinned.forEach((p) => {
             const item = document.createElement('div');
             item.className = 'pinned-item';
-            const body = p.body || (p.att_name ? '📎 ' + p.att_name : '');
+            const bodyIcon = (!p.body && p.att_name) ? I(fileIcon(p.att_name), 'ico inline-ico') : '';
+            const body = p.body || p.att_name || '';
             item.innerHTML =
                 '<div class="pinned-top">' +
                 `<span class="pinned-name">${esc(p.name)}</span>` +
                 `<span class="pinned-time">${esc(timeStr(p.created_at))}</span>` +
                 '<button class="pinned-unpin" type="button">Unpin</button>' +
                 '</div>' +
-                `<div class="pinned-body">${esc(body.slice(0, 240))}</div>`;
+                `<div class="pinned-body">${bodyIcon}${esc(body.slice(0, 240))}</div>`;
             item.addEventListener('click', () => jumpToPost(p));
             item.querySelector('.pinned-unpin').addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -4423,7 +4783,7 @@
             else if (!$('dialog').hidden) closeDialog(inp_null());
             else if (!$('picker').hidden) closePicker();
             else if (!$('popover').hidden) closePopover();
-            else if (!$('settings').hidden) $('settings').hidden = true;
+            else if (!$('settings').hidden) closeSettings();
             else if (!$('filter-menu').hidden) $('filter-menu').hidden = true;
             else if (filterOpen()) toggleFilter(false);
             else if (!$('pinned-panel').hidden) togglePinned(false);

@@ -53,7 +53,21 @@ const DEFAULTS = {
     // Shell layout
     showMembers: true,           // right-hand members sidebar
     catTextOpen: true,           // "Text Channels" category expanded
-    catVoiceOpen: true           // "Voice Channels" category expanded
+    catVoiceOpen: true,          // "Voice Channels" category expanded
+
+    // Appearance
+    theme: 'dark',               // 'dark' | 'light' | 'system'
+    density: 'cozy',             // 'cozy' | 'compact'
+
+    // Notifications
+    dnd: false,                  // do not disturb: silences every alert + sound
+    mutedChannels: [],           // channel names that never notify
+
+    // Privacy — local only; the board has no server-side block
+    blocked: {},                 // clientId -> display name
+
+    // RMS x100 above which you read as "speaking"; see voice.js
+    speakThreshold: 6
 };
 
 // The app used to be called "The Lounge", and productName decides

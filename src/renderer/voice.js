@@ -13,7 +13,9 @@
 (function () {
     'use strict';
 
-    const SPEAK_THRESHOLD = 0.055;   // RMS above which a participant reads as "speaking"
+    // RMS above which a participant reads as "speaking". Settable per user from
+    // Settings > Voice & Audio, calibrated against the mic-test meter there.
+    const SPEAK_THRESHOLD = 0.055;   // fallback when the setting is unset
     const SPEAK_HANG_MS = 220;       // hold the indicator briefly so it doesn't strobe
 
     // ---- screen-share quality ------------------------------------------------
@@ -346,7 +348,10 @@
 
                 // A muted/non-transmitting local mic must never light up.
                 const gated = isLocal && (muted || lastTransmit === false);
-                if (!gated && rms > SPEAK_THRESHOLD) rec.until = now + SPEAK_HANG_MS;
+                const threshold = Number(settings.speakThreshold) > 0
+                    ? Number(settings.speakThreshold) / 100
+                    : SPEAK_THRESHOLD;
+                if (!gated && rms > threshold) rec.until = now + SPEAK_HANG_MS;
                 const nowSpeaking = !gated && now < rec.until;
 
                 if (nowSpeaking !== rec.speaking) {

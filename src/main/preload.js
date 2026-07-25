@@ -95,6 +95,11 @@ contextBridge.exposeInMainWorld('lounge', {
         setVoiceState: (state) => ipcRenderer.invoke('app:voiceState', state),
         setBadge: (count) => ipcRenderer.invoke('app:badge', count),
         openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
+        // Theme. The renderer decides dark/light/follow-Windows; main owns the
+        // system answer and restyles the native caption buttons to match.
+        systemTheme: () => ipcRenderer.invoke('app:systemTheme'),
+        setTheme: (theme) => ipcRenderer.invoke('app:setTheme', theme),
+        onThemeChange: (cb) => sub('app:themeChange', cb),
         // Tray / menu actions that need to drive the UI.
         onCommand: (cb) => sub('app:command', cb),
         // Fired when the window is restored / the machine wakes — the renderer

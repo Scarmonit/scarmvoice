@@ -31,17 +31,33 @@
 
   /* ---- text ---- */
   --text:  #e9ebf0;
+  --text-strong: #ffffff;      /* author names, active channel */
+  --text-body:   #dcdfe6;      /* message prose */
   --muted: #a7aebc;
   --dim:   #767e8e;
+  --field: var(--rail);        /* text inputs + selects */
+  --field-line: transparent;
+  --code-bg: var(--rail);
+  --code-text: #d6deeb;
+  --spoiler: #2b2f38;
+  --spoiler-hover: #353a45;
+  --divider: rgba(0, 0, 0, .28);
+  --scrim: rgba(4, 5, 7, .82);
+  --scrollbar: rgba(0, 0, 0, .45);
+  --scrollbar-hover: rgba(0, 0, 0, .65);
+  --rail-plate: linear-gradient(155deg, #232937, #0d0f14);
+  --rail-plate-hover: linear-gradient(155deg, #2c3444, #12151c);
 
   /* ---- accent + status ---- */
+  --accent-rgb:  38, 221, 208;   /* drives every rgba() accent tint */
   --accent:      #26ddd0;
   --accent-hi:   #6ceee4;
   --accent-lo:   #12b3a7;
-  --accent-soft: rgba(38, 221, 208, .14);
-  --accent-line: rgba(38, 221, 208, .40);
+  --accent-soft: rgba(var(--accent-rgb), .14);
+  --accent-line: rgba(var(--accent-rgb), .40);
   --on-accent:   #04211f;
 
+  --online-rgb:  45, 189, 110;
   --online:      #2dbd6e;
   --idle:        #dfa32c;
   --danger:      #f2455e;
@@ -71,7 +87,13 @@
   /* Chat text scale. Everything inside #messages sizes in em against this, so
      one value moves message text, names, timestamps and avatars together. */
   --chat-fs: 16px;
-  --font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  /* Emoji are named explicitly and last: text still comes from Segoe UI, and
+     every emoji codepoint resolves to ONE set - Segoe UI Emoji - instead of
+     scattering across Segoe UI Symbol (thin monochrome) and the colour font
+     depending on the codepoint. It is also what the website renders with on the
+     same machine, so a reaction looks identical in both clients. */
+  --font-emoji: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  --font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif, var(--font-emoji);
   --mono: Consolas, "SFMono-Regular", "Cascadia Mono", monospace;
 }
 
@@ -105,12 +127,12 @@ button { font-family: inherit; }
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, .45);
+  background: var(--scrollbar);
   border-radius: 8px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, .65); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* The sidebars hide their scrollbar until the pointer is over them, so a short
@@ -118,7 +140,7 @@ button { font-family: inherit; }
 .side-scroll::-webkit-scrollbar-thumb,
 #members-list::-webkit-scrollbar-thumb { background: transparent; }
 .side-scroll:hover::-webkit-scrollbar-thumb,
-#members-list:hover::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, .5); background-clip: content-box; }
+#members-list:hover::-webkit-scrollbar-thumb { background: var(--scrollbar); background-clip: content-box; }
 
 /* ---------- title bar ---------------------------------------------------- */
 /* Native minimise/maximise/close are painted over the right of this bar by
@@ -145,7 +167,7 @@ button { font-family: inherit; }
   background: var(--dim);
   transition: background .2s, box-shadow .2s;
 }
-.tb-dot.live { background: var(--online); box-shadow: 0 0 8px rgba(45, 189, 110, .6); }
+.tb-dot.live { background: var(--online); box-shadow: 0 0 8px rgba(var(--online-rgb), .6); }
 .tb-dot.warn { background: var(--idle); box-shadow: 0 0 8px rgba(223, 163, 44, .6); animation: tbpulse 1.1s ease-in-out infinite; }
 .tb-dot.err  { background: var(--danger); box-shadow: 0 0 8px rgba(242, 69, 94, .5); }
 @keyframes tbpulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
@@ -164,7 +186,7 @@ button { font-family: inherit; }
   flex: 0 0 auto;
   display: flex; align-items: flex-start; gap: 10px;
   padding: 9px 14px;
-  background: linear-gradient(90deg, rgba(38, 221, 208, .12), rgba(38, 221, 208, .04));
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), .12), rgba(var(--accent-rgb), .04));
   border-bottom: 1px solid var(--accent-line);
   font-size: 13px;
 }
@@ -238,8 +260,8 @@ button { font-family: inherit; }
 .rail-server:hover, .rail-btn:hover { border-radius: 14px; background: var(--elev); color: var(--text); }
 /* The mark is a near-black "S" behind a cyan waveform, so it needs a plate a
    shade lighter than the rail to read at 48px. */
-.rail-server { background: linear-gradient(155deg, #232937, #0d0f14); }
-.rail-server:hover { background: linear-gradient(155deg, #2c3444, #12151c); }
+.rail-server { background: var(--rail-plate); }
+.rail-server:hover { background: var(--rail-plate-hover); }
 .rail-server img { width: 44px; height: 44px; object-fit: contain; display: block; }
 /* The white pill on the rail's very edge marks the active server, as Discord
    does — the rail's 12px side margin is why this reaches out exactly that far. */
@@ -278,7 +300,7 @@ button { font-family: inherit; }
   flex: 0 0 48px; height: 48px;
   display: flex; flex-direction: column; justify-content: center;
   padding: 0 16px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .28);
+  box-shadow: 0 1px 0 var(--divider);
   cursor: default;
 }
 .sh-name { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: .2px; }
@@ -330,8 +352,8 @@ button { font-family: inherit; }
   color: var(--muted); text-align: left; cursor: pointer;
   font-size: 15px; font-weight: 500;
 }
-.chan:hover { background: var(--hover); color: #d6dae2; }
-.chan.active { background: var(--active); color: #fff; }
+.chan:hover { background: var(--hover); color: var(--text); }
+.chan.active { background: var(--active); color: var(--text-strong); }
 .chan.unread { color: var(--text); font-weight: 600; }
 /* Unread pill on the sidebar's edge — the sidebar's own 8px padding is why this
    reaches out to a negative offset. */
@@ -365,7 +387,7 @@ button { font-family: inherit; }
   color: var(--muted); text-align: left; cursor: pointer;
   font-size: 15px; font-weight: 500;
 }
-.vchan:hover { background: var(--hover); color: #d6dae2; }
+.vchan:hover { background: var(--hover); color: var(--text); }
 .vchan.connected { color: var(--text); }
 .vchan.connected .vchan-ico { color: var(--accent); }
 .vchan.connecting { color: var(--muted); cursor: default; }
@@ -432,7 +454,7 @@ button { font-family: inherit; }
   flex: 0 0 auto;
   padding: 8px;
   background: var(--panel);
-  box-shadow: 0 -1px 0 rgba(0, 0, 0, .3);
+  box-shadow: 0 -1px 0 var(--divider);
 }
 .voice-live { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px 6px; }
 .voice-live[hidden] { display: none; }
@@ -443,7 +465,7 @@ button { font-family: inherit; }
 }
 .vl-dot {
   width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%;
-  background: var(--online); box-shadow: 0 0 8px rgba(45, 189, 110, .7);
+  background: var(--online); box-shadow: 0 0 8px rgba(var(--online-rgb), .7);
 }
 .btn-leave {
   width: 30px; height: 30px; flex: 0 0 30px;
@@ -480,7 +502,7 @@ button { font-family: inherit; }
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 4px;
   padding: 8px; background: var(--panel);
-  box-shadow: 0 -1px 0 rgba(0, 0, 0, .3);
+  box-shadow: 0 -1px 0 var(--divider);
 }
 #voice-panel:has(#voice-live:not([hidden])) + #me-bar { box-shadow: none; }
 .me-id {
@@ -526,7 +548,13 @@ button { font-family: inherit; }
 /* Mute / deafen read as "off" states, so they go red rather than accent. */
 #btn-mute[aria-pressed="true"], #btn-deafen[aria-pressed="true"] { color: var(--danger-hi); }
 #btn-mute[aria-pressed="true"]:hover, #btn-deafen[aria-pressed="true"]:hover { background: var(--danger-soft); }
-.ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+/* The single geometry contract every icon obeys. A context may change the box
+   size, never the weight or the colour source. */
+.ico {
+  width: 18px; height: 18px; flex: 0 0 auto;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
 
 /* ---------- members sidebar --------------------------------------------- */
 
@@ -541,7 +569,7 @@ button { font-family: inherit; }
   flex: 0 0 48px; height: 48px;
   display: flex; align-items: center; gap: 8px;
   padding: 0 16px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .28);
+  box-shadow: 0 1px 0 var(--divider);
   font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
   color: var(--dim);
 }
@@ -588,7 +616,7 @@ button { font-family: inherit; }
   height: 48px; flex: 0 0 48px;
   display: flex; align-items: center; gap: 8px;
   padding: 0 8px 0 16px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .28);
+  box-shadow: 0 1px 0 var(--divider);
   z-index: 5;
 }
 .ch-hash { color: var(--dim); font-size: 22px; font-weight: 400; line-height: 1; }
@@ -681,9 +709,9 @@ button { font-family: inherit; }
   border-top-left-radius: 6px;
 }
 .msg-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.msg-author { font-weight: 600; font-size: 1em; color: #fff; }
+.msg-author { font-weight: 600; font-size: 1em; color: var(--text-strong); }
 .msg-time { font-size: 0.7em; color: var(--dim); font-weight: 500; }
-.msg-text { font-size: 1em; line-height: 1.375; white-space: pre-wrap; word-break: break-word; user-select: text; color: #dcdfe6; }
+.msg-text { font-size: 1em; line-height: 1.375; white-space: pre-wrap; word-break: break-word; user-select: text; color: var(--text-body); }
 .msg-text a { color: var(--accent); text-decoration: none; }
 .msg-text a:hover { text-decoration: underline; }
 .msg-edited { font-size: 0.68em; color: var(--dim); margin-left: 4px; }
@@ -721,7 +749,7 @@ button { font-family: inherit; }
   font-size: 0.76em; font-weight: 600; color: var(--accent);
   background: var(--accent-soft); border: 0; cursor: pointer;
 }
-.msg-thread:hover { background: rgba(38, 221, 208, .2); }
+.msg-thread:hover { background: rgba(var(--accent-rgb), .2); }
 
 .msg-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .reaction {
@@ -767,16 +795,18 @@ button { font-family: inherit; }
 .msg-act {
   width: 30px; height: 30px; display: grid; place-items: center;
   background: none; border: 0; border-radius: 5px; cursor: pointer;
-  color: var(--muted); font-size: 14px;
+  color: var(--muted);
 }
+.msg-act .ico { width: 17px; height: 17px; }
 .msg-act:hover { background: var(--elev); color: var(--text); }
 .msg-act.on { color: var(--accent); }
+.msg-act.danger:hover { background: var(--danger-soft); color: var(--danger-hi); }
 .msg-pinned-tag { font-size: 0.68em; color: var(--accent); font-weight: 600; }
-.msg.pinned { background: rgba(38, 221, 208, .045); box-shadow: inset 2px 0 0 var(--accent); }
-.msg.pinned:hover { background: rgba(38, 221, 208, .07); }
+.msg.pinned { background: rgba(var(--accent-rgb), .045); box-shadow: inset 2px 0 0 var(--accent); }
+.msg.pinned:hover { background: rgba(var(--accent-rgb), .07); }
 .msg.flash { animation: flash 1.6s ease-out; }
 @keyframes flash {
-  0%, 25% { background: rgba(38, 221, 208, .18); }
+  0%, 25% { background: rgba(var(--accent-rgb), .18); }
   100% { background: transparent; }
 }
 /* In a filtered view, matched messages are jump-to-context clickable. */
@@ -790,17 +820,17 @@ button { font-family: inherit; }
 .msg-para { display: block; }
 .msg-code {
   margin: 6px 0 2px; padding: 10px 12px; overflow-x: auto;
-  background: var(--rail); border: 1px solid var(--line); border-radius: 6px;
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
 }
 .msg-code code {
   font-family: var(--mono);
-  font-size: 0.82em; line-height: 1.45; color: #d6deeb; white-space: pre;
+  font-size: 0.82em; line-height: 1.45; color: var(--code-text); white-space: pre;
   background: none; border: 0; padding: 0;
 }
 .inline-code {
   font-family: var(--mono); font-size: 0.85em;
   padding: 1px 4px; border-radius: 4px;
-  background: var(--rail); border: 1px solid var(--line);
+  background: var(--code-bg); border: 1px solid var(--line);
 }
 .msg-list { margin: 4px 0; padding-left: 22px; }
 .msg-list li { margin: 2px 0; line-height: 1.45; }
@@ -813,15 +843,15 @@ button { font-family: inherit; }
   border-radius: 4px; padding: 0 2px; font-weight: 500;
   cursor: pointer;
 }
-.mention:hover { background: rgba(38, 221, 208, .26); }
-.mention-self { color: var(--accent); background: rgba(38, 221, 208, .22); font-weight: 600; }
+.mention:hover { background: rgba(var(--accent-rgb), .26); }
+.mention-self { color: var(--accent); background: rgba(var(--accent-rgb), .22); font-weight: 600; }
 .spoiler {
-  background: #2b2f38; border-radius: 4px; padding: 0 4px;
+  background: var(--spoiler); border-radius: 4px; padding: 0 4px;
   cursor: pointer; user-select: none;
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
 .spoiler, .spoiler * { color: transparent !important; }
-.spoiler:hover { background: #353a45; }
+.spoiler:hover { background: var(--spoiler-hover); }
 .spoiler.revealed { background: rgba(255, 255, 255, .06); cursor: auto; user-select: text; }
 .spoiler.revealed, .spoiler.revealed * { color: inherit !important; }
 
@@ -975,10 +1005,12 @@ button { font-family: inherit; }
   height: 44px; padding: 0 8px 0 4px;
 }
 #btn-emoji, #btn-mic {
+  position: relative;
   flex: 0 0 auto; width: 32px; height: 32px; border-radius: 5px;
+  display: grid; place-items: center;
   background: none; border: 0; cursor: pointer; color: var(--muted);
-  font-size: 17px; line-height: 1;
 }
+#btn-emoji .ico, #btn-mic .ico { width: 20px; height: 20px; }
 #btn-emoji:hover, #btn-mic:hover { background: var(--hover); color: var(--text); }
 #btn-send {
   width: 32px; height: 32px; flex: 0 0 32px;
@@ -988,7 +1020,7 @@ button { font-family: inherit; }
 }
 #btn-send:hover { background: var(--accent-hi); }
 #btn-send:disabled { background: none; color: var(--dim); cursor: default; }
-#btn-send .ico { fill: currentColor; stroke: none; width: 17px; height: 17px; }
+#btn-send .ico { width: 18px; height: 18px; }
 
 /* ---------- voice message recorder -------------------------------------- */
 
@@ -1087,14 +1119,14 @@ button { font-family: inherit; }
   border: 2px dashed var(--accent); color: var(--accent);
   font-size: 15px; font-weight: 700;
 }
-.drop-inner svg { width: 38px; height: 38px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.drop-ico { width: 40px; height: 40px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---------- filter + search bar ----------------------------------------- */
 
 #filter-bar {
   flex: 0 0 auto; position: relative;
   padding: 10px 16px; background: var(--chat-2);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .25);
+  box-shadow: 0 1px 0 var(--divider);
   z-index: 4;
 }
 .fb-top { display: flex; align-items: center; gap: 9px; }
@@ -1121,7 +1153,7 @@ button { font-family: inherit; }
   background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--accent);
   font-size: 11.5px; font-weight: 600;
 }
-.fb-chip:hover { background: rgba(38, 221, 208, .22); }
+.fb-chip:hover { background: rgba(var(--accent-rgb), .22); }
 .fb-chip-x { opacity: .75; font-size: 10px; }
 .fb-clear {
   padding: 3px 11px; border-radius: 999px; cursor: pointer;
@@ -1144,7 +1176,8 @@ button { font-family: inherit; }
   background: none; border: 0; cursor: pointer; text-align: left;
   color: var(--text); font-size: 13px;
 }
-.fb-opt span { width: 16px; text-align: center; }
+.fb-opt .ico { width: 17px; height: 17px; color: var(--dim); }
+.fb-opt.on .ico { color: var(--accent); }
 .fb-opt:hover { background: var(--elev); }
 .fb-opt.on { background: var(--accent-soft); color: var(--accent); }
 .fb-menu-sep { height: 1px; margin: 5px 6px; background: var(--line); }
@@ -1180,7 +1213,7 @@ button { font-family: inherit; }
 .sr-ch { color: var(--accent); }
 .sr-time { margin-left: auto; color: var(--dim); }
 .sr-body { margin-top: 3px; font-size: 12.5px; color: var(--muted); line-height: 1.4; word-break: break-word; }
-.sr-body mark { background: rgba(38, 221, 208, .28); color: var(--text); border-radius: 3px; padding: 0 2px; }
+.sr-body mark { background: rgba(var(--accent-rgb), .28); color: var(--text); border-radius: 3px; padding: 0 2px; }
 
 /* ---------- pinned messages -------------------------------------------- */
 
@@ -1261,7 +1294,7 @@ button { font-family: inherit; }
 #camera-stage {
   flex: 1 1 0; min-height: 160px; max-height: 60vh;
   padding: 10px 14px; background: var(--rail);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .3);
+  box-shadow: 0 1px 0 var(--divider);
 }
 #camera-stage[hidden] { display: none; }
 /* A screen share already claims half the column; cap the tiles below it so the
@@ -1292,7 +1325,7 @@ button { font-family: inherit; }
 /* contain = letterbox: never stretch or crop a face out of frame. */
 .cam-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .cam-tile.me video { transform: scaleX(-1); }   /* your own camera reads as a mirror */
-.cam-tile.speaking { border-color: var(--online); box-shadow: 0 0 0 2px rgba(45, 189, 110, .5); }
+.cam-tile.speaking { border-color: var(--online); box-shadow: 0 0 0 2px rgba(var(--online-rgb), .5); }
 .cam-tile:fullscreen { width: 100%; height: 100%; border: 0; border-radius: 0; }
 .cam-tile:fullscreen video { object-fit: contain; }
 
@@ -1330,7 +1363,7 @@ button { font-family: inherit; }
   flex: 0 0 48px; height: 48px;
   display: flex; align-items: center; gap: 8px;
   padding: 0 8px 0 16px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, .28);
+  box-shadow: 0 1px 0 var(--divider);
   font-size: 13px; font-weight: 700; color: var(--text);
 }
 .thread-head .icon-btn { margin-left: auto; }
@@ -1353,14 +1386,14 @@ button { font-family: inherit; }
 }
 #thread-send:hover { background: var(--accent-hi); }
 #thread-send:disabled { opacity: .55; cursor: default; }
-#thread-send .ico { fill: currentColor; stroke: none; width: 17px; height: 17px; }
+#thread-send .ico { width: 18px; height: 18px; }
 
 /* ---------- overlays ---------------------------------------------------- */
 
 .overlay {
   position: fixed; inset: 0; z-index: 100;
   display: grid; place-items: center;
-  background: rgba(4, 5, 7, .82);
+  background: var(--scrim);
   backdrop-filter: blur(4px);
 }
 .overlay[hidden] { display: none; }
@@ -1380,8 +1413,8 @@ button { font-family: inherit; }
 .login-sub { color: var(--muted); font-size: 13px; margin: 0 0 22px; line-height: 1.4; }
 .login-card input {
   width: 100%; padding: 11px 13px; margin-bottom: 10px;
-  border-radius: 6px; border: 1px solid transparent;
-  background: var(--rail); color: var(--text); outline: none; font-size: 14px;
+  border-radius: 6px; border: 1px solid var(--field-line);
+  background: var(--field); color: var(--text); outline: none; font-size: 14px;
 }
 .login-card input::placeholder { color: var(--dim); }
 .login-card input:focus { border-color: var(--accent); }
@@ -1456,7 +1489,7 @@ button { font-family: inherit; }
 .row.between { justify-content: space-between; }
 .row input[type="text"], .row select {
   flex: 1; padding: 9px 11px; border-radius: 6px;
-  background: var(--rail); border: 1px solid transparent; outline: none; font-size: 13px;
+  background: var(--field); border: 1px solid var(--field-line); outline: none; font-size: 13px;
   color: var(--text); min-width: 0;
 }
 .row input[type="text"]:focus, .row select:focus { border-color: var(--accent); }
@@ -1495,7 +1528,7 @@ button { font-family: inherit; }
   padding: 6px; cursor: pointer; text-align: left; overflow: hidden;
 }
 .pick:hover { border-color: var(--line-2); }
-.pick.sel { border-color: var(--accent); background: rgba(38, 221, 208, .07); }
+.pick.sel { border-color: var(--accent); background: rgba(var(--accent-rgb), .07); }
 .pick img { width: 100%; height: 104px; object-fit: contain; background: #000; border-radius: 5px; display: block; }
 .pick-name {
   display: flex; align-items: center; gap: 6px;
@@ -1622,7 +1655,9 @@ button { font-family: inherit; }
   background: none; border: 0; cursor: pointer;
   color: var(--muted); font-size: 13.5px; text-align: left;
 }
-.ctx-item > span:first-child { width: 16px; text-align: center; flex: 0 0 16px; }
+.ctx-ico { width: 17px; height: 17px; flex: 0 0 17px; color: var(--dim); }
+.ctx-item:hover .ctx-ico, .ctx-item.danger .ctx-ico { color: inherit; }
+.ctx-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-item:hover { background: var(--accent); color: var(--on-accent); }
 .ctx-item:disabled { color: var(--dim); cursor: default; background: none; }
 .ctx-item.danger { color: var(--danger-hi); }
@@ -1642,8 +1677,8 @@ button { font-family: inherit; }
 .dialog-card label { display: block; margin-bottom: 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
 .dialog-card input {
   width: 100%; padding: 11px 13px; margin-bottom: 16px;
-  border-radius: 6px; border: 1px solid transparent;
-  background: var(--rail); color: var(--text); outline: none; font-size: 14px;
+  border-radius: 6px; border: 1px solid var(--field-line);
+  background: var(--field); color: var(--text); outline: none; font-size: 14px;
 }
 .dialog-card input:focus { border-color: var(--accent); }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -1683,3 +1718,222 @@ button { font-family: inherit; }
 }
 .toast[hidden] { display: none; }
 .toast.err { border-color: var(--danger-line); color: var(--danger-hi); }
+
+/* ==========================================================================
+   Icon contexts
+   Every glyph below is the same set at a different box size. Nothing here
+   changes stroke weight or colour source — that is fixed in .ico.
+   ========================================================================== */
+
+.tag-ico { width: 1em; height: 1em; margin-right: .25em; vertical-align: -.15em; }
+.chip-ico { width: 13px; height: 13px; }
+.inline-ico { width: 1.05em; height: 1.05em; vertical-align: -.18em; margin-right: .35em; color: var(--dim); }
+.au-note { width: 1.15em; height: 1.15em; vertical-align: -.22em; margin-right: .35em; }
+.sc-glyph { width: 24px; height: 24px; }
+.sc-play .ico { width: 12px; height: 12px; }
+.thread-head > .ico { width: 17px; height: 17px; color: var(--accent); }
+.ub-icon .ico { width: 15px; height: 15px; stroke-width: 2.4; }
+.pinned-title { display: inline-flex; align-items: center; gap: 6px; }
+.pinned-title .ico { width: 15px; height: 15px; }
+.vp-flag .ico, .vp-invoice .ico { width: 15px; height: 15px; display: block; }
+.vp-flag.warn { color: var(--idle); }
+.msg-att-file .ico { width: 17px; height: 17px; color: var(--muted); flex: 0 0 17px; }
+.att-save { display: inline-flex; align-items: center; gap: .4em; }
+.att-save .ico { width: 1.25em; height: 1.25em; }
+/* The caret points down when the menu is closed. */
+.fb-caret { width: 12px; height: 12px; transform: rotate(90deg); }
+.fb-chip-x { width: 12px; height: 12px; opacity: .75; }
+
+/* Record button: a microphone with a solid record dot, so it can never be read
+   as the mute toggle next to it. While recording the whole glyph goes red and
+   the dot pulses. */
+#btn-mic .rec-dot { fill: var(--danger); stroke: none; }
+#btn-mic:hover { color: var(--text); }
+#btn-mic.recording { color: var(--danger); background: var(--danger-soft); }
+#btn-mic.recording .rec-dot { animation: recdot 1s ease-in-out infinite; }
+@keyframes recdot { 0%, 100% { opacity: 1 } 50% { opacity: .2 } }
+
+/* ==========================================================================
+   Emoji — content, never controls
+   ========================================================================== */
+
+/* Reactions are split into glyph + count so the emoji can be sized and centred
+   independently of the number beside it. */
+.rx-emoji { font-size: 16px; line-height: 1; font-family: var(--font-emoji); }
+.rx-n { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.emoji-grid button { font-family: var(--font-emoji); font-size: 20px; height: 32px; }
+/* A message that is nothing but a few emoji reads as a reaction, not prose. */
+.msg-text.jumbo { font-size: 2.4em; line-height: 1.25; letter-spacing: .04em; }
+
+/* ==========================================================================
+   Message density
+   ========================================================================== */
+
+#messages.compact .msg, #thread-list.compact .msg { margin-top: 0; padding-top: 1px; padding-bottom: 1px; }
+#messages.compact .msg-gutter, #thread-list.compact .msg-gutter { display: none; }
+#messages.compact .msg-head, #thread-list.compact .msg-head {
+  display: inline-flex; vertical-align: baseline; margin-right: 8px; gap: 7px;
+}
+#messages.compact .msg-time, #thread-list.compact .msg-time { order: -1; opacity: .85; }
+#messages.compact .msg-text, #thread-list.compact .msg-text { display: inline; }
+/* .msg-para is a block, so without this the body drops below the name and the
+   line is not compact at all. Later paragraphs still break, as they should. */
+#messages.compact .msg-text > .msg-para:first-child,
+#thread-list.compact .msg-text > .msg-para:first-child { display: inline; }
+#messages.compact .msg-body::before, #thread-list.compact .msg-body::before { display: none; }
+#messages.compact .msg-quote, #thread-list.compact .msg-quote { display: block; }
+#messages.compact .day-sep { margin-top: 1em; margin-bottom: .4em; }
+
+/* ==========================================================================
+   Settings — account card, mic meter, channel mutes, blocked list
+   ========================================================================== */
+
+.row.note { margin-top: -4px; }
+.row.note .hint { flex: 1; line-height: 1.5; }
+.row.stack { display: block; }
+.row.stack > span:first-child { display: block; margin-bottom: 8px; color: var(--muted); }
+
+.acct-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px; margin-bottom: 16px;
+  background: var(--rail); border-radius: 8px;
+}
+.acct-avatar {
+  width: 56px; height: 56px; flex: 0 0 56px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 19px; font-weight: 800; color: var(--on-accent);
+}
+.acct-body { min-width: 0; }
+.acct-name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-sub { font-size: 13px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-sub[hidden] { display: none; }
+
+.meter {
+  position: relative; flex: 1; min-width: 0;
+  height: 10px; border-radius: 5px;
+  background: var(--rail); overflow: hidden;
+}
+.meter i {
+  display: block; height: 100%; width: 0;
+  background: var(--muted); border-radius: 5px;
+  transition: width .06s linear, background .12s ease;
+}
+.meter i.over { background: var(--online); }
+.meter-mark {
+  position: absolute; top: -3px; bottom: -3px; width: 2px;
+  background: var(--accent); border-radius: 1px; pointer-events: none;
+}
+.keycap.recording { border-color: var(--danger); color: var(--danger); }
+
+.chan-mutes, .blocked-list { display: flex; flex-direction: column; gap: 2px; }
+.chan-mute {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: 6px; cursor: pointer;
+  font-size: 13.5px; color: var(--muted);
+}
+.chan-mute:hover { background: var(--hover); color: var(--text); }
+.chan-mute input { accent-color: var(--accent); width: 15px; height: 15px; flex: 0 0 15px; }
+.chan-mute .ico { width: 16px; height: 16px; opacity: .55; }
+.chan-mute input:checked ~ .ico { opacity: 1; color: var(--idle); }
+
+.blocked-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 9px; border-radius: 6px;
+  font-size: 13.5px;
+}
+.blocked-row:hover { background: var(--hover); }
+.blocked-row .av {
+  width: 28px; height: 28px; flex: 0 0 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: var(--on-accent);
+}
+.blocked-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blocked-row .keycap { min-width: 0; padding: 5px 12px; }
+
+/* Muted channel + blocked person + do-not-disturb states */
+.chan.muted { opacity: .5; }
+.chan.muted:hover { opacity: .8; }
+.chan.muted .unread { background: var(--dim); }
+.vp.blocked .av-wrap { opacity: .4; }
+.vp.blocked .vp-name { color: var(--dim); text-decoration: line-through; }
+.me-presence.dnd { background: var(--danger); }
+.me-presence.dnd::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 6px; height: 2px; border-radius: 1px; background: var(--panel);
+}
+.me-presence { position: absolute; }
+
+/* ==========================================================================
+   Light theme
+   Only the token block flips — every rule above reads through the tokens.
+   The image lightbox and video surfaces stay dark on purpose.
+   ========================================================================== */
+
+:root[data-theme="light"] {
+  --rail:       #dcdee3;
+  --panel:      #e9ebef;
+  --side:       #f2f3f5;
+  --chat:       #ffffff;
+  --chat-2:     #f6f7f9;
+  --float:      #ffffff;
+  --input:      #eaecef;
+  --elev:       #e0e2e6;
+
+  --hover:      rgba(0, 0, 0, .045);
+  --active:     rgba(0, 0, 0, .085);
+  --msg-hover:  rgba(0, 0, 0, .022);
+  --line:       rgba(0, 0, 0, .08);
+  --line-2:     rgba(0, 0, 0, .14);
+  --line-solid: rgba(0, 0, 0, .12);
+
+  --text:        #202226;
+  --text-strong: #06070a;
+  --text-body:   #2e3035;
+  --muted:       #4e5058;
+  --dim:         #767980;
+
+  --field:      #ffffff;
+  --field-line: rgba(0, 0, 0, .14);
+  --code-bg:    #f0f1f4;
+  --code-text:  #1f2933;
+  --spoiler:      #c9ccd2;
+  --spoiler-hover: #b8bcc4;
+  --divider:    rgba(0, 0, 0, .09);
+  --scrim:      rgba(28, 30, 34, .45);
+  --scrollbar:  rgba(0, 0, 0, .22);
+  --scrollbar-hover: rgba(0, 0, 0, .34);
+  --rail-plate: linear-gradient(155deg, #ffffff, #dfe1e6);
+  --rail-plate-hover: linear-gradient(155deg, #ffffff, #eef0f3);
+
+  /* Darkened so it still passes contrast as text and as a fill under white. */
+  --accent-rgb:  14, 145, 134;
+  --accent:      #0e9186;
+  --accent-hi:   #0a7a71;
+  --accent-lo:   #086a62;
+  --accent-soft: rgba(14, 145, 134, .12);
+  --accent-line: rgba(14, 145, 134, .42);
+  --on-accent:   #ffffff;
+
+  --online-rgb:  28, 156, 86;
+  --online:      #1c9c56;
+  --idle:        #a9761a;
+  --danger:      #d32a45;
+  --danger-hi:   #ad2137;
+  --danger-soft: rgba(211, 42, 69, .10);
+  --danger-line: rgba(211, 42, 69, .34);
+
+  --shadow-sm: 0 2px 8px rgba(16, 18, 24, .10);
+  --shadow:    0 6px 18px rgba(16, 18, 24, .14);
+  --shadow-lg: 0 16px 44px rgba(16, 18, 24, .20);
+}
+
+/* The rail pill and the unread pill are white-on-dark by nature; invert them. */
+:root[data-theme="light"] .rail-server::before { background: #2b2d31; }
+:root[data-theme="light"] .cam-name,
+:root[data-theme="light"] .sc-badge,
+:root[data-theme="light"] .cam-tool,
+:root[data-theme="light"] .sc-play { color: #fff; }
+/* Highlight.js ships a dark palette; keep code blocks dark in both themes so
+   the vendored theme stays legible. */
+:root[data-theme="light"] .msg-code { background: #1f2228; border-color: rgba(0, 0, 0, .18); }
+:root[data-theme="light"] .msg-code code { color: #d6deeb; }
