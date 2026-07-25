@@ -18,7 +18,8 @@ let send = () => {};      // renderer bridge, set by init()
 let state = {             // last-known state, replayed to a late-subscribing UI
     status: 'idle',       // idle|checking|available|downloading|ready|none|error
     version: null,
-    notes: null,
+    notes: null,          // flattened text, for the one-line status in Settings
+    noteBlocks: [],       // structured changelog, for the release-notes modal
     progress: 0,
     error: null,
     auto: false
@@ -48,14 +49,22 @@ function load() {
     updater.allowDowngrade = false;
     updater.on('checking-for-update', () => emit({ status: 'checking', error: null }));
     updater.on('update-available', (info) => {
-        emit({ status: 'available', version: info.version, notes: normalizeNotes(info.releaseNotes) });
+        const n = parseNotes(info.releaseNotes);
+        emit({ status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks });
         // Background mode: fetch it quietly and install on quit.
         if (state.auto) startDownload();
     });
     updater.on('update-not-available', () => emit({ status: 'none' }));
     updater.on('download-progress', (p) => emit({ status: 'downloading', progress: Math.round(p.percent || 0) }));
     updater.on('update-downloaded', (info) => {
-        emit({ status: 'ready', version: info.version, progress: 100 });
+        // Usually already captured from update-available; re-parse in case this
+        // is the only event that carried them.
+        const n = parseNotes(info.releaseNotes);
+        emit({
+            status: 'ready', version: info.version, progress: 100,
+            notes: n.text || state.notes,
+            noteBlocks: (n.blocks && n.blocks.length) ? n.blocks : state.noteBlocks
+        });
         if (state.auto) {
             // Don't yank the session away; install silently on the next quit.
             try { updater.autoInstallOnAppQuit = true; } catch (e) {}
@@ -68,14 +77,156 @@ function load() {
     return updater;
 }
 
-// Release notes can be a string or an array of {version, note}; flatten to text.
-function normalizeNotes(notes) {
-    if (!notes) return null;
-    if (typeof notes === 'string') return notes.replace(/<[^>]+>/g, '').trim().slice(0, 2000) || null;
-    if (Array.isArray(notes)) {
-        return notes.map((n) => (n && n.note ? n.note : '')).join('\n').replace(/<[^>]+>/g, '').trim().slice(0, 2000) || null;
+// ---- release notes -------------------------------------------------------
+//
+// The GitHub feed carries the release body as rendered HTML, and electron-updater
+// hands it over as either a string or an array of { version, note }. The old
+// version stripped every tag and produced one unreadable paragraph, so this
+// parses it into a small block model instead:
+//
+//   { t: 'h',  text }            a section heading
+//   { t: 'ul', items: [text] }   a bullet list
+//   { t: 'p',  text }            prose
+//
+// Deliberately structure-only, never markup: the renderer builds these with
+// createElement + textContent, so nothing from a remote feed can ever be
+// interpreted as HTML in the window.
+
+const ENTITIES = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+    mdash: '—', ndash: '–', hellip: '…', bull: '•', middot: '·', rsquo: '’', lsquo: '‘'
+};
+
+function decode(s) {
+    return String(s).replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (m, ent) => {
+        if (ent[0] === '#') {
+            const n = (ent[1] === 'x' || ent[1] === 'X')
+                ? parseInt(ent.slice(2), 16)
+                : parseInt(ent.slice(1), 10);
+            try { return Number.isFinite(n) ? String.fromCodePoint(n) : m; } catch (e) { return m; }
+        }
+        const key = ent.toLowerCase();
+        return Object.prototype.hasOwnProperty.call(ENTITIES, key) ? ENTITIES[key] : m;
+    });
+}
+
+// Tags out, entities decoded, leftover markdown emphasis unwrapped.
+function clean(s) {
+    return decode(String(s).replace(/<[^>]+>/g, ''))
+        .replace(/\*\*([\s\S]+?)\*\*/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1')
+        .replace(/[ \t]+/g, ' ')
+        .trim();
+}
+
+const BULLET = /^(?:[-*•–·]|\d+[.)])\s+/;
+const ALL_BOLD = /^(?:\*\*[\s\S]+\*\*|<(?:strong|b)\b[^>]*>[\s\S]+<\/(?:strong|b)>)\s*:?$/i;
+
+// GitHub emits "<br>\n" between the lines of a paragraph. Treating the tag and
+// the newline as two separators would put an empty line between every bullet,
+// which flushes the list and turns each item into a list of its own — so a <br>
+// swallows the whitespace around it and counts once.
+function splitRawLines(s) {
+    return String(s).split(/\s*<br\s*\/?>\s*|\r?\n/i);
+}
+
+function linesToBlocks(rawLines, out) {
+    let para = [];
+    let items = [];
+    const flushPara = () => { if (para.length) { out.push({ t: 'p', text: para.join(' ') }); para = []; } };
+    const flushItems = () => { if (items.length) { out.push({ t: 'ul', items }); items = []; } };
+
+    rawLines.forEach((raw) => {
+        const rawTrim = String(raw).trim();
+        const line = clean(rawTrim);
+        if (!line) { flushItems(); flushPara(); return; }
+
+        const md = /^(#{1,6})\s+([\s\S]*)$/.exec(line);
+        if (md) { flushItems(); flushPara(); out.push({ t: 'h', text: md[2].trim() }); return; }
+
+        // A line that is entirely bold is a section label — which is exactly how
+        // this app's own release notes are written.
+        if (ALL_BOLD.test(rawTrim)) {
+            flushItems(); flushPara();
+            out.push({ t: 'h', text: line.replace(/:$/, '') });
+            return;
+        }
+
+        if (BULLET.test(line)) { flushPara(); items.push(line.replace(BULLET, '').trim()); return; }
+
+        flushItems();
+        para.push(line);
+    });
+
+    flushItems();
+    flushPara();
+}
+
+function htmlToBlocks(html, out) {
+    const re = /<(h[1-6]|ul|ol|p|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+    let m;
+    let matched = false;
+    while ((m = re.exec(html)) !== null) {
+        matched = true;
+        const tag = m[1].toLowerCase();
+        const inner = m[2];
+        if (/^h[1-6]$/.test(tag)) {
+            const t = clean(inner);
+            if (t) out.push({ t: 'h', text: t });
+        } else if (tag === 'ul' || tag === 'ol') {
+            const items = [];
+            const lire = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+            let li;
+            while ((li = lire.exec(inner)) !== null) {
+                const t = clean(li[1]);
+                if (t) items.push(t);
+            }
+            if (items.length) out.push({ t: 'ul', items });
+        } else {
+            // A <p> can still hold <br>-separated bullet lines.
+            linesToBlocks(splitRawLines(inner), out);
+        }
     }
-    return null;
+    return matched;
+}
+
+function addNotes(body, out) {
+    if (!body) return;
+    const s = String(body);
+    if (/<(p|ul|ol|li|h[1-6]|br)\b/i.test(s) && htmlToBlocks(s, out)) return;
+    linesToBlocks(splitRawLines(s), out);
+}
+
+function blocksToText(blocks) {
+    return blocks.map((b) => {
+        if (b.t === 'h') return b.text;
+        if (b.t === 'ul') return b.items.map((i) => '• ' + i).join('\n');
+        return b.text;
+    }).join('\n').trim();
+}
+
+function parseNotes(raw) {
+    const blocks = [];
+    if (!raw) return { text: null, blocks: [] };
+
+    if (Array.isArray(raw)) {
+        // Several releases skipped at once: one section per version.
+        raw.forEach((n) => {
+            if (!n) return;
+            const body = typeof n === 'string' ? n : n.note;
+            if (n.version) blocks.push({ t: 'h', text: 'Version ' + n.version });
+            addNotes(body, blocks);
+        });
+    } else if (typeof raw === 'string') {
+        addNotes(raw, blocks);
+    } else {
+        return { text: null, blocks: [] };
+    }
+
+    const trimmed = blocks.slice(0, 150);
+    const text = blocksToText(trimmed).slice(0, 4000);
+    return { text: text || null, blocks: text ? trimmed : [] };
 }
 
 function init(bridge) {
@@ -130,4 +281,4 @@ function setAuto(on) {
 
 function getState() { return state; }
 
-module.exports = { init, checkOnLaunch, checkNow, startDownload, installNow, setAuto, getState, available };
+module.exports = { init, checkOnLaunch, checkNow, startDownload, installNow, setAuto, getState, available, parseNotes };

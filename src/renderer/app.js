@@ -2659,65 +2659,179 @@
         }
     }
 
-    // ---------- auto-update banner ----------------------------------------
-    // Non-blocking bar under the title bar. Dismiss hides it for THIS session
-    // only (dismissedVersion), so a new launch re-surfaces the same update
-    // without nagging within a session.
+    // ---------- auto-update card + release notes ---------------------------
+    //
+    // A right-aligned card that slides in under the title bar. It stays IN the
+    // layout flow rather than floating over a corner: in a three-column shell an
+    // overlay would sit on either the composer's controls or the member list,
+    // whereas stealing ~60px of height covers nothing at any window size.
+    //
+    // Dismissing hides it for this session only. "Ready to install" still breaks
+    // through a dismissal made while it was merely available or downloading -
+    // that is new information - and dismissing the ready card keeps it away until
+    // the next launch.
 
-    let dismissedVersion = null;
+    let dismissed = null;                    // { version, ready }
+    let updateState = { status: 'idle' };
+    let bannerTimer = null;
 
-    function renderUpdate(s) {
-        const banner = $('update-banner');
-        const text = $('ub-text');
-        const action = $('ub-action');
-        const prog = $('ub-progress');
-        const bar = $('ub-bar');
-        const notesToggle = $('ub-notes-toggle');
-        const notes = $('ub-notes');
+    function updateVersionKey(s) { return s && s.version ? s.version : '?'; }
 
-        // Nothing to show for these states.
-        const showable = ['available', 'downloading', 'ready'].includes(s.status);
-        if (!showable || (s.version && s.version === dismissedVersion && s.status === 'available')) {
-            banner.hidden = true;
-            return;
-        }
-        banner.hidden = false;
-
-        prog.hidden = s.status !== 'downloading';
-        if (s.status === 'downloading') bar.style.width = (s.progress || 0) + '%';
-
-        notesToggle.hidden = !s.notes;
-        if (s.notes) notes.textContent = s.notes;
-
-        if (s.status === 'available') {
-            text.textContent = `ScarmVoice ${s.version} is available.`;
-            action.textContent = 'Download';
-            action.disabled = false;
-        } else if (s.status === 'downloading') {
-            text.textContent = `Downloading ScarmVoice ${s.version}…  ${s.progress || 0}%`;
-            action.textContent = 'Downloading…';
-            action.disabled = true;
-        } else if (s.status === 'ready') {
-            text.textContent = `ScarmVoice ${s.version} is ready to install.`;
-            action.textContent = 'Restart to update';
-            action.disabled = false;
-        }
+    function bannerSuppressed(s) {
+        if (!dismissed || dismissed.version !== updateVersionKey(s)) return false;
+        return dismissed.ready || s.status !== 'ready';
     }
 
-    $('ub-action').addEventListener('click', async () => {
+    function hasNotes(s) { return !!(s && s.noteBlocks && s.noteBlocks.length); }
+
+    const UPDATE_COPY = {
+        available: (s) => ({
+            title: 'Update available',
+            sub: 'ScarmVoice ' + (s.version || ''),
+            action: 'Download'
+        }),
+        downloading: (s) => ({
+            title: 'Downloading update',
+            sub: 'ScarmVoice ' + (s.version || '') + ' \u00b7 ' + (s.progress || 0) + '%',
+            action: 'Downloading\u2026'
+        }),
+        ready: (s) => ({
+            title: 'Update ready',
+            sub: 'ScarmVoice ' + (s.version || '') + ' — restart to install',
+            action: 'Restart to update'
+        })
+    };
+
+    function showBanner() {
+        const b = $('update-banner');
+        clearTimeout(bannerTimer);
+        b.classList.remove('leaving');
+        b.hidden = false;                    // removing [hidden] runs the entrance
+    }
+
+    // Let the exit animation finish before the card leaves the flow, so the app
+    // doesn't snap upward under it.
+    function hideBanner() {
+        const b = $('update-banner');
+        if (b.hidden) return;
+        clearTimeout(bannerTimer);
+        b.classList.add('leaving');
+        bannerTimer = setTimeout(() => {
+            b.hidden = true;
+            b.classList.remove('leaving');
+        }, 200);
+    }
+
+    function renderUpdate(s) {
+        updateState = s || { status: 'idle' };
+        const make = UPDATE_COPY[updateState.status];
+
+        const notesBtn = $('btn-release-notes');
+        if (notesBtn) notesBtn.hidden = !hasNotes(updateState);
+        if (notesOpen()) paintNotes();
+
+        if (!make || bannerSuppressed(updateState)) { hideBanner(); return; }
+
+        const c = make(updateState);
+        $('ub-text').textContent = c.title;
+        $('ub-sub').textContent = c.sub;
+        $('ub-sub').title = c.sub;
+        $('ub-action').textContent = c.action;
+        $('ub-action').disabled = updateState.status === 'downloading';
+        $('ub-progress').hidden = updateState.status !== 'downloading';
+        if (updateState.status === 'downloading') {
+            $('ub-bar').style.width = (updateState.progress || 0) + '%';
+        }
+        $('ub-notes-toggle').hidden = !hasNotes(updateState);
+        showBanner();
+    }
+
+    function applyUpdateAction() {
+        if (updateState.status === 'ready') L.update.install();
+        else if (updateState.status === 'available') L.update.download();
+    }
+
+    $('ub-action').addEventListener('click', applyUpdateAction);
+    $('ub-dismiss').addEventListener('click', () => {
+        dismissed = { version: updateVersionKey(updateState), ready: updateState.status === 'ready' };
+        hideBanner();
+    });
+
+    // ---- release notes modal ----
+    // The changelog comes straight from the update feed as a block model (see
+    // main/updater.js), so this stays correct on every future release with no
+    // per-version edit here. Built with createElement + textContent: nothing from
+    // a remote feed is ever handed to the DOM as markup.
+
+    function notesOpen() { return !$('notes').hidden; }
+
+    function renderNoteBlocks(container, blocks) {
+        container.innerHTML = '';
+        if (!blocks || !blocks.length) {
+            const e = document.createElement('div');
+            e.className = 'empty-state';
+            e.textContent = 'This release was published without notes.';
+            container.appendChild(e);
+            return;
+        }
+        blocks.forEach((b) => {
+            if (b.t === 'h') {
+                const h = document.createElement('h3');
+                h.className = 'nm-h';
+                h.textContent = b.text;
+                container.appendChild(h);
+            } else if (b.t === 'ul') {
+                const ul = document.createElement('ul');
+                ul.className = 'nm-list';
+                (b.items || []).forEach((it) => {
+                    const li = document.createElement('li');
+                    li.textContent = it;
+                    ul.appendChild(li);
+                });
+                container.appendChild(ul);
+            } else {
+                const para = document.createElement('p');
+                para.className = 'nm-p';
+                para.textContent = b.text;
+                container.appendChild(para);
+            }
+        });
+    }
+
+    // Footer + title track the live update state, so finishing a download while
+    // the modal is open swaps "Download" for "Restart to update" in place.
+    function paintNotes() {
+        const s = updateState;
+        $('notes-title').textContent = 'ScarmVoice ' + (s.version || '');
+        const act = $('notes-action');
+        const ready = s.status === 'ready';
+        const downloading = s.status === 'downloading';
+        const offerable = ready || downloading || s.status === 'available';
+        act.hidden = !offerable;
+        act.disabled = downloading;
+        act.textContent = ready ? 'Restart to update'
+            : downloading ? 'Downloading\u2026' : 'Download update';
+        $('notes-hint').textContent = downloading ? (s.progress || 0) + '% downloaded'
+            : ready ? 'Downloaded and waiting.' : '';
+    }
+
+    async function openNotes() {
         const s = await L.update.getState();
-        if (s.status === 'ready') L.update.install();
-        else if (s.status === 'available') L.update.download();
-    });
-    $('ub-dismiss').addEventListener('click', async () => {
-        const s = await L.update.getState();
-        dismissedVersion = s.version || 'dismissed';   // suppress until next launch
-        $('update-banner').hidden = true;
-    });
-    $('ub-notes-toggle').addEventListener('click', () => {
-        const n = $('ub-notes');
-        n.hidden = !n.hidden;
-    });
+        if (s) updateState = s;
+        paintNotes();
+        renderNoteBlocks($('notes-body'), updateState.noteBlocks);
+        $('notes-body').scrollTop = 0;
+        $('notes').hidden = false;
+        $('notes-close').focus();
+    }
+
+    function closeNotes() { $('notes').hidden = true; }
+
+    $('ub-notes-toggle').addEventListener('click', openNotes);
+    $('notes-close').addEventListener('click', closeNotes);
+    $('notes-later').addEventListener('click', closeNotes);
+    $('notes-action').addEventListener('click', () => { closeNotes(); applyUpdateAction(); });
+    $('notes').addEventListener('mousedown', (e) => { if (e.target === $('notes')) closeNotes(); });
 
     L.update.onState((s) => renderUpdate(s));
     // Replay whatever state main already reached before this listener attached.
@@ -3514,8 +3628,16 @@
         $('update-status').textContent = map[s.status] || map.idle;
     }
     async function refreshUpdateStatus() {
-        try { updateStatusText(await L.update.getState()); } catch (e) {}
+        try {
+            const s = await L.update.getState();
+            updateStatusText(s);
+            // Keep the notes entry point honest even if no state event has fired
+            // since the last render.
+            if (s) { updateState = s; $('btn-release-notes').hidden = !hasNotes(s); }
+        } catch (e) {}
     }
+
+    $('btn-release-notes').addEventListener('click', openNotes);
     // Keep the settings line in sync while the panel is open.
     L.update.onState((s) => { if (!$('settings').hidden) updateStatusText(s); });
 
@@ -4803,6 +4925,7 @@
             else if (!$('dialog').hidden) closeDialog(inp_null());
             else if (!$('picker').hidden) closePicker();
             else if (!$('popover').hidden) closePopover();
+            else if (notesOpen()) closeNotes();
             else if (!$('settings').hidden) closeSettings();
             else if (!$('filter-menu').hidden) $('filter-menu').hidden = true;
             else if (filterOpen()) toggleFilter(false);

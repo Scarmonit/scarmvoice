@@ -38,19 +38,21 @@
   <div class="tb-spacer"></div>
 </header>
 
-<!-- Non-blocking update banner. Sits under the title bar, above the app. -->
+<!-- Update card. Right-aligned and in the layout flow rather than floating over a
+     corner, so it never covers the composer or the member list; it slides in and
+     out and steals a little height instead. -->
 <div id="update-banner" hidden>
   <span class="ub-icon" aria-hidden="true"><span class="ico" data-icon="arrow-up"></span></span>
   <div class="ub-body">
-    <span class="ub-text" id="ub-text"></span>
-    <button class="ub-notes-toggle" id="ub-notes-toggle" hidden>release notes</button>
-    <div class="ub-notes" id="ub-notes" hidden></div>
+    <span class="ub-title" id="ub-text"></span>
+    <span class="ub-sub" id="ub-sub"></span>
     <div class="ub-progress" id="ub-progress" hidden><i id="ub-bar"></i></div>
   </div>
-  <div class="ub-actions">
-    <button class="ub-btn" id="ub-action"></button>
-    <button class="ub-x" id="ub-dismiss" title="Dismiss"><span class="ico" data-icon="x"></span></button>
-  </div>
+  <button class="ub-notes-toggle" id="ub-notes-toggle" hidden>Release notes</button>
+  <button class="ub-btn" id="ub-action"></button>
+  <button class="ub-x" id="ub-dismiss" title="Dismiss until next launch">
+    <span class="ico" data-icon="x"></span>
+  </button>
 </div>
 
 <div id="app" hidden>
@@ -558,7 +560,11 @@
         </label>
         <div class="row between" id="update-row">
           <span class="hint" id="update-status">You're on the latest version.</span>
-          <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
+          <span class="row-actions">
+            <!-- Stays reachable after the update card has been dismissed. -->
+            <button type="button" id="btn-release-notes" class="keycap" hidden>Release notes</button>
+            <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
+          </span>
         </div>
         <label class="row">
           <span>Server URL</span>
@@ -574,6 +580,30 @@
         </div>
       </section>
     </div>
+  </div>
+</div>
+
+<!-- ---------- release notes ----------
+     Reuses the app's .overlay + .modal shell, so the header stays put, the notes
+     scroll on their own, and the footer buttons never move. The changelog itself
+     comes from the update feed (see main/updater.js) as a block model, rendered
+     with createElement — never as markup. -->
+<div id="notes" class="overlay" hidden>
+  <div class="modal notes-modal">
+    <header class="modal-head">
+      <span class="nm-mark" aria-hidden="true"><span class="ico" data-icon="arrow-up"></span></span>
+      <div class="nm-heading">
+        <h2 id="notes-title">ScarmVoice</h2>
+        <span class="nm-sub">What's new in this update</span>
+      </div>
+      <button class="icon-btn" id="notes-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
+    </header>
+    <div class="modal-body" id="notes-body"></div>
+    <footer class="notes-foot">
+      <span class="hint" id="notes-hint"></span>
+      <button type="button" id="notes-later">Later</button>
+      <button type="button" id="notes-action">Restart to update</button>
+    </footer>
   </div>
 </div>
 

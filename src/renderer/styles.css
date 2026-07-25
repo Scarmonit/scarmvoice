@@ -180,53 +180,89 @@ button { font-family: inherit; }
 .tb-conn.err { color: var(--danger-hi); background: var(--danger-soft); }
 .tb-spacer { flex: 1; }
 
-/* ---------- update banner ------------------------------------------------ */
+/* ---------- update card --------------------------------------------------
+   Right-aligned and in the flow, so it covers nothing: an overlay in a
+   three-column shell would land on the composer's controls or the member list.
+   Slides down on arrival and back up on dismissal. */
 
 #update-banner {
   flex: 0 0 auto;
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 9px 14px;
-  background: linear-gradient(90deg, rgba(var(--accent-rgb), .12), rgba(var(--accent-rgb), .04));
-  border-bottom: 1px solid var(--accent-line);
+  align-self: flex-end;
+  width: min(620px, calc(100% - 24px));
+  margin: 10px 12px 2px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px 11px 14px;
+  background: var(--float);
+  border: 1px solid var(--accent-line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
   font-size: 13px;
+  animation: ubIn .22s cubic-bezier(.2, .9, .3, 1) both;
 }
 #update-banner[hidden] { display: none; }
+#update-banner.leaving { animation: ubOut .2s ease-in both; }
+
+@keyframes ubIn {
+  from { opacity: 0; transform: translateY(-14px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes ubOut {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateY(-10px) scale(.98); }
+}
+
 .ub-icon {
-  flex: 0 0 22px; width: 22px; height: 22px; margin-top: 1px;
+  flex: 0 0 30px; width: 30px; height: 30px;
   display: grid; place-items: center; border-radius: 50%;
-  background: var(--accent); color: var(--on-accent); font-weight: 800; font-size: 13px;
+  background: var(--accent-soft); color: var(--accent);
 }
-.ub-body { flex: 1; min-width: 0; }
-.ub-text { color: var(--text); font-weight: 600; }
-.ub-notes-toggle {
-  display: inline-block; margin-left: 8px; padding: 0;
-  background: none; border: 0; cursor: pointer;
-  color: var(--accent); font-size: 12px; text-decoration: underline;
-}
-.ub-notes {
-  margin-top: 6px; padding: 9px 11px; max-height: 140px; overflow-y: auto;
-  background: rgba(0, 0, 0, .3); border: 1px solid var(--line); border-radius: 8px;
-  color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+.ub-icon .ico { width: 17px; height: 17px; stroke-width: 2.2; }
+
+.ub-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ub-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+.ub-sub {
+  color: var(--muted); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ub-progress {
-  margin-top: 7px; height: 5px; border-radius: 3px;
-  background: rgba(0, 0, 0, .4); overflow: hidden; max-width: 320px;
+  margin-top: 6px; height: 4px; border-radius: 2px;
+  background: var(--hover); overflow: hidden;
 }
-.ub-progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s ease; }
-.ub-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.ub-progress i {
+  display: block; height: 100%; width: 0;
+  background: var(--accent); border-radius: 2px;
+  transition: width .2s ease;
+}
+
+/* Tertiary: a text action that reads as a link, not a button. */
+.ub-notes-toggle {
+  flex: 0 0 auto; padding: 6px 4px;
+  background: none; border: 0; cursor: pointer;
+  color: var(--muted); font-size: 12.5px; font-weight: 600;
+  text-decoration: underline; text-decoration-color: var(--line-2);
+  text-underline-offset: 3px;
+}
+.ub-notes-toggle:hover { color: var(--text); text-decoration-color: currentColor; }
+
+/* Primary. */
 .ub-btn {
-  padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  flex: 0 0 auto;
+  padding: 8px 14px; border-radius: 7px; cursor: pointer;
   background: var(--accent); border: 0; color: var(--on-accent);
-  font-size: 12px; font-weight: 700; white-space: nowrap;
+  font-size: 12.5px; font-weight: 700; white-space: nowrap;
 }
 .ub-btn:hover { background: var(--accent-hi); }
-.ub-btn:disabled { opacity: .6; cursor: default; }
+.ub-btn:disabled { opacity: .55; cursor: default; background: var(--accent); }
+
+/* Tertiary-most. */
 .ub-x {
-  width: 26px; height: 26px; display: grid; place-items: center;
+  flex: 0 0 28px; width: 28px; height: 28px;
+  display: grid; place-items: center;
   background: none; border: 0; border-radius: 7px; cursor: pointer;
-  color: var(--muted); font-size: 13px;
+  color: var(--dim);
 }
 .ub-x:hover { background: var(--hover); color: var(--text); }
+.ub-x .ico { width: 15px; height: 15px; }
 
 /* ---------- app shell --------------------------------------------------- */
 
@@ -1069,7 +1105,6 @@ button { font-family: inherit; }
 .sc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .sc-thumb.sc-icon { font-size: 22px; }
 .sc-thumb.sc-audio { color: var(--accent); }
-.sc-wave { width: 26px; height: 26px; fill: currentColor; }
 .sc-video .sc-play {
   position: absolute; inset: 0; margin: auto; width: 20px; height: 20px;
   display: grid; place-items: center; font-size: 10px; color: #fff;
@@ -1937,3 +1972,61 @@ button { font-family: inherit; }
    the vendored theme stays legible. */
 :root[data-theme="light"] .msg-code { background: #1f2228; border-color: rgba(0, 0, 0, .18); }
 :root[data-theme="light"] .msg-code code { color: #d6deeb; }
+
+/* ==========================================================================
+   Release notes modal
+   Same .overlay + .modal shell as Settings: fixed header, scrolling body,
+   fixed footer.
+   ========================================================================== */
+
+.notes-modal { max-width: 560px; max-height: 78vh; }
+.notes-modal .modal-head { gap: 12px; align-items: center; }
+.nm-mark {
+  flex: 0 0 34px; width: 34px; height: 34px;
+  display: grid; place-items: center; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent);
+}
+.nm-mark .ico { width: 19px; height: 19px; stroke-width: 2.2; }
+.nm-heading { min-width: 0; display: flex; flex-direction: column; }
+.nm-heading h2 { margin: 0; font-size: 16px; font-weight: 700; }
+.nm-sub { font-size: 12px; color: var(--dim); }
+
+#notes-body { padding: 4px 22px 20px; }
+.nm-h {
+  margin: 20px 0 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--accent);
+}
+.nm-h:first-child { margin-top: 12px; }
+.nm-p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+.nm-list { margin: 0 0 10px; padding-left: 18px; list-style: none; }
+.nm-list li {
+  position: relative;
+  margin: 0 0 6px; padding-left: 2px;
+  font-size: 13.5px; line-height: 1.5; color: var(--text);
+}
+.nm-list li::before {
+  content: ""; position: absolute; left: -13px; top: .62em;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+}
+
+.notes-foot {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 20px; box-shadow: 0 -1px 0 var(--line);
+}
+.notes-foot .hint { flex: 1; min-width: 0; }
+.notes-foot button {
+  padding: 9px 16px; border-radius: 7px; cursor: pointer;
+  font-size: 13px; font-weight: 600;
+  background: var(--input); border: 0; color: var(--text);
+}
+.notes-foot button:hover { background: var(--elev); }
+#notes-action { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+#notes-action:hover { background: var(--accent-hi); }
+#notes-action:disabled { opacity: .55; cursor: default; background: var(--accent); }
+#notes-action[hidden] { display: none; }
+
+/* Two buttons side by side in a settings row. */
+.row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.row-actions .keycap { min-width: 0; }
