@@ -4,3 +4,5 @@ build/icon.ico
 src/renderer/vendor/*
 !src/renderer/vendor/.gitkeep
 *.log
+test-results/
+playwright-report/
