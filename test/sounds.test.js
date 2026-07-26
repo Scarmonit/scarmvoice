@@ -43,6 +43,10 @@ async function boot(settings = {}) {
     globalThis.fetch = async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) });
 
     vi.resetModules();
+    // audio.js owns the renderer's single AudioContext; sounds.js borrows it
+    // rather than opening a second one, so it has to be loaded first — exactly
+    // the order index.html uses.
+    await import('../src/renderer/audio.js');
     await import('../src/renderer/sounds.js');
 
     const sounds = window.loungeSounds;

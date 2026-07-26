@@ -262,7 +262,10 @@
     <!-- The wrapper exists so the jump button can float over the bottom of the
          list without covering the composer. -->
     <div id="messages-wrap">
-      <div id="messages" role="log" aria-live="polite"></div>
+      <!-- tabindex makes the conversation reachable from the composer; the
+           arrow-key walk that follows from there lives in app.js. -->
+      <div id="messages" role="log" aria-live="polite" tabindex="0"
+           aria-label="Messages, use the arrow keys to move between them"></div>
       <button type="button" id="jump-latest" class="jump-latest" aria-hidden="true" title="Jump to the newest messages">
         <span class="jump-count" id="jump-count" hidden></span>
         <span class="ico" data-icon="arrow-down"></span>
@@ -578,6 +581,12 @@
           <span class="hint" id="set-version"></span>
           <button type="button" id="btn-logout" class="btn-danger">Sign out</button>
         </div>
+        <!-- Everything the app logs goes to a rotating file (see main/log.js);
+             this is how it gets attached to a bug report. -->
+        <div class="row between">
+          <span class="hint">Diagnostic log for this and the previous session</span>
+          <button type="button" id="btn-open-logs" class="keycap">Open logs folder</button>
+        </div>
       </section>
     </div>
   </div>
@@ -721,6 +730,11 @@
      icons.js hydrates every data-icon placeholder above, so it has to run
      before app.js starts querying and cloning those nodes. -->
 <script src="vendor/hljs.js"></script>
+<!-- lib.js holds the renderer's pure helpers (the unit-tested half); audio.js
+     owns the single AudioContext and the shared meter tick. Both have to be
+     defined before app.js, voice.js and sounds.js reach for them. -->
+<script src="lib.js"></script>
+<script src="audio.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
 <script src="vendor/realtimekit.js"></script>

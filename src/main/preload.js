@@ -20,8 +20,10 @@ contextBridge.exposeInMainWorld('lounge', {
     // Generic proxy for /api/board/*
     board: (path, opts) => ipcRenderer.invoke('board:call', { path, opts }),
 
-    // Attachments. `data` is an ArrayBuffer of the raw file bytes.
-    uploadFile: (name, type, data) => ipcRenderer.invoke('board:upload', { name, type, data }),
+    // Attachments. `data` is an ArrayBuffer of the raw file bytes. Pass an `id`
+    // to receive upload:progress events tagged with it (see onUploadProgress).
+    uploadFile: (name, type, data, id) => ipcRenderer.invoke('board:upload', { name, type, data, id }),
+    onUploadProgress: (cb) => sub('upload:progress', cb),
     // `url` is the fallback for images that aren't ours (link previews): pass a
     // key for an attachment, or a remote http(s) url, not both.
     saveAttachment: (key, name, url) => ipcRenderer.invoke('board:saveAttachment', { key, name, url }),
@@ -91,6 +93,8 @@ contextBridge.exposeInMainWorld('lounge', {
     app: {
         version: () => ipcRenderer.invoke('app:version'),
         isElevated: () => ipcRenderer.invoke('app:isElevated'),
+        // Opens the folder holding the rotating log file (see main/log.js).
+        openLogs: () => ipcRenderer.invoke('app:openLogs'),
         notify: (payload) => ipcRenderer.invoke('app:notify', payload),
         setVoiceState: (state) => ipcRenderer.invoke('app:voiceState', state),
         setBadge: (count) => ipcRenderer.invoke('app:badge', count),

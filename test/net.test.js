@@ -287,3 +287,122 @@ describe('login', () => {
         expect(r.error).toMatch(/42/);
     });
 });
+
+describe('transient retry', () => {
+    it('retries a read that fails with a network error, then succeeds', async () => {
+        const { net } = await load();
+        stubFetch((_u, _o, i) => {
+            if (i === 0) throw new Error('socket hang up');
+            return jsonRes({ success: true, posts: [] });
+        });
+
+        const r = await net.board('list');
+
+        expect(r.success).toBe(true);
+        expect(calls).toHaveLength(2);
+    });
+
+    it('retries a read on a gateway error from in front of the Worker', async () => {
+        const { net } = await load();
+        stubFetch((_u, _o, i) => (i === 0
+            ? jsonRes({}, { status: 502 })
+            : jsonRes({ success: true })));
+
+        const r = await net.board('list');
+
+        expect(r.success).toBe(true);
+        expect(calls).toHaveLength(2);
+    });
+
+    it('gives up after the configured attempts rather than retrying forever', async () => {
+        const { net } = await load();
+        stubFetch(() => { throw new Error('offline'); });
+
+        const r = await net.board('list');
+
+        expect(r.success).toBe(false);
+        expect(r.network).toBe(true);
+        expect(calls).toHaveLength(3);      // the first try plus two retries
+    });
+
+    it('NEVER retries a write, which would post the message twice', async () => {
+        // The failure can happen after the server already accepted it, so a
+        // retry is not safe no matter how transient the error looks.
+        const { net } = await load();
+        stubFetch(() => { throw new Error('socket hang up'); });
+
+        const r = await net.board('post', { method: 'POST', body: { body: 'hi' } });
+
+        expect(r.success).toBe(false);
+        expect(r.network).toBe(true);
+        expect(calls).toHaveLength(1);
+    });
+
+    it('does not retry a 4xx, which will not resolve itself', async () => {
+        const { net } = await load();
+        stubFetch(() => jsonRes({ success: false, error: 'nope' }, { status: 400 }));
+
+        await net.board('list');
+
+        expect(calls).toHaveLength(1);
+    });
+});
+
+describe('upload progress', () => {
+    it('reports bytes handed to the socket, ending at the total', async () => {
+        const { net } = await load();
+        stubFetch(async (_u, opts) => {
+            // Drain the streamed body the way the real transport would.
+            if (opts.body && typeof opts.body.getReader === 'function') {
+                const reader = opts.body.getReader();
+                // eslint-disable-next-line no-constant-condition
+                while (true) { const { done } = await reader.read(); if (done) break; }
+            }
+            return jsonRes({ success: true, key: 'uploads/x' });
+        });
+
+        const seen = [];
+        const bytes = Buffer.alloc(200 * 1024, 7);      // big enough for several chunks
+        const r = await net.upload('big.bin', 'application/octet-stream', bytes,
+            (sent, total) => seen.push([sent, total]));
+
+        expect(r.success).toBe(true);
+        expect(seen.length).toBeGreaterThan(1);
+        // Monotonic, and finishing exactly at the total.
+        seen.forEach(([sent, total], i) => {
+            expect(sent).toBeLessThanOrEqual(total);
+            if (i) expect(sent).toBeGreaterThan(seen[i - 1][0]);
+        });
+        expect(seen[seen.length - 1][0]).toBe(seen[seen.length - 1][1]);
+    });
+
+    it('sends a plain body when no progress callback is given', async () => {
+        const { net } = await load();
+        stubFetch(() => jsonRes({ success: true }));
+
+        await net.upload('x.txt', 'text/plain', Buffer.from('hello'));
+
+        expect(typeof calls[0].opts.body).toBe('string');
+        expect(calls[0].opts.duplex).toBeUndefined();
+    });
+
+    it('declares the body length so the request is not sent chunked', async () => {
+        const { net } = await load();
+        stubFetch(async (_u, opts) => {
+            if (opts.body && typeof opts.body.getReader === 'function') {
+                const reader = opts.body.getReader();
+                // eslint-disable-next-line no-constant-condition
+                while (true) { const { done } = await reader.read(); if (done) break; }
+            }
+            return jsonRes({ success: true });
+        });
+
+        const bytes = Buffer.from('hello world');
+        await net.upload('x.txt', 'text/plain', bytes, () => {});
+
+        const { opts } = calls[0];
+        expect(opts.duplex).toBe('half');
+        // base64 of the payload, which is what actually goes on the wire
+        expect(opts.headers['Content-Length']).toBe(String(bytes.toString('base64').length));
+    });
+});

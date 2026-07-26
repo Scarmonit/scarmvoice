@@ -59,8 +59,10 @@
     function init(initialSettings) {
         settings = Object.assign({}, initialSettings || {});
 
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (AC) { try { ctx = new AC(); } catch (e) { ctx = null; } }
+        // The renderer's one shared AudioContext (audio.js) — this used to open
+        // its own, which counted against Chromium's six-context page limit for
+        // the whole life of the app.
+        ctx = window.ScarmAudio ? window.ScarmAudio.context() : null;
         if (ctx) loadMessageBuffer(0); else initElementFallback();
 
         // Preload the voice chimes as plain elements — they're short and only
@@ -73,7 +75,9 @@
         // Fallback unlock, in case the autoplay policy still gates us.
         function unlock() {
             if (ctx && ctx.state !== 'running') {
-                ctx.resume().then(() => { if (ctx.state === 'running') { log('unlocked'); done(); } }).catch(() => {});
+                window.ScarmAudio.resume().then((running) => {
+                    if (running) { log('unlocked'); done(); }
+                });
             } else done();
         }
         function done() {
@@ -90,7 +94,7 @@
         if (!notifyEnabled()) return;
         try {
             if (ctx && messageBuf) {
-                if (ctx.state !== 'running') { ctx.resume().catch(() => {}); }
+                if (ctx.state !== 'running') window.ScarmAudio.resume();
                 const src = ctx.createBufferSource();
                 const gain = ctx.createGain();
                 gain.gain.value = VOLUME;

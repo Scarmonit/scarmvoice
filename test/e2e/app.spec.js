@@ -93,9 +93,15 @@ test('exposes the whole preload bridge to the renderer', async () => {
     expect(shape).toBeTruthy();
     expect(Object.keys(shape).sort()).toEqual([
         'app', 'auth', 'board', 'copyImage', 'downloadAttachment', 'edit', 'fetchImage',
-        'fileUrl', 'ptt', 'revealFile', 'rt', 'saveAttachment', 'settings', 'share',
-        'startup', 'unfurl', 'update', 'uploadFile', 'voiceToken', 'win', 'youtube'
+        'fileUrl', 'onUploadProgress', 'ptt', 'revealFile', 'rt', 'saveAttachment',
+        'settings', 'share', 'startup', 'unfurl', 'update', 'uploadFile', 'voiceToken',
+        'win', 'youtube'
     ]);
+
+    // The taskbar badge and the log folder are reached through app.*; both were
+    // added after the original contract and both are called from the renderer.
+    expect(shape.app).toContain('setBadge');
+    expect(shape.app).toContain('openLogs');
 
     expect(shape.auth).toEqual(['login', 'logout', 'status']);
     expect(shape.settings).toEqual(['get', 'set']);

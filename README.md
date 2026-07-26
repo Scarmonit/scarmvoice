@@ -174,8 +174,31 @@ GH_TOKEN=$(gh auth token) npm run release   # build AND publish a GitHub release
 | `npm run dev` | Same, with devtools |
 | `npm run build` / `npm run dist` | Build the installer locally, `--publish never` |
 | `npm run release` | Build **and publish** to GitHub Releases (needs `GH_TOKEN`) |
+| `npm test` | Unit + jsdom suite (vitest) |
+| `npm run test:e2e` | Launch the real app and drive it with Playwright |
 | `npm run vendor` | Re-copy the RealtimeKit browser bundle into `src/renderer/vendor/` |
 | `npm run icon` | Regenerate `build/icon.ico` |
+
+### Tests
+
+Three tiers, each covering what the one below it can't reach:
+
+- **Unit** (`test/*.test.js`) — the main-process modules, loaded through Node's
+  CommonJS registry against a fake `electron` (`test/stubs/`) so they share one
+  instance the way they do at runtime, plus `renderer/lib.js` directly.
+- **Renderer boot** (`test/renderer-boot.test.js`) — evaluates `index.html`'s
+  real DOM and every renderer script in jsdom against a stubbed `window.lounge`.
+  This is the guard for the whole class of bug a 5000-line IIFE invites: a helper
+  can be renamed, moved, or deleted and *nothing* complains until the window is
+  blank. Every top-level wiring line — hundreds of `addEventListener` calls
+  against elements that must exist by that id — runs here.
+- **E2E** (`test/e2e/`) — launches the actual Electron app. It covers the
+  "silently does nothing" failures that live in main.js's window and session
+  wiring, where a missing permission makes a promise *hang* rather than reject.
+
+> `npm run test:e2e` refuses to run while ScarmVoice is open: a second instance
+> fights over the user-data lock and the system-wide uiohook, which hard-crashes
+> the running one. Close it first (`Stop-Process -Name ScarmVoice`).
 
 ### Shipping a release
 
@@ -204,12 +227,38 @@ src/
     rt.js        WebSocket bridge to the realtime Durable Object
     ptt.js       global push-to-talk
     store.js     settings + encrypted session storage
+    log.js       rotating log file + crash reporter
+    badge.js     the taskbar unread-count overlay (drawn pixel by pixel)
+    updater.js   auto-update + release-note parsing
     preload.js   the only renderer↔main bridge (contextBridge)
   renderer/      UI — no network access of its own
     app.js       chat, channels, roster, settings
+    lib.js       the pure half of the renderer — unit-tested
+    audio.js     the ONE AudioContext + the shared level-meter tick
     voice.js     RealtimeKit SFU engine
+    sounds.js    join/leave/message chimes
+    icons.js     the single icon set
     vendor/      RealtimeKit bundle, copied from node_modules at install
 ```
+
+`lib.js` and `audio.js` exist for reasons worth stating outright.
+
+**`lib.js`** — `app.js` is one very large IIFE where almost every line touches
+the DOM, `window.lounge`, or module state, so none of it could be unit-tested:
+the entire renderer, *including the escaping between a message someone else
+wrote and this window*, had zero coverage. Everything pure now lives in `lib.js`
+and is tested directly. Anything needing the DOM or app state stays in `app.js`.
+
+**`audio.js`** — Chromium caps a page at **six** concurrent `AudioContext`s. The
+renderer used to create one per participant for speaking detection, another per
+participant boosted above 100%, one for the microphone test, and one for the
+chime. In a call with four other people the seventh constructor call throws, and
+because the failure was caught and ignored, the only symptom was the speaking
+indicator quietly not working for whoever joined last. One shared context has no
+such limit — analysers and gain nodes are cheap, contexts are not. It also owns
+the single 20 Hz tick that drives every meter, replacing a per-participant
+`requestAnimationFrame` running at 60 Hz (and stalling whenever the window was
+hidden).
 
 ### Why the network lives in the main process
 
@@ -312,14 +361,18 @@ matters.
 
 ### Holding the reader's place
 
-Rendering the list is a full `innerHTML` rebuild, and clearing a scroll container
+Rendering used to be a full `innerHTML` rebuild, and clearing a scroll container
 resets `scrollTop` to 0 — so anyone reading history got thrown to the top by the
-next background poll. Three things keep the view still:
+next background poll. Four things keep the view still:
 
-- **Polls that change nothing render nothing.** The displayed list is signed
-  (channel + filter state + the posts themselves); an identical signature skips
-  the rebuild entirely, which also stops every image restarting its load.
-- **A real rebuild restores an anchor** — the topmost still-visible message and
+- **The list is diffed by key, not rebuilt.** Each row (a message, a day
+  separator, the *Load earlier* button) carries a key and a signature over
+  everything that affects how it draws. Unchanged rows keep their existing DOM
+  node; a changed message rebuilds only itself. A single new message used to
+  discard every node on screen, which restarted every image and video load and
+  threw away link previews that had already been fetched — `renderPreviews` then
+  had to fetch and re-graft them all over again.
+- **A rebuilt row restores an anchor** — the topmost still-visible message and
   its offset from the top of the viewport — instead of a raw `scrollTop`, so
   changes in the content above it don't matter.
 - **A refresh only speaks for the newest page.** It used to replace `posts`
@@ -335,6 +388,29 @@ Auto-scroll happens only when already at the bottom (within 120 px). Past 400 px
 away, the **Jump to present** button fades in, badged with the number of messages
 from other people since the reader was last caught up; past 4000 px it jumps
 instantly rather than animating through thousands of messages.
+
+Retained history is capped at 400 messages, trimmed **only** while the reader is
+following the live edge with no filter applied — trimming under a reader who has
+deliberately paged back, or who is filtering across that history, would take away
+exactly what they asked for. `hasMore` is re-armed when it trims, so the trimmed
+page is immediately reachable again via *Load earlier*.
+
+### Messages typed while offline
+
+A failed send is queued rather than handed back to the composer with an error
+toast. Queued messages appear in the conversation, dimmed, and go out
+automatically when realtime reconnects — or on the next poll, whichever comes
+first. The queue is persisted to `localStorage`, because "the app crashed and ate
+my message" is the worst possible outcome for something already sent.
+
+The distinction that matters: only *network* failures queue. Anything the server
+actively rejected (too long, bad channel) is handed straight back, because
+retrying it will never help. Attachments are deliberately never queued — the
+bytes can be tens of megabytes and `localStorage` is not the place for them.
+
+Reads are retried in `net.js` too, twice with backoff, on a dropped connection or
+a 429/502/503/504. **Writes never are**: the failure can happen after the server
+already accepted the post, so a retry would send it twice.
 
 ### Window state and the lightbox
 
@@ -438,6 +514,22 @@ cannot drive real push-to-talk on its own. The app uses the optional native hook
 keydown/keyup. If that module is unavailable it degrades gracefully: the
 accelerator becomes a push-to-talk *toggle*, and hold-to-talk still works
 whenever the window has focus.
+
+Both paths use **one** matcher (`lib.js`'s `matchesPttBinding`, mirrored by
+`ptt.js`'s hook matcher) so they cannot drift. The in-window path previously
+compared only `event.code`, which meant a binding of Ctrl+Q also opened the mic
+on a bare Q. Two details are deliberate:
+
+- **Key-up ignores modifiers.** Releasing Ctrl before Q would otherwise leave the
+  mic open, because the keyup for Q no longer satisfies the binding.
+- **A modifier can be the trigger key.** Binding PTT to Shift records
+  `shift: false`, but the event that fires it reports `shiftKey: true` — requiring
+  it both ways would never match.
+
+Losing window focus mid-hold releases PTT, but **only when the native hook is
+unavailable**. With the hook loaded, holding the key while working in another
+window is the entire point; without it the key-up lands in whatever window took
+over and the mic would stay open indefinitely.
 
 ### Screen sharing
 

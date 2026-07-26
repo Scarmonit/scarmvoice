@@ -264,9 +264,7 @@
         function dropGain(cid) {
             const g = gainNodes[cid];
             if (!g) return;
-            try { g.src.disconnect(); } catch (e) {}
-            try { g.gain.disconnect(); } catch (e) {}
-            try { g.ctx.close(); } catch (e) {}
+            g.stop();
             delete gainNodes[cid];
         }
 
@@ -286,22 +284,19 @@
                 el.volume = effective;
                 return;
             }
-            // Boost path: element at unity, GainNode does the rest.
+            // Boost path: element silenced, the shared context's GainNode does
+            // all the work (it can exceed 1, which the element cannot).
             el.volume = 1;
             let g = gainNodes[cid];
             if (!g && el.srcObject) {
-                try {
-                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                    const src = ctx.createMediaStreamSource(el.srcObject);
-                    const gain = ctx.createGain();
-                    src.connect(gain);
-                    gain.connect(ctx.destination);
+                g = window.ScarmAudio.createGain(el.srcObject, effective);
+                if (g) {
                     // The element would otherwise play the same audio a second time.
                     el.volume = 0;
-                    g = gainNodes[cid] = { ctx, src, gain };
-                } catch (e) { /* boost unavailable; unity is fine */ }
+                    gainNodes[cid] = g;
+                }
             }
-            if (g) g.gain.gain.value = effective;
+            if (g) g.set(effective);
         }
 
         function applySinkId(el) {
@@ -316,58 +311,43 @@
 
         // ---- speaking detection ------------------------------------------
         // The SDK has no reliable cross-version active-speaker event, so we
-        // measure RMS off each stream. Cheap: one analyser per participant.
+        // measure RMS off each stream. One analyser per participant on the
+        // shared AudioContext (see audio.js) — a context per participant used to
+        // blow past Chromium's six-context limit in a call of five.
 
         function watchSpeaking(cid, stream, isLocal) {
             stopSpeaking(cid);
             if (!stream) return;
-            let ctx, analyser, srcNode;
-            try {
-                ctx = new (window.AudioContext || window.webkitAudioContext)();
-                srcNode = ctx.createMediaStreamSource(stream);
-                analyser = ctx.createAnalyser();
-                analyser.fftSize = 512;
-                analyser.smoothingTimeConstant = 0.5;
-                srcNode.connect(analyser);
-                // Deliberately NOT connected to destination — analysis only.
-            } catch (e) { return; }
 
-            const data = new Uint8Array(analyser.fftSize);
-            const rec = analysers[cid] = { ctx, analyser, data, speaking: false, until: 0, raf: 0, isLocal };
+            const meter = window.ScarmAudio.createMeter(stream);
+            if (!meter) return;
 
-            const tick = () => {
-                if (!analysers[cid]) return;
-                analyser.getByteTimeDomainData(data);
-                let sum = 0;
-                for (let i = 0; i < data.length; i++) {
-                    const v = (data[i] - 128) / 128;
-                    sum += v * v;
-                }
-                const rms = Math.sqrt(sum / data.length);
+            const rec = analysers[cid] = { meter, speaking: false, until: 0, isLocal, off: null };
+
+            // Sampling happens on the shared tick; this callback only turns the
+            // level into a boolean with a short hang so the dot doesn't strobe.
+            rec.off = window.ScarmAudio.onTick(() => {
                 const now = performance.now();
-
                 // A muted/non-transmitting local mic must never light up.
                 const gated = isLocal && (muted || lastTransmit === false);
                 const threshold = Number(settings.speakThreshold) > 0
                     ? Number(settings.speakThreshold) / 100
                     : SPEAK_THRESHOLD;
-                if (!gated && rms > threshold) rec.until = now + SPEAK_HANG_MS;
+                if (!gated && meter.rms() > threshold) rec.until = now + SPEAK_HANG_MS;
                 const nowSpeaking = !gated && now < rec.until;
 
                 if (nowSpeaking !== rec.speaking) {
                     rec.speaking = nowSpeaking;
                     on.onSpeaking(cid, nowSpeaking);
                 }
-                rec.raf = requestAnimationFrame(tick);
-            };
-            rec.raf = requestAnimationFrame(tick);
+            });
         }
 
         function stopSpeaking(cid) {
             const rec = analysers[cid];
             if (!rec) return;
-            if (rec.raf) cancelAnimationFrame(rec.raf);
-            try { rec.ctx.close(); } catch (e) {}
+            if (rec.off) rec.off();
+            rec.meter.stop();
             delete analysers[cid];
             if (rec.speaking) on.onSpeaking(cid, false);
         }
@@ -911,6 +891,11 @@
                 }
                 if (settings.speakerDeviceId !== prevSpeaker) {
                     Object.values(audioEls).forEach(applySinkId);
+                    // Boosted participants play through the shared context, not
+                    // through their <audio> element, so it needs the same sink —
+                    // otherwise turning someone above 100% moved them to the
+                    // system default output.
+                    window.ScarmAudio.setSinkId(settings.speakerDeviceId);
                 }
                 applyAllLocalAudio();
                 applyTransmit();

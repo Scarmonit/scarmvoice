@@ -18,6 +18,10 @@
     const PRESENCE_MS = 5000;       // voice presence heartbeat (server TTL is 12s)
     const TYPING_MS = 3000;
     const PAGE = 40;
+    // Ceiling on retained history. Deep enough that ordinary scrolling back
+    // never hits it, shallow enough that a long session can't accumulate
+    // thousands of live DOM nodes and the arrays that back them.
+    const MAX_POSTS = 400;
 
     let settings = {};
     let channels = [];
@@ -55,55 +59,15 @@
 
     // ---------- utilities -------------------------------------------------
 
-    function esc(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
-    // Deterministic avatar colour from a name, so the same person is always the
-    // same colour on every machine.
-    function hueOf(str) {
-        let h = 0;
-        for (let i = 0; i < String(str).length; i++) h = (h * 31 + String(str).charCodeAt(i)) % 360;
-        return h;
-    }
-    function avatarStyle(name) {
-        const h = hueOf(name || '?');
-        return `background:linear-gradient(135deg,hsl(${h},70%,62%),hsl(${(h + 40) % 360},75%,52%))`;
-    }
-    // A body that is nothing but a handful of emoji renders large, the way every
-    // other chat client does. Anything that isn't an emoji, a skin-tone modifier,
-    // a ZWJ, a variation selector or whitespace disqualifies it.
-    function isOnlyEmoji(body) {
-        const t = String(body || '').trim();
-        if (!t || t.length > 40) return false;
-        if (!/\p{Extended_Pictographic}/u.test(t)) return false;
-        if (/[^\s\p{Extended_Pictographic}‍️\u{1f3fb}-\u{1f3ff}]/u.test(t)) return false;
-        return [...t].filter((c) => /\p{Extended_Pictographic}/u.test(c)).length <= 6;
-    }
-
-    function initials(name) {
-        const n = String(name || '?').trim();
-        const parts = n.split(/\s+/).filter(Boolean);
-        if (!parts.length) return '?';
-        if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-        return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-
-    function timeStr(ms) {
-        const d = new Date(ms);
-        return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    }
-    function dayStr(ms) {
-        const d = new Date(ms);
-        const today = new Date();
-        const yest = new Date(Date.now() - 86400000);
-        const same = (a, b) => a.toDateString() === b.toDateString();
-        if (same(d, today)) return 'Today';
-        if (same(d, yest)) return 'Yesterday';
-        return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
-    }
+    // The pure half of the renderer lives in lib.js so it can be unit-tested;
+    // these are local names for the parts used here.
+    const {
+        esc, avatarStyle, initials, isOnlyEmoji,
+        timeStr, dayStr, fmtSize, fmtDuration, splitName,
+        attachmentKind, fileIcon,
+        extractUrls, safeHttpUrl, urlFileName, youtubeId,
+        FONT_SIZES, fontSizeIndex, matchesPttBinding
+    } = window.ScarmLib;
 
     let toastTimer = null;
     function toast(msg, isError) {
@@ -337,18 +301,6 @@
     // One CSS variable drives the whole message body — text, names, timestamps
     // and avatars are all sized in em against it, so they scale together.
 
-    const FONT_SIZES = [
-        { key: 'small', px: 14, label: 'Small' },
-        { key: 'medium', px: 16, label: 'Medium' },
-        { key: 'large', px: 18, label: 'Large' },
-        { key: 'xlarge', px: 21, label: 'Extra Large' }
-    ];
-
-    function fontSizeIndex(key) {
-        const i = FONT_SIZES.findIndex((f) => f.key === key);
-        return i === -1 ? 1 : i;                     // default to medium
-    }
-
     function applyChatFontSize(key) {
         const f = FONT_SIZES[fontSizeIndex(key)];
         document.documentElement.style.setProperty('--chat-fs', f.px + 'px');
@@ -378,6 +330,84 @@
 
     let dialogDone = null;
 
+    // ---------- modal focus management -------------------------------------
+    //
+    // Every overlay in this app was a plain div: assistive technology had no way
+    // to know a dialog had opened, Tab walked straight out of it into the
+    // message list behind, and closing one left focus on whatever the browser
+    // happened to pick rather than the control that opened it.
+    //
+    // trapFocus() fixes all three for any element, so each overlay needs one
+    // call rather than its own keyboard handling.
+
+    const FOCUSABLE = [
+        'a[href]', 'button:not([disabled])', 'input:not([disabled])',
+        'select:not([disabled])', 'textarea:not([disabled])', '[tabindex]:not([tabindex="-1"])'
+    ].join(',');
+
+    // Only what the user can actually reach: a control inside a hidden section
+    // of the settings sheet must not be a tab stop.
+    function focusableIn(root) {
+        return Array.from(root.querySelectorAll(FOCUSABLE))
+            .filter((el) => !el.hasAttribute('hidden') && !el.closest('[hidden]') &&
+                (el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement));
+    }
+
+    const trapped = new Map();      // element -> { handler, returnTo }
+
+    function trapFocus(el, { label, initial } = {}) {
+        if (!el || trapped.has(el)) return;
+
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
+        if (label) el.setAttribute('aria-label', label);
+
+        // Remembered so Escape / Close puts the caret back where it came from,
+        // rather than dumping it at the top of the document.
+        const returnTo = document.activeElement;
+
+        const handler = (e) => {
+            if (e.key !== 'Tab') return;
+            const items = focusableIn(el);
+            if (!items.length) { e.preventDefault(); return; }
+            const first = items[0];
+            const last = items[items.length - 1];
+            // Focus outside the modal entirely (a click on the backdrop) still
+            // has to come back in, so both edges are handled explicitly.
+            if (!el.contains(document.activeElement)) {
+                e.preventDefault();
+                (e.shiftKey ? last : first).focus();
+            } else if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+
+        el.addEventListener('keydown', handler);
+        trapped.set(el, { handler, returnTo });
+
+        const target = initial || focusableIn(el)[0];
+        if (target) target.focus();
+    }
+
+    function releaseFocus(el) {
+        const rec = trapped.get(el);
+        if (!rec) return;
+        el.removeEventListener('keydown', rec.handler);
+        trapped.delete(el);
+        el.removeAttribute('aria-modal');
+        // Only restore if focus is still inside (or nowhere) — if the user has
+        // already clicked elsewhere, yanking it back would be worse.
+        const active = document.activeElement;
+        if (rec.returnTo && rec.returnTo.isConnected &&
+            (!active || active === document.body || el.contains(active))) {
+            rec.returnTo.focus();
+        }
+    }
+
     function openDialog({ title, message, value, ok, danger, withInput, label2, value2 }) {
         return new Promise((resolve) => {
             dialogDone = resolve;
@@ -397,11 +427,16 @@
             $('dialog-ok').textContent = ok || 'OK';
             $('dialog-ok').classList.toggle('danger', !!danger);
             $('dialog').hidden = false;
-            if (withInput) { inp.focus(); inp.select(); } else $('dialog-ok').focus();
+            trapFocus($('dialog'), {
+                label: title,
+                initial: withInput ? inp : $('dialog-ok')
+            });
+            if (withInput) inp.select();
         });
     }
 
     function closeDialog(result) {
+        releaseFocus($('dialog'));
         $('dialog').hidden = true;
         const done = dialogDone;
         dialogDone = null;
@@ -510,6 +545,9 @@
 
         channel = settings.channel || 'general';
         try { reads = JSON.parse(localStorage.getItem('lounge_reads') || '{}'); } catch (e) { reads = {}; }
+        // Anything left queued by a previous session goes out as soon as the
+        // first successful poll proves we're online.
+        loadOutbox();
 
         applyChatFontSize(settings.chatFontSize);
         applyChrome();
@@ -525,6 +563,7 @@
         startTextPresence();
         await L.ptt.apply();
         refreshPttHint();
+        flushOutbox();
 
         if (settings.autoJoinVoice) joinVoice();
     }
@@ -544,10 +583,12 @@
         const list = $('channel-list');
         list.innerHTML = '';
         let total = 0;
+        let alerting = 0;       // the same count minus muted channels
         channels.forEach((c) => {
             const b = document.createElement('button');
             const unread = c.name === channel ? 0 : (c.unread || 0);
             total += unread;
+            if (!channelMuted(c.name)) alerting += unread;
             b.className = 'chan' + (c.name === channel ? ' active' : '') +
                 (unread ? ' unread' : '') + (channelMuted(c.name) ? ' muted' : '');
             b.dataset.channel = c.name;
@@ -561,6 +602,19 @@
         const badge = $('rail-badge');
         badge.textContent = total > 99 ? '99+' : String(total);
         badge.hidden = !total;
+
+        setTaskbarBadge(alerting);
+    }
+
+    // The same total, drawn onto the Windows taskbar button so unread messages
+    // are visible when the window is minimised or hidden in the tray. Muted
+    // channels are excluded — they are muted precisely so they don't nag.
+    let lastTaskbarBadge = -1;
+    function setTaskbarBadge(total) {
+        const n = settings.dnd ? 0 : Math.max(0, total | 0);
+        if (n === lastTaskbarBadge) return;     // don't re-flash on every render
+        lastTaskbarBadge = n;
+        L.app.setBadge(n);
     }
 
     // Channel name only — the '#' is a separate glyph in the header.
@@ -630,13 +684,55 @@
 
     // ---------- messages --------------------------------------------------
 
+    // Every realtime 'posted' event used to trigger its own full page refetch, so
+    // a burst of messages meant a burst of identical 40-message requests — and
+    // the `loading` guard silently DROPPED the overlapping ones, which meant the
+    // last message of a burst could be missed until the next poll.
+    //
+    // Instead: while a refresh is in flight, remember that another was asked for
+    // and run exactly one more when it lands. Paged history requests (`before`)
+    // are never coalesced — each asks for a different page.
+    const REFRESH_COALESCE_MS = 250;
+    let refreshTimer = null;
+    let refreshPending = false;
+    let refreshStick = false;
+
+    function scheduleRefresh(scrollToEnd) {
+        refreshStick = refreshStick || !!scrollToEnd;
+        if (refreshTimer) return;
+        refreshTimer = setTimeout(() => {
+            refreshTimer = null;
+            const stick = refreshStick;
+            refreshStick = false;
+            loadMessages(stick);
+        }, REFRESH_COALESCE_MS);
+    }
+
     async function loadMessages(scrollToEnd, before) {
-        if (loading) return;
+        if (loading) {
+            // Don't lose the request — replay it once the in-flight one returns.
+            if (!before) { refreshPending = true; refreshStick = refreshStick || !!scrollToEnd; }
+            return;
+        }
         loading = true;
+        try {
+            await loadMessagesOnce(scrollToEnd, before);
+        } finally {
+            loading = false;
+        }
+        // Exactly one replay, however many requests arrived while we were busy.
+        if (refreshPending) {
+            refreshPending = false;
+            const stick = refreshStick;
+            refreshStick = false;
+            await loadMessages(stick);
+        }
+    }
+
+    async function loadMessagesOnce(scrollToEnd, before) {
         const res = await L.board('list', {
             query: { channel, limit: PAGE, before: before || null }
         });
-        loading = false;
 
         if (res && res.needsAuth) return relogin();
         if (!res || !res.success) {
@@ -675,6 +771,19 @@
             }
         }
         hasMore = !!res.hasMore;
+
+        // Cap the retained history. Paging back far enough used to grow `posts`
+        // without limit for the life of the session, and every render walks the
+        // whole array. Trimming is only safe while the reader is following the
+        // bottom and has no filter applied — otherwise we'd yank away the older
+        // messages they deliberately loaded, or the ones a filter is matching.
+        if (!before && following && !filterActive() && posts.length > MAX_POSTS) {
+            const dropped = posts.length - MAX_POSTS;
+            posts = posts.slice(dropped);
+            hasMore = true;     // the trimmed page is now reachable via Load earlier
+            console.info(`[messages] trimmed ${dropped} message(s) from retained history`);
+        }
+
         // Names seen in history feed @mention matching and autocomplete.
         posts.forEach((p) => addRosterName(p.name));
         typingUsers = (res.typing || []).filter((t) => t.client_id !== settings.clientId);
@@ -715,6 +824,65 @@
         return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     }
 
+    // ---------- keyboard navigation of the message list --------------------
+    //
+    // The list was reachable only with a mouse: every action on a message lived
+    // behind hover or right-click. Tab from the composer now lands on the list,
+    // arrows walk it, Enter opens the same menu right-click does, and Escape
+    // returns to the composer so the keyboard never gets stranded there.
+
+    function focusMessage(el) {
+        if (!el) return;
+        const box = $('messages');
+        box.querySelectorAll('.msg.kb').forEach((m) => m.classList.remove('kb'));
+        el.classList.add('kb');
+        el.focus({ preventScroll: true });
+        // Keep it in view without the jump a default scrollIntoView gives.
+        const r = el.getBoundingClientRect();
+        const b = box.getBoundingClientRect();
+        if (r.top < b.top) box.scrollTop += r.top - b.top - 8;
+        else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom + 8;
+    }
+
+    $('messages').addEventListener('keydown', (e) => {
+        // Never swallow keys aimed at a control inside a message (a reaction
+        // button, the inline editor, a link).
+        if (inEditable(e.target)) return;
+
+        const box = $('messages');
+        const items = Array.from(box.querySelectorAll('.msg'));
+        if (!items.length) return;
+        const current = e.target.closest ? e.target.closest('.msg') : null;
+        const idx = current ? items.indexOf(current) : -1;
+
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const step = e.key === 'ArrowDown' ? 1 : -1;
+            // Entering the list from the container itself starts at the newest
+            // message going up, and the oldest going down.
+            const next = idx === -1
+                ? (step === 1 ? 0 : items.length - 1)
+                : Math.min(items.length - 1, Math.max(0, idx + step));
+            focusMessage(items[next]);
+        } else if (e.key === 'Home' || e.key === 'End') {
+            e.preventDefault();
+            focusMessage(e.key === 'Home' ? items[0] : items[items.length - 1]);
+        } else if ((e.key === 'Enter' || e.key === ' ') && current) {
+            // The message menu, anchored on the message rather than the pointer.
+            e.preventDefault();
+            const r = current.getBoundingClientRect();
+            const p = posts.find((x) => String(x.id) === current.dataset.id);
+            if (p) openCtxMenu(messageMenuItems(p, current), r.left + 24, r.top + 12);
+        } else if (e.key === 'Escape') {
+            // Stopped here so the document-level Escape handler doesn't also
+            // close the thread panel on the way past.
+            e.preventDefault();
+            e.stopPropagation();
+            box.querySelectorAll('.msg.kb').forEach((m) => m.classList.remove('kb'));
+            $('composer-input').focus();
+        }
+    });
+
     // ---------- scroll position --------------------------------------------
 
     // Show the jump button only well clear of the bottom, so a stray wheel
@@ -733,6 +901,8 @@
         const box = $('messages');
         const top = box.getBoundingClientRect().top;
         for (const el of box.querySelectorAll('.msg')) {
+            // Queued messages have no server id to anchor to; skip them.
+            if (!el.dataset.id) continue;
             const r = el.getBoundingClientRect();
             if (r.bottom > top) return { id: el.dataset.id, offset: r.top - top };
         }
@@ -805,27 +975,8 @@
     }, true);
 
     // Which type(s) a post satisfies, for filtering.
-    function postMatchesFilter(p) {
-        if (filter.fromIds && !filter.fromIds.includes(p.client_id)) return false;
-        if (filter.pinned && !p.pinned) return false;
-        if (filter.mentions && !mentionsMe(p.body)) return false;
-        if (filter.edited && !p.edited_at) return false;
-        if (filter.text) {
-            const hay = ((p.body || '') + ' ' + (p.att_name || '')).toLowerCase();
-            if (!hay.includes(filter.text.toLowerCase())) return false;
-        }
-        if (filter.types.size) {
-            const kind = p.att_key ? attachmentKind(p) : null;
-            let ok = false;
-            if (filter.types.has('links') && extractUrls(p.body).length) ok = true;
-            if (!ok && filter.types.has('files') && p.att_key) ok = true;
-            if (!ok && filter.types.has('images') && kind === 'image') ok = true;
-            if (!ok && filter.types.has('videos') && kind === 'video') ok = true;
-            if (!ok && filter.types.has('audio') && kind === 'audio') ok = true;
-            if (!ok) return false;
-        }
-        return true;
-    }
+    const postMatchesFilter = (p) =>
+        window.ScarmLib.postMatchesFilter(p, filter, settings.displayName);
     function displayedPosts() {
         // A blocked author's messages are hidden here rather than deleted, so
         // unblocking brings them straight back without a reload.
@@ -835,8 +986,29 @@
         return filterActive() ? base.filter(postMatchesFilter) : base;
     }
 
-    let renderedSig = null;
+    // Everything that can change how one message draws. Two posts with equal
+    // signatures produce byte-identical DOM, so the existing node is kept.
+    // `grouped` is in here because it depends on the message BEFORE this one:
+    // deleting a message can re-group its neighbour without that neighbour
+    // itself changing.
+    function messageSig(p, grouped, compact) {
+        return JSON.stringify([
+            p.id, p.body, p.edited_at, p.pinned, p.reply_count, p.name,
+            p.att_key, p.att_name, p.att_size, p.created_at,
+            p.quote ? [p.quote.name, p.quote.body, p.quote.att_name, p.quote.missing] : 0,
+            p.reactions || 0,
+            grouped, compact
+        ]);
+    }
 
+    // The list is diffed against the DOM by key rather than rebuilt.
+    //
+    // It used to be `box.innerHTML = ''` followed by a full re-render, guarded by
+    // a signature over the whole page — so a single new message threw away every
+    // node on screen. That restarted every image and video load, dropped the
+    // link previews that had been fetched asynchronously (renderPreviews had to
+    // refetch and re-graft them), and reset scroll position, which the code then
+    // had to painstakingly restore. Reusing nodes makes all of that unnecessary.
     function renderMessages() {
         // A background poll must not rip the inline editor out from under
         // someone mid-sentence. The list resyncs when the edit finishes.
@@ -845,55 +1017,173 @@
         const box = $('messages');
         const active = filterActive();
         const list = displayedPosts();
-
-        // Most polls return exactly what's already on screen. Rebuilding it
-        // anyway would reset the scroll, restart every image load and throw away
-        // the previews — so when nothing changed, leave the DOM alone.
         const compact = compactMode();
-        const sig = JSON.stringify([channel, active, hasMore, compact, list]);
-        if (sig === renderedSig && box.firstChild) return;
-        renderedSig = sig;
 
         box.classList.toggle('filtering', active);
-        box.innerHTML = '';
-
-        // Older history can still be pulled in to widen a filter's reach.
-        if (hasMore) {
-            const b = document.createElement('button');
-            b.className = 'load-more';
-            b.textContent = active ? 'Load earlier messages to widen results' : 'Load earlier messages';
-            b.addEventListener('click', () => loadMessages(false, posts.length ? posts[0].id : null));
-            box.appendChild(b);
-        }
-
         if (active) updateFilterCount(list.length);
 
-        if (!list.length) {
-            const e = document.createElement('div');
-            e.className = 'empty-state';
-            e.textContent = active
-                ? 'No loaded messages match these filters.' + (hasMore ? ' Load earlier messages to search further back.' : '')
-                : `No messages in #${channel} yet — say something.`;
-            box.appendChild(e);
-            return;
+        // Build the desired sequence of rows: each is a key, a signature, and a
+        // factory that is only called when the row has to be (re)built.
+        const rows = [];
+
+        if (hasMore) {
+            const label = active ? 'Load earlier messages to widen results' : 'Load earlier messages';
+            rows.push({
+                key: 'load-more', sig: label, make: () => {
+                    const b = document.createElement('button');
+                    b.className = 'load-more';
+                    b.textContent = label;
+                    b.addEventListener('click', () => loadMessages(false, posts.length ? posts[0].id : null));
+                    return b;
+                }
+            });
         }
 
-        let lastDay = '';
-        let prev = null;
-        list.forEach((p) => {
-            const day = dayStr(p.created_at);
-            if (day !== lastDay) {
-                lastDay = day;
-                const sep = document.createElement('div');
-                sep.className = 'day-sep';
-                sep.innerHTML = `<span>${esc(day)}</span>`;
-                box.appendChild(sep);
-                prev = null;
-            }
-            // Compact shows a timestamp and name on every line, so nothing groups.
-            box.appendChild(renderMessage(p, compact ? null : prev));
-            prev = p;
+        if (!list.length) {
+            const text = active
+                ? 'No loaded messages match these filters.' + (hasMore ? ' Load earlier messages to search further back.' : '')
+                : `No messages in #${channel} yet — say something.`;
+            rows.push({
+                key: 'empty', sig: text, make: () => {
+                    const e = document.createElement('div');
+                    e.className = 'empty-state';
+                    e.textContent = text;
+                    return e;
+                }
+            });
+        } else {
+            let lastDay = '';
+            let prev = null;
+            list.forEach((p) => {
+                const day = dayStr(p.created_at);
+                if (day !== lastDay) {
+                    lastDay = day;
+                    rows.push({
+                        key: 'day:' + day, sig: day, make: () => {
+                            const sep = document.createElement('div');
+                            sep.className = 'day-sep';
+                            sep.innerHTML = `<span>${esc(day)}</span>`;
+                            return sep;
+                        }
+                    });
+                    prev = null;
+                }
+                // Compact shows a timestamp and name on every line, so nothing groups.
+                const before = compact ? null : prev;
+                const grouped = !!(before && before.client_id === p.client_id && before.name === p.name &&
+                    (p.created_at - before.created_at) < 300000 && !p.quote);
+                rows.push({
+                    key: 'msg:' + p.id,
+                    sig: messageSig(p, grouped, compact),
+                    make: () => renderMessage(p, before)
+                });
+                prev = p;
+            });
+        }
+
+        // Queued messages sit after everything real, in the order they were
+        // typed. Hidden while a filter is on: they aren't on the server yet, so
+        // "matching" them would be a promise the search can't keep.
+        if (!active) {
+            outboxFor(channel).forEach((entry) => {
+                rows.push({
+                    key: 'out:' + entry.seq,
+                    sig: JSON.stringify([entry.body, entry.sending, entry.failed, entry.error || '']),
+                    make: () => renderPending(entry)
+                });
+            });
+        }
+
+        // Index what is already on screen so a node can be found wherever it sits.
+        // Anything unkeyed is left over from an older render path; drop it so the
+        // cursor walk below only ever sees rows it owns.
+        const existing = new Map();
+        Array.from(box.children).forEach((node) => {
+            if (node.dataset && node.dataset.key) existing.set(node.dataset.key, node);
+            else node.remove();
         });
+
+        let cursor = box.firstElementChild;
+        const keep = new Set();
+
+        rows.forEach((row) => {
+            let node = existing.get(row.key);
+            if (node && node.dataset.sig !== row.sig) {
+                // Same message, different content — rebuild just this one.
+                const fresh = row.make();
+                fresh.dataset.key = row.key;
+                fresh.dataset.sig = row.sig;
+                // Step the cursor past the node first: replaceChild detaches it,
+                // and a cursor pointing at a detached node makes the insertBefore
+                // below throw.
+                if (node === cursor) cursor = cursor.nextElementSibling;
+                box.replaceChild(fresh, node);
+                existing.set(row.key, fresh);
+                node = fresh;
+            } else if (!node) {
+                node = row.make();
+                node.dataset.key = row.key;
+                node.dataset.sig = row.sig;
+                existing.set(row.key, node);
+            }
+            keep.add(row.key);
+
+            if (node === cursor) {
+                cursor = cursor.nextElementSibling;  // already in the right place
+            } else {
+                box.insertBefore(node, cursor);      // moves it if it was elsewhere
+            }
+        });
+
+        // Whatever is left over is gone from the list (deleted, filtered out, or
+        // scrolled off the retained history).
+        for (const [key, node] of existing) {
+            if (!keep.has(key)) node.remove();
+        }
+    }
+
+    // A queued message. Deliberately not run through renderMessage: it has no
+    // server id, so reactions, pinning, threads, editing and deleting all have
+    // nothing to act on, and offering them would be a lie.
+    function renderPending(entry) {
+        const el = document.createElement('div');
+        el.className = 'msg pending' + (entry.failed ? ' failed' : '');
+
+        el.innerHTML =
+            '<div class="msg-gutter">' +
+            `<div class="msg-avatar" style="${avatarStyle(settings.displayName)}">` +
+            `${esc(initials(settings.displayName || 'You'))}</div></div>` +
+            '<div class="msg-body">' +
+            '<div class="msg-head">' +
+            `<span class="msg-author">${esc(settings.displayName || 'You')}</span>` +
+            `<span class="msg-time">${esc(timeStr(entry.created_at))}</span>` +
+            '</div>' +
+            '<div class="msg-text"></div>' +
+            '<div class="pending-note"></div>' +
+            '</div>';
+
+        renderBody(entry.body, el.querySelector('.msg-text'));
+
+        const note = el.querySelector('.pending-note');
+        if (entry.sending) {
+            note.textContent = 'Sending…';
+        } else if (entry.failed) {
+            note.append(entry.error || 'Not sent — waiting for a connection', ' ');
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'pending-retry';
+            retry.textContent = 'Retry';
+            retry.addEventListener('click', () => { entry.failed = false; flushOutbox(); });
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'pending-retry';
+            cancel.textContent = 'Discard';
+            cancel.addEventListener('click', () => dropOutbox(entry.id));
+            note.append(retry, ' ', cancel);
+        } else {
+            note.textContent = 'Queued — will send when you\'re back online';
+        }
+        return el;
     }
 
     function renderMessage(p, prev) {
@@ -992,6 +1282,17 @@
             '</div>');
 
         el.innerHTML = parts.join('');
+
+        // Each message is a stop for keyboard navigation of the list, and an
+        // article so it is announced as a unit rather than a run of loose text.
+        el.tabIndex = -1;
+        el.setAttribute('role', 'article');
+        el.setAttribute('aria-label',
+            `${p.name || 'Someone'} at ${timeStr(p.created_at)}: ` +
+            (p.body || p.att_name || 'attachment'));
+
+        // The hover actions are icon-only, so they need names (see icons.js).
+        window.ScarmIcons.labelIconButtons(el);
 
         // The body is DOM, not markup: bold/italic/code/lists/quotes/mentions.
         const textEl = el.querySelector('.msg-text');
@@ -1159,7 +1460,14 @@
 
         if (res && res.needsAuth) return relogin();
         if (!res || !res.success) {
-            toast((res && res.error) || 'Could not send', true);
+            // A network failure is not the user's problem to solve — queue it
+            // and retry when the connection comes back. Anything the server
+            // actively rejected is handed back, because retrying won't fix it.
+            if (!res || res.network) {
+                queueOutbox(body, quoteId);
+                return;
+            }
+            toast(res.error || 'Could not send', true);
             input.value = body;   // give the text back rather than losing it
             autosize();
             return;
@@ -1168,39 +1476,124 @@
         await loadMessages(true);
     });
 
+    // ---------- outbox ------------------------------------------------------
+    //
+    // A message typed while the connection is down used to be handed straight
+    // back to the composer with an error toast, so the only recovery was to
+    // notice, wait, and press Enter again. Instead it is queued, shown in the
+    // conversation greyed out, and retried automatically when realtime comes
+    // back — the behaviour every other chat client has.
+    //
+    // Persisted, because "the app crashed and ate my message" is the worst
+    // possible outcome for something the user has already pressed send on.
+    // Attachments are deliberately NOT queued: the bytes can be hundreds of
+    // megabytes and localStorage is not the place for them.
+
+    const OUTBOX_KEY = 'lounge_outbox';
+    const OUTBOX_MAX = 50;
+    let outbox = [];
+    let outboxSeq = 0;
+    let flushingOutbox = false;
+
+    function loadOutbox() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
+            outbox = Array.isArray(raw) ? raw.slice(-OUTBOX_MAX) : [];
+        } catch (e) { outbox = []; }
+        outbox.forEach((o) => { outboxSeq = Math.max(outboxSeq, Number(o.seq) || 0); });
+    }
+
+    function saveOutbox() {
+        try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+    }
+
+    function queueOutbox(body, quoteId) {
+        const entry = {
+            seq: ++outboxSeq,
+            id: 'out:' + outboxSeq,
+            channel,
+            body,
+            quoteId: quoteId || null,
+            created_at: Date.now(),
+            sending: false,
+            failed: false
+        };
+        outbox.push(entry);
+        if (outbox.length > OUTBOX_MAX) outbox = outbox.slice(-OUTBOX_MAX);
+        saveOutbox();
+        renderMessages();
+        settleScroll();
+        return entry;
+    }
+
+    function dropOutbox(id) {
+        outbox = outbox.filter((o) => o.id !== id);
+        saveOutbox();
+        renderMessages();
+    }
+
+    function outboxFor(chan) {
+        return outbox.filter((o) => o.channel === chan);
+    }
+
+    // Sends every queued message for every channel, oldest first, stopping at
+    // the first network failure so a long queue doesn't hammer a dead link.
+    async function flushOutbox() {
+        if (flushingOutbox || !outbox.length || $('app').hidden) return;
+        flushingOutbox = true;
+        try {
+            // A copy: entries are removed from `outbox` as they succeed.
+            for (const entry of outbox.slice()) {
+                if (!outbox.includes(entry)) continue;      // dropped meanwhile
+                entry.sending = true;
+                entry.failed = false;
+                renderMessages();
+
+                const res = await L.board('post', {
+                    method: 'POST',
+                    body: {
+                        body: entry.body,
+                        name: settings.displayName || 'Anonymous',
+                        clientId: settings.clientId,
+                        channel: entry.channel,
+                        quoteId: entry.quoteId
+                    }
+                });
+
+                if (res && res.needsAuth) { entry.sending = false; return relogin(); }
+
+                if (res && res.success) {
+                    outbox = outbox.filter((o) => o !== entry);
+                    saveOutbox();
+                    L.rt.notifyPosted(entry.channel);
+                    continue;
+                }
+
+                entry.sending = false;
+                if (res && res.network) {
+                    // Still offline — leave the rest queued and try again later.
+                    entry.failed = true;
+                    renderMessages();
+                    return;
+                }
+                // A real rejection from the server (too long, bad channel).
+                // Retrying forever would never help, so surface it and stop.
+                entry.failed = true;
+                entry.error = (res && res.error) || 'The server rejected this message';
+                renderMessages();
+            }
+        } finally {
+            flushingOutbox = false;
+            renderMessages();
+        }
+    }
+
     // ---------- attachments -----------------------------------------------
     // Uses the same two-step the website does — POST the bytes to
     // /api/board/upload, then POST the message carrying { key, name, type, size }
     // — so a desktop upload is indistinguishable from a browser one.
 
     const MAX_UPLOAD = 25 * 1048576;
-
-    // Attachment precedence: audio → image → video → generic file. Types are
-    // checked before extensions because .webm is legitimately either audio or
-    // video, and the uploader's MIME type is the more reliable signal.
-    const AUDIO_EXT = /\.(mp3|wav|ogg|oga|m4a|flac|aac|opus|weba)$/i;
-    const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
-    const VIDEO_EXT = /\.(mp4|webm|mov|mkv|avi|m4v)$/i;
-
-    function attachmentKind(p) {
-        const type = (p.att_type || '').toLowerCase();
-        const name = (p.att_name || '').toLowerCase();
-        if (type.startsWith('audio/') || (!type && AUDIO_EXT.test(name))) return 'audio';
-        if (type.startsWith('image/') || (!type && IMAGE_EXT.test(name))) return 'image';
-        if (type.startsWith('video/') || (!type && VIDEO_EXT.test(name))) return 'video';
-        // A generic octet-stream upload still deserves the right player.
-        if (AUDIO_EXT.test(name)) return 'audio';
-        if (IMAGE_EXT.test(name)) return 'image';
-        if (VIDEO_EXT.test(name)) return 'video';
-        return 'file';
-    }
-
-    function fmtSize(b) {
-        if (!b) return '';
-        if (b < 1024) return b + ' B';
-        if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-        return (b / 1048576).toFixed(1) + ' MB';
-    }
 
     function addUploadRow(name, size) {
         const row = document.createElement('div');
@@ -1212,6 +1605,27 @@
         $('upload-list').appendChild(row);
         return row;
     }
+
+    // ---- upload progress ----
+    // The main process reports bytes handed to the socket, tagged with the id
+    // the renderer generated for this upload (see main/net.js). Until the first
+    // event lands the bar keeps its indeterminate animation, so a fast upload on
+    // a fast link never flickers through a bar that's already full.
+    let uploadSeq = 0;
+    const uploadRows = new Map();       // id -> { row, size }
+
+    L.onUploadProgress(({ id, sent, total }) => {
+        const entry = uploadRows.get(id);
+        if (!entry || !total) return;
+        const pct = Math.min(100, Math.round((sent / total) * 100));
+        entry.row.classList.add('determinate');
+        entry.row.querySelector('.up-bar i').style.width = pct + '%';
+        // At 100% the bytes are out but the server hasn't answered yet, so say
+        // so rather than showing a full bar next to a row that isn't finished.
+        entry.row.querySelector('.up-size').textContent = pct >= 100
+            ? 'processing…'
+            : `${pct}% of ${fmtSize(entry.size)}`;
+    });
 
     function failUploadRow(row, msg) {
         row.classList.add('err');
@@ -1234,7 +1648,14 @@
             }
         }
 
-        const up = await L.uploadFile(item.name, item.type || 'application/octet-stream', buf);
+        const uploadId = 'u' + (++uploadSeq);
+        uploadRows.set(uploadId, { row, size: item.size });
+        let up;
+        try {
+            up = await L.uploadFile(item.name, item.type || 'application/octet-stream', buf, uploadId);
+        } finally {
+            uploadRows.delete(uploadId);
+        }
         if (up && up.needsAuth) { row.remove(); relogin(); return false; }
         if (!up || !up.success) {
             failUploadRow(row, (up && up.error) || `Upload of ${item.name} failed`);
@@ -1302,25 +1723,6 @@
     }
     function validStaged() { return staged.filter((s) => !s.error); }
     function stagedTotal() { return validStaged().reduce((n, s) => n + s.size, 0); }
-
-    function fmtDuration(sec) {
-        if (!Number.isFinite(sec) || sec <= 0) return '';
-        const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
-        return m + ':' + String(s).padStart(2, '0');
-    }
-
-    // Truncate in the MIDDLE so the extension stays readable. Returns {head, tail}
-    // where tail is the extension (+ a little context) and head ellipsizes in CSS.
-    function splitName(name) {
-        const s = String(name || '');
-        const dot = s.lastIndexOf('.');
-        if (dot > 0 && dot >= s.length - 8) {
-            // keep the extension plus up to 2 trailing chars of the stem as the tail
-            const tailStart = Math.max(dot - 2, 1);
-            return { head: s.slice(0, tailStart), tail: s.slice(tailStart) };
-        }
-        return { head: s, tail: '' };
-    }
 
     // ---- local thumbnails (no server round trip) -------------------------
 
@@ -1422,20 +1824,6 @@
 
     // Icon name for a non-media file, by extension. Names resolve against the
     // one icon set, so a staged .pdf and a posted .pdf draw the same glyph.
-    function fileIcon(name) {
-        const ext = (String(name || '').split('.').pop() || '').toLowerCase();
-        const map = {
-            pdf: 'doc', doc: 'doc', docx: 'doc', rtf: 'doc', txt: 'doc', md: 'doc',
-            xls: 'sheet', xlsx: 'sheet', csv: 'sheet', tsv: 'sheet',
-            ppt: 'slides', pptx: 'slides', key: 'slides',
-            zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
-            json: 'app', xml: 'app', yml: 'app', yaml: 'app', js: 'app', ts: 'app',
-            exe: 'app', msi: 'app', bat: 'app', ps1: 'app',
-            dmg: 'disc', iso: 'disc', img: 'disc'
-        };
-        return map[ext] || 'file';
-    }
-
     function stageCard(s) {
         const card = document.createElement('div');
         card.className = 'stage-card' + (s.error ? ' errored' : '') + ' kind-' + (s.kind || 'file');
@@ -2238,6 +2626,7 @@
         $('picker-quality-hint').textContent =
             `${settings.shareQuality || '1080p'} · ${settings.shareMotion === 'smooth' ? 'smooth' : 'sharp'}`;
         $('picker').hidden = false;
+        trapFocus($('picker'), { label: 'Share your screen', initial: $('picker-close') });
         $('picker-grid').innerHTML = '<div class="empty-state">Looking for screens and windows…</div>';
 
         try {
@@ -2292,6 +2681,7 @@
     });
 
     function closePicker() {
+        releaseFocus($('picker'));
         $('picker').hidden = true;
         L.share.cancel();
     }
@@ -2886,10 +3276,13 @@
         renderNoteBlocks($('notes-body'), updateState.noteBlocks);
         $('notes-body').scrollTop = 0;
         $('notes').hidden = false;
-        $('notes-close').focus();
+        trapFocus($('notes'), { label: 'Release notes', initial: $('notes-close') });
     }
 
-    function closeNotes() { $('notes').hidden = true; }
+    function closeNotes() {
+        releaseFocus($('notes'));
+        $('notes').hidden = true;
+    }
 
     $('ub-notes-toggle').addEventListener('click', openNotes);
     $('notes-close').addEventListener('click', closeNotes);
@@ -2944,6 +3337,8 @@
             const stick = nearBottom();
             await loadMessages(stick);
             await loadChannels();
+            // Back online is exactly when anything queued should go out.
+            await flushOutbox();
         } finally { resyncing = false; }
     }
 
@@ -2954,8 +3349,10 @@
                 if (m.channel === channel) {
                     // loadMessages does the chime + notification once it has the
                     // real post bodies, so nothing to announce here.
-                    const stick = nearBottom();
-                    loadMessages(stick);
+                    //
+                    // Coalesced: several people posting at once (or one person
+                    // pasting a few lines) is one refetch, not one per event.
+                    scheduleRefresh(nearBottom());
                 } else {
                     bumpUnread(m.channel);
                     if (m.cid !== settings.clientId) notifyOtherChannel(m);
@@ -3000,13 +3397,7 @@
     }
 
     // @mention of my display name, matching the website's matcher.
-    function mentionsMe(body) {
-        const me = (settings.displayName || '').toLowerCase();
-        if (!me || me === 'anonymous') return false;
-        try {
-            return new RegExp('@' + me.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(body || '');
-        } catch (e) { return false; }
-    }
+    const mentionsMe = (body) => window.ScarmLib.mentionsMe(body, settings.displayName);
 
     // Rich notification for fresh posts in the CURRENT channel — the mention is
     // preferred over the newest message, same as the website.
@@ -3045,6 +3436,9 @@
             const stick = nearBottom();
             await loadMessages(stick);
             await loadChannels();
+            // The poll is also the retry clock for anything queued while the
+            // socket was down but before it reported itself as reconnected.
+            await flushOutbox();
         }, every);
     }
 
@@ -3074,11 +3468,11 @@
     function inEditable(t) {
         return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
     }
-    function matchesPtt(e) {
-        const b = settings.pttBinding;
-        if (!b || b.type === 'mouse') return false;
-        return e.code === b.code;
-    }
+    // Modifiers are checked exactly the way main/ptt.js checks them for the
+    // global hook (the shared matcher lives in lib.js). Comparing only e.code
+    // meant a binding of Ctrl+Q also opened the mic on a bare Q whenever the
+    // window had focus.
+    const matchesPtt = (e) => matchesPttBinding(e, settings.pttBinding);
     window.addEventListener('keydown', (e) => {
         if (recordingPtt) return;
         if (settings.voiceMode !== 'ptt' || !voice || !voice.isJoined()) return;
@@ -3086,12 +3480,34 @@
         e.preventDefault();
         voice.setPttHeld(true);
     }, true);
+    // Released on the key itself, ignoring modifier state: letting go of Ctrl
+    // before Q would otherwise leave the mic open, because the keyup for Q no
+    // longer satisfies the binding's modifier requirement.
     window.addEventListener('keyup', (e) => {
         if (recordingPtt) return;
         if (settings.voiceMode !== 'ptt' || !voice) return;
-        if (!matchesPtt(e)) return;
+        const b = settings.pttBinding;
+        if (!b || b.type === 'mouse' || e.code !== b.code) return;
         voice.setPttHeld(false);
     }, true);
+
+    // Losing focus mid-hold means the keyup lands in whatever window took over,
+    // so without this the mic stays open until you press and release the key
+    // again — the classic "I alt-tabbed and kept broadcasting" bug.
+    //
+    // ONLY when the native hook is unavailable. With uiohook-napi loaded, PTT is
+    // deliberately global: holding the key while working in another window is
+    // the whole point, and releasing on blur would break it. The hook is an
+    // optional dependency, so the in-window path is what ships whenever the
+    // prebuilt binary didn't install.
+    let pttHookAvailable = true;    // assume the safe answer until told otherwise
+    L.ptt.available().then((ok) => { pttHookAvailable = !!ok; });
+
+    window.addEventListener('blur', () => {
+        if (pttHookAvailable) return;
+        if (settings.voiceMode !== 'ptt' || !voice) return;
+        voice.setPttHeld(false);
+    });
 
     // ---------- tray commands ---------------------------------------------
 
@@ -3368,16 +3784,22 @@
         await populateDevices();
         refreshPttHint();
         $('settings').hidden = false;
+        trapFocus($('settings'), { label: 'Settings', initial: $('settings-close') });
     }
 
     // Closing has to stop the mic test, whichever way it happens.
     function closeSettings() {
         stopMicTest();
+        releaseFocus($('settings'));
         $('settings').hidden = true;
     }
 
     $('btn-settings').addEventListener('click', openSettings);
     $('settings-close').addEventListener('click', closeSettings);
+    $('btn-open-logs').addEventListener('click', async () => {
+        const ok = await L.app.openLogs();
+        if (!ok) toast('No log folder yet', true);
+    });
 
     // ---- account card ----
     function renderAccountCard() {
@@ -3449,9 +3871,9 @@
 
     function stopMicTest() {
         if (!micTest) return;
-        cancelAnimationFrame(micTest.raf);
+        micTest.off();
+        micTest.meter.stop();
         try { micTest.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
-        try { micTest.ctx.close(); } catch (e) {}
         micTest = null;
         $('btn-mic-test').textContent = 'Test';
         $('btn-mic-test').classList.remove('recording');
@@ -3473,39 +3895,27 @@
             return;
         }
 
-        let ctx, analyser;
-        try {
-            ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const src = ctx.createMediaStreamSource(stream);
-            analyser = ctx.createAnalyser();
-            analyser.fftSize = 512;
-            analyser.smoothingTimeConstant = 0.6;
-            src.connect(analyser);       // analysis only — never to the destination
-        } catch (e) {
+        // Metered on the renderer's shared AudioContext (audio.js). Opening one
+        // here used to compete with the per-participant analysers for Chromium's
+        // six-context limit, so testing your mic during a call could break the
+        // speaking indicators.
+        const meter = window.ScarmAudio.createMeter(stream);
+        if (!meter) {
             try { stream.getTracks().forEach((t) => t.stop()); } catch (e2) {}
             return toast('Could not read the microphone level', true);
         }
 
-        const data = new Uint8Array(analyser.fftSize);
-        micTest = { stream, ctx, raf: 0 };
-        $('btn-mic-test').textContent = 'Stop';
-        $('btn-mic-test').classList.add('recording');
-
-        const tick = () => {
+        const off = window.ScarmAudio.onTick(() => {
             if (!micTest) return;
-            analyser.getByteTimeDomainData(data);
-            let sum = 0;
-            for (let i = 0; i < data.length; i++) {
-                const v = (data[i] - 128) / 128;
-                sum += v * v;
-            }
-            const rms = Math.sqrt(sum / data.length);
+            const rms = meter.rms();
             const bar = $('mic-meter-bar');
             bar.style.width = Math.min(100, (rms / METER_MAX) * 100).toFixed(1) + '%';
             bar.classList.toggle('over', rms >= vadRms());
-            micTest.raf = requestAnimationFrame(tick);
-        };
-        micTest.raf = requestAnimationFrame(tick);
+        });
+
+        micTest = { stream, meter, off };
+        $('btn-mic-test').textContent = 'Stop';
+        $('btn-mic-test').classList.add('recording');
     }
 
     $('btn-mic-test').addEventListener('click', () => {
@@ -3563,6 +3973,7 @@
     $('set-dnd').addEventListener('change', async (e) => {
         await saveSettings({ dnd: e.target.checked });
         renderMe();
+        renderChannels();       // the taskbar badge is suppressed while DND is on
         toast(e.target.checked ? 'Do not disturb on — everything is silenced' : 'Do not disturb off');
     });
     $('set-theme').addEventListener('change', async (e) => {
@@ -3572,7 +3983,8 @@
     $('set-density').addEventListener('change', async (e) => {
         await saveSettings({ density: e.target.value });
         applyDensity();
-        renderedSig = null;             // grouping differs between densities
+        // Density is part of every row's signature, so the diff rebuilds the
+        // affected messages on its own — no cache to invalidate.
         renderMessages();
     });
     $('set-vad').addEventListener('input', async (e) => {
@@ -3980,6 +4392,84 @@
         Symbols: ['💬', '📌', '📎', '✅', '❌', '⚠️', '💡', '🔑', '🔒', '🔔', '➡️', '⬆️', '⭐']
     };
 
+    // Search keywords. Without these the picker can only be browsed, which for a
+    // grid this size means scanning every glyph to find the one you want.
+    // Multiple words per emoji so both the obvious name and how people actually
+    // refer to it will find it ("joy" and "crying laughing" both hit 😂).
+    const EMOJI_WORDS = {
+        '😀': 'grin smile happy', '😃': 'smile happy open', '😄': 'smile happy eyes',
+        '😁': 'beam grin teeth', '😆': 'laugh squint haha', '😅': 'sweat laugh nervous',
+        '😂': 'joy laugh crying tears lol', '🤣': 'rofl rolling laughing lmao',
+        '😊': 'blush smile happy', '😇': 'angel halo innocent', '🙂': 'slight smile',
+        '🙃': 'upside down silly', '😉': 'wink', '😌': 'relieved calm',
+        '😍': 'heart eyes love', '🥰': 'love hearts adore', '😘': 'kiss blow love',
+        '😋': 'yum tongue tasty', '😜': 'wink tongue silly', '🤪': 'zany crazy wild',
+        '😎': 'cool sunglasses', '🤩': 'star struck excited wow', '🥳': 'party celebrate birthday',
+        '😏': 'smirk sly', '🙄': 'eye roll annoyed', '😴': 'sleep tired zzz',
+        '🤔': 'think hmm consider', '🤗': 'hug', '🤭': 'oops giggle hand',
+        '😬': 'grimace awkward yikes', '😭': 'sob cry loudly', '🥺': 'pleading puppy eyes beg',
+
+        '👍': 'thumbs up yes approve like ok', '👎': 'thumbs down no disapprove dislike',
+        '👏': 'clap applause bravo', '🙌': 'raise hands praise celebrate', '👋': 'wave hello bye hi',
+        '🤝': 'handshake deal agree', '✊': 'fist raised solidarity', '👊': 'fist bump punch',
+        '🤞': 'fingers crossed luck hope', '✌️': 'peace victory two', '🤟': 'love you rock',
+        '👌': 'ok perfect nice', '🤌': 'pinched chef italian', '🙏': 'pray thanks please',
+        '💪': 'muscle strong flex', '👀': 'eyes look watching', '🫶': 'heart hands love',
+        '🤙': 'call me shaka hang loose',
+
+        '❤️': 'red heart love', '🧡': 'orange heart', '💛': 'yellow heart',
+        '💚': 'green heart', '💙': 'blue heart', '💜': 'purple heart',
+        '🖤': 'black heart', '🤍': 'white heart', '💖': 'sparkling heart',
+        '💗': 'growing heart', '💕': 'two hearts love', '💞': 'revolving hearts',
+        '💔': 'broken heart sad', '❣️': 'heart exclamation',
+
+        '🔥': 'fire lit hot flame', '✨': 'sparkles shiny magic', '🎉': 'party popper celebrate congrats',
+        '🚀': 'rocket launch ship fast', '💯': 'hundred perfect score', '⭐': 'star',
+        '🌟': 'glowing star shine', '💥': 'boom explosion collision', '⚡': 'lightning bolt zap fast',
+        '🌈': 'rainbow pride', '🎯': 'target bullseye direct hit', '🏆': 'trophy win award',
+        '🎈': 'balloon party', '👑': 'crown king queen best', '💎': 'gem diamond',
+        '🍻': 'beers cheers drink', '🎮': 'game controller gaming', '🍕': 'pizza food',
+
+        '💬': 'speech bubble comment chat', '📌': 'pin pinned', '📎': 'paperclip attachment',
+        '✅': 'check done yes tick complete', '❌': 'cross no wrong fail',
+        '⚠️': 'warning caution alert', '💡': 'idea bulb light', '🔑': 'key access',
+        '🔒': 'lock locked private secure', '🔔': 'bell notification alert',
+        '➡️': 'right arrow next', '⬆️': 'up arrow'
+    };
+
+    // Recents are per-machine UI state, not a setting worth syncing, so they live
+    // in localStorage next to the read markers.
+    const EMOJI_RECENT_KEY = 'lounge_emoji_recent';
+    const EMOJI_RECENT_MAX = 16;
+
+    function recentEmojis() {
+        try {
+            const arr = JSON.parse(localStorage.getItem(EMOJI_RECENT_KEY) || '[]');
+            return Array.isArray(arr) ? arr.filter((e) => typeof e === 'string').slice(0, EMOJI_RECENT_MAX) : [];
+        } catch (e) { return []; }
+    }
+
+    function noteEmojiUsed(em) {
+        const next = [em].concat(recentEmojis().filter((e) => e !== em)).slice(0, EMOJI_RECENT_MAX);
+        try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(next)); } catch (e) {}
+    }
+
+    // Matches on the keywords above and, so an unlisted emoji is still findable,
+    // on its category name.
+    function searchEmojis(query) {
+        const q = String(query || '').trim().toLowerCase();
+        if (!q) return null;
+        const terms = q.split(/\s+/);
+        const out = [];
+        Object.keys(EMOJIS).forEach((cat) => {
+            EMOJIS[cat].forEach((em) => {
+                const hay = (EMOJI_WORDS[em] || '') + ' ' + cat.toLowerCase();
+                if (terms.every((t) => hay.includes(t))) out.push(em);
+            });
+        });
+        return out;
+    }
+
     let emojiPop = null;
     let emojiCb = null;
 
@@ -3992,25 +4482,89 @@
         const pop = document.createElement('div');
         pop.className = 'emoji-pop';
         pop.hidden = true;
+
+        const search = document.createElement('input');
+        search.type = 'text';
+        search.className = 'emoji-search';
+        search.placeholder = 'Search emoji';
+        search.setAttribute('aria-label', 'Search emoji');
+        pop.appendChild(search);
+
         const grid = document.createElement('div');
         grid.className = 'emoji-grid';
-        Object.keys(EMOJIS).forEach((cat) => {
+        pop.appendChild(grid);
+
+        function button(em) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = em;
+            b.title = EMOJI_WORDS[em] ? EMOJI_WORDS[em].split(' ')[0] : '';
+            b.addEventListener('click', () => {
+                const cb = emojiCb;
+                noteEmojiUsed(em);
+                closeEmojiPop();
+                if (cb) cb(em);
+            });
+            return b;
+        }
+
+        function heading(text) {
             const c = document.createElement('div');
             c.className = 'emoji-cat';
-            c.textContent = cat;
-            grid.appendChild(c);
-            EMOJIS[cat].forEach((em) => {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.textContent = em;
-                b.addEventListener('click', () => { const cb = emojiCb; closeEmojiPop(); if (cb) cb(em); });
-                grid.appendChild(b);
+            c.textContent = text;
+            return c;
+        }
+
+        // Rebuilt on every keystroke. The whole set is ~110 glyphs, so this is
+        // far cheaper than maintaining per-button visibility.
+        function paint() {
+            grid.innerHTML = '';
+            const hits = searchEmojis(search.value);
+
+            if (hits) {
+                if (!hits.length) {
+                    const none = document.createElement('div');
+                    none.className = 'emoji-none';
+                    none.textContent = 'No emoji match that';
+                    grid.appendChild(none);
+                    return;
+                }
+                grid.appendChild(heading('Results'));
+                hits.forEach((em) => grid.appendChild(button(em)));
+                return;
+            }
+
+            const recent = recentEmojis();
+            if (recent.length) {
+                grid.appendChild(heading('Frequently used'));
+                recent.forEach((em) => grid.appendChild(button(em)));
+            }
+            Object.keys(EMOJIS).forEach((cat) => {
+                grid.appendChild(heading(cat));
+                EMOJIS[cat].forEach((em) => grid.appendChild(button(em)));
             });
+        }
+
+        search.addEventListener('input', paint);
+        // Enter picks the first result, so a search can be completed without
+        // reaching for the mouse.
+        search.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const first = grid.querySelector('button');
+            if (first) first.click();
         });
-        pop.appendChild(grid);
-        // Keep the composer's caret where it was when picking for insertion.
-        pop.addEventListener('mousedown', (e) => e.preventDefault());
+
+        pop.repaint = paint;
+        pop.searchField = search;
+
+        // Keep the composer's caret where it was when picking for insertion. The
+        // search field is exempt: it has to be able to take focus to be typed in.
+        pop.addEventListener('mousedown', (e) => {
+            if (e.target !== search) e.preventDefault();
+        });
         document.body.appendChild(pop);
+        paint();
         return pop;
     }
 
@@ -4031,7 +4585,13 @@
         closeCtxMenu();
         if (!emojiPop) emojiPop = buildEmojiPop();
         emojiCb = cb;
+        // Always opens clean: a leftover search from last time would hide the
+        // recents row and look like the picker had lost most of its emoji.
+        emojiPop.searchField.value = '';
+        emojiPop.repaint();
+        emojiPop.scrollTop = 0;
         positionPop(emojiPop, anchor);
+        emojiPop.searchField.focus();
     }
 
     function closeEmojiPop() {
@@ -4073,14 +4633,6 @@
     // A message body is attacker-controlled, and openExternal on a file:// or a
     // registered custom protocol is a way to run code on this machine — so
     // anything that isn't plainly http(s) is not offered at all.
-    function safeHttpUrl(raw) {
-        const s = String(raw || '').trim();
-        try {
-            const u = new URL(s);
-            return (u.protocol === 'http:' || u.protocol === 'https:') ? s : null;
-        } catch (e) { return null; }
-    }
-
     // The url behind whatever was right-clicked: a linkified url in the text, or
     // anywhere on a preview card (the whole card carries the url, so the
     // thumbnail and the padding work as well as the title).
@@ -4109,13 +4661,6 @@
         if (el.dataset.attKey) return { key: el.dataset.attKey, name: el.dataset.attName || 'image' };
         if (/^https?:/i.test(el.src)) return { url: el.src, name: urlFileName(el.src) };
         return null;
-    }
-
-    function urlFileName(url) {
-        try {
-            const n = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
-            return n || 'image';
-        } catch (e) { return 'image'; }
     }
 
     // A link others can actually open: our attachments live behind the board's
@@ -4152,6 +4697,7 @@
         setZoom(false);                       // always open fitted
         $('lb-caption').textContent = name || '';
         $('lightbox').hidden = false;
+        trapFocus($('lightbox'), { label: name ? 'Image: ' + name : 'Image viewer', initial: $('lb-close') });
         // Only offer "actual size" when it would actually reveal more pixels.
         img.onload = () => {
             const stage = $('lb-stage');
@@ -4176,6 +4722,7 @@
     function toggleZoom() { setZoom(!$('lb-image').classList.contains('actual')); }
 
     function closeLightbox() {
+        releaseFocus($('lightbox'));
         $('lightbox').hidden = true;
         $('lb-image').src = '';
         $('lb-image').onload = null;
@@ -4333,34 +4880,7 @@
 
     const previewCache = new Map();
     const youtubeCache = new Map();
-    const URL_RE = /https?:\/\/[^\s<>"']+/g;
-    const IMAGE_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?[^\s]*)?$/i;
-
-    function extractUrls(body) {
-        const found = String(body || '').match(URL_RE) || [];
-        // Trim trailing punctuation people type after a link.
-        return [...new Set(found.map((u) => u.replace(/[),.;:!?\]]+$/, '')))].slice(0, 3);
-    }
-
-    // Pull an 11-character video id out of any of YouTube's URL shapes, ignoring
-    // whatever tracking/timestamp/playlist params are hanging off the end.
-    function youtubeId(raw) {
-        let u;
-        try { u = new URL(raw); } catch (e) { return null; }
-        if (!/^https?:$/.test(u.protocol)) return null;
-
-        const host = u.hostname.replace(/^(www|m|music)\./, '');
-        const ok = (id) => (/^[A-Za-z0-9_-]{11}$/.test(id || '') ? id : null);
-
-        if (host === 'youtu.be') return ok(u.pathname.slice(1).split('/')[0]);
-        if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
-            if (u.pathname === '/watch') return ok(u.searchParams.get('v'));
-            // /shorts/ID, /embed/ID, /v/ID, /live/ID
-            const m = u.pathname.match(/^\/(?:shorts|embed|v|live)\/([^/?#]+)/);
-            if (m) return ok(m[1]);
-        }
-        return null;
-    }
+    const isImageUrl = window.ScarmLib.isImageUrl;
 
     function youtubeCard(info) {
         const card = document.createElement('button');
@@ -4460,7 +4980,7 @@
             }
 
             // A direct image link renders as the image itself — no round trip.
-            if (IMAGE_RE.test(url)) {
+            if (isImageUrl(url)) {
                 const el = imageCard(url);
                 el.dataset.previewUrl = url;
                 container.appendChild(el);

@@ -137,12 +137,70 @@ describe('settings', () => {
         const first = await loadStore();
         first.init();
         first.set({ displayName: 'Scarm', chatFontSize: 'large' });
+        first.flush();          // saves are debounced; quitting flushes them
 
         const second = await loadStore();
         second.init();
 
         expect(second.get().displayName).toBe('Scarm');
         expect(second.get().chatFontSize).toBe('large');
+    });
+
+    it('debounces writes rather than hitting the disk on every set', async () => {
+        // A slider drag is dozens of set() calls a second. Each one used to be a
+        // synchronous whole-file write on the main process's main thread.
+        const store = await loadStore();
+        store.init();
+
+        const before = fs.statSync(at('settings.json')).mtimeMs;
+        for (let i = 0; i < 50; i++) store.set({ outputVolume: i / 50 });
+
+        // Nothing written yet — it is sitting in the debounce timer.
+        expect(fs.statSync(at('settings.json')).mtimeMs).toBe(before);
+
+        store.flush();
+        expect(JSON.parse(fs.readFileSync(at('settings.json'), 'utf8')).outputVolume)
+            .toBeCloseTo(49 / 50);
+    });
+
+    it('writes settings atomically and leaves no temp file behind', async () => {
+        const store = await loadStore();
+        store.init();
+        store.set({ displayName: 'Scarm' });
+        store.flush();
+
+        // A rename-into-place never leaves a half-written settings.json, which
+        // is what used to reset every setting after a crash mid-write.
+        expect(fs.existsSync(at('settings.json.tmp'))).toBe(false);
+        expect(() => JSON.parse(fs.readFileSync(at('settings.json'), 'utf8'))).not.toThrow();
+    });
+
+    it('flush is a no-op when there is nothing pending', async () => {
+        const store = await loadStore();
+        store.init();
+        store.set({ displayName: 'Scarm' });
+        store.flush();
+
+        const mtime = fs.statSync(at('settings.json')).mtimeMs;
+        expect(() => store.flush()).not.toThrow();
+        expect(fs.statSync(at('settings.json')).mtimeMs).toBe(mtime);
+    });
+
+    it('caps the per-peer maps so they cannot grow forever', async () => {
+        // localVolumes / localMuted / blocked are keyed by client id and nothing
+        // ever removed an entry, so they grew for the life of the profile.
+        const volumes = {};
+        for (let i = 0; i < 700; i++) volumes['c' + i] = 1;
+        seedCurrent({ 'settings.json': JSON.stringify({ localVolumes: volumes }) });
+
+        const store = await loadStore();
+        store.init();
+
+        const kept = Object.keys(store.get().localVolumes);
+        expect(kept.length).toBe(500);
+        // Oldest go first, newest survive.
+        expect(kept).not.toContain('c0');
+        expect(kept).toContain('c699');
     });
 
     it('generates clientId once and keeps it stable across restarts', async () => {

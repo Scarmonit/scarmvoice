@@ -13,6 +13,8 @@ const {
     desktopCapturer, dialog, clipboard, screen, powerMonitor, nativeTheme
 } = require('electron');
 
+const log = require('./log');
+const badge = require('./badge');
 const store = require('./store');
 const net = require('./net');
 const rt = require('./rt');
@@ -63,6 +65,10 @@ if (!app.requestSingleInstanceLock()) {
 } else {
     app.on('second-instance', () => showWindow());
 }
+
+// Before anything else, so the console output of startup itself is captured and
+// so the crash reporter is armed ahead of the first window.
+log.install();
 
 // Adopt the previous app name's profile before Electron touches the user data
 // directory — see store.migrateLegacyProfile for why the timing matters.
@@ -225,6 +231,9 @@ function showWindow() {
     win.focus();
 }
 
+// The taskbar unread badge is drawn in badge.js (pixel work, no Electron).
+let lastBadge = 0;              // so the taskbar only flashes on a real increase
+
 // ---- tray ----------------------------------------------------------------
 
 function trayTooltip() {
@@ -380,8 +389,23 @@ function registerIpc() {
 
     // ---- attachments ----
 
-    ipcMain.handle('board:upload', async (_e, { name, type, data }) => {
-        return net.upload(name, type, data);
+    // `id` ties the progress events below back to the composer row that started
+    // this upload, so several files uploading at once each move their own bar.
+    ipcMain.handle('board:upload', async (_e, { name, type, data, id }) => {
+        if (!id) return net.upload(name, type, data);
+
+        // Throttled: the stream reports every 64 KB, which for a 25 MB file is
+        // ~400 events. One a frame is more than enough to animate a bar.
+        let lastSent = 0;
+        const onProgress = (sent, total) => {
+            const now = Date.now();
+            if (sent < total && now - lastSent < 100) return;
+            lastSent = now;
+            if (win && !win.isDestroyed()) {
+                win.webContents.send('upload:progress', { id, sent, total });
+            }
+        };
+        return net.upload(name, type, data, onProgress);
     });
 
     // Bytes for an image the renderer can name two ways: by attachment key
@@ -582,6 +606,10 @@ function registerIpc() {
 
     ipcMain.handle('app:version', () => app.getVersion());
 
+    // Everything the app logs goes to a file (see log.js); this is how someone
+    // reporting a bug gets at it without knowing where userData lives.
+    ipcMain.handle('app:openLogs', () => log.openFolder());
+
     // Windows blocks drag-and-drop from a medium-integrity process (Explorer)
     // into a high-integrity one (an elevated app) — UIPI drops the messages
     // before they ever reach us, so no amount of renderer code can fix it.
@@ -622,11 +650,32 @@ function registerIpc() {
         return voiceState;
     });
 
+    // Unread count on the taskbar button. Windows has no dock badge, so this is
+    // setOverlayIcon with an image we draw ourselves.
+    //
+    // This used to clear the overlay when the count was zero and otherwise only
+    // flash the frame, so the badge was never actually drawn — and nothing in
+    // the renderer called it at all.
     ipcMain.handle('app:badge', (_e, count) => {
-        if (!win) return;
-        // Windows has no dock badge; overlay the taskbar icon instead.
-        if (!count) { win.setOverlayIcon(null, ''); return; }
-        win.flashFrame(!win.isFocused());
+        if (!win || win.isDestroyed()) return false;
+        const n = Math.max(0, Math.floor(Number(count) || 0));
+
+        if (!n) {
+            win.setOverlayIcon(null, '');
+            lastBadge = 0;
+            return true;
+        }
+        try {
+            win.setOverlayIcon(badge.badgeIcon(badge.badgeLabel(n)),
+                `${n} unread message${n === 1 ? '' : 's'}`);
+        } catch (e) {
+            console.warn('[badge] overlay failed:', e.message);
+        }
+        // Flash only when the count actually goes up, so a re-render can't make
+        // the taskbar button strobe.
+        if (n > lastBadge && !win.isFocused()) win.flashFrame(true);
+        lastBadge = n;
+        return true;
     });
 
     // Handing an arbitrary url to the shell is how a message from someone else
@@ -792,5 +841,8 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => { quitting = true; });
-app.on('will-quit', () => { ptt.shutdown(); rt.stop(); });
+// store.flush() matters here: settings saves are debounced, so the last change
+// before quitting (window geometry, a slider you just released) is still
+// pending in a timer that quitting would otherwise discard.
+app.on('will-quit', () => { ptt.shutdown(); rt.stop(); store.flush(); log.close(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

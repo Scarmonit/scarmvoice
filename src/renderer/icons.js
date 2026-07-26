@@ -175,6 +175,23 @@
         });
     }
 
-    window.ScarmIcons = { markup, build, hydrate, has: (n) => !!P[n] };
+    // Every glyph is aria-hidden (correctly — it is decoration, and its shape
+    // means nothing to a screen reader). The consequence is that an icon-only
+    // button has NO accessible name at all: it is announced as just "button".
+    //
+    // All of them already carry a `title` for the tooltip, which is the name a
+    // sighted user gets, so mirror it into aria-label. Doing it here rather than
+    // by hand in the markup means a new icon button is labelled by default and
+    // cannot be forgotten.
+    function labelIconButtons(root) {
+        (root || document).querySelectorAll('button[title]:not([aria-label])').forEach((b) => {
+            // Only when there is no text of its own to announce.
+            if (b.textContent.trim()) return;
+            b.setAttribute('aria-label', b.getAttribute('title'));
+        });
+    }
+
+    window.ScarmIcons = { markup, build, hydrate, labelIconButtons, has: (n) => !!P[n] };
     hydrate(document);
+    labelIconButtons(document);
 })();

@@ -75,6 +75,12 @@ const DEFAULTS = {
 // and session, signing everyone out — so adopt the old profile once.
 const LEGACY_APP_NAMES = ['The Lounge'];
 
+// Per-participant maps (localVolumes, localMuted, blocked) are keyed by client
+// id and nothing ever removes an entry, so they grow for the life of the
+// profile. Cap them at a size no real room approaches; oldest keys go first,
+// which is the best proxy for "least recently relevant" without timestamps.
+const MAX_PEER_ENTRIES = 500;
+
 let settingsPath = null;
 let sessionPath = null;
 let cache = null;
@@ -85,11 +91,15 @@ function init() {
     settingsPath = path.join(dir, 'settings.json');
     sessionPath = path.join(dir, 'session.bin');
     cache = load();
+    prunePeerMaps();
     if (!cache.clientId) {
         // Stable identity across restarts. Matches the website's client id shape
         // so the same person reads consistently in presence + per-user volume prefs.
         cache.clientId = 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-        save();
+        // Written immediately, not debounced: this is the identity everyone else
+        // sees us by, and losing it to a crash in the first 250 ms would orphan
+        // every per-user preference keyed against it.
+        writeNow();
     }
 }
 
@@ -132,12 +142,55 @@ function load() {
     }
 }
 
-function save() {
+// Writes are ATOMIC: a full file is written to a sibling temp path and then
+// renamed over the real one, which is atomic on NTFS. The old code wrote in
+// place, so a crash or power loss mid-write left a truncated settings.json —
+// and load() silently falls back to DEFAULTS, so the symptom was "every setting
+// reset itself", including the clientId that identifies you to everyone else.
+function writeNow() {
+    if (!settingsPath) return;
+    const tmp = settingsPath + '.tmp';
     try {
-        fs.writeFileSync(settingsPath, JSON.stringify(cache, null, 2));
+        fs.writeFileSync(tmp, JSON.stringify(cache, null, 2));
+        fs.renameSync(tmp, settingsPath);
     } catch (e) {
         console.error('[store] failed to save settings:', e.message);
+        try { fs.unlinkSync(tmp); } catch (_) { /* nothing to clean up */ }
     }
+}
+
+// …and DEBOUNCED, because the renderer's sliders (per-user volume, output
+// volume, the speaking threshold) persist on every 'input' event. Dragging one
+// used to mean ~60 synchronous whole-file writes per second on the main
+// process's main thread, which blocks the UI and the IPC queue with it.
+const SAVE_DEBOUNCE_MS = 250;
+let saveTimer = null;
+
+function save() {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => { saveTimer = null; writeNow(); }, SAVE_DEBOUNCE_MS);
+}
+
+// Called on quit so the last change in a debounce window is never lost.
+function flush() {
+    if (!saveTimer) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    writeNow();
+}
+
+// Drop the oldest entries from the unbounded per-peer maps. Insertion order is
+// preserved by JSON.parse and by Object.assign, so the first keys really are
+// the ones written longest ago.
+function prunePeerMaps() {
+    ['localVolumes', 'localMuted', 'blocked'].forEach((key) => {
+        const map = cache[key];
+        if (!map || typeof map !== 'object') return;
+        const keys = Object.keys(map);
+        if (keys.length <= MAX_PEER_ENTRIES) return;
+        keys.slice(0, keys.length - MAX_PEER_ENTRIES).forEach((k) => delete map[k]);
+        console.log(`[store] pruned ${key} to ${MAX_PEER_ENTRIES} entries`);
+    });
 }
 
 function get() {
@@ -147,6 +200,7 @@ function get() {
 function set(patch) {
     if (!patch || typeof patch !== 'object') return get();
     Object.assign(cache, patch);
+    prunePeerMaps();
     save();
     return get();
 }
@@ -192,6 +246,6 @@ function clearSession() {
 }
 
 module.exports = {
-    init, get, set, readSession, writeSession, clearSession,
+    init, get, set, flush, readSession, writeSession, clearSession,
     migrateLegacyProfile, DEFAULTS
 };

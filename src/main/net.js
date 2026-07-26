@@ -52,7 +52,7 @@ function captureCookie(res) {
     return null;
 }
 
-async function request(pathname, { method = 'GET', body, headers = {}, query, raw = false, timeout } = {}) {
+async function request(pathname, { method = 'GET', body, headers = {}, query, timeout } = {}) {
     let url = baseUrl() + pathname;
     if (query) {
         const qs = Object.keys(query)
@@ -70,7 +70,12 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ra
         signal: AbortSignal.timeout(timeout || TIMEOUT_MS)
     };
     if (body !== undefined && body !== null) {
-        if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
+        if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
+            // A streamed request body (the upload progress path). duplex:'half'
+            // is mandatory in undici/fetch for any non-buffered body.
+            opts.body = body;
+            opts.duplex = 'half';
+        } else if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
             opts.body = body;
         } else if (typeof body === 'string') {
             // Raw string body (e.g. a base64 upload). Trust the caller's
@@ -92,7 +97,6 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ra
         store.writeSession(cookie);
     }
 
-    if (raw) return res;
     return res;
 }
 
@@ -153,6 +157,18 @@ async function status() {
 let bookmark = null;
 let forcePrimary = false;
 
+// A GET is safe to repeat; a POST/DELETE is not — retrying one that already
+// reached the server would post the message twice. So only reads are retried,
+// and only for failures that are plausibly transient: a dropped connection, a
+// timeout, or a 5xx / 429 from in front of the Worker.
+const RETRY_DELAYS = [400, 1200];
+
+function retriable(status) {
+    return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function board(pathname, { method = 'GET', body, query } = {}) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
@@ -162,11 +178,30 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
         forcePrimary = false;
     }
 
+    const canRetry = method === 'GET';
     let res;
-    try {
-        res = await request('/api/board/' + pathname, { method, body, query, headers });
-    } catch (e) {
-        return { success: false, error: e.name === 'TimeoutError' ? 'Request timed out' : e.message, network: true };
+    let lastErr = null;
+
+    for (let attempt = 0; ; attempt++) {
+        try {
+            res = await request('/api/board/' + pathname, { method, body, query, headers });
+            lastErr = null;
+            if (!canRetry || !retriable(res.status) || attempt >= RETRY_DELAYS.length) break;
+            console.warn(`[net] ${pathname} -> ${res.status}, retrying (${attempt + 1})`);
+        } catch (e) {
+            lastErr = e;
+            if (!canRetry || attempt >= RETRY_DELAYS.length) break;
+            console.warn(`[net] ${pathname} failed (${e.message}), retrying (${attempt + 1})`);
+        }
+        await sleep(RETRY_DELAYS[attempt]);
+    }
+
+    if (lastErr) {
+        return {
+            success: false,
+            error: lastErr.name === 'TimeoutError' ? 'Request timed out' : lastErr.message,
+            network: true
+        };
     }
 
     const bm = res.headers.get('x-d1-bookmark');
@@ -190,7 +225,7 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
 
 // Attachment bytes, proxied so the renderer can display them without the cookie.
 async function fileStream(key) {
-    return request('/api/board/file', { query: { key }, raw: true });
+    return request('/api/board/file', { query: { key } });
 }
 
 // Store an attachment in R2. Deliberately identical to what the website's
@@ -199,7 +234,30 @@ async function fileStream(key) {
 // renders the same for everyone.
 const MAX_UPLOAD = 25 * 1024 * 1024;
 
-async function upload(name, type, bytes) {
+// The body is pushed in chunks this size so progress has somewhere to come from.
+// 64 KB is small enough to make the bar move smoothly on a slow uplink and large
+// enough that the per-chunk overhead is irrelevant.
+const UPLOAD_CHUNK = 64 * 1024;
+
+// A ReadableStream over the payload that reports how much has been handed to the
+// socket. This is "sent", not "acknowledged" — the last few percent can sit in
+// kernel buffers — so the caller should treat 100% as "waiting on the server",
+// which is exactly how the composer renders it.
+function progressStream(text, onProgress) {
+    let offset = 0;
+    const total = text.length;
+    return new ReadableStream({
+        pull(controller) {
+            if (offset >= total) { controller.close(); return; }
+            const end = Math.min(offset + UPLOAD_CHUNK, total);
+            controller.enqueue(Buffer.from(text.slice(offset, end), 'latin1'));
+            offset = end;
+            try { onProgress(offset, total); } catch (e) { /* never break the upload */ }
+        }
+    });
+}
+
+async function upload(name, type, bytes, onProgress) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
     const buf = Buffer.from(bytes);
@@ -213,19 +271,42 @@ async function upload(name, type, bytes) {
     // Base64 is opaque text the WAF won't match, so any file type uploads.
     const b64 = buf.toString('base64');
 
+    const headers = {
+        'x-file-name': encodeURIComponent(name || 'file'),
+        'x-file-type': type || 'application/octet-stream',
+        'x-file-encoding': 'base64',
+        'Content-Type': 'text/plain',
+        // Explicit, so a streamed body still goes out with a known length rather
+        // than chunked transfer-encoding.
+        'Content-Length': String(Buffer.byteLength(b64))
+    };
+    const TIMEOUT = 5 * 60 * 1000;   // 25 MB over a slow uplink needs far more than the default
+
     let res;
     try {
-        res = await request('/api/board/upload', {
-            method: 'POST',
-            body: b64,
-            headers: {
-                'x-file-name': encodeURIComponent(name || 'file'),
-                'x-file-type': type || 'application/octet-stream',
-                'x-file-encoding': 'base64',
-                'Content-Type': 'text/plain'
-            },
-            timeout: 5 * 60 * 1000   // 25 MB over a slow uplink needs far more than the default
-        });
+        if (typeof onProgress === 'function') {
+            try {
+                res = await request('/api/board/upload', {
+                    method: 'POST',
+                    body: progressStream(b64, onProgress),
+                    headers,
+                    timeout: TIMEOUT
+                });
+            } catch (e) {
+                // A stream body needs duplex:'half' support in the runtime. If
+                // that is what failed, fall back to the plain string body — a
+                // missing progress bar is far better than a failed upload.
+                if (!/duplex|not supported|Invalid state/i.test(e.message || '')) throw e;
+                console.warn('[net] streamed upload unsupported, falling back:', e.message);
+                res = await request('/api/board/upload', {
+                    method: 'POST', body: b64, headers, timeout: TIMEOUT
+                });
+            }
+        } else {
+            res = await request('/api/board/upload', {
+                method: 'POST', body: b64, headers, timeout: TIMEOUT
+            });
+        }
     } catch (e) {
         return { success: false, error: e.name === 'TimeoutError' ? 'Upload timed out' : e.message, network: true };
     }
