@@ -2414,9 +2414,9 @@
                 $('btn-cam').title = $('btn-cam-label').textContent;
                 $('btn-share').title = $('btn-share-label').textContent;
 
-                // Remote share audio has to follow the deafen state too.
-                const sv = $('stage-video');
-                if (sv) sv.muted = st.deafened || !!(st.sharer && st.sharer.isLocal);
+                // Share audio rides its own elements in the voice engine (so a
+                // presenter you aren't watching is still audible), and it
+                // follows deafen there — the stage <video> is always silent.
 
                 $('stage-quality').value = st.shareQuality;
                 $('stage-motion').textContent = st.shareMotion === 'smooth' ? 'Smooth' : 'Sharp';
@@ -2426,7 +2426,7 @@
 
                 if (st.joined) startPresence(); else stopPresence();
             },
-            onShare: (info) => renderStage(info),
+            onShares: (list) => { shareSources = list || []; renderStage(); },
             onCams: (list) => renderCams(list),
             onParticipants: () => renderVoiceRoster(),
             onSpeaking: (cid, on) => {
@@ -2482,39 +2482,132 @@
         voice.toggleDeafened();
     });
 
-    // ---------- screen share ----------------------------------------------
+    // ---------- viewing stage ----------------------------------------------
+    // Any number of people can present at once and any number of cameras can be
+    // live, so "the stage" is no longer whoever shared last. Every watchable
+    // stream — screen shares and cameras alike — becomes an entry in one list;
+    // `watching` names the one playing large, and the strip under the head is
+    // how you switch. The camera grid below still shows everybody.
 
-    function renderStage(info) {
+    let shareSources = [];      // live screen shares, newest presenter last
+    let watching = null;        // explicit pick: 'screen:<cid>' | 'cam:<cid>' | null
+    let stageStreamId = null;   // what the <video> currently holds
+
+    function stageSources() {
+        const out = shareSources.map((s) => ({
+            key: 'screen:' + s.id, kind: 'screen',
+            id: s.id, name: s.name, isMe: !!s.isLocal, stream: s.stream
+        }));
+        camList.forEach((c) => out.push({
+            key: 'cam:' + c.id, kind: 'cam',
+            id: c.id, name: c.name, isMe: !!c.isMe, stream: c.stream
+        }));
+        return out;
+    }
+
+    // With nothing picked, the stage follows the screen shares — someone else's
+    // first, since that's what you'd have opened it for. Cameras are NOT auto-
+    // promoted: they have their own grid, and one person turning a webcam on
+    // shouldn't take over half the window.
+    function defaultSource(list) {
+        return list.find((s) => s.kind === 'screen' && !s.isMe) ||
+            list.find((s) => s.kind === 'screen') || null;
+    }
+
+    function sourceLabel(s, long) {
+        if (s.kind === 'screen') {
+            if (!long) return s.isMe ? 'Your screen' : `${s.name}'s screen`;
+            return s.isMe ? 'You are sharing your screen' : `${s.name} is sharing their screen`;
+        }
+        return s.isMe ? 'Your camera' : `${s.name}'s camera`;
+    }
+
+    function renderStage() {
         const stage = $('stage');
         const video = $('stage-video');
+        const list = stageSources();
 
-        if (!info) {
+        // An explicit choice is kept until that stream goes away; otherwise the
+        // stage falls back to a screen share, or closes if there is none.
+        let cur = list.find((s) => s.key === watching);
+        if (!cur) { watching = null; cur = defaultSource(list); }
+
+        if (!cur) {
+            stageStreamId = null;
             try { video.srcObject = null; } catch (e) {}
             stage.hidden = true;
+            renderStageSources([], null);
+            markWatchedCam();
             return;
         }
 
         stage.hidden = false;
-        try { video.srcObject = info.stream; } catch (e) {}
-        // Never play your own share back — that's an instant feedback loop.
-        video.muted = info.isLocal || (voice && voice.isDeafened());
-        $('stage-title').textContent = info.isLocal
-            ? 'You are sharing your screen'
-            : `${info.name} is sharing their screen`;
+        const sid = cur.stream && cur.stream.id;
+        if (sid !== stageStreamId) {
+            stageStreamId = sid;
+            try { video.srcObject = cur.stream; } catch (e) {}
+            video.play().catch(() => {});
+        }
+        // Always silent: share audio plays through the voice engine's own
+        // elements, so your own share can't feed back and a presenter you are
+        // not watching stays audible.
+        video.muted = true;
+        video.classList.toggle('mirror', cur.kind === 'cam' && cur.isMe);
 
-        // Quality/motion/stop are the presenter's controls only.
+        $('stage-title').textContent = sourceLabel(cur, true);
+
+        // Quality/motion/stop drive YOUR share, so they only apply while your
+        // own share is the thing on screen.
+        const mine = cur.kind === 'screen' && cur.isMe;
         ['stage-quality', 'stage-motion', 'stage-stop'].forEach((id) => {
-            $(id).hidden = !info.isLocal;
+            $(id).hidden = !mine;
         });
 
-        video.play().catch(() => {});
+        renderStageSources(list, cur.key);
+        markWatchedCam();
+    }
+
+    // The switcher. With a single source there is nothing to choose, so it
+    // stays out of the way until a second one appears.
+    function renderStageSources(list, activeKey) {
+        const bar = $('stage-sources');
+        bar.hidden = list.length < 2;
+        bar.innerHTML = '';
+        if (bar.hidden) return;
+
+        list.forEach((s) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'stage-src' + (s.key === activeKey ? ' active' : '');
+            b.setAttribute('role', 'tab');
+            b.setAttribute('aria-selected', String(s.key === activeKey));
+            b.title = 'Watch ' + sourceLabel(s, false);
+            b.innerHTML = I(s.kind === 'screen' ? 'screen' : 'camera') +
+                `<span>${esc(sourceLabel(s, false))}</span>`;
+            b.addEventListener('click', () => watchSource(s.key));
+            bar.appendChild(b);
+        });
+    }
+
+    // Picking the source already on the stage puts it back: for a camera that
+    // means closing the stage and going back to just the grid, the same
+    // click-again-to-shrink the tiles have always had.
+    function watchSource(key) {
+        if (watching === key) {
+            // Screen shares behave like radio buttons — re-picking the active
+            // one changes nothing.
+            if (!key.startsWith('cam:')) return;
+            watching = null;
+        } else {
+            watching = key;
+        }
+        renderStage();
     }
 
     // Camera tiles. Kept keyed by participant so a re-render doesn't tear down
     // and re-attach a <video> that's already playing — that flashes black.
     const camTiles = new Map();
-    let camList = [];              // last list, so speaking/focus updates can re-lay-out
-    let focusedCamId = null;       // the tile clicked to enlarge, if any
+    let camList = [];              // last list, so speaking updates can re-lay-out
 
     // Balanced column count: 1→1, 2→2, 3-4→2, 5-6→3, 7-9→3, 10-12→4 …
     function camColumns(n) { return Math.max(1, Math.ceil(Math.sqrt(n))); }
@@ -2550,7 +2643,10 @@
         // The tools act on the tile; they must not also trigger click-to-focus.
         pip.addEventListener('click', (e) => { e.stopPropagation(); togglePip(video); });
         full.addEventListener('click', (e) => { e.stopPropagation(); toggleFullscreen(wrap); });
-        wrap.addEventListener('click', () => toggleCamFocus(c.id));
+        // A tile is a thumbnail of a source: clicking it moves that camera to
+        // the big stage, the same choice the source strip offers.
+        wrap.addEventListener('click', () => watchSource('cam:' + c.id));
+        wrap.title = 'Watch on the stage';
 
         wrap.appendChild(video);
         wrap.appendChild(label);
@@ -2563,11 +2659,6 @@
         const grid = $('cam-grid');
         const seen = new Set();
 
-        // A focus target that has left is no longer valid; a lone tile shouldn't
-        // sit in focus mode with an empty strip below it.
-        if (focusedCamId && !camList.some((c) => c.id === focusedCamId)) focusedCamId = null;
-        if (camList.length < 2) focusedCamId = null;
-
         camList.forEach((c) => {
             seen.add(c.id);
             let tile = camTiles.get(c.id);
@@ -2576,7 +2667,6 @@
             tile.label.textContent = c.isMe ? 'You' : c.name;
             tile.wrap.classList.toggle('me', !!c.isMe);
             tile.wrap.classList.toggle('speaking', !!speaking[c.id]);
-            tile.wrap.classList.toggle('primary', c.id === focusedCamId);
 
             const sid = c.stream && c.stream.id;
             if (sid !== tile.streamId) {
@@ -2593,17 +2683,18 @@
             camTiles.delete(id);
         });
 
-        grid.classList.toggle('has-focus', !!focusedCamId);
         grid.style.setProperty('--cols', String(camColumns(camTiles.size)));
         $('camera-stage').hidden = camTiles.size === 0;
+
+        // Cameras are stage sources too, so the switcher has to follow them.
+        renderStage();
     }
 
-    // Click a tile to enlarge it; click it again (or its speaking highlight) to
-    // return to the even grid.
-    function toggleCamFocus(id) {
-        if (camList.length < 2) return;
-        focusedCamId = (focusedCamId === id) ? null : id;
-        renderCams(camList);
+    // Ring the tile whose camera is currently on the stage.
+    function markWatchedCam() {
+        camTiles.forEach((tile, id) => {
+            tile.wrap.classList.toggle('watching', watching === 'cam:' + id);
+        });
     }
 
     // Keep the speaking ring on camera tiles in sync without a full re-render.

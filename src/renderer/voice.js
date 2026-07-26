@@ -198,7 +198,7 @@
             onState: () => {},
             onParticipants: () => {},
             onSpeaking: () => {},
-            onShare: () => {},
+            onShares: () => {},
             onCams: () => {},
             onError: () => {}
         }, opts || {});
@@ -212,10 +212,14 @@
         let lastTransmit = null;
 
         let localSharing = false;
-        let currentSharer = null;   // { id, name, isLocal } — one presenter at a time
+        // Every live presenter, keyed by participant id. The SFU happily carries
+        // several screen shares at once; which one you WATCH is a viewer-side
+        // choice made in the UI, so the engine keeps them all published.
+        const sharers = new Map();  // cid -> { id, name, isLocal, stream, sig }
 
         let settings = {};
         const audioEls = {};        // cid -> HTMLAudioElement
+        const shareAudioEls = {};   // cid -> HTMLAudioElement carrying that share's audio
         const gainNodes = {};       // cid -> { ctx, src, gain, dest } for >100% boost
         const analysers = {};       // cid -> { ctx, analyser, data, raf, speaking, until }
         let sink = null;
@@ -243,7 +247,7 @@
                 joined, joining, muted, deafened,
                 transmitting: lastTransmit === true,
                 sharing: localSharing,
-                sharer: currentSharer ? { id: currentSharer.id, name: currentSharer.name, isLocal: currentSharer.isLocal } : null,
+                sharers: shareList().map((s) => ({ id: s.id, name: s.name, isLocal: s.isLocal })),
                 shareQuality, shareMotion,
                 cam: isCamOn()
             };
@@ -305,8 +309,48 @@
             el.setSinkId(id).catch(() => {});
         }
 
+        // Screen-share audio rides its own element rather than the on-screen
+        // <video>, so you keep hearing a presenter you're not currently watching.
+        // No >100% boost path here: a share's audio follows the same person's
+        // volume/mute prefs, clamped to what the element can do.
+        function applyShareAudio(cid) {
+            const el = shareAudioEls[cid];
+            if (!el) return;
+            const vol = settings.localVolumes && settings.localVolumes[cid] !== undefined
+                ? Number(settings.localVolumes[cid]) : 1;
+            const master = settings.outputVolume === undefined ? 1 : Number(settings.outputVolume);
+            el.muted = deafened || !!(settings.localMuted && settings.localMuted[cid]);
+            el.volume = Math.max(0, Math.min(1, vol * master));
+        }
+
+        function attachShareAudio(cid, tracks) {
+            const track = tracks && tracks.audio;
+            if (!cid || !track) { detachShareAudio(cid); return; }
+            ensureSink();
+            let el = shareAudioEls[cid];
+            if (!el) {
+                el = document.createElement('audio');
+                el.autoplay = true;
+                el.setAttribute('playsinline', '');
+                sink.appendChild(el);
+                shareAudioEls[cid] = el;
+                applySinkId(el);
+            }
+            try { el.srcObject = new MediaStream([track]); } catch (e) { return; }
+            applyShareAudio(cid);
+            el.play().catch(() => {});
+        }
+
+        function detachShareAudio(cid) {
+            const el = shareAudioEls[cid];
+            if (!el) return;
+            try { el.srcObject = null; el.remove(); } catch (e) {}
+            delete shareAudioEls[cid];
+        }
+
         function applyAllLocalAudio() {
             Object.keys(audioEls).forEach(applyLocalAudio);
+            Object.keys(shareAudioEls).forEach(applyShareAudio);
         }
 
         // ---- speaking detection ------------------------------------------
@@ -572,16 +616,44 @@
             } catch (e) { return settings.clientId; }
         }
 
-        function setSharer(id, name, isLocal, stream) {
-            currentSharer = { id, name, isLocal };
-            on.onShare({ id, name, isLocal, stream });
+        // Identifies the track pair behind a share. The SDK re-fires
+        // screenShareUpdate for unrelated reasons; rebuilding the MediaStream
+        // each time would swap the <video>'s srcObject and flash it black.
+        function trackSig(tracks) {
+            const v = (tracks && tracks.video && tracks.video.id) || '-';
+            const a = (tracks && tracks.audio && tracks.audio.id) || '-';
+            return v + '/' + a;
+        }
+
+        // Remote presenters first, in the order they started — a locally shared
+        // screen is the one thing you can already see, so it never displaces
+        // someone else's from the top of the list.
+        function shareList() {
+            const arr = Array.from(sharers.values());
+            return arr.filter((s) => !s.isLocal).concat(arr.filter((s) => s.isLocal))
+                .map((s) => ({ id: s.id, name: s.name, isLocal: s.isLocal, stream: s.stream }));
+        }
+
+        function pushShares() {
+            try { on.onShares(shareList()); } catch (e) {}
             pushState();
         }
 
-        function clearSharer() {
-            currentSharer = null;
-            on.onShare(null);
-            pushState();
+        function setSharer(id, name, isLocal, tracks) {
+            if (!id) return;
+            const prev = sharers.get(id);
+            const sig = trackSig(tracks);
+            const stream = (prev && prev.sig === sig) ? prev.stream : buildShareStream(tracks);
+            sharers.set(id, { id, name, isLocal, stream, sig });
+            // Your own share's audio is already coming out of your speakers.
+            if (!isLocal) attachShareAudio(id, tracks);
+            pushShares();
+        }
+
+        function clearSharer(id) {
+            if (!id || !sharers.delete(id)) return;
+            detachShareAudio(id);
+            pushShares();
         }
 
         // Re-assert the active tier once the SDK has the capture running. The
@@ -624,16 +696,15 @@
                     m.self.on('screenShareUpdate', (d) => {
                         if (d && d.screenShareEnabled) {
                             localSharing = true;
-                            const st = (d.screenShareTracks || m.self.screenShareTracks || {}).video;
-                            SHARE_TRACK_ID = (st && st.id) || null;
+                            const tracks = d.screenShareTracks || m.self.screenShareTracks || {};
+                            SHARE_TRACK_ID = (tracks.video && tracks.video.id) || null;
                             tuneLocalShare();
-                            setSharer(selfCid(), m.self.name || settings.displayName || 'You', true,
-                                buildShareStream(d.screenShareTracks || m.self.screenShareTracks));
+                            setSharer(selfCid(), m.self.name || settings.displayName || 'You', true, tracks);
                         } else {
                             localSharing = false;
                             SHARE_TRACK_ID = null;
-                            if (currentSharer && currentSharer.isLocal) clearSharer();
-                            else pushState();
+                            clearSharer(selfCid());
+                            pushState();
                         }
                     });
                 }
@@ -650,25 +721,22 @@
                     'video=' + (t.video ? `${t.video.readyState}` : 'none'),
                     'audio=' + (t.audio ? `${t.audio.readyState}` : 'none'));
                 if (p.screenShareEnabled) {
-                    setSharer(cid, p.name || 'Someone', false, buildShareStream(p.screenShareTracks));
-                } else if (currentSharer && !currentSharer.isLocal && currentSharer.id === cid) {
-                    clearSharer();
+                    setSharer(cid, p.name || 'Someone', false, p.screenShareTracks);
+                } else {
+                    clearSharer(cid);
                 }
             });
-            pj.on('participantLeft', (p) => {
-                const cid = cidOf(p);
-                if (currentSharer && !currentSharer.isLocal && currentSharer.id === cid) clearSharer();
-            });
+            pj.on('participantLeft', (p) => clearSharer(cidOf(p)));
             // Someone already sharing when they (or we) arrive.
             pj.on('participantJoined', (p) => {
                 if (p.screenShareEnabled) {
-                    setSharer(cidOf(p), p.name || 'Someone', false, buildShareStream(p.screenShareTracks));
+                    setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks);
                 }
             });
             try {
                 (pj.toArray ? pj.toArray() : []).forEach((p) => {
                     if (p.screenShareEnabled) {
-                        setSharer(cidOf(p), p.name || 'Someone', false, buildShareStream(p.screenShareTracks));
+                        setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks);
                     }
                 });
             } catch (e) {}
@@ -700,7 +768,8 @@
                 }
             } catch (e) {}
             localSharing = false;
-            if (currentSharer && currentSharer.isLocal) clearSharer(); else pushState();
+            clearSharer(selfCid());
+            pushState();
         }
 
         // ---- transmission gate -------------------------------------------
@@ -836,7 +905,12 @@
             pttHeld = false;
             lastTransmit = null;
             localSharing = false;
-            if (currentSharer) { currentSharer = null; on.onShare(null); }
+            sharers.clear();
+            Object.keys(shareAudioEls).forEach(detachShareAudio);
+            on.onShares([]);
+            // Cameras are torn down with the meeting; without this the tiles (and
+            // the stage entries that follow them) would linger after leaving.
+            on.onCams([]);
 
             stopAllSpeaking();
             Object.keys(audioEls).forEach((cid) => {
@@ -860,6 +934,7 @@
             startShare,
             stopShare,
             isSharing: () => localSharing,
+            shares: shareList,
 
             enableCam,
             disableCam,
@@ -891,6 +966,7 @@
                 }
                 if (settings.speakerDeviceId !== prevSpeaker) {
                     Object.values(audioEls).forEach(applySinkId);
+                    Object.values(shareAudioEls).forEach(applySinkId);
                     // Boosted participants play through the shared context, not
                     // through their <audio> element, so it needs the same sink —
                     // otherwise turning someone above 100% moved them to the
@@ -935,11 +1011,13 @@
                 if (!settings.localVolumes) settings.localVolumes = {};
                 settings.localVolumes[cid] = vol;
                 applyLocalAudio(cid);
+                applyShareAudio(cid);
             },
             setLocalMuted(cid, v) {
                 if (!settings.localMuted) settings.localMuted = {};
                 if (v) settings.localMuted[cid] = true; else delete settings.localMuted[cid];
                 applyLocalAudio(cid);
+                applyShareAudio(cid);
                 render();
             },
 

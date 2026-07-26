@@ -51,10 +51,18 @@ Start-menu entry and desktop shortcut.
 - Live speaking indicators
 - **Camera** — turn on video in a call; everyone's tiles fill a responsive grid
   above the message list (one fills, two split, and so on), letterboxed to keep
-  faces in frame. Click a tile to enlarge it with the rest as a strip, and each
+  faces in frame. Click a tile to put that camera on the big stage and click it
+  again to send it back to the grid, and each
   tile has hover buttons for fullscreen and pop-out (picture-in-picture), the
-  same viewing options as the screen-share stage. The speaker's tile is ringed.
+  same viewing options as the stage. The speaker's tile is ringed, and the one
+  you're watching is outlined in the accent colour.
   Plain RealtimeKit video on the same meeting, so it works across desktop and web
+- **Multi-presenter viewing** — several people can share a screen at once, and
+  you choose which one you watch. The stage lists every live screen share and
+  camera as a pill above the video; click to switch. Your choice sticks until
+  that stream ends, at which point it falls back to someone else's screen. Share
+  audio plays from its own element, so a presenter you aren't watching is still
+  audible
 - Microphone and speaker selection, echo cancellation / noise suppression /
   AGC toggles
 
@@ -342,7 +350,31 @@ in `main.js` — without it `requestFullscreen()` silently no-ops and the button
 looks dead, which is exactly the bug the share stage hit once. Pop-out is the OS
 picture-in-picture window (always-on-top, resizable, aspect-preserving). The
 tile's own tool buttons `stopPropagation` so they don't also trigger
-click-to-enlarge.
+click-to-watch.
+
+### One stage, many sources
+
+`voice.js` keeps presenters in a `Map` keyed by participant id and emits the
+whole set through `onShares`, because the SFU carries as many screen shares as
+people start — the earlier one-slot model made a second presenter silently
+replace the first with no way back. The renderer flattens shares and cameras
+into one list of stage sources (`screen:<cid>` / `cam:<cid>`). `watching` holds
+an **explicit** pick and is honoured until that stream disappears, so a new
+presenter never yanks the view out from under you; with nothing picked the stage
+falls back to a screen share, and to nothing at all if there is none — cameras
+are never auto-promoted, or one person turning a webcam on would claim half the
+window when the grid was already doing the job.
+
+Two consequences worth keeping:
+
+- The `MediaStream` for a share is **reused** while its track ids are unchanged.
+  The SDK re-fires `screenShareUpdate` for unrelated reasons, and rebuilding the
+  stream each time would swap `srcObject` and flash the video black mid-talk.
+- Share audio rides a hidden `<audio>` per presenter rather than the on-screen
+  `<video>`, which is what lets you keep hearing someone you're not watching.
+  The stage `<video>` is therefore *always* muted — that also removes the old
+  feedback-loop guard around your own share. Those elements follow deafen and
+  the same per-person volume/mute prefs as the presenter's microphone.
 
 ### Opening links
 

@@ -1337,11 +1337,33 @@ button { font-family: inherit; }
 .stage-btn.danger { color: var(--danger-hi); }
 .stage-btn.danger:hover { background: var(--danger-soft); color: #ffa3b3; }
 
+/* Source switcher: one pill per live screen share / camera. It scrolls rather
+   than wrapping, so a busy call never pushes the video down the window. */
+.stage-sources {
+  display: flex; gap: 6px; align-items: center;
+  padding: 7px 10px; background: var(--chat-2);
+  box-shadow: inset 0 1px 0 var(--divider);
+  overflow-x: auto; scrollbar-width: thin;
+}
+.stage-sources[hidden] { display: none; }
+.stage-src {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  max-width: 220px; padding: 5px 11px; border: 0; border-radius: 999px;
+  background: var(--input); color: var(--muted); cursor: pointer;
+  font-size: 11.5px; font-weight: 600; white-space: nowrap;
+}
+.stage-src > span { overflow: hidden; text-overflow: ellipsis; }
+.stage-src .ico { width: 14px; height: 14px; flex: 0 0 14px; }
+.stage-src:hover { color: var(--text); background: var(--elev); }
+.stage-src.active { background: var(--accent-soft); color: var(--accent); }
+
 .stage-video-wrap {
   flex: 1; min-height: 0;
   background: #000; display: grid; place-items: center;
 }
 #stage-video { width: 100%; height: 100%; max-height: 46vh; object-fit: contain; display: block; }
+/* Watching your own camera on the stage reads as a mirror, as its tile does. */
+#stage-video.mirror { transform: scaleX(-1); }
 #stage-video:fullscreen { max-height: none; }
 /* When the wrapper is the fullscreen element, let the video fill the screen
    (its inline 46vh cap would otherwise shrink it to a small centred box). */
@@ -1370,14 +1392,6 @@ button { font-family: inherit; }
 }
 .cam-grid > .cam-tile { min-width: 0; min-height: 0; }
 
-/* Focus mode: one big primary on top, everyone else in a centred strip below. */
-.cam-grid.has-focus {
-  display: flex; flex-wrap: wrap; gap: 8px;
-  align-content: flex-start; justify-content: center;
-}
-.cam-grid.has-focus > .cam-tile { flex: 0 0 132px; height: 84px; }
-.cam-grid.has-focus > .cam-tile.primary { order: -1; flex: 1 1 100%; height: calc(100% - 92px); }
-
 .cam-tile {
   position: relative; border-radius: 8px; overflow: hidden; background: #000;
   border: 1px solid var(--line); cursor: pointer;
@@ -1387,6 +1401,8 @@ button { font-family: inherit; }
 .cam-tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .cam-tile.me video { transform: scaleX(-1); }   /* your own camera reads as a mirror */
 .cam-tile.speaking { border-color: var(--online); box-shadow: 0 0 0 2px rgba(var(--online-rgb), .5); }
+/* The tile whose camera is on the big stage right now. */
+.cam-tile.watching { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .cam-tile:fullscreen { width: 100%; height: 100%; border: 0; border-radius: 0; }
 .cam-tile:fullscreen video { object-fit: contain; }
 

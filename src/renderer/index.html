@@ -231,7 +231,9 @@
       <div id="pinned-list"></div>
     </div>
 
-    <!-- Screen-share stage. One presenter at a time, matching the website. -->
+    <!-- Viewing stage. Several people can present at once; the strip below the
+         head lists every live screen share and camera, and you pick which one
+         plays here. -->
     <section id="stage" hidden>
       <div class="stage-head">
         <span class="stage-live"></span>
@@ -248,6 +250,8 @@
           <button class="stage-btn danger" id="stage-stop" title="Stop sharing">Stop</button>
         </div>
       </div>
+      <div class="stage-sources" id="stage-sources" role="tablist"
+           aria-label="Choose what to watch" hidden></div>
       <div class="stage-video-wrap" id="stage-video-wrap">
         <video id="stage-video" autoplay playsinline></video>
       </div>
