@@ -130,14 +130,16 @@
     }
 
     // Call on every voice roster render. `joined` = am I in the call.
-    function voiceRoster(list, joined, myId) {
+    // `silent` (DND) suppresses playback WITHOUT disarming: folding DND into
+    // `joined` made toggling DND off replay your own join chime mid-call.
+    function voiceRoster(list, joined, myId, silent) {
         if (!joined) { armed = false; prevIds = null; return; }
 
         if (!armed) {                       // the first render after I join
             armed = true;
             armAt = Date.now();
             prevIds = idSet(list);
-            playVoice('join');              // my own arrival chime
+            if (!silent) playVoice('join'); // my own arrival chime
             return;
         }
 
@@ -150,8 +152,8 @@
             for (const b in prevIds) { if (b !== myId && !ids[b]) leaveHit = true; }
         }
         prevIds = ids;
-        if (joinHit) playVoice('join');
-        if (leaveHit) playVoice('leave');
+        if (joinHit && !silent) playVoice('join');
+        if (leaveHit && !silent) playVoice('leave');
     }
 
     function reset() { armed = false; prevIds = null; }

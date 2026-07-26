@@ -277,6 +277,12 @@ function setAuto(on) {
     if (on && state.status === 'ready' && updater) {
         try { updater.autoInstallOnAppQuit = true; } catch (e) {}
     }
+    // Turning auto OFF must also cancel a silent install that a background
+    // download already armed — otherwise the update installs on quit anyway,
+    // contradicting the toggle the user just set.
+    if (!on && updater) {
+        try { updater.autoInstallOnAppQuit = false; } catch (e) {}
+    }
 }
 
 function getState() { return state; }

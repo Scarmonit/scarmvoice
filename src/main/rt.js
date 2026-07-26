@@ -91,7 +91,12 @@ function connect() {
     emitStatus(attempts >= OFFLINE_AFTER ? 'disconnected' : 'reconnecting');
 
     try {
-        ws = new WebSocket(wsUrl(), { headers: net.cookieHeader() });
+        // handshakeTimeout matters: without it, a peer that accepts the TCP
+        // connection but never answers the HTTP upgrade leaves the socket in
+        // CONNECTING forever — no 'open', no 'error', no 'close' — and every
+        // reconnect attempt no-ops on the `ws` guard above. With it, ws aborts
+        // the handshake, emits 'error' + 'close', and reconnect proceeds.
+        ws = new WebSocket(wsUrl(), { headers: net.cookieHeader(), handshakeTimeout: 15000 });
     } catch (e) {
         ws = null;
         scheduleReconnect();
@@ -175,8 +180,15 @@ function wake() {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         backoff = BACKOFF_START;
         attempts = 0;
-        if (!ws) connect();
-        else scheduleReconnect();
+        if (!ws) {
+            connect();
+        } else {
+            // A socket stuck in CONNECTING/CLOSING blocks connect() via the
+            // `ws` guard, so scheduling a reconnect around it would spin
+            // forever. Kill it; 'close' fires and drives the reconnect.
+            try { ws.terminate(); } catch (e) {}
+            scheduleReconnect();
+        }
         return;
     }
     // Verify the "open" socket is genuinely alive.

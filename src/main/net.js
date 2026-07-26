@@ -104,10 +104,24 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
 
 async function login(password) {
     // /auth/login is outside the gate and sets the cookie on success.
-    const res = await request('/auth/login', {
-        method: 'POST',
-        body: { password: String(password || '') }
-    });
+    let res;
+    try {
+        res = await request('/auth/login', {
+            method: 'POST',
+            body: { password: String(password || '') }
+        });
+    } catch (e) {
+        // Offline / DNS / timeout must come back as the module's normal
+        // { success:false } shape — a bare throw here rejects the IPC invoke
+        // and the login form gets a raw exception it was never built for.
+        return {
+            success: false,
+            error: e.name === 'TimeoutError'
+                ? 'Could not reach the server (timed out). Are you online?'
+                : 'Could not reach the server. Are you online?',
+            network: true
+        };
+    }
 
     let data = {};
     try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
@@ -188,6 +202,10 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
             lastErr = null;
             if (!canRetry || !retriable(res.status) || attempt >= RETRY_DELAYS.length) break;
             console.warn(`[net] ${pathname} -> ${res.status}, retrying (${attempt + 1})`);
+            // Drain the response we're abandoning — an unconsumed body pins its
+            // keep-alive connection until GC gets around to it, which bleeds
+            // sockets during exactly the outages retries are for.
+            try { await res.body?.cancel(); } catch (e) { /* already gone */ }
         } catch (e) {
             lastErr = e;
             if (!canRetry || attempt >= RETRY_DELAYS.length) break;

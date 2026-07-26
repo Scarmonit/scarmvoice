@@ -711,8 +711,12 @@
     async function loadMessages(scrollToEnd, before) {
         if (loading) {
             // Don't lose the request — replay it once the in-flight one returns.
-            if (!before) { refreshPending = true; refreshStick = refreshStick || !!scrollToEnd; }
-            return;
+            if (!before) { refreshPending = true; refreshStick = refreshStick || !!scrollToEnd; return; }
+            // A paging request (Load earlier / jumpToPost) must not be silently
+            // dropped just because a poll happened to be in flight — wait
+            // briefly for the slot instead.
+            for (let i = 0; i < 40 && loading; i++) await new Promise((r) => setTimeout(r, 50));
+            if (loading) return;   // still busy after ~2s; give up rather than pile on
         }
         loading = true;
         try {
@@ -730,9 +734,15 @@
     }
 
     async function loadMessagesOnce(scrollToEnd, before) {
+        // Pin the channel this request is FOR. The user can switch channels
+        // while the request is in flight; merging the response then would
+        // interleave the old channel's posts into the new one and stamp the
+        // wrong channel's read watermark.
+        const forChannel = channel;
         const res = await L.board('list', {
-            query: { channel, limit: PAGE, before: before || null }
+            query: { channel: forChannel, limit: PAGE, before: before || null }
         });
+        if (forChannel !== channel) return;   // stale — a switch happened mid-flight
 
         if (res && res.needsAuth) return relogin();
         if (!res || !res.success) {
@@ -1012,7 +1022,13 @@
     function renderMessages() {
         // A background poll must not rip the inline editor out from under
         // someone mid-sentence. The list resyncs when the edit finishes.
-        if (editingId) return;
+        // But if the editor's node has been destroyed by something else (the
+        // thread panel rebuilding, the list being wiped), waiting for its
+        // handlers to clear editingId would block rendering forever.
+        if (editingId) {
+            if (document.querySelector('.msg-edit')) return;
+            editingId = null;
+        }
 
         const box = $('messages');
         const active = filterActive();
@@ -1173,7 +1189,7 @@
             retry.type = 'button';
             retry.className = 'pending-retry';
             retry.textContent = 'Retry';
-            retry.addEventListener('click', () => { entry.failed = false; flushOutbox(); });
+            retry.addEventListener('click', () => { entry.failed = false; entry.rejected = false; flushOutbox(); });
             const cancel = document.createElement('button');
             cancel.type = 'button';
             cancel.className = 'pending-retry';
@@ -1426,8 +1442,12 @@
         if (!body && !attachments.length) return;
 
         // Captured before the chip is cleared, and sent with the post the same
-        // way the website does it.
+        // way the website does it. The channel is pinned too: the user can
+        // switch channels while the request is in flight, and a failure path
+        // reading the module-level `channel` after the await would queue the
+        // message into the wrong channel.
         const quoteId = replyTarget ? replyTarget.id : null;
+        const forChannel = channel;
 
         input.value = '';
         autosize();
@@ -1439,23 +1459,33 @@
         // With attachments, the text becomes the first one's caption so a
         // "here's the thing" message stays attached to the thing.
         if (attachments.length) {
+            // The caption rides on the first attachment that actually makes it,
+            // not blindly on index 0 — otherwise "#1 failed, #2 succeeded"
+            // silently lost the typed text.
             let ok = 0;
+            let bodyPosted = false;
             for (let i = 0; i < attachments.length; i++) {
-                if (await uploadOne(attachments[i], i === 0 ? body : '', i === 0 ? quoteId : null)) ok++;
+                const carryBody = !bodyPosted;
+                if (await uploadOne(attachments[i], carryBody ? body : '', carryBody ? quoteId : null)) {
+                    ok++;
+                    if (carryBody) bodyPosted = true;
+                }
             }
             if (ok) {
-                L.rt.notifyPosted(channel);
+                L.rt.notifyPosted(forChannel);
                 await loadMessages(true);
-            } else if (body) {
-                input.value = body;      // nothing sent — give the text back
+            }
+            if (!bodyPosted && body) {
+                input.value = body;      // the caption never went out — give it back
                 autosize();
+                updateSendEnabled();
             }
             return;
         }
 
         const res = await L.board('post', {
             method: 'POST',
-            body: { body, name: settings.displayName || 'Anonymous', clientId: settings.clientId, channel, quoteId }
+            body: { body, name: settings.displayName || 'Anonymous', clientId: settings.clientId, channel: forChannel, quoteId }
         });
 
         if (res && res.needsAuth) return relogin();
@@ -1464,15 +1494,16 @@
             // and retry when the connection comes back. Anything the server
             // actively rejected is handed back, because retrying won't fix it.
             if (!res || res.network) {
-                queueOutbox(body, quoteId);
+                queueOutbox(body, quoteId, forChannel);
                 return;
             }
             toast(res.error || 'Could not send', true);
             input.value = body;   // give the text back rather than losing it
             autosize();
+            updateSendEnabled();  // the button was disabled at submit — re-enable it
             return;
         }
-        L.rt.notifyPosted(channel);
+        L.rt.notifyPosted(forChannel);
         await loadMessages(true);
     });
 
@@ -1507,11 +1538,11 @@
         try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox.slice(-OUTBOX_MAX))); } catch (e) {}
     }
 
-    function queueOutbox(body, quoteId) {
+    function queueOutbox(body, quoteId, chan) {
         const entry = {
             seq: ++outboxSeq,
             id: 'out:' + outboxSeq,
-            channel,
+            channel: chan || channel,
             body,
             quoteId: quoteId || null,
             created_at: Date.now(),
@@ -1545,6 +1576,10 @@
             // A copy: entries are removed from `outbox` as they succeed.
             for (const entry of outbox.slice()) {
                 if (!outbox.includes(entry)) continue;      // dropped meanwhile
+                // A server-rejected entry only goes out again via its Retry
+                // button — auto-retrying it on every poll re-POSTs a message
+                // the server already said no to, forever.
+                if (entry.rejected) continue;
                 entry.sending = true;
                 entry.failed = false;
                 renderMessages();
@@ -1579,7 +1614,9 @@
                 // A real rejection from the server (too long, bad channel).
                 // Retrying forever would never help, so surface it and stop.
                 entry.failed = true;
+                entry.rejected = true;
                 entry.error = (res && res.error) || 'The server rejected this message';
+                saveOutbox();
                 renderMessages();
             }
         } finally {
@@ -2321,7 +2358,11 @@
         updateRecTime();
         showRecBar(true);
         recTimer = setInterval(updateRecTime, 250);
-        setTimeout(() => { if (recording()) stopRecording(true); }, REC_MAX_MS);
+        // The max-duration cutoff must only ever stop the recording it was
+        // armed for — a stale timer from a discarded recording used to fire
+        // during a LATER one and auto-send it mid-sentence.
+        const thisRec = mediaRec;
+        setTimeout(() => { if (mediaRec === thisRec && recording()) stopRecording(true); }, REC_MAX_MS);
     }
 
     function stopRecording(send) {
@@ -2886,7 +2927,7 @@
 
         // Join / leave chimes. Gated on actually being in the call, so they are
         // never audible to someone who is only watching the roster.
-        window.loungeSounds.voiceRoster(list, inCall && !settings.dnd, settings.clientId);
+        window.loungeSounds.voiceRoster(list, inCall, settings.clientId, !!settings.dnd);
 
         list.forEach((p) => addRosterName(p.name));
         renderVoiceUsers(list, inCall);
@@ -3433,6 +3474,21 @@
         } finally { resyncing = false; }
     }
 
+    // One expiry timer per typist, refreshed while they keep typing.
+    const typingTimers = new Map();   // cid -> timeout id
+    function armTypingExpiry(cid) {
+        clearTypingExpiry(cid);
+        typingTimers.set(cid, setTimeout(() => {
+            typingTimers.delete(cid);
+            typingUsers = typingUsers.filter((t) => t.client_id !== cid);
+            renderTyping();
+        }, 6000));
+    }
+    function clearTypingExpiry(cid) {
+        const t = typingTimers.get(cid);
+        if (t) { clearTimeout(t); typingTimers.delete(cid); }
+    }
+
     L.rt.onMessage((m) => {
         if (!m || !m.t) return;
         switch (m.t) {
@@ -3452,13 +3508,17 @@
             case 'typing':
                 if (m.channel && m.channel !== channel) break;
                 if (m.cid === settings.clientId) break;
-                if (m.stop) typingUsers = typingUsers.filter((t) => t.client_id !== m.cid);
-                else if (!typingUsers.some((t) => t.client_id === m.cid)) {
-                    typingUsers.push({ client_id: m.cid, name: m.name });
-                    setTimeout(() => {
-                        typingUsers = typingUsers.filter((t) => t.client_id !== m.cid);
-                        renderTyping();
-                    }, 6000);
+                if (m.stop) {
+                    typingUsers = typingUsers.filter((t) => t.client_id !== m.cid);
+                    clearTypingExpiry(m.cid);
+                } else {
+                    if (!typingUsers.some((t) => t.client_id === m.cid)) {
+                        typingUsers.push({ client_id: m.cid, name: m.name });
+                    }
+                    // Refreshed on EVERY event: the old one-shot timer was armed
+                    // once at first sight, so someone typing a long message
+                    // vanished at the 6s mark and popped back on each keystroke.
+                    armTypingExpiry(m.cid);
                 }
                 renderTyping();
                 break;
@@ -4367,6 +4427,13 @@
         audio.addEventListener('ended', () => { setPlayingUI(false); seek.value = '0'; paint(); });
         audio.addEventListener('loadedmetadata', paint);
         audio.addEventListener('timeupdate', paint);
+        // The row this player sits in can be rebuilt or removed out from under
+        // us (message signature change, channel switch). The Audio element is
+        // not in the DOM, so it would keep playing with no visible controls —
+        // stop it as soon as its card is detached.
+        audio.addEventListener('timeupdate', () => {
+            if (!wrap.isConnected && !audio.paused) audio.pause();
+        });
         audio.addEventListener('error', () => {
             time.textContent = 'unavailable';
             playBtn.disabled = true;
@@ -5473,6 +5540,9 @@
 
     function renderThread() {
         const list = $('thread-list');
+        // Same courtesy the main list extends: a thread poll must not destroy
+        // an inline editor someone is typing into.
+        if (editingId && list.querySelector('.msg-edit')) return;
         const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
 
         const replies = threadPosts.length - 1;

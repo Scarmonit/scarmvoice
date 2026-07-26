@@ -181,6 +181,14 @@ function describe(b) {
 
 function onChange(cb) { listener = cb || (() => {}); }
 
+// Force the held/toggle state back to "up". The renderer discards PTT events
+// while not in a call, so a fallback-mode toggle pressed outside voice would
+// leave main's `held` inverted — the first press in the next call then does
+// nothing. Called on every join/leave voice-state transition.
+function reset() {
+    if (held) { held = false; listener(false); }
+}
+
 function shutdown() {
     if (fallbackAccel && globalShortcut) {
         try { globalShortcut.unregister(fallbackAccel); } catch (e) {}
@@ -192,4 +200,4 @@ function shutdown() {
     }
 }
 
-module.exports = { apply, onChange, shutdown, isAvailable, describe };
+module.exports = { apply, onChange, shutdown, isAvailable, describe, reset };

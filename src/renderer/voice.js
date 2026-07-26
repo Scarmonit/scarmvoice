@@ -73,6 +73,16 @@
     // RTCRtpSender.setParameters on the real sender, but the SDK hides its
     // RTCPeerConnection, so we wrap the constructor to keep a registry.
     const PCS = [];
+    // Closed connections from previous sessions would otherwise pin native
+    // resources forever and get pointlessly iterated on every share.
+    function prunePCS() {
+        for (let i = PCS.length - 1; i >= 0; i--) {
+            const pc = PCS[i];
+            if (!pc || pc.signalingState === 'closed' || pc.connectionState === 'closed') {
+                PCS.splice(i, 1);
+            }
+        }
+    }
     (function patchRTC() {
         try {
             const Native = window.RTCPeerConnection || window.webkitRTCPeerConnection;
@@ -117,6 +127,7 @@
     // longer unambiguous — matching on the share track's own id keeps these
     // settings off the camera, which wants none of them.
     function forceScreenQuality() {
+        prunePCS();
         const prof = shareProfile();
         const shareTrackId = shareVideoTrackId();
         let found = 0;
@@ -157,7 +168,13 @@
     // The producer/sender appears asynchronously after enableScreenShare.
     function forceScreenQualityRetry() {
         let tries = 0;
+        const hadId = !!SHARE_TRACK_ID;
         (function go() {
+            // If the share stopped while this loop was still running, the id is
+            // nulled and forceScreenQuality's "tune any video sender" fallback
+            // would apply share encoder params (16 Mbps, maintain-resolution)
+            // to the CAMERA. Stop instead.
+            if (hadId && !SHARE_TRACK_ID) return;
             const found = forceScreenQuality();
             if (tries === 0) console.info('[share] video senders found:', found, 'across', PCS.length, 'peer connections');
             if (++tries < 6) setTimeout(go, tries * 500);
@@ -168,6 +185,7 @@
     // outbound video RTP stream is the only proof that matters — a local
     // preview only shows that capture works.
     function reportShareStats(label) {
+        prunePCS();
         let seen = 0;
         PCS.forEach((pc, idx) => {
             if (!pc || typeof pc.getStats !== 'function') return;
@@ -290,17 +308,21 @@
             }
             // Boost path: element silenced, the shared context's GainNode does
             // all the work (it can exceed 1, which the element cannot).
-            el.volume = 1;
             let g = gainNodes[cid];
             if (!g && el.srcObject) {
                 g = window.ScarmAudio.createGain(el.srcObject, effective);
-                if (g) {
-                    // The element would otherwise play the same audio a second time.
-                    el.volume = 0;
-                    gainNodes[cid] = g;
-                }
+                if (g) gainNodes[cid] = g;
             }
-            if (g) g.set(effective);
+            if (g) {
+                // The element must stay silent on EVERY pass while the gain
+                // graph exists — un-silencing it here made the same audio play
+                // twice (element at 100% + boosted graph) after any re-apply.
+                el.volume = 0;
+                g.set(effective);
+            } else {
+                // No gain graph available: the element's own max is the best we can do.
+                el.volume = 1;
+            }
         }
 
         function applySinkId(el) {
@@ -508,7 +530,11 @@
         window.loungeInbound = reportInboundStats;
 
         function wire(m) {
-            try { if (m.self && m.self.on) m.self.on('audioUpdate', render); } catch (e) {}
+            // Re-run watchLocal on every self audioUpdate: mute/PTT replaces the
+            // published track (disableAudio really stops it), so a meter bound
+            // once at join goes dark after the first cycle — and in PTT mode the
+            // track doesn't exist until the first transmit at all.
+            try { if (m.self && m.self.on) m.self.on('audioUpdate', () => { watchLocal(); render(); }); } catch (e) {}
             const pj = m.participants && m.participants.joined;
             if (pj && pj.on) {
                 pj.on('participantJoined', (p) => { attachAudio(p); render(); pushCams(); });
@@ -526,9 +552,23 @@
         // camera turned on here shows up there and vice versa. The screen share
         // is a separate track pair and is unaffected.
 
+        // One MediaStream per track, cached: camList() runs on every roster
+        // event, and a fresh MediaStream gets a fresh random .id each time —
+        // which defeats the renderer's stream-id check and made every cam tile
+        // re-attach (black flash) on every participant event.
+        const camStreams = new Map();   // track.id -> MediaStream
         function camStream(track) {
-            const s = new MediaStream();
-            try { if (track) s.addTrack(track); } catch (e) {}
+            if (!track) return new MediaStream();
+            camStreams.forEach((s, id) => {
+                const t = s.getVideoTracks()[0];
+                if (!t || t.readyState === 'ended') camStreams.delete(id);
+            });
+            let s = camStreams.get(track.id);
+            if (!s) {
+                s = new MediaStream();
+                try { s.addTrack(track); } catch (e) {}
+                camStreams.set(track.id, s);
+            }
             return s;
         }
 
@@ -796,9 +836,17 @@
 
         // ---- join / leave ------------------------------------------------
 
+        // Bumped by every leave(). A join() re-checks it after each await so a
+        // leave that raced an in-flight join (tray "Leave voice", session
+        // expiry) actually sticks — without this the pending init resolved,
+        // reassigned `meeting`, and reconnected the user with a hot mic AFTER
+        // they left.
+        let joinGen = 0;
+
         async function join() {
             if (joined || joining) return;
             joining = true;
+            const gen = joinGen;
             pushState();
 
             try {
@@ -808,6 +856,7 @@
                     clientId: settings.clientId,
                     name: settings.displayName || 'Anonymous'
                 });
+                if (gen !== joinGen) return;   // leave() ran while we awaited
                 if (!res || !res.success || !res.token) {
                     throw new Error((res && res.error) || 'could not get a voice token');
                 }
@@ -823,7 +872,7 @@
                 };
                 if (settings.micDeviceId) audioCfg.deviceId = { exact: settings.micDeviceId };
 
-                meeting = await window.RealtimeKitClient.init({
+                const m = await window.RealtimeKitClient.init({
                     authToken: res.token,
                     defaults: {
                         // In push-to-talk, start with the mic off so joining never
@@ -844,9 +893,21 @@
                     }
                 });
 
+                if (gen !== joinGen) {
+                    // Left while init was pending — discard the fresh meeting.
+                    try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
+                    return;
+                }
+                meeting = m;
+
                 wire(meeting);
                 const joinFn = meeting.join || meeting.joinRoom;
                 await joinFn.call(meeting);
+                if (gen !== joinGen) {
+                    try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
+                    if (meeting === m) meeting = null;
+                    return;
+                }
 
                 joined = true;
                 joining = false;
@@ -863,6 +924,7 @@
                 // roster reflects who is actually peered rather than just present.
                 setTimeout(render, 4000);
             } catch (e) {
+                if (gen !== joinGen) return;   // leave() already cleaned up
                 joining = false;
                 joined = false;
                 try { if (meeting && meeting.leave) meeting.leave(); } catch (_) {}
@@ -889,6 +951,7 @@
 
         function leave() {
             if (!joined && !joining) return;
+            joinGen++;   // invalidate any join() still in flight
             try {
                 if (meeting) {
                     if (meeting.leave) meeting.leave();
@@ -906,6 +969,7 @@
             lastTransmit = null;
             localSharing = false;
             sharers.clear();
+            camStreams.clear();
             Object.keys(shareAudioEls).forEach(detachShareAudio);
             on.onShares([]);
             // Cameras are torn down with the meeting; without this the tiles (and
@@ -979,8 +1043,18 @@
 
             setMuted(v) {
                 muted = !!v;
+                // Unmuting while deafened also undeafens (what every voice
+                // client does) — the old behaviour let you transmit while
+                // unable to hear anyone, then undeafen silently re-muted you
+                // from the stale saved state.
+                if (!muted && deafened) {
+                    deafened = false;
+                    mutedBeforeDeafen = false;
+                    applyAllLocalAudio();
+                }
                 applyTransmit();
                 render();
+                pushState();
             },
             toggleMuted() { this.setMuted(!muted); return muted; },
 

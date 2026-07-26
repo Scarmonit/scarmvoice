@@ -63,7 +63,11 @@ function detectElevation() {
 if (!app.requestSingleInstanceLock()) {
     app.quit();
 } else {
-    app.on('second-instance', () => showWindow());
+    // A second launch can arrive before `whenReady` resolves (double-clicked
+    // shortcut, login item + manual launch); creating a BrowserWindow then
+    // throws. Pre-ready there is nothing to focus yet — startup will show the
+    // window itself — so only act once ready.
+    app.on('second-instance', () => { if (app.isReady()) showWindow(); });
 }
 
 // Before anything else, so the console output of startup itself is captured and
@@ -196,6 +200,11 @@ function createWindow() {
         }
     });
 
+    // Without this, a destroyed window (X with tray-hide off) leaves `win`
+    // pointing at a dead object and the tray/showWindow paths throw
+    // "Object has been destroyed" in the gap before quit.
+    win.on('closed', () => { win = null; });
+
     // External links open in the real browser, never in-app.
     win.webContents.setWindowOpenHandler(({ url }) => {
         if (/^https?:/.test(url)) shell.openExternal(url);
@@ -225,7 +234,7 @@ function saveWindowState() {
 }
 
 function showWindow() {
-    if (!win) { createWindow(); return; }
+    if (!win || win.isDestroyed()) { createWindow(); return; }
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
     win.focus();
@@ -273,7 +282,7 @@ function createTray() {
     tray = new Tray(image);
     tray.setToolTip(trayTooltip());
     tray.setContextMenu(buildTrayMenu());
-    tray.on('click', () => (win && win.isVisible() ? win.hide() : showWindow()));
+    tray.on('click', () => (win && !win.isDestroyed() && win.isVisible() ? win.hide() : showWindow()));
 }
 
 function refreshTray() {
@@ -296,9 +305,12 @@ function registerProtocol() {
             const upstream = await net.fileStream(key);
             return new Response(upstream.body, {
                 status: upstream.status,
+                // No Content-Length: fetch already decompressed the body, but
+                // the upstream header still counts the COMPRESSED bytes, so
+                // forwarding it truncates any attachment Cloudflare gzips
+                // (SVG, text). Chromium streams chunked responses fine.
                 headers: {
                     'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
-                    'Content-Length': upstream.headers.get('content-length') || '',
                     'Cache-Control': 'private, max-age=3600'
                 }
             });
@@ -645,7 +657,11 @@ function registerIpc() {
     });
 
     ipcMain.handle('app:voiceState', (_e, state) => {
+        const wasInVoice = voiceState.inVoice;
         voiceState = Object.assign(voiceState, state || {});
+        // Joining or leaving voice invalidates any PTT toggle state that
+        // accumulated while the renderer was ignoring hotkey events.
+        if (voiceState.inVoice !== wasInVoice) ptt.reset();
         refreshTray();
         return voiceState;
     });

@@ -48,14 +48,27 @@ function fmt(arg) {
 }
 
 function rotate() {
-    try {
-        if (stream) { stream.end(); stream = null; }
-        const old = file + '.1';
-        try { fs.unlinkSync(old); } catch (e) { /* no previous generation */ }
-        fs.renameSync(file, old);
-    } catch (e) { /* rotation is best effort — keep logging either way */ }
+    // The rename must wait for the fd to actually close: stream.end() flushes
+    // and closes asynchronously, and Windows refuses to rename a file that is
+    // still open — renaming in the same tick fails with EPERM every time,
+    // which silently disabled rotation entirely.
     bytes = 0;
-    open();
+    const s = stream;
+    stream = null;   // lines during the swap are dropped; that beats a giant log
+    const finish = () => {
+        try {
+            const old = file + '.1';
+            try { fs.unlinkSync(old); } catch (e) { /* no previous generation */ }
+            fs.renameSync(file, old);
+        } catch (e) { /* rotation is best effort — keep logging either way */ }
+        open();
+    };
+    if (s) {
+        s.once('close', finish);
+        try { s.end(); } catch (e) { finish(); }
+    } else {
+        finish();
+    }
 }
 
 function open() {
