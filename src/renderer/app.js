@@ -97,16 +97,27 @@
         return [...rosterSet].sort((a, b) => b.length - a.length);
     }
 
+    function appendLink(container, raw) {
+        // Trailing punctuation people type after a link is not part of it —
+        // the same trim extractUrls applies, so the anchor and the preview
+        // card underneath agree on the URL instead of the anchor 404ing.
+        const url = raw.replace(/[),.;:!?\]]+$/, '');
+        const a = document.createElement('a');
+        a.href = url;
+        a.dataset.external = '1';        // opened in the browser by the click handler
+        a.textContent = url;
+        container.appendChild(a);
+        if (url.length < raw.length) {
+            container.appendChild(document.createTextNode(raw.slice(url.length)));
+        }
+    }
+
     function appendTextWithLinks(container, text) {
         const re = /https?:\/\/[^\s<>"']+/g;
         let last = 0, m;
         while ((m = re.exec(text)) !== null) {
             if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
-            const a = document.createElement('a');
-            a.href = m[0];
-            a.dataset.external = '1';        // opened in the browser by the click handler
-            a.textContent = m[0];
-            container.appendChild(a);
+            appendLink(container, m[0]);
             last = m.index + m[0].length;
         }
         if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
@@ -125,12 +136,13 @@
         return best;
     }
 
-    function appendTextWithMentions(container, text, ctx) {
+    // Mention chips within a segment that is already known to be URL-free.
+    function appendMentionSegment(container, text, ctx) {
         let i = 0;
         while (i < text.length) {
             const at = text.indexOf('@', i);
-            if (at === -1) { appendTextWithLinks(container, text.slice(i)); break; }
-            if (at > i) appendTextWithLinks(container, text.slice(i, at));
+            if (at === -1) { container.appendChild(document.createTextNode(text.slice(i))); break; }
+            if (at > i) container.appendChild(document.createTextNode(text.slice(i, at)));
             const rest = text.slice(at + 1);
             let matched = matchRosterName(rest, ctx.roster);
             if (!matched) { const g = /^[A-Za-z0-9_]+/.exec(rest); if (g) matched = g[0]; }
@@ -146,6 +158,20 @@
                 i = at + 1;
             }
         }
+    }
+
+    function appendTextWithMentions(container, text, ctx) {
+        // URLs are carved out FIRST: splitting on '@' before linkifying used
+        // to cut https://youtube.com/@handle into a half-link plus a bogus
+        // mention chip.
+        const re = /https?:\/\/[^\s<>"']+/g;
+        let last = 0, m;
+        while ((m = re.exec(text)) !== null) {
+            if (m.index > last) appendMentionSegment(container, text.slice(last, m.index), ctx);
+            appendLink(container, m[0]);
+            last = m.index + m[0].length;
+        }
+        if (last < text.length) appendMentionSegment(container, text.slice(last), ctx);
     }
 
     // Inline: **bold**, *italic*, ~~strike~~, ||spoiler|| (recursive).
@@ -709,6 +735,11 @@
     }
 
     async function loadMessages(scrollToEnd, before) {
+        // Pinned at entry: a `before` cursor is an id from THIS channel's
+        // history. If the user switches channels while we wait for the slot,
+        // running the stale cursor against the new channel would splice an
+        // arbitrary older page into it (post ids are global).
+        const forChannel = channel;
         if (loading) {
             // Don't lose the request — replay it once the in-flight one returns.
             if (!before) { refreshPending = true; refreshStick = refreshStick || !!scrollToEnd; return; }
@@ -716,7 +747,7 @@
             // dropped just because a poll happened to be in flight — wait
             // briefly for the slot instead.
             for (let i = 0; i < 40 && loading; i++) await new Promise((r) => setTimeout(r, 50));
-            if (loading) return;   // still busy after ~2s; give up rather than pile on
+            if (loading || channel !== forChannel) return;
         }
         loading = true;
         try {
@@ -1466,7 +1497,7 @@
             let bodyPosted = false;
             for (let i = 0; i < attachments.length; i++) {
                 const carryBody = !bodyPosted;
-                if (await uploadOne(attachments[i], carryBody ? body : '', carryBody ? quoteId : null)) {
+                if (await uploadOne(attachments[i], carryBody ? body : '', carryBody ? quoteId : null, forChannel)) {
                     ok++;
                     if (carryBody) bodyPosted = true;
                 }
@@ -1671,8 +1702,10 @@
     }
 
     // Uploads one staged item and posts it. `caption` rides on the first
-    // attachment only, matching the website.
-    async function uploadOne(item, caption, quoteId) {
+    // attachment only, matching the website. `chan` is pinned by the caller:
+    // an upload can take minutes, and reading the live channel after it would
+    // post the attachment into whatever channel the user switched to.
+    async function uploadOne(item, caption, quoteId, chan) {
         const row = addUploadRow(item.name, item.size);
 
         let buf = item.bytes;
@@ -1705,7 +1738,7 @@
                 body: caption || '',
                 name: settings.displayName || 'Anonymous',
                 clientId: settings.clientId,
-                channel,
+                channel: chan || channel,
                 quoteId: quoteId || null,
                 attachment: { key: up.key, name: up.name, type: up.type, size: up.size }
             }

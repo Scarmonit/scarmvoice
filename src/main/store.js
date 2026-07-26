@@ -235,7 +235,12 @@ function writeSession(token) {
         const data = safeStorage.isEncryptionAvailable()
             ? safeStorage.encryptString(token)
             : Buffer.from(token, 'utf8');
-        fs.writeFileSync(sessionPath, data);
+        // Atomic for the same reason settings.json is: a crash mid-write would
+        // leave a truncated blob that fails to decrypt and silently signs the
+        // user out on next launch.
+        const tmp = sessionPath + '.tmp';
+        fs.writeFileSync(tmp, data);
+        fs.renameSync(tmp, sessionPath);
     } catch (e) {
         console.error('[store] failed to save session:', e.message);
     }

@@ -55,7 +55,15 @@ function badgeBitmap(label, size = SIZE) {
             const d = Math.hypot(x - c, y - c);
             if (d > radius + 1) continue;
             const a = Math.round(255 * Math.min(1, Math.max(0, radius - d + 0.5)));
-            if (a > 0) put(x, y, BG.b, BG.g, BG.r, a);
+            // createFromBitmap expects PREMULTIPLIED alpha (the toBitmap()
+            // format) — straight alpha on the AA edge read as brighter-than-
+            // red and drew a light fringe around the disc.
+            if (a > 0) {
+                put(x, y,
+                    Math.round(BG.b * a / 255),
+                    Math.round(BG.g * a / 255),
+                    Math.round(BG.r * a / 255), a);
+            }
         }
     }
 

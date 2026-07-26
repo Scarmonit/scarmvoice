@@ -71,7 +71,12 @@
         const me = String(displayName || '').toLowerCase();
         if (!me || me === 'anonymous') return false;
         try {
-            return new RegExp('@' + me.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(body || '');
+            // Bounded on both sides: without the leading boundary
+            // "bob@alice.com" notified user "alice", and without the trailing
+            // one "@Alexander" notified user "Alex" — false-positive pings for
+            // messages that don't even render a mention chip.
+            const esc = me.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp('(^|[^A-Za-z0-9_])@' + esc + '($|[^A-Za-z0-9])', 'i').test(body || '');
         } catch (e) { return false; }
     }
 

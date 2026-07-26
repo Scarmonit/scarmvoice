@@ -57,6 +57,11 @@
     let SHARE_TRACK_ID = null;
     function shareVideoTrackId() { return SHARE_TRACK_ID; }
 
+    // Bumped on every share start/stop transition. Retry loops capture it when
+    // armed and bail if it moved — covers the case where SHARE_TRACK_ID was
+    // null from the start (producer not up yet), which the id check can't.
+    let SHARE_GEN = 0;
+
     function shareProfile() {
         const smooth = isSmooth();
         return {
@@ -168,13 +173,13 @@
     // The producer/sender appears asynchronously after enableScreenShare.
     function forceScreenQualityRetry() {
         let tries = 0;
-        const hadId = !!SHARE_TRACK_ID;
+        const gen = SHARE_GEN;
         (function go() {
-            // If the share stopped while this loop was still running, the id is
-            // nulled and forceScreenQuality's "tune any video sender" fallback
+            // If the share stopped (or restarted) while this loop was still
+            // running, forceScreenQuality's "tune any video sender" fallback
             // would apply share encoder params (16 Mbps, maintain-resolution)
             // to the CAMERA. Stop instead.
-            if (hadId && !SHARE_TRACK_ID) return;
+            if (gen !== SHARE_GEN) return;
             const found = forceScreenQuality();
             if (tries === 0) console.info('[share] video senders found:', found, 'across', PCS.length, 'peer connections');
             if (++tries < 6) setTimeout(go, tries * 500);
@@ -318,7 +323,10 @@
                 // graph exists — un-silencing it here made the same audio play
                 // twice (element at 100% + boosted graph) after any re-apply.
                 el.volume = 0;
-                g.set(effective);
+                // The graph plays via the shared AudioContext, which ignores
+                // el.muted entirely — mute/deafen must zero the gain itself,
+                // or a >100% participant stays audible while you're deafened.
+                g.set((isMuted || deafened) ? 0 : effective);
             } else {
                 // No gain graph available: the element's own max is the best we can do.
                 el.volume = 1;
@@ -736,12 +744,14 @@
                     m.self.on('screenShareUpdate', (d) => {
                         if (d && d.screenShareEnabled) {
                             localSharing = true;
+                            SHARE_GEN++;   // new share — retire any older retry loop
                             const tracks = d.screenShareTracks || m.self.screenShareTracks || {};
                             SHARE_TRACK_ID = (tracks.video && tracks.video.id) || null;
                             tuneLocalShare();
                             setSharer(selfCid(), m.self.name || settings.displayName || 'You', true, tracks);
                         } else {
                             localSharing = false;
+                            SHARE_GEN++;   // share over — kill in-flight retry loops
                             SHARE_TRACK_ID = null;
                             clearSharer(selfCid());
                             pushState();
@@ -802,6 +812,7 @@
         }
 
         function stopShare() {
+            SHARE_GEN++;   // stop any quality-retry loop before the SDK winds down
             try {
                 if (meeting && meeting.self && meeting.self.disableScreenShare) {
                     Promise.resolve(meeting.self.disableScreenShare()).catch(() => {});
