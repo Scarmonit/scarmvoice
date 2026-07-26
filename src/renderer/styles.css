@@ -2183,3 +2183,65 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 /* Two buttons side by side in a settings row. */
 .row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .row-actions .keycap { min-width: 0; }
+
+/* ============================== v0.9.0 ==================================== */
+
+/* Presence: do-not-disturb dot (red), everywhere a presence dot renders. */
+.vp .presence.dnd { background: var(--danger); }
+
+/* Board account block in Settings. */
+.acct-board { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.acct-board input {
+  flex: 1 1 150px; min-width: 0;
+  background: var(--input); border: 1px solid var(--line); border-radius: 7px;
+  padding: 8px 10px; color: var(--text); font: inherit;
+}
+.acct-btns { display: flex; gap: 8px; }
+.acct-signed-as { flex: 1; min-width: 0; }
+.acct-err { color: var(--danger); }
+
+/* DM rows in the sidebar reuse .chan; the sign-in nudge is dimmer. */
+.chan.dm-signin .chan-name { color: var(--muted); font-style: italic; }
+
+/* DM conversation drawer — same shell as the thread panel. */
+#dm-panel {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: min(420px, 62%); z-index: 40;
+  display: flex; flex-direction: column;
+  background: var(--chat-2);
+  box-shadow: -16px 0 44px rgba(0, 0, 0, .45);
+}
+#dm-panel[hidden] { display: none; }
+#dm-messages {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 14px;
+}
+.dm-day {
+  align-self: center; margin: 8px 0 4px;
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.dm-empty { color: var(--muted); text-align: center; margin-top: 24px; }
+.dm-msg { display: flex; align-items: flex-end; gap: 8px; max-width: 88%; align-self: flex-start; }
+.dm-msg.mine { align-self: flex-end; flex-direction: row-reverse; }
+.dm-bubble {
+  background: var(--float); border-radius: 14px; padding: 8px 12px;
+  white-space: pre-wrap; word-break: break-word; font-size: 14px;
+}
+.dm-msg.mine .dm-bubble { background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.dm-time { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+#dm-composer {
+  flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
+  padding: 10px 12px; box-shadow: 0 -1px 0 var(--line);
+}
+#dm-composer textarea {
+  flex: 1; min-width: 0; resize: none; max-height: 120px;
+  background: var(--input); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; color: var(--text); font: inherit;
+}
+#dm-composer button {
+  flex: 0 0 auto; background: none; border: 0; cursor: pointer;
+  color: var(--muted); padding: 8px; border-radius: 7px;
+}
+#dm-composer button:hover { color: var(--text); background: var(--elev); }

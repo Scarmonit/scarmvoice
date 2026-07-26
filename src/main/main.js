@@ -385,8 +385,25 @@ function registerIpc() {
     });
 
     ipcMain.handle('board:call', async (_e, { path: p, opts }) => {
-        return net.board(String(p || ''), opts || {});
+        const pathStr = String(p || '');
+        // register/login responses carry the account token — those go through
+        // the dedicated handlers below so the credential never enters the
+        // renderer, same policy as the sb_auth cookie.
+        if (pathStr === 'account/register' || pathStr === 'account/login') {
+            return { success: false, error: 'use the account bridge' };
+        }
+        return net.board(pathStr, opts || {});
     });
+
+    // ---- board accounts ----
+    ipcMain.handle('account:register', async (_e, { username, password }) => {
+        return net.accountRegister(String(username || ''), String(password || ''), store.get().clientId);
+    });
+    ipcMain.handle('account:login', async (_e, { username, password }) => {
+        return net.accountLogin(String(username || ''), String(password || ''), store.get().clientId);
+    });
+    ipcMain.handle('account:logout', async () => net.accountLogout());
+    ipcMain.handle('account:me', async () => net.accountMe());
 
     ipcMain.handle('voice:token', async (_e, payload) => {
         const s = store.get();
@@ -834,6 +851,11 @@ app.whenReady().then(() => {
 
     ptt.onChange((down) => {
         if (win && !win.isDestroyed()) win.webContents.send('ptt:change', { down });
+    });
+    // Global mute/deafen hotkeys ride the same command channel the tray menu
+    // uses, so the renderer-side guards (in voice? joined?) apply unchanged.
+    ptt.onAction((action) => {
+        if (win && !win.isDestroyed()) win.webContents.send('app:command', { cmd: action });
     });
     ptt.apply();
 

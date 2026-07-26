@@ -13,9 +13,11 @@ const COOKIE_NAME = 'sb_auth';
 const TIMEOUT_MS = 20000;
 
 let cookie = '';          // the raw sb_auth value, not the whole header
+let accountToken = '';    // board account session (x-account-token)
 
 function init() {
     cookie = store.readSession() || '';
+    accountToken = store.readAccountToken() || '';
 }
 
 function baseUrl() {
@@ -187,6 +189,9 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
     const headers = {};
+    // The account token rides every board call once signed in; endpoints that
+    // don't know about accounts simply ignore it.
+    if (accountToken) headers['x-account-token'] = accountToken;
     if (pathname === 'list' || pathname === 'thread') {
         headers['x-d1-bookmark'] = forcePrimary ? 'first-primary' : (bookmark || 'first-unconstrained');
         forcePrimary = false;
@@ -239,6 +244,53 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
     }
     if (method !== 'GET' && data && data.success) forcePrimary = true;
     return data;
+}
+
+// ---- board accounts --------------------------------------------------------
+// The token lives here (main process) exactly like the sb_auth cookie: the
+// renderer only ever sees parsed results, never the credential.
+
+async function accountRegister(username, password, clientId) {
+    const res = await board('account/register', { method: 'POST', body: { username, password, clientId } });
+    if (res && res.success && res.token) {
+        accountToken = res.token;
+        store.writeAccountToken(accountToken);
+        return { success: true, user: res.user };
+    }
+    return res && res.success ? { success: false, error: 'No token returned' } : res;
+}
+
+async function accountLogin(username, password, clientId) {
+    const res = await board('account/login', { method: 'POST', body: { username, password, clientId } });
+    if (res && res.success && res.token) {
+        accountToken = res.token;
+        store.writeAccountToken(accountToken);
+        return { success: true, user: res.user };
+    }
+    return res && res.success ? { success: false, error: 'No token returned' } : res;
+}
+
+async function accountLogout() {
+    try { await board('account/logout', { method: 'POST', body: {} }); } catch (e) { /* best effort */ }
+    accountToken = '';
+    store.clearAccountToken();
+    return { success: true };
+}
+
+async function accountMe() {
+    if (!accountToken) return { success: true, user: null };
+    const res = await board('account/me');
+    // An expired/revoked token is not an account — drop it so the UI offers
+    // sign-in again instead of silently sending a dead header forever.
+    if (res && res.success && !res.user) {
+        accountToken = '';
+        store.clearAccountToken();
+    }
+    return res;
+}
+
+function hasAccount() {
+    return !!accountToken;
 }
 
 // Attachment bytes, proxied so the renderer can display them without the cookie.
@@ -343,5 +395,6 @@ async function upload(name, type, bytes, onProgress) {
 
 module.exports = {
     init, login, logout, status, board, request, fileStream, upload,
+    accountRegister, accountLogin, accountLogout, accountMe, hasAccount,
     hasSession, cookieHeader, baseUrl, MAX_UPLOAD
 };

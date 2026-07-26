@@ -83,6 +83,7 @@ const MAX_PEER_ENTRIES = 500;
 
 let settingsPath = null;
 let sessionPath = null;
+let accountPath = null;
 let cache = null;
 
 function init() {
@@ -90,6 +91,7 @@ function init() {
     fs.mkdirSync(dir, { recursive: true });
     settingsPath = path.join(dir, 'settings.json');
     sessionPath = path.join(dir, 'session.bin');
+    accountPath = path.join(dir, 'account.bin');
     cache = load();
     prunePeerMaps();
     if (!cache.clientId) {
@@ -250,7 +252,41 @@ function clearSession() {
     try { fs.unlinkSync(sessionPath); } catch (e) { /* already gone */ }
 }
 
+// ---- board account token ---------------------------------------------------
+// Same treatment as the session cookie: safeStorage-encrypted, atomic write.
+
+function readAccountToken() {
+    let buf;
+    try { buf = fs.readFileSync(accountPath); } catch (e) { return ''; }
+    try {
+        if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(buf);
+        return buf.toString('utf8');
+    } catch (e) {
+        console.error('[store] could not decrypt the account token: ' + e.message);
+        return '';
+    }
+}
+
+function writeAccountToken(token) {
+    try {
+        if (!token) { clearAccountToken(); return; }
+        const data = safeStorage.isEncryptionAvailable()
+            ? safeStorage.encryptString(token)
+            : Buffer.from(token, 'utf8');
+        const tmp = accountPath + '.tmp';
+        fs.writeFileSync(tmp, data);
+        fs.renameSync(tmp, accountPath);
+    } catch (e) {
+        console.error('[store] failed to save account token:', e.message);
+    }
+}
+
+function clearAccountToken() {
+    try { fs.unlinkSync(accountPath); } catch (e) { /* already gone */ }
+}
+
 module.exports = {
     init, get, set, flush, readSession, writeSession, clearSession,
+    readAccountToken, writeAccountToken, clearAccountToken,
     migrateLegacyProfile, DEFAULTS
 };

@@ -10,10 +10,14 @@ const store = require('./store');
 
 let hook = null;              // uiohook-napi module, if loadable
 let hookRunning = false;
-let listener = () => {};      // (down: boolean) => void
+let listener = () => {};      // (down: boolean) => void — push-to-talk only
+let actionListener = () => {}; // (action: string) => void — mute/deafen toggles
 let held = false;
 let binding = null;           // { type:'key'|'mouse', keycode|button, ctrl, shift, alt, meta }
-let fallbackAccel = null;
+// Global one-shot toggles (mute/deafen). Each: { action, binding, held }.
+// `held` swallows uiohook's key-repeat so holding the key fires once.
+let toggles = [];
+let fallbackAccels = [];      // every accelerator registered in fallback mode
 let globalShortcut = null;
 
 // KeyboardEvent.code -> UiohookKey name. The renderer records a binding with
@@ -71,21 +75,32 @@ function modsMatch(ev, b) {
            (!b.alt || ev.altKey) && (!b.meta || ev.metaKey);
 }
 
+function bindingHit(ev, kind, b) {
+    if (!b || b.type !== kind) return false;
+    return kind === 'key' ? ev.keycode === b.keycode : ev.button === b.button;
+}
+
 function onDown(ev, kind) {
-    if (!binding || binding.type !== kind) return;
-    const hit = kind === 'key' ? ev.keycode === binding.keycode : ev.button === binding.button;
-    if (!hit || !modsMatch(ev, binding)) return;
-    if (held) return;
-    held = true;
-    listener(true);
+    if (bindingHit(ev, kind, binding) && modsMatch(ev, binding) && !held) {
+        held = true;
+        listener(true);
+    }
+    for (const t of toggles) {
+        if (!bindingHit(ev, kind, t.binding) || !modsMatch(ev, t.binding)) continue;
+        if (t.held) continue;               // key repeat while held — one toggle per press
+        t.held = true;
+        actionListener(t.action);
+    }
 }
 
 function onUp(ev, kind) {
-    if (!binding || binding.type !== kind || !held) return;
-    const hit = kind === 'key' ? ev.keycode === binding.keycode : ev.button === binding.button;
-    if (!hit) return;
-    held = false;
-    listener(false);
+    if (held && bindingHit(ev, kind, binding)) {
+        held = false;
+        listener(false);
+    }
+    for (const t of toggles) {
+        if (t.held && bindingHit(ev, kind, t.binding)) t.held = false;
+    }
 }
 
 function startHook() {
@@ -105,25 +120,30 @@ function startHook() {
     }
 }
 
-// Fallback: register the accelerator as a toggle so PTT is still usable
-// system-wide, just press-to-talk / press-to-stop instead of hold.
-function registerFallback(accel) {
+function clearFallbacks() {
     if (!globalShortcut) globalShortcut = require('electron').globalShortcut;
-    if (fallbackAccel) {
-        try { globalShortcut.unregister(fallbackAccel); } catch (e) {}
-        fallbackAccel = null;
-    }
+    fallbackAccels.forEach((a) => { try { globalShortcut.unregister(a); } catch (e) {} });
+    fallbackAccels = [];
+}
+
+function registerAccel(accel, fn) {
     if (!accel) return false;
     try {
-        const ok = globalShortcut.register(accel, () => {
-            held = !held;
-            listener(held);
-        });
-        if (ok) fallbackAccel = accel;
+        const ok = globalShortcut.register(accel, fn);
+        if (ok) fallbackAccels.push(accel);
         return ok;
     } catch (e) {
         return false;
     }
+}
+
+// Fallback: register the PTT accelerator as a toggle so PTT is still usable
+// system-wide, just press-to-talk / press-to-stop instead of hold.
+function registerFallback(accel) {
+    return registerAccel(accel, () => {
+        held = !held;
+        listener(held);
+    });
 }
 
 // Build an Electron accelerator from a recorded binding (fallback path only).
@@ -153,14 +173,37 @@ function apply() {
     const s = store.get();
     binding = resolveBinding(s.pttBinding);
     if (held) { held = false; listener(false); }
+    clearFallbacks();
 
-    if (isAvailable() && binding) {
+    // Mute/deafen toggles ride whichever transport PTT uses. In native-hook
+    // mode they get real keydown/keyup; in fallback mode each becomes its own
+    // globalShortcut (which is naturally a one-shot per press).
+    const wanted = [
+        { action: 'toggleMute', raw: s.muteBinding },
+        { action: 'toggleDeafen', raw: s.deafenBinding }
+    ].filter((t) => t.raw && t.raw.code);
+
+    const native = isAvailable() && (binding || wanted.some((t) => resolveBinding(t.raw)));
+    if (native) {
         startHook();
-        registerFallback(null);   // native hook covers it; don't double-fire
-        return { mode: 'native', bound: describe(s.pttBinding) };
+        toggles = wanted
+            .map((t) => ({ action: t.action, binding: resolveBinding(t.raw), held: false }))
+            .filter((t) => t.binding);
+        // A mouse-button toggle still works through the hook even when the
+        // PTT binding itself fell back — but if a KEY toggle didn't resolve,
+        // register it as a plain accelerator alongside.
+        wanted.forEach((t) => {
+            if (!resolveBinding(t.raw)) {
+                registerAccel(toAccelerator(t.raw), () => actionListener(t.action));
+            }
+        });
+        return { mode: binding ? 'native' : 'toggle', bound: describe(s.pttBinding) };
     }
+
+    toggles = [];
     const accel = toAccelerator(s.pttBinding) || s.pttKey;
     const ok = registerFallback(accel);
+    wanted.forEach((t) => registerAccel(toAccelerator(t.raw), () => actionListener(t.action)));
     return { mode: ok ? 'toggle' : 'none', bound: ok ? accel : null };
 }
 
@@ -180,6 +223,7 @@ function describe(b) {
 }
 
 function onChange(cb) { listener = cb || (() => {}); }
+function onAction(cb) { actionListener = cb || (() => {}); }
 
 // Force the held/toggle state back to "up". The renderer discards PTT events
 // while not in a call, so a fallback-mode toggle pressed outside voice would
@@ -190,14 +234,11 @@ function reset() {
 }
 
 function shutdown() {
-    if (fallbackAccel && globalShortcut) {
-        try { globalShortcut.unregister(fallbackAccel); } catch (e) {}
-        fallbackAccel = null;
-    }
+    clearFallbacks();
     if (hookRunning && hook) {
         try { hook.uIOhook.stop(); } catch (e) {}
         hookRunning = false;
     }
 }
 
-module.exports = { apply, onChange, shutdown, isAvailable, describe, reset };
+module.exports = { apply, onChange, onAction, shutdown, isAvailable, describe, reset };

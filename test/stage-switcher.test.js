@@ -56,6 +56,10 @@ beforeAll(async () => {
     window.lounge = {
         // Signed in, so enterApp() runs and setupVoice() registers the callbacks.
         auth: { status: vi.fn(async () => ({ authed: true })), login: vi.fn(async () => ({ success: true })), logout: noop },
+        account: {
+            register: vi.fn(async () => ({ success: false })), login: vi.fn(async () => ({ success: false })),
+            logout: vi.fn(async () => ({ success: true })), me: vi.fn(async () => ({ success: true, user: null }))
+        },
         board: vi.fn(async () => ({ success: true, posts: [], channels: [], typing: [], voice: [] })),
         uploadFile: vi.fn(async () => ({ success: true })),
         onUploadProgress: unsub,
@@ -109,6 +113,7 @@ beforeAll(async () => {
     const run = (f) => new Function(fs.readFileSync(path.join(RENDERER, f), 'utf8')).call(window);
     run('lib.js');
     run('audio.js');
+    run('noise.js');    // defines window.ScarmNoise; its getUserMedia patch no-ops in jsdom
     run('sounds.js');
     run('icons.js');
     window.createVoice = fakeVoice;      // stands in for voice.js

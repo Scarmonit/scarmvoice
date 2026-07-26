@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld('lounge', {
     // Generic proxy for /api/board/*
     board: (path, opts) => ipcRenderer.invoke('board:call', { path, opts }),
 
+    // Board accounts. register/login run main-side so the account token (like
+    // the session cookie) never reaches the renderer.
+    account: {
+        register: (username, password) => ipcRenderer.invoke('account:register', { username, password }),
+        login: (username, password) => ipcRenderer.invoke('account:login', { username, password }),
+        logout: () => ipcRenderer.invoke('account:logout'),
+        me: () => ipcRenderer.invoke('account:me')
+    },
+
     // Attachments. `data` is an ArrayBuffer of the raw file bytes. Pass an `id`
     // to receive upload:progress events tagged with it (see onUploadProgress).
     uploadFile: (name, type, data, id) => ipcRenderer.invoke('board:upload', { name, type, data, id }),

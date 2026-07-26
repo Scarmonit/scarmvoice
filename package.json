@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
@@ -12,8 +12,8 @@
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
-    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/make-icon.js",
-    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js",
+    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/make-icon.js",
+    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js",
     "icon": "node scripts/make-icon.js",
     "start": "electron .",
     "dev": "electron . --dev",
@@ -34,6 +34,7 @@
   "devDependencies": {
     "@cloudflare/realtimekit": "2.0.0",
     "@electron/fuses": "^2.1.3",
+    "@jitsi/rnnoise-wasm": "^0.2.1",
     "@playwright/test": "^1.61.1",
     "electron": "33.4.11",
     "electron-builder": "^25.1.8",

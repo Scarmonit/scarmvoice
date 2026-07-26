@@ -92,6 +92,19 @@
         <nav id="channel-list"></nav>
       </section>
 
+      <section class="side-section" id="dm-section">
+        <div class="cat-head">
+          <button type="button" class="cat-toggle" id="cat-dms" aria-expanded="true">
+            <span class="cat-arrow" data-icon="chevron"></span>
+            <span>Direct Messages</span>
+          </button>
+          <button type="button" class="cat-add" id="btn-new-dm" title="Start a conversation">
+            <span class="ico" data-icon="plus"></span>
+          </button>
+        </div>
+        <nav id="dm-list"></nav>
+      </section>
+
       <section class="side-section" id="voice-section">
         <div class="cat-head">
           <button type="button" class="cat-toggle" id="cat-voice" aria-expanded="true">
@@ -329,6 +342,21 @@
       </form>
     </aside>
 
+    <aside id="dm-panel" hidden>
+      <div class="thread-head">
+        <span class="ico" data-icon="at"></span>
+        <span id="dm-title">Direct message</span>
+        <button class="icon-btn" id="dm-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
+      </div>
+      <div id="dm-messages"></div>
+      <form id="dm-composer" autocomplete="off">
+        <textarea id="dm-input" rows="1" placeholder="Message…" maxlength="2000"></textarea>
+        <button type="submit" id="dm-send" title="Send (Enter)">
+          <span class="ico" data-icon="send"></span>
+        </button>
+      </form>
+    </aside>
+
     <div id="drop-hint" hidden>
       <div class="drop-inner">
         <span class="drop-ico" data-icon="upload"></span>
@@ -396,6 +424,24 @@
           <span>Custom status</span>
           <input type="text" id="set-status" maxlength="80" placeholder="What you're up to">
         </label>
+        <div class="row stack">
+          <span>Board account</span>
+          <div class="acct-board" id="acct-signed" hidden>
+            <span class="acct-signed-as">Signed in as <b id="acct-user"></b> <em class="hint" id="acct-role"></em></span>
+            <button type="button" class="keycap" id="btn-acct-logout">Sign out</button>
+          </div>
+          <div class="acct-board" id="acct-forms">
+            <input type="text" id="acct-username" maxlength="24" placeholder="Username" autocomplete="off">
+            <input type="password" id="acct-password" maxlength="72" placeholder="Password (8+ characters)">
+            <div class="acct-btns">
+              <button type="button" class="keycap" id="btn-acct-login">Sign in</button>
+              <button type="button" class="keycap" id="btn-acct-register">Create account</button>
+            </div>
+            <span class="hint">An account unlocks direct messages, and admins can moderate any message.
+              The first account created on the board becomes the admin.</span>
+          </div>
+          <span class="hint acct-err" id="acct-error" hidden></span>
+        </div>
         <div class="row note">
           <span class="hint">Your avatar is generated from your display name, so it looks the same
             here and on the website. Uploading a picture needs board-side support that doesn't exist yet.</span>
@@ -446,11 +492,25 @@
           <button type="button" id="set-ptt" class="keycap">Backquote</button>
           <span class="hint" id="ptt-hint"></span>
         </label>
+        <label class="row">
+          <span>Mute hotkey</span>
+          <button type="button" id="set-mute-key" class="keycap">Click to set</button>
+          <span class="hint">— works system-wide; Backspace while recording clears it</span>
+        </label>
+        <label class="row">
+          <span>Deafen hotkey</span>
+          <button type="button" id="set-deafen-key" class="keycap">Click to set</button>
+        </label>
         <label class="row check">
           <input type="checkbox" id="set-ec"><span>Echo cancellation</span>
         </label>
         <label class="row check">
           <input type="checkbox" id="set-ns"><span>Noise suppression</span>
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="set-nsai">
+          <span>AI noise suppression <em class="hint">— RNNoise, removes keyboards/fans/hum;
+            takes effect the next time your mic opens</em></span>
         </label>
         <label class="row check">
           <input type="checkbox" id="set-agc">
@@ -739,6 +799,7 @@
      defined before app.js, voice.js and sounds.js reach for them. -->
 <script src="lib.js"></script>
 <script src="audio.js"></script>
+<script src="noise.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
 <script src="vendor/realtimekit.js"></script>

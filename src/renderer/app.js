@@ -580,6 +580,7 @@
         setChannelTitle(channel);
         warnIfElevated();
         window.loungeSounds.init(settings);
+        window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
         setupVoice();
         renderMe();
         await L.rt.start();
@@ -587,6 +588,7 @@
         await loadMessages(true);
         startPolling();
         startTextPresence();
+        refreshAccount().then(() => { loadDmThreads(); startDmPolling(); });
         await L.ptt.apply();
         refreshPttHint();
         flushOutbox();
@@ -625,6 +627,11 @@
         });
         // The rail's server icon carries the total, the way Discord badges a
         // server you aren't currently looking at.
+        // DMs count toward both badges — a DM is never "muted".
+        const dmN = dmUnreadTotal();
+        total += dmN;
+        alerting += dmN;
+
         const badge = $('rail-badge');
         badge.textContent = total > 99 ? '99+' : String(total);
         badge.hidden = !total;
@@ -3015,7 +3022,7 @@
             rows.push({
                 id: m.client_id,
                 name: m.name || 'Anonymous',
-                status: m.status === 'away' ? 'away' : 'online',
+                status: (m.status === 'away' || m.status === 'dnd') ? m.status : 'online',
                 custom: m.custom || '',
                 voice: inVoice.get(m.client_id) || null
             });
@@ -3061,11 +3068,13 @@
 
             const blocked = isBlocked(r.id);
             if (blocked) li.classList.add('blocked');
-            const sub = blocked ? 'Blocked' : (r.custom || (r.status === 'away' ? 'Away' : ''));
+            const sub = blocked ? 'Blocked'
+                : (r.custom || (r.status === 'away' ? 'Away' : (r.status === 'dnd' ? 'Do not disturb' : '')));
+            const dotClass = r.status === 'away' ? ' away' : (r.status === 'dnd' ? ' dnd' : '');
             li.innerHTML =
                 '<span class="av-wrap">' +
                 `<span class="av" style="${avatarStyle(r.name)}">${esc(initials(r.name))}</span>` +
-                `<i class="presence${r.status === 'away' ? ' away' : ''}" aria-hidden="true"></i>` +
+                `<i class="presence${dotClass}" aria-hidden="true"></i>` +
                 '</span>' +
                 '<span class="vp-name">' + esc(r.name) + (isMe ? ' (you)' : '') +
                 (sub ? `<span class="vp-sub">${esc(sub)}</span>` : '') + '</span>' +
@@ -3219,6 +3228,8 @@
     });
 
     function myPresenceStatus() {
+        // Do-not-disturb outranks the computed states — everyone should see it.
+        if (settings.dnd) return 'dnd';
         if (document.hidden || !windowFocused) return 'away';
         if (Date.now() - lastActivity > AWAY_AFTER_MS) return 'away';
         return 'online';
@@ -3563,6 +3574,9 @@
                     renderVoiceRoster();
                 }
                 break;
+            case 'dm':
+                onDmEvent(m);
+                break;
             case 'welcome':
                 if (m.voice) {
                     voicePresence = (m.voice || []).map((v) => ({
@@ -3766,7 +3780,11 @@
     });
 
     // Collapsible channel categories, remembered across launches.
-    const CATS = { text: { sec: 'text-section', key: 'catTextOpen' }, voice: { sec: 'voice-section', key: 'catVoiceOpen' } };
+    const CATS = {
+        text: { sec: 'text-section', key: 'catTextOpen' },
+        dms: { sec: 'dm-section', key: 'catDmsOpen' },
+        voice: { sec: 'voice-section', key: 'catVoiceOpen' }
+    };
 
     function applyCategory(which, open) {
         $(CATS[which].sec).classList.toggle('collapsed', !open);
@@ -3789,6 +3807,7 @@
     function applyChrome() {
         applyMembersPanel(settings.showMembers !== false);
         applyCategory('text', settings.catTextOpen !== false);
+        applyCategory('dms', settings.catDmsOpen !== false);
         applyCategory('voice', settings.catVoiceOpen !== false);
         applyTheme();
         applyDensity();
@@ -3926,6 +3945,7 @@
         $('set-mode').value = settings.voiceMode || 'open';
         $('set-ec').checked = settings.echoCancellation !== false;
         $('set-ns').checked = settings.noiseSuppression !== false;
+        $('set-nsai').checked = !!settings.noiseSuppressionAI;
         $('set-agc').checked = !!settings.autoGainControl;
         $('set-tray').checked = settings.minimizeToTray !== false;
         $('set-autoupdate').checked = settings.autoUpdateOnLaunch === true;
@@ -3952,6 +3972,8 @@
         $('set-share-motion').value = settings.shareMotion || 'sharp';
         $('set-share-audio').checked = settings.shareAudio !== false;
         $('set-ptt').textContent = (await L.ptt.describe(settings.pttBinding)) || 'Click to set';
+        $('set-mute-key').textContent = (await L.ptt.describe(settings.muteBinding)) || 'Click to set';
+        $('set-deafen-key').textContent = (await L.ptt.describe(settings.deafenBinding)) || 'Click to set';
         $('row-ptt').style.display = settings.voiceMode === 'ptt' ? '' : 'none';
 
         // Account / notifications / appearance / privacy
@@ -3995,7 +4017,71 @@
         const sub = $('set-avatar-status');
         sub.textContent = settings.status || '';
         sub.hidden = !settings.status;
+
+        $('acct-signed').hidden = !account;
+        $('acct-forms').hidden = !!account;
+        if (account) {
+            $('acct-user').textContent = account.username;
+            $('acct-role').textContent = account.role === 'admin' ? '(admin)' : '';
+        }
     }
+
+    // ---- board account (username + role on top of the shared password) ----
+
+    let account = null;               // { id, username, role } | null
+    const isAdmin = () => !!(account && account.role === 'admin');
+
+    async function refreshAccount() {
+        try {
+            const res = await L.account.me();
+            account = (res && res.success && res.user) || null;
+        } catch (e) {
+            account = null;
+        }
+        renderAccountCard();
+        renderDmSection();
+    }
+
+    function acctError(msg) {
+        const el = $('acct-error');
+        el.textContent = msg || '';
+        el.hidden = !msg;
+    }
+
+    async function acctSubmit(mode) {
+        const username = $('acct-username').value.trim();
+        const password = $('acct-password').value;
+        if (!username || !password) return acctError('Enter a username and password.');
+        acctError('');
+        const res = mode === 'register'
+            ? await L.account.register(username, password)
+            : await L.account.login(username, password);
+        if (!res || !res.success) return acctError((res && res.error) || 'Could not sign in.');
+        account = res.user;
+        $('acct-password').value = '';
+        renderAccountCard();
+        renderDmSection();
+        loadDmThreads();
+        toast(mode === 'register'
+            ? `Account created — welcome, ${account.username}` +
+              (account.role === 'admin' ? '. You are the admin.' : '')
+            : `Signed in as ${account.username}`);
+    }
+
+    $('btn-acct-login').addEventListener('click', () => acctSubmit('login'));
+    $('btn-acct-register').addEventListener('click', () => acctSubmit('register'));
+    $('acct-password').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); acctSubmit('login'); }
+    });
+    $('btn-acct-logout').addEventListener('click', async () => {
+        await L.account.logout();
+        account = null;
+        dmThreads = [];
+        closeDm();
+        renderAccountCard();
+        renderDmSection();
+        toast('Signed out of your board account');
+    });
 
     // ---- muted channels ----
     function renderMutedChannels() {
@@ -4158,6 +4244,7 @@
         await saveSettings({ dnd: e.target.checked });
         renderMe();
         renderChannels();       // the taskbar badge is suppressed while DND is on
+        sendTextPresence(false);   // everyone's member list shows the red dot now, not in 20s
         toast(e.target.checked ? 'Do not disturb on — everything is silenced' : 'Do not disturb off');
     });
     $('set-theme').addEventListener('change', async (e) => {
@@ -4236,6 +4323,11 @@
             await saveSettings({ [map[k]]: e.target.checked });
             if (voice.isJoined()) toast('Rejoin voice to apply audio processing changes');
         });
+    });
+    $('set-nsai').addEventListener('change', async (e) => {
+        await saveSettings({ noiseSuppressionAI: e.target.checked });
+        window.ScarmNoise.setEnabled(e.target.checked);
+        if (voice.isJoined()) toast('Rejoin voice to apply AI noise suppression');
     });
     $('set-font-size').addEventListener('change', async (e) => {
         await saveSettings({ chatFontSize: e.target.value });
@@ -4324,50 +4416,60 @@
     });
     $('set-autojoin').addEventListener('change', (e) => saveSettings({ autoJoinVoice: e.target.checked }));
 
-    // PTT key recorder: captures the next key or mouse button pressed.
-    $('set-ptt').addEventListener('click', () => {
-        if (recordingPtt) return;
-        recordingPtt = true;
-        const btn = $('set-ptt');
-        btn.classList.add('recording');
-        btn.textContent = 'Press any key…';
+    // Hotkey recorder: captures the next key or mouse button pressed. Shared
+    // by push-to-talk and the mute/deafen toggles — one recorder at a time,
+    // guarded by the same recordingPtt flag the in-window PTT handlers respect.
+    function bindKeyRecorder(btnId, settingKey, afterSave) {
+        $(btnId).addEventListener('click', () => {
+            if (recordingPtt) return;
+            recordingPtt = true;
+            const btn = $(btnId);
+            btn.classList.add('recording');
+            btn.textContent = 'Press any key…';
 
-        const finish = async (binding) => {
-            recordingPtt = false;
-            btn.classList.remove('recording');
-            window.removeEventListener('keydown', onKey, true);
-            window.removeEventListener('mousedown', onMouse, true);
-            if (binding) {
-                await saveSettings({ pttBinding: binding });
-                await L.ptt.apply();
-            }
-            btn.textContent = (await L.ptt.describe(settings.pttBinding)) || 'Click to set';
-            refreshPttHint();
-        };
+            const finish = async (binding, clear) => {
+                recordingPtt = false;
+                btn.classList.remove('recording');
+                window.removeEventListener('keydown', onKey, true);
+                window.removeEventListener('mousedown', onMouse, true);
+                if (binding || clear) {
+                    await saveSettings({ [settingKey]: binding });
+                    await L.ptt.apply();
+                }
+                btn.textContent = (await L.ptt.describe(settings[settingKey])) || 'Click to set';
+                if (afterSave) afterSave();
+            };
 
-        const onKey = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (e.key === 'Escape') return finish(null);
-            finish({
-                type: 'key', code: e.code,
-                ctrl: e.ctrlKey && !/^Control/.test(e.code),
-                shift: e.shiftKey && !/^Shift/.test(e.code),
-                alt: e.altKey && !/^Alt/.test(e.code),
-                meta: e.metaKey && !/^Meta|^OS/.test(e.code)
-            });
-        };
-        const onMouse = (e) => {
-            // Only the extra side buttons — hijacking left/right click would make
-            // the app unusable.
-            if (e.button < 3) return;
-            e.preventDefault();
-            e.stopPropagation();
-            finish({ type: 'mouse', code: 'Mouse' + e.button, button: e.button + 1 });
-        };
-        window.addEventListener('keydown', onKey, true);
-        window.addEventListener('mousedown', onMouse, true);
-    });
+            const onKey = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.key === 'Escape') return finish(null, false);
+                // Backspace/Delete clears the binding entirely (the toggles are
+                // optional; PTT falls back to its default key).
+                if (e.key === 'Backspace' || e.key === 'Delete') return finish(null, true);
+                finish({
+                    type: 'key', code: e.code,
+                    ctrl: e.ctrlKey && !/^Control/.test(e.code),
+                    shift: e.shiftKey && !/^Shift/.test(e.code),
+                    alt: e.altKey && !/^Alt/.test(e.code),
+                    meta: e.metaKey && !/^Meta|^OS/.test(e.code)
+                });
+            };
+            const onMouse = (e) => {
+                // Only the extra side buttons — hijacking left/right click would
+                // make the app unusable.
+                if (e.button < 3) return;
+                e.preventDefault();
+                e.stopPropagation();
+                finish({ type: 'mouse', code: 'Mouse' + e.button, button: e.button + 1 });
+            };
+            window.addEventListener('keydown', onKey, true);
+            window.addEventListener('mousedown', onMouse, true);
+        });
+    }
+    bindKeyRecorder('set-ptt', 'pttBinding', refreshPttHint);
+    bindKeyRecorder('set-mute-key', 'muteBinding');
+    bindKeyRecorder('set-deafen-key', 'deafenBinding');
 
     $('btn-logout').addEventListener('click', async () => {
         if (voice.isJoined()) { heartbeatPresence(true); voice.leave(); }
@@ -4563,6 +4665,8 @@
             mine && 'sep',
             mine && { label: 'Edit message', icon: 'pencil', onClick: () => startEdit(p, el) },
             mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
+            !mine && isAdmin() && 'sep',
+            !mine && isAdmin() && { label: 'Delete (admin)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
             !mine && p.client_id && 'sep',
             !mine && p.client_id && {
                 label: 'Block ' + (p.name || 'this person'), icon: 'ban', danger: true,
@@ -5042,7 +5146,7 @@
     }
 
     async function deletePost(p) {
-        if (p.client_id !== settings.clientId) return toast('You can only delete your own messages', true);
+        if (!isAdmin() && p.client_id !== settings.clientId) return toast('You can only delete your own messages', true);
 
         const preview = (p.body || p.att_name || '').slice(0, 80);
         const ok = await askConfirm(
@@ -5053,7 +5157,8 @@
         );
         if (!ok) return;
 
-        const res = await L.board('delete', { method: 'POST', body: { id: p.id } });
+        // clientId lets the server enforce ownership for signed-in members.
+        const res = await L.board('delete', { method: 'POST', body: { id: p.id, clientId: settings.clientId } });
         if (res && res.needsAuth) return relogin();
         if (!res || !res.success) return toast((res && res.error) || 'Could not delete', true);
 
@@ -5636,7 +5741,7 @@
     // ---------- pinned ----------------------------------------------------
 
     async function pinPost(id, pinned) {
-        const res = await L.board('pin', { method: 'POST', body: { id, pinned } });
+        const res = await L.board('pin', { method: 'POST', body: { id, pinned, clientId: settings.clientId } });
         if (res && res.needsAuth) return relogin();
         if (!res || !res.success) return toast((res && res.error) || 'Could not pin', true);
         // Reflect immediately, then refresh from the server.
@@ -5657,12 +5762,22 @@
     $('btn-pinned').addEventListener('click', () => togglePinned($('pinned-panel').hidden));
     $('pinned-close').addEventListener('click', () => togglePinned(false));
 
-    function renderPinned() {
+    async function renderPinned() {
         const list = $('pinned-list');
         $('pinned-channel').textContent = channel;
         list.innerHTML = '';
 
-        const pinned = posts.filter((p) => p.pinned);
+        // The whole channel's pins from the server — not just whatever pages
+        // happen to be loaded. Falls back to loaded posts offline.
+        let pinned = null;
+        const forChannel = channel;
+        try {
+            const res = await L.board('pins', { query: { channel } });
+            if (res && res.success && Array.isArray(res.pins)) pinned = res.pins;
+        } catch (e) { /* fall through */ }
+        if (forChannel !== channel || $('pinned-panel').hidden) return;   // switched away meanwhile
+        if (!pinned) pinned = posts.filter((p) => p.pinned);
+        list.innerHTML = '';
         if (!pinned.length) {
             const e = document.createElement('div');
             e.className = 'pinned-empty';
@@ -5683,13 +5798,222 @@
                 '<button class="pinned-unpin" type="button">Unpin</button>' +
                 '</div>' +
                 `<div class="pinned-body">${bodyIcon}${esc(body.slice(0, 240))}</div>`;
-            item.addEventListener('click', () => jumpToPost(p));
+            item.addEventListener('click', () => {
+                // A pinned thread reply lives in its thread, not the main list.
+                if (p.thread_root_id) openThread(p.thread_root_id, p.channel);
+                else jumpToPost(p);
+            });
             item.querySelector('.pinned-unpin').addEventListener('click', (e) => {
                 e.stopPropagation();
                 pinPost(p.id, false);
             });
             list.appendChild(item);
         });
+    }
+
+    // ---------- direct messages --------------------------------------------
+    // DMs need a board account (see the Account settings group): message rows
+    // are keyed by user id, and realtime delivery routes through the account's
+    // bound client_id. The conversation opens in a drawer like the thread panel.
+
+    const DM_POLL_MS = 12000;
+    let dmThreads = [];               // [{ user:{id,username}, last:{...}, unread }]
+    let dmOpen = null;                // { id, username } of the open conversation
+    let dmMsgs = [];
+    let dmTimer = null;
+    let dmLoadedOnce = false;
+
+    function dmUnreadTotal() {
+        return dmThreads.reduce((s, t) => s + (t.unread || 0), 0);
+    }
+
+    function renderDmSection() {
+        const list = $('dm-list');
+        list.innerHTML = '';
+        if (!account) {
+            const b = document.createElement('button');
+            b.className = 'chan dm-signin';
+            b.innerHTML = '<span class="hash">@</span><span class="chan-name">Sign in to use DMs</span>';
+            b.addEventListener('click', () => { openSettings(); });
+            list.appendChild(b);
+            return;
+        }
+        dmThreads.forEach((t) => {
+            const open = dmOpen && dmOpen.id === t.user.id;
+            const unread = open ? 0 : (t.unread || 0);
+            const b = document.createElement('button');
+            b.className = 'chan dm' + (open ? ' active' : '') + (unread ? ' unread' : '');
+            b.innerHTML = `<span class="hash">@</span><span class="chan-name">${esc(t.user.username)}</span>` +
+                (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
+            b.addEventListener('click', () => openDm(t.user));
+            list.appendChild(b);
+        });
+        renderChannels();   // DM unread feeds the rail + taskbar badges
+    }
+
+    async function loadDmThreads() {
+        if (!account) return;
+        const res = await L.board('dm/threads');
+        if (res && res.success) {
+            dmThreads = res.threads || [];
+            dmLoadedOnce = true;
+            renderDmSection();
+        }
+    }
+
+    function startDmPolling() {
+        if (dmTimer) clearInterval(dmTimer);
+        dmTimer = setInterval(() => {
+            if (!account || $('app').hidden) return;
+            loadDmThreads();
+            if (dmOpen) loadDmMessages(false);
+        }, DM_POLL_MS);
+    }
+
+    async function openDm(user) {
+        dmOpen = { id: user.id, username: user.username };
+        $('dm-title').textContent = user.username;
+        $('dm-panel').hidden = false;
+        closeThread();
+        dmMsgs = [];
+        $('dm-messages').innerHTML = '<div class="thread-loading">Loading…</div>';
+        await loadDmMessages(true);
+        const t = dmThreads.find((x) => x.user.id === user.id);
+        if (t && t.unread) { t.unread = 0; renderDmSection(); }
+        renderDmSection();
+        $('dm-input').focus();
+    }
+
+    function closeDm() {
+        dmOpen = null;
+        $('dm-panel').hidden = true;
+        renderDmSection();
+    }
+
+    function dmPanelOpen() { return !$('dm-panel').hidden; }
+
+    async function loadDmMessages(force) {
+        if (!dmOpen) return;
+        const forUser = dmOpen.id;
+        const res = await L.board('dm/list', { query: { with: forUser } });
+        if (!dmOpen || dmOpen.id !== forUser) return;      // switched conversations mid-flight
+        if (!res || !res.success) {
+            if (res && res.needsAccount) { closeDm(); toast('Sign into your board account to use DMs', true); }
+            return;
+        }
+        const sig = JSON.stringify(res.messages || []);
+        if (!force && sig === loadDmMessages.lastSig) return;
+        loadDmMessages.lastSig = sig;
+        dmMsgs = res.messages || [];
+        renderDmMessages();
+    }
+
+    function renderDmMessages() {
+        const box = $('dm-messages');
+        box.innerHTML = '';
+        if (!dmMsgs.length) {
+            const e = document.createElement('div');
+            e.className = 'dm-empty';
+            e.textContent = 'No messages yet — say hi!';
+            box.appendChild(e);
+            return;
+        }
+        let prevDay = '';
+        dmMsgs.forEach((m) => {
+            const day = dayStr(m.created_at);
+            if (day !== prevDay) {
+                prevDay = day;
+                const sep = document.createElement('div');
+                sep.className = 'dm-day';
+                sep.textContent = day;
+                box.appendChild(sep);
+            }
+            const row = document.createElement('div');
+            row.className = 'dm-msg' + (m.fromMe ? ' mine' : '');
+            const bubble = document.createElement('div');
+            bubble.className = 'dm-bubble';
+            bubble.textContent = m.body;
+            const time = document.createElement('span');
+            time.className = 'dm-time';
+            time.textContent = timeStr(m.created_at);
+            row.appendChild(bubble);
+            row.appendChild(time);
+            box.appendChild(row);
+        });
+        // A DM drawer always lands on the newest message.
+        box.scrollTop = box.scrollHeight;
+    }
+
+    $('dm-composer').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!dmOpen) return;
+        const input = $('dm-input');
+        const body = input.value.trim();
+        if (!body) return;
+        const to = dmOpen.id;
+        input.value = '';
+        const res = await L.board('dm/send', { method: 'POST', body: { to, body } });
+        if (!res || !res.success) {
+            input.value = body;   // give the text back
+            return toast((res && res.error) || 'Could not send the DM', true);
+        }
+        if (dmOpen && dmOpen.id === to) {
+            dmMsgs.push({ id: res.id, body, created_at: res.created_at || Date.now(), fromMe: true });
+            renderDmMessages();
+        }
+        loadDmThreads();
+    });
+    $('dm-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            $('dm-composer').requestSubmit();
+        }
+    });
+    $('dm-close').addEventListener('click', closeDm);
+
+    // Start a conversation: pick any account holder from the directory.
+    $('btn-new-dm').addEventListener('click', async (e) => {
+        if (!account) { openSettings(); return; }
+        const res = await L.board('account/users');
+        if (!res || !res.success) return toast((res && res.error) || 'Could not load the member directory', true);
+        const others = (res.users || []).filter((u) => u.id !== account.id);
+        if (!others.length) {
+            return toast('No one else has a board account yet — DMs need one on both ends');
+        }
+        const r = e.currentTarget.getBoundingClientRect();
+        openCtxMenu(others.map((u) => ({
+            label: u.username + (u.role === 'admin' ? ' (admin)' : ''),
+            icon: 'at',
+            onClick: () => openDm({ id: u.id, username: u.username })
+        })), r.left, r.bottom + 4);
+    });
+
+    // Realtime delivery — pushed by the server the moment the sender posts.
+    function onDmEvent(m) {
+        if (!m || !m.from) return;
+        if (dmOpen && dmOpen.id === m.from.id) {
+            // Open conversation: append, and let the server mark it read via
+            // the next list call rather than double-counting unread.
+            dmMsgs.push({ id: m.id, body: m.body, created_at: m.created_at, fromMe: false });
+            renderDmMessages();
+            loadDmMessages(true);
+        } else {
+            const t = dmThreads.find((x) => x.user.id === m.from.id);
+            if (t) {
+                t.unread = (t.unread || 0) + 1;
+                t.last = { id: m.id, body: m.body, created_at: m.created_at, fromMe: false };
+                renderDmSection();
+            } else {
+                loadDmThreads();
+            }
+        }
+        if (alertsAllowed(null)) {
+            const conversationVisible = windowFocused && dmOpen && dmOpen.id === m.from.id;
+            if (!conversationVisible) window.loungeSounds.playMessage();
+            if (!windowFocused && settings.notifications !== false) {
+                L.app.notify({ title: `${m.from.username} (DM)`, body: (m.body || '').slice(0, 140) });
+            }
+        }
     }
 
     // ---------- window chrome ---------------------------------------------
@@ -5699,6 +6023,7 @@
             if (emojiPopOpen()) closeEmojiPop();
             else if (!$('ctx-menu').hidden) closeCtxMenu();
             else if (threadOpen()) closeThread();
+            else if (dmPanelOpen()) closeDm();
             else if (!$('lightbox').hidden) closeLightbox();
             else if (!$('dialog').hidden) closeDialog(inp_null());
             else if (!$('picker').hidden) closePicker();
