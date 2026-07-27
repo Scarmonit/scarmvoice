@@ -2245,3 +2245,15 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   color: var(--muted); padding: 8px; border-radius: 7px;
 }
 #dm-composer button:hover { color: var(--text); background: var(--elev); }
+
+/* Login step 2: the mandatory account sign-in. */
+#login-acct { display: flex; flex-direction: column; }
+.login-acct-btns { display: flex; gap: 8px; margin-top: 2px; }
+.login-acct-btns button {
+  flex: 1; padding: 11px 0; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--input); color: var(--text); font-size: 14px; font-weight: 600;
+  cursor: pointer;
+}
+.login-acct-btns button:hover { background: var(--elev); }
+.login-acct-btns button.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
+.login-acct-btns button.primary:hover { background: var(--accent-hi); }

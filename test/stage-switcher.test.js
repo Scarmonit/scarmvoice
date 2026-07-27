@@ -58,7 +58,10 @@ beforeAll(async () => {
         auth: { status: vi.fn(async () => ({ authed: true })), login: vi.fn(async () => ({ success: true })), logout: noop },
         account: {
             register: vi.fn(async () => ({ success: false })), login: vi.fn(async () => ({ success: false })),
-            logout: vi.fn(async () => ({ success: true })), me: vi.fn(async () => ({ success: true, user: null }))
+            logout: vi.fn(async () => ({ success: true })),
+            // Signed into an account too — accounts are mandatory, and a null
+            // user would park boot() at the account gate instead of enterApp().
+            me: vi.fn(async () => ({ success: true, user: { id: 1, username: 'Me', role: 'member', client_id: 'me' } }))
         },
         board: vi.fn(async () => ({ success: true, posts: [], channels: [], typing: [], voice: [] })),
         uploadFile: vi.fn(async () => ({ success: true })),

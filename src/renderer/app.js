@@ -515,13 +515,83 @@
 
         const st = await L.auth.status();
         if (st.authed) {
-            enterApp();
+            if (await accountGate()) enterApp();
         } else {
             $('login').hidden = false;
             if (st.offline) $('login-sub').textContent = 'Could not reach the server — check the URL below.';
             $('login-pw').focus();
         }
     }
+
+    // ---- mandatory account step -------------------------------------------
+    // The shared board password only unlocks the API; using THIS app also
+    // requires a personal account, so every message, DM and moderation action
+    // has a real identity behind it. A stored token skips the step.
+
+    async function accountGate() {
+        try {
+            const res = await L.account.me();
+            if (res && res.success && res.user) { account = res.user; return true; }
+        } catch (e) { /* fall through to the step */ }
+        showAccountStep();
+        return false;
+    }
+
+    function showAccountStep() {
+        $('login').hidden = false;
+        $('login-pw').hidden = true;
+        $('login-name').hidden = true;
+        $('login-btn').hidden = true;
+        $('login-advanced').hidden = true;
+        $('login-advanced-box').hidden = true;
+        $('login-acct').hidden = false;
+        $('login-sub').textContent = 'One more step — sign into your account, or create one';
+        $('login-error').textContent = '';
+        $('login-acct-user').focus();
+    }
+
+    function hideAccountStep() {
+        $('login-pw').hidden = false;
+        $('login-name').hidden = false;
+        $('login-btn').hidden = false;
+        $('login-advanced').hidden = false;
+        $('login-acct').hidden = true;
+        $('login-sub').textContent = 'Enter the board password to connect';
+    }
+
+    async function loginAcctSubmit(mode) {
+        const err = $('login-error');
+        const username = $('login-acct-user').value.trim();
+        const password = $('login-acct-pw').value;
+        if (!username || !password) { err.textContent = 'Enter a username and a password.'; return; }
+        err.textContent = '';
+
+        const res = mode === 'register'
+            ? await L.account.register(username, password)
+            : await L.account.login(username, password);
+        if (!res || !res.success) {
+            err.textContent = (res && res.error) || 'Could not sign in.';
+            $('login-form').classList.add('shake');
+            setTimeout(() => $('login-form').classList.remove('shake'), 420);
+            return;
+        }
+        account = res.user;
+        $('login-acct-pw').value = '';
+        // A fresh install with no display name inherits the account name.
+        if (!settings.displayName) await saveSettings({ displayName: account.username });
+        if (mode === 'register' && account.role === 'admin') {
+            toast('Account created — you are the board admin');
+        }
+        hideAccountStep();
+        $('login').hidden = true;
+        enterApp();
+    }
+
+    $('login-acct-signin').addEventListener('click', () => loginAcctSubmit('login'));
+    $('login-acct-create').addEventListener('click', () => loginAcctSubmit('register'));
+    $('login-acct-pw').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); loginAcctSubmit('login'); }
+    });
 
     $('login-advanced').addEventListener('click', () => {
         const box = $('login-advanced-box');
@@ -548,8 +618,11 @@
 
         if (res && res.success) {
             $('login-pw').value = '';
-            $('login').hidden = true;
-            enterApp();
+            // Password accepted — the account step decides whether we're in.
+            if (await accountGate()) {
+                $('login').hidden = true;
+                enterApp();
+            }
             return;
         }
         err.textContent = (res && res.error) || 'Could not sign in.';
@@ -3646,6 +3719,7 @@
         stopTextPresence();
         if (voice) voice.leave();
         $('app').hidden = true;
+        hideAccountStep();       // back to step 1 — the site password comes first
         $('login').hidden = false;
         $('login-error').textContent = 'Your session expired. Sign in again.';
         $('login-pw').focus();
@@ -4080,6 +4154,11 @@
         closeDm();
         renderAccountCard();
         renderDmSection();
+        // Accounts are mandatory: without one, back to the gate (the board
+        // session itself stays valid, so it's a one-field hop back in).
+        $('settings').hidden = true;
+        $('app').hidden = true;
+        showAccountStep();
         toast('Signed out of your board account');
     });
 
@@ -4481,6 +4560,7 @@
         await L.rt.stop();
         $('settings').hidden = true;
         $('app').hidden = true;
+        hideAccountStep();       // fresh sign-in starts at the password step
         $('login').hidden = false;
         $('login-error').textContent = '';
         $('login-pw').focus();

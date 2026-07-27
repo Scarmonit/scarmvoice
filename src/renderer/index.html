@@ -385,6 +385,17 @@
     <input type="password" id="login-pw" placeholder="Password" autocomplete="current-password" autofocus>
     <input type="text" id="login-name" placeholder="Display name" maxlength="40" autocomplete="off">
     <button type="submit" id="login-btn">Connect</button>
+    <!-- Step 2: everyone needs their own account (the board password alone no
+         longer gets you in). Shown after the password is accepted, unless a
+         stored account token already vouches for this install. -->
+    <div id="login-acct" hidden>
+      <input type="text" id="login-acct-user" placeholder="Username" maxlength="24" autocomplete="username">
+      <input type="password" id="login-acct-pw" placeholder="Account password (8+ characters)" autocomplete="off">
+      <div class="login-acct-btns">
+        <button type="button" id="login-acct-signin" class="primary">Sign in</button>
+        <button type="button" id="login-acct-create">Create account</button>
+      </div>
+    </div>
     <div class="login-error" id="login-error"></div>
     <button type="button" class="linkish" id="login-advanced">Server settings</button>
     <div id="login-advanced-box" hidden>
