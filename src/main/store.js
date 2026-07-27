@@ -87,15 +87,39 @@ const ALLOWED_ORIGINS = [
 // settings cache's prototype.
 const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
-// Accepts anything parseable whose scheme+host is allow-listed; used both to
-// validate what the renderer asks us to store and (in net.js) to decide whether
-// a resolved request URL may carry credentials.
+// Accepts anything parseable whose scheme+host is allow-listed. This is the
+// test net.js applies to a RESOLVED request url — which legitimately carries a
+// path, a query and sometimes a fragment — so it deliberately looks at nothing
+// but the origin.
 function isAllowedOrigin(value) {
     let u;
     try { u = new URL(String(value || '')); } catch (e) { return false; }
     // ws:/wss: are the same origins reached by rt.js's socket.
     const scheme = u.protocol === 'wss:' ? 'https:' : (u.protocol === 'ws:' ? 'http:' : u.protocol);
     return ALLOWED_ORIGINS.includes(scheme + '//' + u.hostname);
+}
+
+// …which is exactly why the STORED baseUrl has to be held to a stricter rule.
+// net.js concatenates a path onto it, so any path, query or fragment left on
+// the stored value is a splice point: a baseUrl of
+// "https://scarmonit.com/api/board/account/login#" turns a request for
+// "/api/board/list" into "…/account/login#/api/board/list", whose real path is
+// the account endpoint while every guard upstream — which resolves the caller's
+// path against the origin — sees an innocuous "list". That reaches any endpoint
+// on the host with both credentials attached and hands the reply back verbatim.
+//
+// So a base url is accepted only when it is a BARE ORIGIN, and what gets stored
+// is the parsed origin rather than the caller's string. There is nothing to
+// splice onto.
+function normalizeBaseUrl(value) {
+    let u;
+    try { u = new URL(String(value || '')); } catch (e) { return null; }
+    if (!isAllowedOrigin(u.href)) return null;
+    if (u.username || u.password) return null;
+    if (u.pathname !== '/' && u.pathname !== '') return null;
+    if (u.search || u.hash) return null;
+    // Keeps the port, which the loopback dev server needs.
+    return u.origin;
 }
 
 // The app used to be called "The Lounge", and productName decides
@@ -185,9 +209,12 @@ function load() {
     // A hand-edited (or previously written) settings.json is just as capable of
     // aiming the credentials somewhere else as the renderer is, so the file is
     // held to the same rule.
-    if (!isAllowedOrigin(merged.baseUrl)) {
+    const base = normalizeBaseUrl(merged.baseUrl);
+    if (!base) {
         console.warn(`[store] stored baseUrl "${merged.baseUrl}" is not an allowed origin — using the default`);
         merged.baseUrl = DEFAULTS.baseUrl;
+    } else {
+        merged.baseUrl = base;
     }
     return merged;
 }
@@ -259,8 +286,13 @@ function set(patch) {
             console.warn('[store] refused a prototype-polluting settings key: ' + key);
             continue;
         }
-        if (key === 'baseUrl' && !isAllowedOrigin(patch[key])) {
-            console.warn(`[store] refused baseUrl "${patch[key]}" — not an allowed origin`);
+        if (key === 'baseUrl') {
+            const base = normalizeBaseUrl(patch[key]);
+            if (!base) {
+                console.warn(`[store] refused baseUrl "${patch[key]}" — not a bare allowed origin`);
+                continue;
+            }
+            cache[key] = base;
             continue;
         }
         cache[key] = patch[key];
@@ -401,5 +433,5 @@ function clearAccountToken() {
 module.exports = {
     init, get, set, flush, readSession, writeSession, clearSession,
     readAccountToken, writeAccountToken, clearAccountToken,
-    migrateLegacyProfile, isAllowedOrigin, DEFAULTS
+    migrateLegacyProfile, isAllowedOrigin, normalizeBaseUrl, DEFAULTS
 };

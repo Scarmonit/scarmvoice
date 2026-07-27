@@ -831,6 +831,7 @@
             warnIfElevated();
             window.loungeSounds.init(settings);
             window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
+            window.ScarmNoise.onFailure(handleNoiseFailure);
             setupVoice();
             renderMe();
             // BEFORE the socket opens: this registers the install against the
@@ -2711,6 +2712,7 @@
     const REC_MAX_MS = 5 * 60 * 1000;
 
     let mediaRec = null, recChunks = [], recStream = null, recStart = 0, recTimer = null, recSend = true;
+    let recMaxTimer = null;     // the REC_MAX_MS cutoff, held so it can be cancelled
 
     function recording() { return !!mediaRec; }
 
@@ -2757,9 +2759,12 @@
         recTimer = setInterval(updateRecTime, 250);
         // The max-duration cutoff must only ever stop the recording it was
         // armed for — a stale timer from a discarded recording used to fire
-        // during a LATER one and auto-send it mid-sentence.
+        // during a LATER one and auto-send it mid-sentence. The identity check
+        // is what makes that safe; the handle is what makes it stop existing,
+        // since an unheld five-minute timer outlives the clip that armed it and
+        // the session that recorded it.
         const thisRec = mediaRec;
-        setTimeout(() => { if (mediaRec === thisRec && recording()) stopRecording(true); }, REC_MAX_MS);
+        recMaxTimer = setTimeout(() => { if (mediaRec === thisRec && recording()) stopRecording(true); }, REC_MAX_MS);
     }
 
     function stopRecording(send) {
@@ -2769,6 +2774,7 @@
 
     function finishRecording() {
         if (recTimer) { clearInterval(recTimer); recTimer = null; }
+        if (recMaxTimer) { clearTimeout(recMaxTimer); recMaxTimer = null; }
         if (recStream) {
             try { recStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             recStream = null;
@@ -4074,10 +4080,26 @@
         // join never bumped voice.js's generation counter — so the in-flight
         // join resolved afterwards and reconnected the mic behind the login gate.
         if (voice) voice.leave();
+        // Two more microphones, neither of them the call's: a voice message
+        // still recording and the Settings mic test. Both hold their own
+        // getUserMedia stream, so leaving the call releases neither and the OS
+        // mic indicator stayed lit behind the login gate. The recording is
+        // CANCELLED rather than stopped — its clip belongs to the session that
+        // just ended, and nothing may be sent with the credential gone.
+        stopRecording(false);
+        if (recMaxTimer) { clearTimeout(recMaxTimer); recMaxTimer = null; }
+        // The two manual sign-outs call closeSettings() right afterwards, which
+        // stops the test for them; an expired session and a failed enterApp()
+        // do not, so doing it here is what covers all four ways out.
+        stopMicTest();
         // The thread poll runs on its own timer and would otherwise survive
         // teardown: with no credential every tick 401s and calls relogin(),
         // which re-focuses the password field every 2.5s while it's being typed.
         closeThread();
+        // renderMessages() refuses to run while a .msg-edit node exists, so an
+        // editor left open by the teardown does not just leak — it freezes the
+        // message list for the whole of the next session.
+        cancelEdit();
         stopDmPolling();
         stopPolling();
         stopPresence();
@@ -5020,6 +5042,21 @@
         window.ScarmNoise.setEnabled(e.target.checked);
         if (voice.isJoined()) toast('Rejoin voice to apply AI noise suppression');
     });
+
+    // RNNoise REPLACES the browser's own noise suppression rather than stacking
+    // on it (voice.js switches that off while the AI toggle is on), so a failed
+    // RNNoise means the mic runs with no suppression at all. Turning the toggle
+    // back off is what restores the ordinary filter; leaving it on would keep
+    // the user in the one state that is worse than either setting. Silent in the
+    // console-only form this used to take: nothing on screen ever changed.
+    async function handleNoiseFailure(why) {
+        console.warn('[app] AI noise suppression is not running:', why);
+        if (!settings.noiseSuppressionAI) return;
+        await saveSettings({ noiseSuppressionAI: false });   // also re-pushes to voice.js
+        window.ScarmNoise.setEnabled(false);
+        $('set-nsai').checked = false;
+        toast('AI noise suppression could not start — using standard noise suppression instead', true);
+    }
     $('set-font-size').addEventListener('change', async (e) => {
         await saveSettings({ chatFontSize: e.target.value });
         applyChatFontSize(e.target.value);

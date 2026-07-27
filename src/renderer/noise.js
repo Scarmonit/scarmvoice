@@ -18,6 +18,22 @@
     let enabled = false;
     let active = 0;             // wrapped streams still alive
 
+    // A failure has to reach the UI, not just the console. voice.js turns the
+    // browser's OWN noiseSuppression constraint off while this is enabled
+    // ("RNNoise owns it"), so a broken RNNoise leaves the microphone with no
+    // suppression whatsoever — strictly worse than never switching it on. The
+    // owner of the toggle is the only code that can undo that, so it gets told.
+    let broken = false;
+    let failureCb = null;
+
+    function markBroken(why) {
+        if (broken) return;     // one report per enable, not one per acquisition
+        broken = true;
+        // The report is a courtesy; a listener that throws must not take the
+        // caller's fall-back-to-the-raw-stream path down with it.
+        try { if (failureCb) failureCb(why || 'unknown'); } catch (e) {}
+    }
+
     // An AudioContext holds a real audio device open. Left running between calls
     // it kept the render thread (and on some drivers the device itself) awake for
     // the rest of the session, so it goes away with the last wrapped stream.
@@ -92,10 +108,13 @@
             node.port.onmessage = (ev) => {
                 const d = ev && ev.data;
                 if (!d || !d.t) return;
-                if (d.t === 'ready') console.info('[noise] rnnoise active on mic capture');
-                else if (d.t === 'failed') {
+                if (d.t === 'ready') {
+                    broken = false;
+                    console.info('[noise] rnnoise active on mic capture');
+                } else if (d.t === 'failed') {
                     console.warn('[noise] rnnoise did NOT start (' + (d.why || 'unknown') +
                         ') — the mic is passing through unprocessed');
+                    markBroken(d.why);
                 }
             };
 
@@ -104,6 +123,7 @@
             return out;
         } catch (e) {
             console.warn('[noise] suppression unavailable, using the raw mic:', e && e.message);
+            markBroken(e && e.message);
             return raw;
         }
     }
@@ -123,7 +143,20 @@
     })();
 
     window.ScarmNoise = {
-        setEnabled(v) { enabled = !!v; },
-        isEnabled() { return enabled; }
+        setEnabled(v) {
+            enabled = !!v;
+            // Switching it back on is the user asking for another go, so a
+            // failure from an earlier session must not permanently suppress the
+            // next report — nor make isWorking() lie about a fresh attempt.
+            if (enabled) broken = false;
+        },
+        isEnabled() { return enabled; },
+        // "Enabled" is what the user asked for; this is what they are actually
+        // getting. Optimistic until an acquisition proves otherwise.
+        isWorking() { return enabled && !broken; },
+        // Called with the reason the first time suppression fails while
+        // enabled. The listener's job is to put the browser's own suppression
+        // back — audio itself is never at risk, the raw mic is always returned.
+        onFailure(cb) { failureCb = typeof cb === 'function' ? cb : null; }
     };
 })();

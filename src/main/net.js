@@ -20,8 +20,11 @@ function init() {
     accountToken = store.readAccountToken() || '';
 }
 
+// store.set/load already reduce this to a bare origin. Re-normalising here means
+// a settings.json written by an older build (or by hand) can't reintroduce a
+// path/query/fragment for the concatenation below to splice a request onto.
 function baseUrl() {
-    return (store.get().baseUrl || 'https://scarmonit.com').replace(/\/+$/, '');
+    return store.normalizeBaseUrl(store.get().baseUrl) || 'https://scarmonit.com';
 }
 
 // Both credentials are bearer-equivalent, so they only ever go to an origin we
@@ -90,7 +93,17 @@ const MAX_REDIRECTS = 3;
 // Following by hand means every hop is re-checked against the allow-list, and
 // both credential decisions key off the origin that is actually being talked to.
 async function request(pathname, { method = 'GET', body, headers = {}, query, timeout } = {}) {
-    let url = baseUrl() + pathname;
+    const base = baseUrl();
+    let url = base + pathname;
+    // baseUrl() is a bare origin, so the concatenation above can only produce a
+    // url on that origin — but this is the single place every credentialled
+    // request funnels through, so the invariant is asserted rather than assumed.
+    // A mismatch means the path argument carried a scheme or an authority.
+    try {
+        if (new URL(url).origin !== new URL(base).origin) throw new Error('origin');
+    } catch (e) {
+        throw new Error('Refusing to build a request outside ' + base);
+    }
     if (query) {
         const qs = Object.keys(query)
             .filter((k) => query[k] !== null && query[k] !== undefined && query[k] !== '')
@@ -172,6 +185,17 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
         }
         const next = new URL(location, url).href;
         try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+
+        // Withholding the credentials from an off-allow-list hop is necessary
+        // but not sufficient: a 307/308 preserves the request BODY, and the body
+        // of /api/board/account/login is the user's password in cleartext. So a
+        // redirect that leaves the allow-list is refused outright rather than
+        // followed with the credentials stripped. Nothing we ship redirects off
+        // its own origin, so this can only ever fire on a hostile or hijacked
+        // response.
+        if (!trusted(next)) {
+            throw new Error('Refusing to follow a redirect to an untrusted origin');
+        }
 
         // 303 always, and 301/302 by universal practice, turn the follow-up
         // into a bodiless GET.

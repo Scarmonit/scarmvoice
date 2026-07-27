@@ -77,3 +77,29 @@ describe('resolveBoardPath', () => {
         expect(allow('')).toBeNull();
     });
 });
+
+// Every case above passes the canonical base url, which is precisely why the
+// guard looked sound while a settings-driven base url walked straight around
+// it: the guard resolves the caller's path as an ABSOLUTE path, so it only ever
+// sees "list", while net.js concatenates onto whatever baseUrl holds. A base of
+// "https://scarmonit.com/api/board/account/login#" therefore requests the
+// account endpoint under a verdict issued for "list".
+//
+// store.normalizeBaseUrl is what makes that unreachable, so these assert the two
+// halves together: the guard's blindness is real, and the store refuses to hold
+// a value that could exploit it.
+describe('a base url is the other half of this guard', () => {
+    const SPLICE = 'https://scarmonit.com/api/board/account/login';
+
+    it('resolves an innocuous key while naming a denied endpoint', () => {
+        for (const suffix of ['#', '?', '#x', '?x=1']) {
+            const r = resolveBoardPath('list', SPLICE + suffix);
+            // The guard says "list" and allows it…
+            expect(r, suffix).toEqual({ key: 'list', path: 'list' });
+            expect(needsAccountBridge(r.key), suffix).toBe(false);
+            // …while the url net.js would build points at account/login.
+            expect(new URL(SPLICE + suffix + '/api/board/' + r.path).pathname, suffix)
+                .toBe('/api/board/account/login');
+        }
+    });
+});

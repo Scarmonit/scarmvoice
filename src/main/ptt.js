@@ -103,9 +103,14 @@ function onUp(ev, kind) {
     }
 }
 
+// Returns whether the hook is actually running. The module loading is not the
+// same thing as the hook working: start() throws when the OS refuses the
+// low-level input hook (locked-down policy, another app holding it), and the
+// caller has to know so it can register the accelerator fallbacks instead.
 function startHook() {
     const mod = loadHook();
-    if (!mod || hookRunning) return;
+    if (!mod) return false;
+    if (hookRunning) return true;
     mod.uIOhook.on('keydown', (e) => onDown(e, 'key'));
     mod.uIOhook.on('keyup', (e) => onUp(e, 'key'));
     mod.uIOhook.on('mousedown', (e) => onDown(e, 'mouse'));
@@ -118,6 +123,7 @@ function startHook() {
         console.warn('[ptt] failed to start native hook:', e.message);
         hook = false;
     }
+    return hookRunning;
 }
 
 function clearFallbacks() {
@@ -188,10 +194,14 @@ function apply() {
     // binding resolved — and then PTT got no native hold, no fallback
     // accelerator either, yet apply() still reported a mode and a bound key, so
     // the Settings screen showed a hotkey that did nothing.
-    const hookUsable = isAvailable() && (binding || wanted.some((t) => resolveBinding(t.raw)));
+    const hookWanted = isAvailable() && (binding || wanted.some((t) => resolveBinding(t.raw)));
+    // …and whether the hook can be TRUSTED is only known after start() returns.
+    // This used to be decided before starting it, so a hook that loaded but
+    // failed to start still reported 'native' and registered no accelerator at
+    // all — every hotkey was silently dead until the next apply().
+    const hookUsable = hookWanted && startHook();
     toggles = [];
     if (hookUsable) {
-        startHook();
         toggles = wanted
             .map((t) => ({ action: t.action, binding: resolveBinding(t.raw), held: false }))
             .filter((t) => t.binding);

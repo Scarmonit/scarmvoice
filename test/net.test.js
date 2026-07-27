@@ -421,3 +421,82 @@ describe('upload progress', () => {
         expect(opts.headers['Content-Length']).toBe(String(bytes.toString('base64').length));
     });
 });
+
+// The account token and the session cookie are both bearer-equivalent, and the
+// only thing deciding which host and which PATH they reach is the stored base
+// url. These pin that boundary end to end, because the guard in boardpath.js
+// cannot see past it: it resolves the caller's path against the origin, so a
+// base url carrying a path/fragment splices a different endpoint underneath an
+// already-issued verdict.
+describe('the base url cannot be used to re-aim a credentialled request', () => {
+    const SPLICES = [
+        'https://scarmonit.com/api/board/account/login#',
+        'https://scarmonit.com/api/board/account/login?',
+        'https://scarmonit.com/api/board/account/login',
+        'https://scarmonit.com/#',
+        'https://user:pw@scarmonit.com'
+    ];
+
+    it('refuses to store anything but a bare allowed origin', async () => {
+        const { store } = await load();
+        for (const bad of SPLICES) {
+            expect(store.set({ baseUrl: bad }).baseUrl, bad).toBe('https://scarmonit.com');
+        }
+        // …while the origins we actually ship still round-trip, port included.
+        expect(store.set({ baseUrl: 'http://localhost:8788' }).baseUrl).toBe('http://localhost:8788');
+        expect(store.set({ baseUrl: 'https://scarmonit.com/' }).baseUrl).toBe('https://scarmonit.com');
+    });
+
+    it('requests the endpoint the guard approved, not one spliced in behind it', async () => {
+        const { store, net } = await load();
+        store.set({ baseUrl: SPLICES[0] });
+        await net.board('list', { method: 'POST', body: { username: 'u', password: 'p' } });
+        expect(new URL(calls[0].url).pathname).toBe('/api/board/list');
+    });
+
+    it('ignores a spliced base url already sitting in settings.json', async () => {
+        // A value written by an older build, or by hand, must not survive the read.
+        fs.mkdirSync(env.userDataDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(env.userDataDir, 'settings.json'),
+            JSON.stringify({ baseUrl: SPLICES[0], clientId: 'c1' })
+        );
+        const { store, net } = await load();
+        expect(store.get().baseUrl).toBe('https://scarmonit.com');
+        await net.board('list');
+        expect(new URL(calls[0].url).pathname).toBe('/api/board/list');
+    });
+});
+
+describe('redirects', () => {
+    function redirectTo(location, status) {
+        let hop = 0;
+        stubFetch(() => (hop++ === 0
+            ? new Response(null, { status, headers: { location } })
+            : jsonRes({ success: true })));
+    }
+
+    // A 307/308 preserves the request body, and the body of account/login is the
+    // password in cleartext. Dropping the credentials is not enough — the hop
+    // must not happen at all.
+    it('refuses to follow one off the allow-list, so the body never leaves', async () => {
+        for (const status of [301, 302, 303, 307, 308]) {
+            const { net } = await load();
+            redirectTo('https://evil.example/collect', status);
+            const r = await net.board('account/login', {
+                method: 'POST', body: { username: 'u', password: 'S3cret' }
+            });
+            expect(r.success, String(status)).toBe(false);
+            expect(calls.length, String(status)).toBe(1);
+            expect(calls.every((c) => new URL(c.url).hostname === 'scarmonit.com')).toBe(true);
+        }
+    });
+
+    it('still follows one that stays on the allow-list', async () => {
+        const { net } = await load();
+        redirectTo('https://scarmonit.com/api/board/list', 302);
+        const r = await net.board('list');
+        expect(r.success).toBe(true);
+        expect(calls.length).toBe(2);
+    });
+});

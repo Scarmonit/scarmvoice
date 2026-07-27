@@ -1045,13 +1045,21 @@
                     const fn = want ? meeting.self.enableAudio : meeting.self.disableAudio;
                     if (fn) {
                         // These return promises. A bare try/catch only sees a
-                        // synchronous throw, so a failure to acquire the mic
-                        // (device unplugged, permission revoked) became an
-                        // unhandled rejection while lastTransmit had ALREADY
-                        // been set — the UI claimed it was transmitting and the
-                        // equality guard above blocked every retry.
+                        // synchronous throw, so a failure became an unhandled
+                        // rejection while lastTransmit had ALREADY been set to
+                        // the state we only hoped for, and the equality guard
+                        // above then blocked every retry.
+                        //
+                        // Both directions can fail, and they fail into opposite
+                        // states: acquiring the mic (device unplugged,
+                        // permission revoked) leaves us silent, while failing to
+                        // release it leaves audio still going out. Reporting
+                        // "idle" for the second one put a calm microphone icon
+                        // over a live mic.
                         Promise.resolve(fn.call(meeting.self)).catch((e) => {
-                            if (lastTransmit === want) lastTransmit = null;   // let it be retried
+                            // Either value differs from `want`, so the retry is
+                            // unblocked as well.
+                            if (lastTransmit === want) lastTransmit = want ? null : true;
                             fail('microphone', e);
                             pushState();
                         });
