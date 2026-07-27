@@ -285,7 +285,32 @@ proxies those bytes through the authenticated client.
 
 The renderer runs with `contextIsolation: true` and `nodeIntegration: false`,
 under a CSP that blocks remote script, and is granted only the microphone and
-notification permissions.
+notification permissions. Every `ipcMain` handler also checks that the call came
+from our own top frame before running.
+
+### The account token never crosses into the renderer
+
+Board accounts add a second credential (`x-account-token`) alongside the gate
+cookie, and it is bearer-equivalent — whoever holds it can mint sessions. Every
+endpoint whose response carries it (`account/login`, `register`, `verify`) has
+its own main-process handler that keeps the token and hands back only the parsed
+user. The generic `board:call` proxy returns the server's JSON verbatim, so it
+is allowed to reach only the read-only corner of that namespace.
+
+That allowlist is applied to the **resolved** path, not the string the renderer
+sent, and the resolved path is what gets requested — see `boardpath.js`. A check
+on the raw string is worthless here: `net.js` concatenates the path onto the base
+URL unparsed and the URL parser collapses dot segments, so
+`../../api/board/account/login` and `x/../account/login` both read as innocent
+relative paths while resolving to exactly the endpoint being denied.
+`test/boardpath.test.js` is the regression test.
+
+Redirects are followed by hand for the same reason (`net.js`). `redirect:
+'follow'` strips `Cookie` and `Authorization` across an origin change but *not* a
+custom header, so `x-account-token` would be replayed to whatever host the chain
+ended on; and the cookie-rotation capture would key off the origin that answered
+last rather than the one we chose to trust. Following each hop ourselves means
+both decisions are re-made against the allow-list every time.
 
 ### Voice settings that are deliberate, not accidental
 

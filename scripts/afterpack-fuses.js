@@ -21,6 +21,11 @@ module.exports = async function afterPack(context) {
 
     await flipFuses(binary, {
         version: FuseVersion.V1,
+        // Flipping a fuse rewrites the binary, which invalidates the ad-hoc
+        // signature macOS gives it — on Apple Silicon the app then refuses to
+        // launch. Windows-only today, but the darwin branch above means a mac
+        // build would hit this the moment anyone tried one.
+        resetAdHocDarwinSignature: electronPlatformName === 'darwin',
         // ELECTRON_RUN_AS_NODE — makes the .exe run as plain Node.js. The app
         // never spawns a child process at all (the elevation probe is a readdir,
         // see main.js), so nothing depends on it and disabling is safe.

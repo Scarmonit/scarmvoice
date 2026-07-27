@@ -92,11 +92,15 @@ test('exposes the whole preload bridge to the renderer', async () => {
 
     expect(shape).toBeTruthy();
     expect(Object.keys(shape).sort()).toEqual([
-        'app', 'auth', 'board', 'copyImage', 'downloadAttachment', 'edit', 'fetchImage',
-        'fileUrl', 'onUploadProgress', 'ptt', 'revealFile', 'rt', 'saveAttachment',
-        'settings', 'share', 'startup', 'unfurl', 'update', 'uploadFile', 'voiceToken',
-        'win', 'youtube'
+        'account', 'app', 'auth', 'board', 'copyImage', 'downloadAttachment', 'edit',
+        'fetchImage', 'fileUrl', 'onUploadProgress', 'ptt', 'revealFile', 'rt',
+        'saveAttachment', 'settings', 'share', 'startup', 'unfurl', 'update',
+        'uploadFile', 'voiceToken', 'win', 'youtube'
     ]);
+
+    // The account bridge exists so the token those calls mint stays in the main
+    // process — the renderer only ever gets the parsed user back.
+    expect(shape.account).toEqual(['login', 'logout', 'me', 'register', 'resend', 'verify']);
 
     // The taskbar badge and the log folder are reached through app.*; both were
     // added after the original contract and both are called from the renderer.

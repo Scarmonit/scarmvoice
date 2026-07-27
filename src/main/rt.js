@@ -102,7 +102,12 @@ function scheduleReconnect() {
 
 function connect() {
     if (manualClose || ws) return;
-    if (!net.hasSession()) return;   // no credential yet — start() is called again after login
+    // No credential yet — start() is called again after login. Say so rather
+    // than returning silently: a 401 can call clearCredentials() while the
+    // socket is up, and the resulting close -> scheduleReconnect -> connect()
+    // would land here with reconnectTimer already nulled, so nothing retries
+    // and the titlebar sits on "Reconnecting…" forever.
+    if (!net.hasSession()) { emitStatus('disconnected'); return; }
 
     attempts++;
     emitStatus(attempts >= OFFLINE_AFTER ? 'disconnected' : 'reconnecting');

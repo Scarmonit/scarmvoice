@@ -436,6 +436,16 @@
 
     function openDialog({ title, message, value, ok, danger, withInput, label2, value2 }) {
         return new Promise((resolve) => {
+            // A second dialog opening over the first used to overwrite
+            // dialogDone, so the first promise never settled and whatever was
+            // awaiting it (a delete confirmation, a rename) was abandoned
+            // mid-flight. Reachable from the tray and the keyboard shortcuts,
+            // which can fire while a dialog is already up.
+            if (dialogDone) {
+                const stale = dialogDone;
+                dialogDone = null;
+                stale(null);
+            }
             dialogDone = resolve;
             $('dialog-title').textContent = title;
             const msg = $('dialog-msg');
@@ -839,10 +849,13 @@
     async function loadChannels(extra) {
         const body = Object.assign({ reads, clientId: settings.clientId }, extra || {});
         const res = await L.board('channels', { method: 'POST', body });
-        if (res && res.needsAuth) return relogin();
-        if (!res || !res.success) return;
+        // The response is returned so callers that ASKED for a change (create)
+        // can tell whether it happened; a plain refresh still ignores it.
+        if (res && res.needsAuth) { relogin(); return res; }
+        if (!res || !res.success) return res;
         channels = res.channels || [];
         renderChannels();
+        return res;
     }
 
     function renderChannels() {
@@ -894,41 +907,81 @@
         $('composer-input').placeholder = 'Message #' + name;
     }
 
+    // Everything that has to be forgotten when the conversation on screen is
+    // replaced. Rename and delete used to skip all of it and just reassign
+    // `channel`, which left the old channel's posts in `posts` — and since post
+    // ids are global, the refresh merge kept every one of them that was older
+    // than the new channel's newest page, rendering them inline as ghosts.
+    function resetChannelView() {
+        posts = [];
+        following = true;
+        seenTopId = 0;
+        hasMore = true;
+        clearReply();            // the quoted message lives in the old channel
+        cancelEdit();            // an editor left open would freeze renderMessages()
+        if (threadOpen()) closeThread();
+    }
+
     async function switchChannel(name) {
         if (name === channel) return;
         channel = name;
         await saveSettings({ channel: name });
         setChannelTitle(name);
-        posts = [];
-        following = true;
-        seenTopId = 0;
-        clearReply();            // the quoted message lives in the old channel
-        if (threadOpen()) closeThread();
+        resetChannelView();
         renderMessages();
         renderChannels();
         await loadMessages(true);
     }
 
+    // Our best guess at the slug the server will produce. Only ever a FALLBACK:
+    // the authoritative answer is whichever name comes back in res.channels,
+    // because collision handling and trimming are the server's rules, not ours.
+    function slugifyChannel(name) {
+        return String(name || '').toLowerCase()
+            .replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-')
+            .replace(/^-+|-+$/g, '').slice(0, 24);
+    }
+
+    // The entry that appeared in the list as a result of this call. Falls back
+    // to the local slug when the server's answer is ambiguous.
+    function channelAddedBy(before, guess) {
+        const added = channels.map((c) => c.name).filter((n) => !before.includes(n));
+        if (added.length === 1) return added[0];
+        const clean = slugifyChannel(guess);
+        return channels.some((c) => c.name === clean) ? clean : '';
+    }
+
     $('btn-add-channel').addEventListener('click', async () => {
         const name = await askText('Create a channel', '', 'Create');
         if (!name) return;
-        await loadChannels({ create: name });
-        const clean = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 24);
-        if (clean) switchChannel(clean);
+        const before = channels.map((c) => c.name);
+        const res = await loadChannels({ create: name });
+        // loadChannels swallows failures, so without this an offline create
+        // still switched the UI to a channel that was never made.
+        if (!res || !res.success) return toast((res && res.error) || 'Could not create that channel', true);
+        const created = res.channel || channelAddedBy(before, name);
+        if (created) switchChannel(created);
     });
 
     $('btn-rename-channel').addEventListener('click', async () => {
         if (channel === 'general') return toast('#general cannot be renamed', true);
         const name = await askText('Rename #' + channel, channel, 'Rename');
         if (!name || name === channel) return;
+        const before = channels.map((c) => c.name);
         const res = await L.board('channels', {
             method: 'POST', body: { rename: name, from: channel, clientId: settings.clientId, reads }
         });
         if (!res || !res.success) return toast((res && res.error) || 'Rename failed', true);
         channels = res.channels || channels;
-        const clean = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 24);
-        channel = clean;
+        channel = res.channel || channelAddedBy(before, name) || channel;
+        // Persisted, or a restart reopens a channel name that no longer exists.
+        await saveSettings({ channel });
         setChannelTitle(channel);
+        // The renamed channel is a different conversation as far as the view is
+        // concerned; without this the old posts stayed in `posts` and the
+        // refresh merge kept every one older than the new newest page.
+        resetChannelView();
+        renderMessages();
         renderChannels();
         loadMessages(true);
     });
@@ -948,7 +1001,12 @@
         if (!res || !res.success) return toast((res && res.error) || 'Delete failed', true);
         channels = res.channels || [];
         channel = 'general';
+        await saveSettings({ channel });
         setChannelTitle('general');
+        // Post ids are global, so the deleted channel's messages would otherwise
+        // survive the refresh merge and render inline in #general as ghosts.
+        resetChannelView();
+        renderMessages();
         renderChannels();
         loadMessages(true);
     });
@@ -992,7 +1050,13 @@
             // dropped just because a poll happened to be in flight — wait
             // briefly for the slot instead.
             for (let i = 0; i < 40 && loading; i++) await new Promise((r) => setTimeout(r, 50));
-            if (loading || channel !== forChannel) return;
+            if (channel !== forChannel) return;
+            if (loading) {
+                // Two seconds and the slot never freed. Say so — silently
+                // dropping it made the "Load earlier" button look dead.
+                toast('Still loading — try that again in a moment', true);
+                return;
+            }
         }
         loading = true;
         try {
@@ -1037,14 +1101,37 @@
             // paged back to stays put — dropping it would yank them out of the
             // part of the conversation they're reading.
             const fresh = res.posts || [];
-            const oldest = fresh.length ? fresh[0].id : Infinity;
-            posts = posts.filter((p) => p.id < oldest).concat(fresh);
+            if (!fresh.length) {
+                // Nothing came back (every message deleted, or an empty
+                // channel). The old `oldest = Infinity` kept the entire stale
+                // list forever, so deletions never showed up.
+                posts = [];
+            } else {
+                const kept = posts.filter((p) => p.id < fresh[0].id);
+                // The retained history and this page are adjacent only if what
+                // we already had reached INTO the page — prevMax is the id of
+                // the newest post we held. If it falls short, more messages
+                // arrived than one page holds (asleep, or a long spell in the
+                // tray) and the two runs have a hole between them. Concatenating
+                // renders that as one seamless conversation with messages
+                // silently missing, and "Load earlier" pages below posts[0], so
+                // the hole is unreachable forever. Keeping only the fresh page
+                // puts the missing range back within reach.
+                const contiguous = !kept.length || prevMax >= fresh[0].id;
+                posts = contiguous ? kept.concat(fresh) : fresh.slice();
+                if (!contiguous) {
+                    console.warn('[messages] dropped stale history — a gap opened above the newest page');
+                }
+            }
         }
 
         // Chime + notify for messages from other people, exactly where the
         // website does it. prevMax > 0 skips the very first load of a channel.
         if (!before && prevMax > 0) {
-            const fresh = posts.filter((p) => p.id > prevMax && p.client_id !== settings.clientId);
+            // Blocked authors chime and notify for a message that is never
+            // drawn, which is the opposite of what blocking promises.
+            const fresh = posts.filter((p) => p.id > prevMax &&
+                p.client_id !== settings.clientId && !isBlocked(p.client_id));
             if (fresh.length) {
                 // Poll and socket nudge can both see the same post as fresh;
                 // the id watermark guarantees a single chime.
@@ -1219,8 +1306,11 @@
         if (nearBottom()) seenTopId = newestId();       // caught up
         const away = box.scrollHeight - box.scrollTop - box.clientHeight > JUMP_SHOW_PX;
 
+        // Counted over what is actually DRAWN: counting raw `posts` included
+        // blocked authors and anything the active filter hides, so the badge
+        // promised messages that jumping to the bottom would never reveal.
         const n = away
-            ? posts.filter((p) => p.id > seenTopId && p.client_id !== settings.clientId).length
+            ? displayedPosts().filter((p) => p.id > seenTopId && p.client_id !== settings.clientId).length
             : 0;
         const badge = $('jump-count');
         badge.textContent = n > 99 ? '99+' : String(n);
@@ -1699,7 +1789,14 @@
         if (input.value.trim() && now - typingSentAt > TYPING_MS) {
             typingSentAt = now;
             L.rt.sendTyping(channel, false);
-            L.board('typing', { method: 'POST', body: { clientId: settings.clientId, name: settings.displayName } });
+            // The channel matters here too: without it the server files the
+            // signal under its default, so on the HTTP fallback — which is
+            // exactly when the socket is down — everyone saw "X is typing…"
+            // against #general no matter where X was actually typing.
+            L.board('typing', {
+                method: 'POST',
+                body: { channel, clientId: settings.clientId, name: settings.displayName }
+            });
         }
     });
 
@@ -2316,7 +2413,10 @@
     $('file-input').addEventListener('change', (e) => {
         const files = Array.from(e.target.files || []).map((f) => itemFromFile(f));
         e.target.value = '';                 // allow re-picking the same file
-        const before = staged.length;
+        // The cap inside stageFiles counts VALID staged items, so measuring
+        // against the raw length made this warn when everything actually fit
+        // (and stay quiet when it didn't) as soon as an errored chip was staged.
+        const before = validStaged().length;
         const wanted = files.length;
         stageFiles(files);
         if (wanted > MAX_FILES - before) toast(`Only ${MAX_FILES} files fit in one message`, true);
@@ -3108,6 +3208,10 @@
         if (!pickerSelected) return;
         await saveSettings({ shareAudio: $('picker-audio').checked });
         await L.share.select(pickerSelected, $('picker-audio').checked);
+        // Released, not just hidden: trapFocus() early-returns for an element
+        // it already holds, so skipping this left the trap installed and every
+        // later open of the picker silently did no focus management at all.
+        releaseFocus($('picker'));
         $('picker').hidden = true;
         const ok = await voice.startShare();
         if (!ok) await L.share.cancel();
@@ -3818,7 +3922,11 @@
                     // Coalesced: several people posting at once (or one person
                     // pasting a few lines) is one refetch, not one per event.
                     scheduleRefresh(nearBottom());
-                } else {
+                } else if (!isBlocked(m.cid)) {
+                    // Blocking hides someone's messages from the list, so it has
+                    // to keep them out of the badge and the notification too —
+                    // otherwise a blocked person still lights up the app and
+                    // pops their message body onto the desktop.
                     bumpUnread(m.channel);
                     if (m.cid !== settings.clientId) notifyOtherChannel(m);
                 }
@@ -3856,9 +3964,12 @@
                 break;
             case 'voiceTakeover':
                 // The same account joined voice somewhere else — one voice
-                // session per person, so this device steps aside.
-                if (voice && voice.isJoined()) {
-                    heartbeatPresence(true);
+                // session per person, so this device steps aside. leave() is
+                // called unconditionally (it self-guards) so a takeover that
+                // lands mid-join still cancels the in-flight join rather than
+                // letting it complete with a live mic afterwards.
+                if (voice && (voice.isJoined() || voice.isJoining())) {
+                    if (voice.isJoined()) heartbeatPresence(true);
                     voice.leave();
                     toast('You joined voice from another device — disconnected here');
                 }
@@ -3886,10 +3997,15 @@
 
     // Rich notification for fresh posts in the CURRENT channel — the mention is
     // preferred over the newest message, same as the website.
-    async function notifyForPosts(fresh) {
-        if (!fresh.length || settings.notifications === false) return;
+    async function notifyForPosts(all) {
+        if (settings.notifications === false) return;
         if (!alertsAllowed(channel)) return;     // do not disturb, or a muted channel
         if (windowFocused) return;   // you're already looking at it
+
+        // Blocked authors are filtered out of the rendered list, so notifying
+        // about them would announce a message the reader can't even see.
+        const fresh = all.filter((p) => !isBlocked(p.client_id));
+        if (!fresh.length) return;
 
         const mention = fresh.find((p) => mentionsMe(p.body));
         const p = mention || fresh[fresh.length - 1];
@@ -3933,7 +4049,17 @@
     // the microphone stayed open behind the login gate.
     async function teardownSession() {
         entered = false;
-        if (voice && voice.isJoined()) { heartbeatPresence(true); voice.leave(); }
+        if (voice && voice.isJoined()) heartbeatPresence(true);
+        // Unconditional: leave() self-guards on (joined || joining), and calling
+        // it only when isJoined() is true meant a session that expired DURING a
+        // join never bumped voice.js's generation counter — so the in-flight
+        // join resolved afterwards and reconnected the mic behind the login gate.
+        if (voice) voice.leave();
+        // The thread poll runs on its own timer and would otherwise survive
+        // teardown: with no credential every tick 401s and calls relogin(),
+        // which re-focuses the password field every 2.5s while it's being typed.
+        closeThread();
+        stopDmPolling();
         stopPolling();
         stopPresence();
         // Awaited so the members list loses us now rather than on its next sweep.
@@ -4010,8 +4136,10 @@
     // ---------- tray commands ---------------------------------------------
 
     L.app.onCommand(({ cmd }) => {
-        if (cmd === 'toggleMute' && voice.isJoined()) voice.toggleMuted();
-        else if (cmd === 'toggleDeafen' && voice.isJoined()) voice.toggleDeafened();
+        // voice is null until setupVoice() runs at entry, and a stale tray menu
+        // can fire these before then — every other call site guards the same way.
+        if (cmd === 'toggleMute' && voice && voice.isJoined()) voice.toggleMuted();
+        else if (cmd === 'toggleDeafen' && voice && voice.isJoined()) voice.toggleDeafened();
         else if (cmd === 'joinVoice') joinVoice();
         else if (cmd === 'leaveVoice') leaveVoice();
     });
@@ -5106,6 +5234,11 @@
             scrubbing = false;
         };
         seek.addEventListener('change', commitSeek);
+        // A range input only fires 'change' when the value actually moved, so
+        // pressing the thumb without dragging left scrubbing stuck on and the
+        // slider stopped tracking playback for the rest of this card's life.
+        seek.addEventListener('pointerup', () => { scrubbing = false; });
+        seek.addEventListener('pointercancel', () => { scrubbing = false; });
         seek.addEventListener('input', () => {
             const d = audio.duration;
             if (Number.isFinite(d) && d > 0) {
@@ -5604,6 +5737,21 @@
 
     // Inline editor: Enter saves, Shift+Enter newlines, Esc cancels.
     let editingId = null;
+    let editingRestore = null;   // the open editor's teardown, for cancelEdit()
+
+    // Abandon an open editor from OUTSIDE its own closure. A channel switch or a
+    // session teardown replaces everything the editor was anchored to, and
+    // renderMessages() refuses to run while a .msg-edit node exists anywhere in
+    // the document — so an orphaned one freezes the message list permanently.
+    function cancelEdit() {
+        const fn = editingRestore;
+        editingRestore = null;
+        editingId = null;
+        if (!fn) return;
+        // The node may already be detached (the thread list was cleared), in
+        // which case there is nothing left to put back.
+        try { fn(); } catch (e) { /* already gone */ }
+    }
 
     function startEdit(p, el) {
         if (editingId) return;                       // one at a time
@@ -5627,12 +5775,14 @@
 
         const restore = () => {
             editingId = null;
+            editingRestore = null;
             const back = document.createElement('div');
             back.className = 'msg-text';
             back.innerHTML = original;
             wrap.replaceWith(back);
             renderMessages();      // resync anything the poll held back
         };
+        editingRestore = restore;
 
         ta.addEventListener('input', () => {
             ta.style.height = 'auto';
@@ -5653,7 +5803,7 @@
                 method: 'POST', body: { id: p.id, clientId: settings.clientId, body }
             });
 
-            if (res && res.needsAuth) { editingId = null; return relogin(); }
+            if (res && res.needsAuth) { editingId = null; editingRestore = null; return relogin(); }
             if (!res || !res.success) {
                 // Keep the editor open with their text intact so nothing is lost.
                 ta.disabled = false;
@@ -5662,6 +5812,7 @@
             }
 
             editingId = null;
+            editingRestore = null;
             // The server stamps edited_at, so reload rather than guessing — that
             // makes the "(edited)" marker reflect real server state.
             await loadMessages(false);
@@ -5699,8 +5850,30 @@
     // are fire-and-forget: the message is already on screen, and the card is
     // grafted into its container when (and if) the metadata arrives.
 
+    // Bounded. Both are keyed by url / video id and the app can sit in the tray
+    // for days, so without a cap they retain every link ever scrolled past —
+    // title, description and thumbnail strings included. Map iteration is
+    // insertion-ordered, so trimming from the front drops the oldest.
+    const PREVIEW_CACHE_MAX = 400;
     const previewCache = new Map();
     const youtubeCache = new Map();
+
+    function cachePut(map, key, value) {
+        if (!map.has(key) && map.size >= PREVIEW_CACHE_MAX) {
+            map.delete(map.keys().next().value);
+        }
+        map.set(key, value);
+    }
+
+    // A preview's image url comes from a page the poster chose, so it is no more
+    // trustworthy than the message body. esc() stops it breaking out of the
+    // attribute, but the url itself still has to be a real http(s) one: img-src
+    // allows 'self', and on a file:// renderer that means a file:/// url here
+    // would render a local file into the conversation.
+    function safeImageSrc(u) {
+        return window.ScarmLib.safeHttpUrl(u) ? u : '';
+    }
+
     const isImageUrl = window.ScarmLib.isImageUrl;
 
     function youtubeCard(info) {
@@ -5709,7 +5882,7 @@
         card.className = 'yt-card';
         card.innerHTML =
             '<div class="yt-thumb">' +
-            `<img src="${esc(info.thumbnail)}" alt="" loading="lazy">` +
+            `<img src="${esc(safeImageSrc(info.thumbnail))}" alt="" loading="lazy">` +
             '<span class="yt-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span>' +
             '</div>' +
             '<div class="yt-body">' +
@@ -5726,6 +5899,8 @@
         // If the thumbnail 404s, fall back to the well-known static path.
         img.addEventListener('error', () => {
             const fallback = `https://img.youtube.com/vi/${info.id}/hqdefault.jpg`;
+            // Also the recovery path when the oEmbed thumbnail was rejected by
+            // safeImageSrc and the src came through empty.
             if (img.src !== fallback) img.src = fallback; else card.remove();
         }, { once: false });
         return card;
@@ -5753,7 +5928,7 @@
             `<div class="lc-title">${esc(preview.title)}</div>` +
             (preview.description ? `<div class="lc-desc">${esc(preview.description)}</div>` : '') +
             '</div>' +
-            (preview.image ? `<img class="lc-thumb" src="${esc(preview.image)}" alt="" loading="lazy">` : '');
+            (safeImageSrc(preview.image) ? `<img class="lc-thumb" src="${esc(preview.image)}" alt="" loading="lazy">` : '');
         card.dataset.linkUrl = preview.url;
         card.addEventListener('click', () => L.app.openExternal(preview.url));
         const thumb = card.querySelector('.lc-thumb');
@@ -5792,11 +5967,11 @@
                 }
                 if (cached === 'pending') return;
 
-                youtubeCache.set(vid, 'pending');
+                cachePut(youtubeCache, vid, 'pending');
                 L.youtube(vid).then((info) => {
-                    youtubeCache.set(vid, info || null);
+                    cachePut(youtubeCache, vid, info || null);
                     if (info) graft(post.id, url, () => youtubeCard(info));
-                }).catch(() => youtubeCache.set(vid, null));
+                }).catch(() => cachePut(youtubeCache, vid, null));
                 return;
             }
 
@@ -5818,14 +5993,14 @@
             }
             if (cached === 'pending') return;
 
-            previewCache.set(url, 'pending');
+            cachePut(previewCache, url, 'pending');
             L.unfurl(url).then((res) => {
                 const preview = (res && res.success && res.preview) ? res.preview : null;
-                previewCache.set(url, preview);
+                cachePut(previewCache, url, preview);
                 // Graft into the live node instead of re-rendering the list, so
                 // the reader's scroll position is never disturbed.
                 if (preview) graft(post.id, url, () => linkCard(preview));
-            }).catch(() => previewCache.set(url, null));
+            }).catch(() => cachePut(previewCache, url, null));
         });
     }
 
@@ -6010,6 +6185,11 @@
     });
 
     function hideSearchResults() {
+        // Invalidates any reply still in flight. Without this, clearing the box
+        // (or closing the panel) left the previous query's seq current, so its
+        // response passed the staleness check and re-opened the results panel
+        // over an empty search.
+        searchSeq++;
         $('search-results').hidden = true;
         $('search-results').innerHTML = '';
     }
@@ -6163,6 +6343,12 @@
         // right place and closing the thread lands somewhere sensible.
         if (chan && chan !== channel) await switchChannel(chan);
 
+        // Both drawers occupy the same slot at the same z-index, and #dm-panel
+        // is later in the DOM — so with a DM open the thread would open
+        // invisibly underneath it and "Reply in thread" looked like a no-op.
+        // (openDm already does the reverse.)
+        if (dmPanelOpen()) closeDm();
+
         threadRootId = rootId;
         threadSig = '';
         threadPosts = [];
@@ -6178,6 +6364,13 @@
         threadRootId = 0;
         threadPosts = [];
         if (threadTimer) { clearInterval(threadTimer); threadTimer = null; }
+        // An inline editor opened on a thread reply lives in this list. Hiding
+        // the panel around it left the .msg-edit node in the document, and
+        // renderMessages() bails whenever one exists anywhere — so the MAIN
+        // message list stopped repainting for good until a thread was reopened.
+        const list = $('thread-list');
+        if (list.querySelector('.msg-edit')) editingId = null;
+        list.innerHTML = '';
         $('thread-panel').hidden = true;
     }
 
@@ -6346,7 +6539,6 @@
     let dmOpen = null;                // { id, username } of the open conversation
     let dmMsgs = [];
     let dmTimer = null;
-    let dmLoadedOnce = false;
 
     // The open conversation is being read right now. The row already hides its
     // own badge; the rail and the taskbar badge read this total, so leaving it
@@ -6391,7 +6583,6 @@
                 const t = dmThreads.find((x) => x.user.id === dmOpen.id);
                 if (t) t.unread = 0;
             }
-            dmLoadedOnce = true;
             renderDmSection();
         }
     }
@@ -6405,6 +6596,11 @@
         }, DM_POLL_MS);
     }
 
+    function stopDmPolling() {
+        if (dmTimer) { clearInterval(dmTimer); dmTimer = null; }
+        closeDm();
+    }
+
     async function openDm(user) {
         dmOpen = { id: user.id, username: user.username };
         $('dm-title').textContent = user.username;
@@ -6414,6 +6610,10 @@
         loadDmMessages.lastSig = null;    // the last conversation's payload isn't this one's
         $('dm-messages').innerHTML = '<div class="thread-loading">Loading…</div>';
         await loadDmMessages(true);
+        // Opening a conversation always lands on the newest message; only the
+        // background re-renders defer to where the reader already is.
+        const box = $('dm-messages');
+        box.scrollTop = box.scrollHeight;
         const t = dmThreads.find((x) => x.user.id === user.id);
         if (t && t.unread) { t.unread = 0; renderDmSection(); }
         renderDmSection();
@@ -6461,6 +6661,11 @@
 
     function renderDmMessages() {
         const box = $('dm-messages');
+        // Measured before the rebuild: this drawer used to slam to the bottom on
+        // every poll, so a DM arriving while you were reading back through the
+        // conversation yanked you away from it. The main list and the thread
+        // panel already extend this courtesy.
+        const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
         box.innerHTML = '';
         if (!dmMsgs.length) {
             const e = document.createElement('div');
@@ -6491,8 +6696,8 @@
             row.appendChild(time);
             box.appendChild(row);
         });
-        // A DM drawer always lands on the newest message.
-        box.scrollTop = box.scrollHeight;
+        // Follow the live edge only if that's where the reader already was.
+        if (atBottom) box.scrollTop = box.scrollHeight;
     }
 
     $('dm-composer').addEventListener('submit', async (e) => {
@@ -6525,13 +6730,16 @@
     // Start a conversation: pick any account holder from the directory.
     $('btn-new-dm').addEventListener('click', async (e) => {
         if (!account) { openSettings(); return; }
+        // Measured BEFORE the await: event.currentTarget is nulled once dispatch
+        // finishes, so reading it afterwards is an unconditional TypeError and
+        // the menu never opened at all.
+        const r = e.currentTarget.getBoundingClientRect();
         const res = await L.board('account/users');
         if (!res || !res.success) return toast((res && res.error) || 'Could not load the member directory', true);
         const others = (res.users || []).filter((u) => u.id !== account.id);
         if (!others.length) {
             return toast('No one else has a board account yet — DMs need one on both ends');
         }
-        const r = e.currentTarget.getBoundingClientRect();
         openCtxMenu(others.map((u) => ({
             label: u.username + (u.role === 'admin' ? ' (admin)' : ''),
             icon: 'at',
@@ -6574,12 +6782,16 @@
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            // Innermost first. The lightbox and the dialog are focus-trapped
+            // modals drawn OVER the thread/DM drawers, so they have to rank
+            // above them — opening an image from a thread row and pressing Esc
+            // used to close the thread behind the picture that was still up.
             if (emojiPopOpen()) closeEmojiPop();
             else if (!$('ctx-menu').hidden) closeCtxMenu();
-            else if (threadOpen()) closeThread();
-            else if (dmPanelOpen()) closeDm();
             else if (!$('lightbox').hidden) closeLightbox();
             else if (!$('dialog').hidden) closeDialog(inp_null());
+            else if (threadOpen()) closeThread();
+            else if (dmPanelOpen()) closeDm();
             else if (!$('picker').hidden) closePicker();
             else if (!$('popover').hidden) closePopover();
             else if (notesOpen()) closeNotes();
@@ -6610,10 +6822,11 @@
 
     // Leaving voice cleanly on quit keeps the presence row from lingering.
     window.addEventListener('beforeunload', () => {
-        if (voice && voice.isJoined()) {
-            heartbeatPresence(true);
-            voice.leave();
-        }
+        if (!voice) return;
+        if (voice.isJoined()) heartbeatPresence(true);
+        // Unconditional: leave() self-guards, and quitting mid-join must still
+        // retire the pending join rather than leave it to resolve.
+        voice.leave();
     });
 
     boot();

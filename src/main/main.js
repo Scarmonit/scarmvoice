@@ -17,6 +17,7 @@ const log = require('./log');
 const badge = require('./badge');
 const store = require('./store');
 const net = require('./net');
+const boardpath = require('./boardpath');
 const rt = require('./rt');
 const ptt = require('./ptt');
 const updater = require('./updater');
@@ -28,8 +29,12 @@ let win = null;
 let tray = null;
 let quitting = false;
 let voiceState = { inVoice: false, muted: false, deafened: false };
-let pendingShareSource = null;   // { id, audio } chosen in the renderer's picker
+let pendingShareSource = null;   // { id, audio, at } chosen in the renderer's picker
+// A pick the SDK never consumed must not satisfy some later request — see the
+// display-media handler.
+const SHARE_PICK_TTL_MS = 60000;
 const youtubeCache = new Map();  // videoId -> { value, until }
+const YOUTUBE_CACHE_MAX = 500;
 let isElevated = false;          // see the app:isElevated handler
 
 // Elevation matters because Windows silently blocks drag-and-drop from Explorer
@@ -113,7 +118,11 @@ function usableBounds(saved) {
     return onScreen ? saved : null;
 }
 
-function createWindow() {
+// forceShow is set when the window is being created *in response to* the user
+// asking for it (tray click, second launch). Without it, the startMinimized /
+// --openAsHidden rule below would build the window and immediately leave it
+// hidden — so the click would appear to do nothing.
+function createWindow(forceShow) {
     const saved = store.get().windowBounds;
     const bounds = usableBounds(saved);
     if (saved && !bounds) {
@@ -156,7 +165,8 @@ function createWindow() {
     win.once('ready-to-show', () => {
         // Stay hidden in the tray if the user asked to start minimized, or if
         // Windows auto-launched us as a hidden login item (--openAsHidden).
-        const startHidden = store.get().startMinimized || process.argv.includes('--openAsHidden');
+        const startHidden = !forceShow &&
+            (store.get().startMinimized || process.argv.includes('--openAsHidden'));
         if (!startHidden) win.show();
     });
 
@@ -220,7 +230,7 @@ function createWindow() {
 
     // External links open in the real browser, never in-app.
     win.webContents.setWindowOpenHandler(({ url }) => {
-        if (/^https?:/.test(url)) shell.openExternal(url);
+        if (/^https?:/.test(url)) openExternal(url);
         return { action: 'deny' };
     });
     // The app is a single page and never navigates itself, so allow only a
@@ -232,7 +242,17 @@ function createWindow() {
     win.webContents.on('will-navigate', (e, url) => {
         if (url === win.webContents.getURL()) return;      // reload of ourselves
         e.preventDefault();
-        if (/^https?:/.test(url)) shell.openExternal(url);
+        if (/^https?:/.test(url)) openExternal(url);
+    });
+}
+
+// shell.openExternal returns a promise that rejects when nothing is registered
+// to handle the url. Unhandled, those land in the global rejection trap in
+// log.js as anonymous noise; named here they say which url failed.
+function openExternal(url) {
+    return Promise.resolve(shell.openExternal(url)).then(() => true, (e) => {
+        console.warn('[app] could not open externally:', url, e && e.message);
+        return false;
     });
 }
 
@@ -247,7 +267,7 @@ function saveWindowState() {
 }
 
 function showWindow() {
-    if (!win || win.isDestroyed()) { createWindow(); return; }
+    if (!win || win.isDestroyed()) { createWindow(true); return; }
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
     win.focus();
@@ -310,11 +330,20 @@ function refreshTray() {
 
 function registerProtocol() {
     protocol.handle('lounge', async (request) => {
-        const url = new URL(request.url);
-        if (url.hostname !== 'file') return new Response('Not found', { status: 404 });
-        const key = decodeURIComponent(url.pathname.replace(/^\//, ''));
-        if (!key) return new Response('Missing key', { status: 400 });
+        // Parsing and decoding are inside the try because a malformed escape
+        // (lounge://file/%E0%A4%A) makes decodeURIComponent throw a URIError —
+        // which would reject the handler's promise instead of answering. CSP
+        // allows lounge: in img-src, so message content can reach this.
         try {
+            const url = new URL(request.url);
+            if (url.hostname !== 'file') return new Response('Not found', { status: 404 });
+            let key;
+            try {
+                key = decodeURIComponent(url.pathname.replace(/^\//, ''));
+            } catch (e) {
+                return new Response('Malformed key', { status: 400 });
+            }
+            if (!key) return new Response('Missing key', { status: 400 });
             const upstream = await net.fileStream(key);
             return new Response(upstream.body, {
                 status: upstream.status,
@@ -362,6 +391,16 @@ function configurePermissions() {
         const pending = pendingShareSource;
         pendingShareSource = null;
         if (!pending) { callback({}); return; }   // empty object = request denied
+
+        // If the SDK never called getDisplayMedia (join failed, the user left,
+        // an SDK error), the selection would sit here indefinitely and satisfy
+        // the NEXT share — silently sharing a window picked in some earlier
+        // session with no picker ever shown.
+        if (Date.now() - pending.at > SHARE_PICK_TTL_MS) {
+            console.warn('[share] ignoring a stale source selection');
+            callback({});
+            return;
+        }
 
         try {
             const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
@@ -437,77 +476,127 @@ async function fetchRemoteImage(raw) {
             redirect: 'manual'
         });
         if (res.status < 300 || res.status > 399) return res;
-        if (hop >= 3) throw new Error('Too many redirects');
-        const next = safeRemoteUrl(new URL(res.headers.get('location') || '', target.href).href);
-        if (!next) throw new Error('unsupported url');
-        try { await res.body?.cancel(); } catch (e) { /* already gone */ }
-        target = next;
+        // Every exit from here abandons this response, and an unconsumed body
+        // pins its keep-alive connection until GC — so the cancel has to happen
+        // on the throwing paths too, not just the one that loops.
+        try {
+            if (hop >= 3) throw new Error('Too many redirects');
+            const location = res.headers.get('location');
+            // A 30x with no Location would resolve to target.href and refetch
+            // the same URL until the hop limit.
+            if (!location) throw new Error('Redirect without a location');
+            const next = safeRemoteUrl(new URL(location, target.href).href);
+            if (!next) throw new Error('unsupported url');
+            target = next;
+        } finally {
+            try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+        }
     }
+}
+
+// A remote URL is chosen by whoever posted the message, so "whatever that host
+// sends" must never be buffered unbounded into the main process — a multi-GB
+// image/png would take down the whole app, not just a tab.
+async function boundedBuffer(res, limit) {
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > limit) {
+        try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+        throw new Error('That file is larger than 25 MB');
+    }
+    if (!res.body) return Buffer.alloc(0);
+
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.length;
+            // Content-Length can lie or be absent, so the running total is the
+            // check that actually holds.
+            if (total > limit) throw new Error('That file is larger than 25 MB');
+            chunks.push(value);
+        }
+    } finally {
+        try { await reader.cancel(); } catch (e) { /* already finished */ }
+    }
+    return Buffer.concat(chunks, total);
 }
 
 // ---- IPC -----------------------------------------------------------------
 
-// Every account/ endpoint that mints or returns the account token has its own
-// handler below, so the credential never crosses into the renderer. The generic
-// proxy therefore allows only the read-only corner of that namespace, and the
-// path is normalised first: it is concatenated into the request URL unparsed,
-// so an equality check against 'account/login' is trivially sidestepped with
-// 'account/login?x=1' or '//account/login'.
-const ACCOUNT_PROXYABLE = new Set([
-    'account/me', 'account/users', 'account/manage',
-    'account/twofactor', 'account/logout', 'account/resend'
-]);
+// Every handler registered through this is reachable only from our own top
+// frame. There are no iframes or webviews in the renderer today, so this is
+// defence in depth — but it is the layer that contains a renderer compromise,
+// and the sender check costs nothing.
+function fromMainFrame(event) {
+    if (!win || win.isDestroyed()) return false;
+    if (event.sender !== win.webContents) return false;
+    let frame;
+    // senderFrame throws if the frame has already gone away; the sender check
+    // above has already established this came from our window.
+    try { frame = event.senderFrame; } catch (e) { return true; }
+    return !frame || frame === win.webContents.mainFrame;
+}
 
-function normalizeBoardPath(p) {
-    return String(p || '').split('?')[0].split('#')[0].replace(/^\/+/, '').toLowerCase();
+function handle(channel, fn) {
+    ipcMain.handle(channel, (event, ...args) => {
+        if (!fromMainFrame(event)) {
+            console.warn(`[ipc] refused ${channel} from an unexpected sender`);
+            return null;
+        }
+        return fn(event, ...args);
+    });
 }
 
 function registerIpc() {
-    ipcMain.handle('auth:login', async (_e, password) => {
+    handle('auth:login', async (_e, password) => {
         const res = await net.login(password);
         if (res.success) rt.start(emitRt);
         return res;
     });
 
-    ipcMain.handle('auth:logout', async () => {
+    handle('auth:logout', async () => {
         rt.stop();
         return net.logout();
     });
 
-    ipcMain.handle('auth:status', async () => {
+    handle('auth:status', async () => {
         const res = await net.status();
         if (res.authed) rt.start(emitRt);
         return res;
     });
 
-    ipcMain.handle('board:call', async (_e, { path: p, opts }) => {
-        const pathStr = String(p || '');
+    handle('board:call', async (_e, { path: p, opts }) => {
         // register/login/verify responses all carry the account token, so the
         // whole namespace is denied except the read-only paths the UI needs.
-        const norm = normalizeBoardPath(pathStr);
-        if (norm.startsWith('account/') && !ACCOUNT_PROXYABLE.has(norm)) {
+        // See boardpath.js for why this decides on the RESOLVED path.
+        const resolved = boardpath.resolveBoardPath(p, net.baseUrl());
+        if (!resolved) return { success: false, error: 'bad path' };
+        if (boardpath.needsAccountBridge(resolved.key)) {
             return { success: false, error: 'use the account bridge' };
         }
-        return net.board(pathStr, opts || {});
+        return net.board(resolved.path, opts || {});
     });
 
     // ---- board accounts ----
-    ipcMain.handle('account:register', async (_e, { username, password, email }) => {
+    handle('account:register', async (_e, { username, password, email }) => {
         return net.accountRegister(String(username || ''), String(password || ''), String(email || ''), store.get().clientId);
     });
-    ipcMain.handle('account:login', async (_e, { username, password, totpCode }) => {
+    handle('account:login', async (_e, { username, password, totpCode }) => {
         return net.accountLogin(String(username || ''), String(password || ''), store.get().clientId, String(totpCode || ''));
     });
-    ipcMain.handle('account:verify', async (_e, { username, code }) => {
+    handle('account:verify', async (_e, { username, code }) => {
         return net.accountVerify(String(username || ''), String(code || ''), store.get().clientId);
     });
-    ipcMain.handle('account:resend', async (_e, { username }) => {
+    handle('account:resend', async (_e, { username }) => {
         return net.accountResend(String(username || ''));
     });
-    ipcMain.handle('account:logout', async () => net.accountLogout());
-    ipcMain.handle('account:me', async () => net.accountMe());
+    handle('account:logout', async () => net.accountLogout());
+    handle('account:me', async () => net.accountMe());
 
-    ipcMain.handle('voice:token', async (_e, payload) => {
+    handle('voice:token', async (_e, payload) => {
         const s = store.get();
         return net.board('voice/token', {
             method: 'POST',
@@ -522,7 +611,7 @@ function registerIpc() {
 
     // `id` ties the progress events below back to the composer row that started
     // this upload, so several files uploading at once each move their own bar.
-    ipcMain.handle('board:upload', async (_e, { name, type, data, id }) => {
+    handle('board:upload', async (_e, { name, type, data, id }) => {
         if (!id) return net.upload(name, type, data);
 
         // Throttled: the stream reports every 64 KB, which for a 25 MB file is
@@ -546,7 +635,9 @@ function registerIpc() {
         if (key) {
             const res = await net.fileStream(key);
             if (!res.ok) throw new Error(`Server returned ${res.status}`);
-            return Buffer.from(await res.arrayBuffer());
+            // Attachments are capped at 25 MB on the way in, so anything larger
+            // coming back is not something we should be buffering either.
+            return boundedBuffer(res, net.MAX_UPLOAD);
         }
         // Host-restricted (see safeRemoteUrl) and content-type checked, exactly
         // like board:fetchImage: everything reaching here saves to disk or goes
@@ -555,7 +646,7 @@ function registerIpc() {
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
         const type = (res.headers.get('content-type') || '').split(';')[0].trim();
         if (!type.startsWith('image/')) throw new Error('That link is not an image');
-        return Buffer.from(await res.arrayBuffer());
+        return boundedBuffer(res, net.MAX_UPLOAD);
     }
 
     // Only paths this process actually wrote may be revealed. The renderer hands
@@ -573,7 +664,7 @@ function registerIpc() {
 
     // Save an attachment to disk. The bytes have to come through the
     // authenticated client, so the renderer can't just download the URL.
-    ipcMain.handle('board:saveAttachment', async (_e, { key, name, url }) => {
+    handle('board:saveAttachment', async (_e, { key, name, url }) => {
         const target = await dialog.showSaveDialog(win, {
             defaultPath: name || 'attachment',
             title: 'Save attachment'
@@ -588,7 +679,7 @@ function registerIpc() {
         }
     });
 
-    ipcMain.handle('board:revealFile', (_e, filePath) => {
+    handle('board:revealFile', (_e, filePath) => {
         if (!filePath) return false;
         // The save dialog's destination is wherever the user chose, so the rule
         // is "a file we just produced", not a fixed directory.
@@ -602,7 +693,7 @@ function registerIpc() {
 
     // Straight to the Downloads folder, no dialog. Never silently clobbers an
     // existing file — it disambiguates with " (2)", " (3)", …
-    ipcMain.handle('board:downloadAttachment', async (_e, { key, name, url }) => {
+    handle('board:downloadAttachment', async (_e, { key, name, url }) => {
         try {
             const buf = await imageBytes({ key, url });
 
@@ -626,7 +717,7 @@ function registerIpc() {
 
     // Put the actual image on the clipboard (not just its URL), so it can be
     // pasted straight into another app.
-    ipcMain.handle('board:copyImage', async (_e, { key, url }) => {
+    handle('board:copyImage', async (_e, { key, url }) => {
         try {
             const img = nativeImage.createFromBuffer(await imageBytes({ key, url }));
             if (img.isEmpty()) return { success: false, error: 'Not a decodable image' };
@@ -639,14 +730,14 @@ function registerIpc() {
 
     // Link previews. Proxied because /api/board/unfurl is cookie-gated; the
     // server does the fetching, parsing and 7-day caching.
-    ipcMain.handle('board:unfurl', async (_e, url) => {
+    handle('board:unfurl', async (_e, url) => {
         return net.board('unfurl', { query: { url } });
     });
 
     // Dragging an image out of a browser gives us a URL, not a file. Fetch the
     // bytes here so the drop can attach the actual image instead of its link
     // text — and because an arbitrary remote host won't send CORS headers.
-    ipcMain.handle('board:fetchImage', async (_e, url) => {
+    handle('board:fetchImage', async (_e, url) => {
         try {
             // Same host restriction as imageBytes — a dragged image URL is no
             // more trustworthy than one embedded in a message.
@@ -656,10 +747,9 @@ function registerIpc() {
             const type = (res.headers.get('content-type') || '').split(';')[0].trim();
             if (!type.startsWith('image/')) return { success: false, error: 'That link is not an image' };
 
-            const buf = Buffer.from(await res.arrayBuffer());
-            if (buf.length > net.MAX_UPLOAD) {
-                return { success: false, error: 'That image is larger than 25 MB' };
-            }
+            // Capped while streaming rather than after buffering, so an
+            // oversized image is refused without ever being held in memory.
+            const buf = await boundedBuffer(res, net.MAX_UPLOAD);
 
             // Name it from the URL path, falling back to the mime subtype.
             let name = '';
@@ -678,11 +768,14 @@ function registerIpc() {
     // YouTube title/channel/thumbnail via oEmbed — no API key needed.
     // This runs here rather than in the renderer because the endpoint sends no
     // Access-Control-Allow-Origin, so a browser-side fetch is blocked by CORS.
-    ipcMain.handle('board:youtube', async (_e, videoId) => {
+    handle('board:youtube', async (_e, videoId) => {
         if (!/^[A-Za-z0-9_-]{11}$/.test(String(videoId || ''))) return null;
 
         const hit = youtubeCache.get(videoId);
-        if (hit && Date.now() < hit.until) return hit.value;
+        if (hit) {
+            if (Date.now() < hit.until) return hit.value;
+            youtubeCache.delete(videoId);   // expired — drop it rather than overwrite
+        }
 
         let value = null;
         try {
@@ -704,6 +797,12 @@ function registerIpc() {
             }
         } catch (e) { /* offline or timeout — fall through to null */ }
 
+        // Bounded: this process lives for weeks in the tray, so an uncapped map
+        // grows with every distinct video ever scrolled past. Map iteration is
+        // insertion-ordered, so this drops the oldest entry.
+        if (youtubeCache.size >= YOUTUBE_CACHE_MAX) {
+            youtubeCache.delete(youtubeCache.keys().next().value);
+        }
         // Cache misses briefly so a dead video isn't re-fetched on every render,
         // but still recovers if it was a transient failure.
         youtubeCache.set(videoId, {
@@ -715,7 +814,7 @@ function registerIpc() {
 
     // ---- screen share ----
 
-    ipcMain.handle('share:sources', async () => {
+    handle('share:sources', async () => {
         const sources = await desktopCapturer.getSources({
             types: ['screen', 'window'],
             thumbnailSize: { width: 320, height: 200 },
@@ -733,62 +832,62 @@ function registerIpc() {
             }));
     });
 
-    ipcMain.handle('share:select', (_e, { id, audio }) => {
-        pendingShareSource = { id, audio: !!audio };
+    handle('share:select', (_e, { id, audio }) => {
+        pendingShareSource = { id, audio: !!audio, at: Date.now() };
         return true;
     });
 
-    ipcMain.handle('share:cancel', () => { pendingShareSource = null; });
+    handle('share:cancel', () => { pendingShareSource = null; });
 
-    ipcMain.handle('rt:start', () => { rt.start(emitRt); return { connected: rt.isConnected() }; });
-    ipcMain.handle('rt:stop', () => { rt.stop(); return { connected: false }; });
-    ipcMain.handle('rt:wake', () => { rt.wake(); return { connected: rt.isConnected() }; });
-    ipcMain.handle('rt:send', (_e, obj) => rt.send(obj));
-    ipcMain.handle('rt:posted', (_e, channel) => rt.notifyPosted(channel));
-    ipcMain.handle('rt:typing', (_e, { channel, stop }) => rt.sendTyping(channel, stop));
-    ipcMain.handle('rt:voice', (_e, { inVoice, muted }) => rt.sendVoice(inVoice, muted));
+    handle('rt:start', () => { rt.start(emitRt); return { connected: rt.isConnected() }; });
+    handle('rt:stop', () => { rt.stop(); return { connected: false }; });
+    handle('rt:wake', () => { rt.wake(); return { connected: rt.isConnected() }; });
+    handle('rt:send', (_e, obj) => rt.send(obj));
+    handle('rt:posted', (_e, channel) => rt.notifyPosted(channel));
+    handle('rt:typing', (_e, { channel, stop }) => rt.sendTyping(channel, stop));
+    handle('rt:voice', (_e, { inVoice, muted }) => rt.sendVoice(inVoice, muted));
 
-    ipcMain.handle('settings:get', () => store.get());
-    ipcMain.handle('settings:set', (_e, patch) => store.set(patch));
+    handle('settings:get', () => store.get());
+    handle('settings:set', (_e, patch) => store.set(patch));
 
-    ipcMain.handle('ptt:apply', () => ptt.apply());
-    ipcMain.handle('ptt:available', () => ptt.isAvailable());
-    ipcMain.handle('ptt:describe', (_e, binding) => ptt.describe(binding));
+    handle('ptt:apply', () => ptt.apply());
+    handle('ptt:available', () => ptt.isAvailable());
+    handle('ptt:describe', (_e, binding) => ptt.describe(binding));
 
-    ipcMain.handle('win:minimize', () => win && win.minimize());
-    ipcMain.handle('win:maximize', () => {
+    handle('win:minimize', () => win && win.minimize());
+    handle('win:maximize', () => {
         if (!win) return;
         win.isMaximized() ? win.unmaximize() : win.maximize();
     });
-    ipcMain.handle('win:close', () => win && win.close());
-    ipcMain.handle('win:focused', () => !!(win && win.isFocused()));
+    handle('win:close', () => win && win.close());
+    handle('win:focused', () => !!(win && win.isFocused()));
 
-    ipcMain.handle('app:version', () => app.getVersion());
+    handle('app:version', () => app.getVersion());
 
     // Everything the app logs goes to a file (see log.js); this is how someone
     // reporting a bug gets at it without knowing where userData lives.
-    ipcMain.handle('app:openLogs', () => log.openFolder());
+    handle('app:openLogs', () => log.openFolder());
 
     // Windows blocks drag-and-drop from a medium-integrity process (Explorer)
     // into a high-integrity one (an elevated app) — UIPI drops the messages
     // before they ever reach us, so no amount of renderer code can fix it.
     // Detect it so we can explain rather than appear broken.
-    ipcMain.handle('app:isElevated', () => isElevated);
+    handle('app:isElevated', () => isElevated);
 
     // Launch-on-startup. get reads the OS's actual state so the toggle reflects
     // reality even if it was changed outside the app.
-    ipcMain.handle('startup:get', () => getLoginItem());
-    ipcMain.handle('startup:set', (_e, { openAtLogin, openAsHidden }) =>
+    handle('startup:get', () => getLoginItem());
+    handle('startup:set', (_e, { openAtLogin, openAsHidden }) =>
         setLoginItem(openAtLogin, openAsHidden));
 
     // Auto-update.
-    ipcMain.handle('update:getState', () => updater.getState());
-    ipcMain.handle('update:check', () => updater.checkNow());
-    ipcMain.handle('update:download', () => updater.startDownload());
-    ipcMain.handle('update:install', () => updater.installNow());
-    ipcMain.handle('update:setAuto', (_e, on) => { updater.setAuto(on); return { ok: true }; });
+    handle('update:getState', () => updater.getState());
+    handle('update:check', () => updater.checkNow());
+    handle('update:download', () => updater.startDownload());
+    handle('update:install', () => updater.installNow());
+    handle('update:setAuto', (_e, on) => { updater.setAuto(on); return { ok: true }; });
 
-    ipcMain.handle('app:notify', (_e, payload) => {
+    handle('app:notify', (_e, payload) => {
         if (!store.get().notifications) return false;
         if (win && win.isFocused()) return false;         // you're already looking at it
         if (!Notification.isSupported()) return false;
@@ -803,9 +902,17 @@ function registerIpc() {
         return true;
     });
 
-    ipcMain.handle('app:voiceState', (_e, state) => {
+    handle('app:voiceState', (_e, state) => {
         const wasInVoice = voiceState.inVoice;
-        voiceState = Object.assign(voiceState, state || {});
+        // Copied field by field rather than Object.assign'd: assign uses [[Set]],
+        // so an own '__proto__' key surviving structured clone would re-point
+        // this object's prototype, and any unrelated key would be merged in.
+        const s = state || {};
+        voiceState = {
+            inVoice: 'inVoice' in s ? !!s.inVoice : voiceState.inVoice,
+            muted: 'muted' in s ? !!s.muted : voiceState.muted,
+            deafened: 'deafened' in s ? !!s.deafened : voiceState.deafened
+        };
         // Joining or leaving voice invalidates any PTT toggle state that
         // accumulated while the renderer was ignoring hotkey events.
         if (voiceState.inVoice !== wasInVoice) ptt.reset();
@@ -819,12 +926,19 @@ function registerIpc() {
     // This used to clear the overlay when the count was zero and otherwise only
     // flash the frame, so the badge was never actually drawn — and nothing in
     // the renderer called it at all.
-    ipcMain.handle('app:badge', (_e, count) => {
+    handle('app:badge', (_e, count) => {
         if (!win || win.isDestroyed()) return false;
         const n = Math.max(0, Math.floor(Number(count) || 0));
 
         if (!n) {
-            win.setOverlayIcon(null, '');
+            try {
+                win.setOverlayIcon(null, '');
+                // Clearing the badge has to stop the taskbar flash too, or the
+                // button keeps pulsing for a count that is already gone.
+                win.flashFrame(false);
+            } catch (e) {
+                console.warn('[badge] clearing the overlay failed:', e.message);
+            }
             lastBadge = 0;
             return true;
         }
@@ -854,9 +968,9 @@ function registerIpc() {
         light: { color: '#ffffff', symbolColor: '#31343b' }
     };
 
-    ipcMain.handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
+    handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
 
-    ipcMain.handle('app:setTheme', (_e, theme) => {
+    handle('app:setTheme', (_e, theme) => {
         const o = OVERLAY[theme === 'light' ? 'light' : 'dark'];
         if (!win || win.isDestroyed()) return false;
         try {
@@ -872,19 +986,19 @@ function registerIpc() {
         }
     });
 
-    ipcMain.handle('app:openExternal', (_e, url) => {
+    handle('app:openExternal', async (_e, url) => {
         let u;
         try { u = new URL(String(url)); } catch (e) { return false; }
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-        shell.openExternal(u.href);
-        return true;
+        // Awaited so the answer reflects whether it actually opened.
+        return openExternal(u.href);
     });
 
     // Editing commands for the in-app context menu on the composer. These run
     // as native edit commands on the focused element, so they behave exactly
     // like Ctrl+X/C/V — including firing the renderer's own paste handler when
     // there's an image on the clipboard.
-    ipcMain.handle('edit:command', (_e, name) => {
+    handle('edit:command', (_e, name) => {
         if (!win) return false;
         const wc = win.webContents;
         if (name === 'cut') wc.cut();
@@ -897,7 +1011,7 @@ function registerIpc() {
 
     // What's on the clipboard, so the menu can grey out Paste rather than
     // offering an action that does nothing.
-    ipcMain.handle('edit:clipboard', () => {
+    handle('edit:clipboard', () => {
         const formats = clipboard.availableFormats();
         return {
             text: clipboard.readText().length > 0,
@@ -1005,7 +1119,7 @@ app.whenReady().then(() => {
         });
     } catch (e) { /* powerMonitor unavailable on this platform */ }
 
-    app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+    app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(true); });
 });
 
 app.on('before-quit', () => { quitting = true; });

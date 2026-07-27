@@ -167,7 +167,18 @@ function load() {
     let merged;
     try {
         const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        merged = Object.assign({}, DEFAULTS, raw);
+        // Merged key by key for the same reason set() is: Object.assign writes
+        // through the setter, so a "__proto__" key in a hand-edited (or
+        // corrupted) settings.json would re-point this object's prototype.
+        merged = Object.assign({}, DEFAULTS);
+        for (const key of Object.keys(raw || {})) {
+            if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+            if (UNSAFE_KEYS.includes(key)) {
+                console.warn('[store] ignored a prototype-polluting key in settings.json: ' + key);
+                continue;
+            }
+            merged[key] = raw[key];
+        }
     } catch (e) {
         return Object.assign({}, DEFAULTS);
     }
@@ -330,6 +341,28 @@ function writeSecret(file, token, label) {
     }
 }
 
+// Signing out has to actually destroy the credential. unlinkSync's catch can't
+// tell "already gone" (ENOENT, fine) from "couldn't delete it" (EPERM/EBUSY — a
+// virus scanner or a file lock), and on the latter the next launch reads the
+// blob straight back and silently signs the user in again. So a failure that
+// isn't ENOENT falls back to overwriting the file with nothing, which leaves
+// unreadable garbage rather than a live credential.
+function destroySecret(p, label) {
+    if (!p) return;
+    try {
+        fs.unlinkSync(p);
+        return;
+    } catch (e) {
+        if (e && e.code === 'ENOENT') return;
+        console.warn(`[store] could not delete the ${label} file (${e.message}) — blanking it instead`);
+    }
+    try {
+        fs.writeFileSync(p, '');
+    } catch (e) {
+        console.error(`[store] the ${label} file could not be cleared: ${e.message}`);
+    }
+}
+
 // ---- session cookie ------------------------------------------------------
 
 function readSession() {
@@ -345,7 +378,7 @@ function writeSession(token) {
 }
 
 function clearSession() {
-    try { fs.unlinkSync(sessionPath); } catch (e) { /* already gone */ }
+    destroySecret(sessionPath, 'session');
 }
 
 // ---- board account token ---------------------------------------------------
@@ -362,7 +395,7 @@ function writeAccountToken(token) {
 }
 
 function clearAccountToken() {
-    try { fs.unlinkSync(accountPath); } catch (e) { /* already gone */ }
+    destroySecret(accountPath, 'account token');
 }
 
 module.exports = {

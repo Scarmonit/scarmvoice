@@ -23,27 +23,40 @@
             this.outFrame = null;
             this.outPos = 0;
 
+            // Report the outcome back to noise.js. Without this the main thread
+            // logged "rnnoise active" purely because the graph was built, so a
+            // wasm that never compiled looked identical to one that worked —
+            // suppression could be completely inert and nothing said so.
+            const announce = (ok, why) => {
+                try { this.port.postMessage({ t: ok ? 'ready' : 'failed', why: why || '' }); } catch (e) {}
+            };
             const boot = (m) => {
                 try {
                     this.wasm = m;
                     this.state = m._rnnoise_create(0);
                     this.ptr = m._malloc(FRAME * 4);
                     this.ready = true;
+                    announce(true);
                 } catch (e) {
                     this.failed = true;
+                    announce(false, (e && e.message) || 'rnnoise_create failed');
                 }
+            };
+            const bootFailed = (e) => {
+                this.failed = true;
+                announce(false, (e && e.message) || 'wasm module failed to load');
             };
             try {
                 // The sync build compiles at import time; the factory returns the
                 // module (sometimes promise-shaped, depending on emscripten
                 // version), so accept both.
                 const mod = createRNNWasmModuleSync();
-                if (mod && typeof mod.then === 'function') mod.then(boot, () => { this.failed = true; });
+                if (mod && typeof mod.then === 'function') mod.then(boot, bootFailed);
                 else if (mod && !mod._rnnoise_create && mod.ready && typeof mod.ready.then === 'function') {
-                    mod.ready.then(boot, () => { this.failed = true; });
+                    mod.ready.then(boot, bootFailed);
                 } else boot(mod);
             } catch (e) {
-                this.failed = true;
+                bootFailed(e);
             }
 
             this.port.onmessage = (ev) => {

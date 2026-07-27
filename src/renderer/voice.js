@@ -55,12 +55,34 @@
     // starts, cleared when it stops; null means "no share, don't tune anything
     // as one". The camera track must never match this.
     let SHARE_TRACK_ID = null;
+    // Kept for the console: `loungeShareTrack()` while debugging a share.
     function shareVideoTrackId() { return SHARE_TRACK_ID; }
+    window.loungeShareTrack = shareVideoTrackId;
 
     // Bumped on every share start/stop transition. Retry loops capture it when
     // armed and bail if it moved — covers the case where SHARE_TRACK_ID was
     // null from the start (producer not up yet), which the id check can't.
     let SHARE_GEN = 0;
+
+    // Late-binding for the id: screenShareUpdate can fire before the SDK has
+    // published the video track, leaving SHARE_TRACK_ID null. The retry loop
+    // used to fall back to "tune any video sender" in that window, which with a
+    // camera already on meant pinning the CAMERA at the share's bitrate and
+    // maintain-resolution — the exact confusion the id match exists to prevent.
+    // Re-reading it each attempt closes the window instead.
+    function refreshShareTrackId() {
+        if (SHARE_TRACK_ID) return SHARE_TRACK_ID;
+        try {
+            const v = meetingRef && meetingRef.self &&
+                meetingRef.self.screenShareTracks && meetingRef.self.screenShareTracks.video;
+            if (v && v.id) SHARE_TRACK_ID = v.id;
+        } catch (e) { /* not up yet */ }
+        return SHARE_TRACK_ID;
+    }
+
+    // The engine closure assigns this so the module-level share helpers can see
+    // the live meeting without threading it through every call.
+    let meetingRef = null;
 
     function shareProfile() {
         const smooth = isSmooth();
@@ -134,7 +156,12 @@
     function forceScreenQuality() {
         prunePCS();
         const prof = shareProfile();
-        const shareTrackId = shareVideoTrackId();
+        // Re-read rather than trusting whatever the id was when the loop armed:
+        // the track often appears a beat after the sender does.
+        const shareTrackId = refreshShareTrackId();
+        // Still unknown — do nothing rather than guess. Tuning "any video
+        // sender" here is what used to re-tune a live camera at 16 Mbps.
+        if (!shareTrackId) return 0;
         let found = 0;
         PCS.forEach((pc) => {
             if (!pc || typeof pc.getSenders !== 'function') return;
@@ -142,9 +169,7 @@
             try { senders = pc.getSenders(); } catch (e) { return; }
             senders.forEach((sender) => {
                 if (!sender || !sender.track || sender.track.kind !== 'video') return;
-                // No share track id yet (the sender can appear first) → fall back
-                // to tuning any video sender, which is the old behaviour.
-                if (shareTrackId && sender.track.id !== shareTrackId) return;
+                if (sender.track.id !== shareTrackId) return;
                 found++;
                 try { sender.track.contentHint = prof.contentHint; } catch (e) {}
                 try {
@@ -537,21 +562,47 @@
         }
         window.loungeInbound = reportInboundStats;
 
+        // Every SDK subscription made for the CURRENT meeting. meeting.leave()
+        // does not take these off, and each handler closes over module state
+        // with no generation check — so an event arriving during the SDK's own
+        // async teardown would rebuild the audio elements and share entries that
+        // leave() had just cleared, and they'd survive until the next leave.
+        let wired = [];
+
+        function bind(emitter, event, handler) {
+            if (!emitter || typeof emitter.on !== 'function') return;
+            try {
+                emitter.on(event, handler);
+                wired.push({ emitter, event, handler });
+            } catch (e) { /* this SDK build doesn't expose that event */ }
+        }
+
+        function unwire() {
+            const list = wired;
+            wired = [];
+            list.forEach(({ emitter, event, handler }) => {
+                try {
+                    if (typeof emitter.off === 'function') emitter.off(event, handler);
+                    else if (typeof emitter.removeListener === 'function') emitter.removeListener(event, handler);
+                } catch (e) { /* best effort — the emitter may already be dead */ }
+            });
+        }
+
         function wire(m) {
             // Re-run watchLocal on every self audioUpdate: mute/PTT replaces the
             // published track (disableAudio really stops it), so a meter bound
             // once at join goes dark after the first cycle — and in PTT mode the
             // track doesn't exist until the first transmit at all.
-            try { if (m.self && m.self.on) m.self.on('audioUpdate', () => { watchLocal(); render(); }); } catch (e) {}
+            bind(m.self, 'audioUpdate', () => { watchLocal(); render(); });
             const pj = m.participants && m.participants.joined;
-            if (pj && pj.on) {
-                pj.on('participantJoined', (p) => { attachAudio(p); render(); pushCams(); });
-                pj.on('participantLeft', (p) => { detachAudio(p); render(); pushCams(); });
-                pj.on('audioUpdate', (p) => { attachAudio(p); render(); });
-                pj.on('videoUpdate', () => pushCams());
+            bind(pj, 'participantJoined', (p) => { attachAudio(p); render(); pushCams(); });
+            bind(pj, 'participantLeft', (p) => { detachAudio(p); render(); pushCams(); });
+            bind(pj, 'audioUpdate', (p) => { attachAudio(p); render(); });
+            bind(pj, 'videoUpdate', () => pushCams());
+            if (pj) {
                 try { (pj.toArray ? pj.toArray() : []).forEach(attachAudio); } catch (e) {}
             }
-            try { if (m.self && m.self.on) m.self.on('videoUpdate', () => pushCams()); } catch (e) {}
+            bind(m.self, 'videoUpdate', () => pushCams());
             wireShare(m);
         }
 
@@ -722,7 +773,15 @@
                     if (v.applyConstraints) v.applyConstraints(cap).catch(() => {});
                     // If the source disappears (window closed, "Stop sharing"),
                     // tell the SDK rather than leaving a dead tile up.
-                    v.addEventListener('ended', () => stopShare(), { once: true });
+                    //
+                    // Tagged because this function also runs on every mid-share
+                    // quality/motion change: {once:true} doesn't dedupe distinct
+                    // closures, so each of those added another listener and the
+                    // source closing then fired stopShare() N times.
+                    if (!v.__loungeEndBound) {
+                        v.__loungeEndBound = true;
+                        v.addEventListener('ended', () => stopShare(), { once: true });
+                    }
                 }
                 if (meeting && meeting.self && typeof meeting.self.updateScreenshareConstraints === 'function') {
                     Promise.resolve(meeting.self.updateScreenshareConstraints(cap)).catch(() => {});
@@ -739,31 +798,27 @@
         }
 
         function wireShare(m) {
-            try {
-                if (m.self && m.self.on) {
-                    m.self.on('screenShareUpdate', (d) => {
-                        if (d && d.screenShareEnabled) {
-                            localSharing = true;
-                            SHARE_GEN++;   // new share — retire any older retry loop
-                            const tracks = d.screenShareTracks || m.self.screenShareTracks || {};
-                            SHARE_TRACK_ID = (tracks.video && tracks.video.id) || null;
-                            tuneLocalShare();
-                            setSharer(selfCid(), m.self.name || settings.displayName || 'You', true, tracks);
-                        } else {
-                            localSharing = false;
-                            SHARE_GEN++;   // share over — kill in-flight retry loops
-                            SHARE_TRACK_ID = null;
-                            clearSharer(selfCid());
-                            pushState();
-                        }
-                    });
+            bind(m.self, 'screenShareUpdate', (d) => {
+                if (d && d.screenShareEnabled) {
+                    localSharing = true;
+                    SHARE_GEN++;   // new share — retire any older retry loop
+                    const tracks = d.screenShareTracks || m.self.screenShareTracks || {};
+                    SHARE_TRACK_ID = (tracks.video && tracks.video.id) || null;
+                    tuneLocalShare();
+                    setSharer(selfCid(), m.self.name || settings.displayName || 'You', true, tracks);
+                } else {
+                    localSharing = false;
+                    SHARE_GEN++;   // share over — kill in-flight retry loops
+                    SHARE_TRACK_ID = null;
+                    clearSharer(selfCid());
+                    pushState();
                 }
-            } catch (e) {}
+            });
 
             const pj = m.participants && m.participants.joined;
             if (!pj || !pj.on) return;
 
-            pj.on('screenShareUpdate', (p) => {
+            bind(pj, 'screenShareUpdate', (p) => {
                 const cid = cidOf(p);
                 const t = p.screenShareTracks || {};
                 console.info('[share] REMOTE screenShareUpdate from', p.name, cid,
@@ -776,9 +831,9 @@
                     clearSharer(cid);
                 }
             });
-            pj.on('participantLeft', (p) => clearSharer(cidOf(p)));
+            bind(pj, 'participantLeft', (p) => clearSharer(cidOf(p)));
             // Someone already sharing when they (or we) arrive.
-            pj.on('participantJoined', (p) => {
+            bind(pj, 'participantJoined', (p) => {
                 if (p.screenShareEnabled) {
                     setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks);
                 }
@@ -811,8 +866,12 @@
                 });
         }
 
+        // Note SHARE_TRACK_ID is cleared here as well as on the SDK's disabled
+        // event: relying on that event alone left a stale id behind whenever it
+        // was delayed or dropped.
         function stopShare() {
             SHARE_GEN++;   // stop any quality-retry loop before the SDK winds down
+            SHARE_TRACK_ID = null;
             try {
                 if (meeting && meeting.self && meeting.self.disableScreenShare) {
                     Promise.resolve(meeting.self.disableScreenShare()).catch(() => {});
@@ -838,8 +897,20 @@
             lastTransmit = want;
             try {
                 if (meeting && meeting.self) {
-                    if (want && meeting.self.enableAudio) meeting.self.enableAudio();
-                    else if (!want && meeting.self.disableAudio) meeting.self.disableAudio();
+                    const fn = want ? meeting.self.enableAudio : meeting.self.disableAudio;
+                    if (fn) {
+                        // These return promises. A bare try/catch only sees a
+                        // synchronous throw, so a failure to acquire the mic
+                        // (device unplugged, permission revoked) became an
+                        // unhandled rejection while lastTransmit had ALREADY
+                        // been set — the UI claimed it was transmitting and the
+                        // equality guard above blocked every retry.
+                        Promise.resolve(fn.call(meeting.self)).catch((e) => {
+                            if (lastTransmit === want) lastTransmit = null;   // let it be retried
+                            fail('microphone', e);
+                            pushState();
+                        });
+                    }
                 }
             } catch (e) { /* SDK will re-sync on the next state event */ }
             pushState();
@@ -881,7 +952,10 @@
                     noiseSuppression: settings.noiseSuppression !== false,
                     enableHighBitrate: true
                 };
-                if (settings.micDeviceId) audioCfg.deviceId = { exact: settings.micDeviceId };
+                // 'ideal', not 'exact': a saved mic that has since been unplugged
+                // made the WHOLE join fail with OverconstrainedError instead of
+                // quietly falling back to the default device.
+                if (settings.micDeviceId) audioCfg.deviceId = { ideal: settings.micDeviceId };
 
                 const m = await window.RealtimeKitClient.init({
                     authToken: res.token,
@@ -910,6 +984,8 @@
                     return;
                 }
                 meeting = m;
+
+                meetingRef = m;
 
                 wire(meeting);
                 const joinFn = meeting.join || meeting.joinRoom;
@@ -940,6 +1016,8 @@
                 joined = false;
                 try { if (meeting && meeting.leave) meeting.leave(); } catch (_) {}
                 meeting = null;
+
+                meetingRef = null;
                 pushState();
                 fail('join', e);
                 throw e;
@@ -963,6 +1041,13 @@
         function leave() {
             if (!joined && !joining) return;
             joinGen++;   // invalidate any join() still in flight
+            // Detach before leaving: the SDK keeps emitting during its own async
+            // teardown, and those handlers close over module state with no
+            // generation check — a late audioUpdate or screenShareUpdate would
+            // rebuild the very hidden <audio> elements and share entries this
+            // function is clearing, and they would then survive until the next
+            // leave.
+            unwire();
             try {
                 if (meeting) {
                     if (meeting.leave) meeting.leave();
@@ -971,6 +1056,18 @@
             } catch (e) { /* leaving is best-effort */ }
 
             meeting = null;
+
+
+            meetingRef = null;
+            // Peer connections from this session are closed now; dropping them
+            // here keeps the registry from growing across join/leave cycles that
+            // never screen-share (the only path that used to prune it).
+            prunePCS();
+            SHARE_TRACK_ID = null;
+            SHARE_GEN++;
+            // Re-armed so the next join logs its SFU peer diagnostic even if the
+            // roster comes back identical.
+            lastRosterSig = '';
             joined = false;
             joining = false;
             muted = false;
@@ -1107,6 +1204,10 @@
             },
 
             isJoined: () => joined,
+            // A join in flight is neither joined nor idle. Callers that tear the
+            // session down need to see this state, or the pending join resolves
+            // after they've finished cleaning up and opens the mic behind them.
+            isJoining: () => joining,
             isMuted: () => muted,
             isDeafened: () => deafened
         };

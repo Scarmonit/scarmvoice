@@ -20,7 +20,12 @@ function channels(file, pattern) {
     return new Set(Array.from(src.matchAll(pattern), (m) => m[1]));
 }
 
-const handled = channels('main.js', /ipcMain\.handle\(\s*'([^']+)'/g);
+// Matches both `ipcMain.handle('x', …)` and the bare `handle('x', …)` that
+// registerIpc uses — every handler goes through main.js's sender-validating
+// wrapper, which registers the real ipcMain listener with a non-literal name.
+// Anchored to the start of a line so `protocol.handle('lounge', …)`, which is
+// a URL scheme rather than an IPC channel, isn't swept up with them.
+const handled = channels('main.js', /^\s*(?:ipcMain\.)?handle\(\s*'([^']+)'/gm);
 const invoked = channels('preload.js', /ipcRenderer\.invoke\(\s*'([^']+)'/g);
 const subscribed = channels('preload.js', /\bsub\(\s*'([^']+)'/g);
 const sent = channels('main.js', /(?:webContents|win\.webContents)\.send\(\s*'([^']+)'/g);

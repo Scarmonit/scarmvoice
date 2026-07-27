@@ -72,7 +72,11 @@
                 try { node.disconnect(); } catch (e) {}
                 // The consumer only ever sees the processed track; stopping the
                 // REAL mic here is what turns the OS mic indicator off.
-                raw.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+                //
+                // AUDIO tracks only. This patch wraps every getUserMedia on the
+                // page, so a combined {audio, video} capture would have had its
+                // still-in-use video track stopped along with the mic.
+                raw.getAudioTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
                 release();
             };
 
@@ -82,9 +86,21 @@
             // feeding the call eternal silence from a dead graph.
             srcTracks.forEach((t) => t.addEventListener('ended', cleanup, { once: true }));
 
+            // The processor reports whether the wasm actually came up. Logging
+            // "active" merely because the graph was built meant a suppression
+            // that silently passed audio straight through still claimed to be on.
+            node.port.onmessage = (ev) => {
+                const d = ev && ev.data;
+                if (!d || !d.t) return;
+                if (d.t === 'ready') console.info('[noise] rnnoise active on mic capture');
+                else if (d.t === 'failed') {
+                    console.warn('[noise] rnnoise did NOT start (' + (d.why || 'unknown') +
+                        ') — the mic is passing through unprocessed');
+                }
+            };
+
             const out = new MediaStream([track]);
             raw.getVideoTracks().forEach((t) => out.addTrack(t));
-            console.info('[noise] rnnoise active on mic capture');
             return out;
         } catch (e) {
             console.warn('[noise] suppression unavailable, using the raw mic:', e && e.message);

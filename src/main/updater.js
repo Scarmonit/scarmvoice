@@ -10,7 +10,7 @@
 //
 // Either way the renderer gets events so it can show a non-blocking banner with
 // version, notes, progress, and a Restart action.
-const { app, autoUpdater: _unused } = require('electron');
+const { app } = require('electron');
 const store = require('./store');
 
 let updater = null;       // the electron-updater autoUpdater (lazy-required)

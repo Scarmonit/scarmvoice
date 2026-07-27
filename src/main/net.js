@@ -75,6 +75,20 @@ function captureCookie(res) {
     return null;
 }
 
+const MAX_REDIRECTS = 3;
+
+// Redirects are followed BY HAND rather than with redirect:'follow'.
+//
+// Two things go wrong when the fetch layer follows them for us. First, it
+// strips Cookie and Authorization across an origin change but not a *custom*
+// header, so `x-account-token` — which is bearer-equivalent — would be replayed
+// verbatim to whatever host the chain ended on. Second, `trusted()` was only
+// ever evaluated against the URL we started with, so the cookie-rotation
+// capture below would happily persist a Set-Cookie from the final response of a
+// chain that had wandered off-origin (session fixation).
+//
+// Following by hand means every hop is re-checked against the allow-list, and
+// both credential decisions key off the origin that is actually being talked to.
 async function request(pathname, { method = 'GET', body, headers = {}, query, timeout } = {}) {
     let url = baseUrl() + pathname;
     if (query) {
@@ -85,55 +99,94 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
         if (qs) url += (url.includes('?') ? '&' : '?') + qs;
     }
 
-    const authed = trusted(url);
-    if (!authed) console.warn('[net] withholding credentials from untrusted origin: ' + url);
+    // One deadline for the whole chain rather than a fresh one per hop, so a
+    // redirect loop can't multiply the timeout the caller asked for.
+    const signal = AbortSignal.timeout(timeout || TIMEOUT_MS);
+    const streamed = typeof ReadableStream !== 'undefined' && body instanceof ReadableStream;
 
-    const opts = {
-        method,
-        headers: Object.assign({ Accept: 'application/json' }, authed ? authHeader() : {}, headers),
-        // We manage the cookie by hand; never let a jar interfere.
-        redirect: 'follow',
-        signal: AbortSignal.timeout(timeout || TIMEOUT_MS)
-    };
-    // Board accounts are mandatory server-side. Attach the token at THIS level
-    // so every board call carries it — including uploads and the lounge://
-    // attachment proxy, which don't go through board().
-    if (authed && accountToken && pathname.startsWith('/api/board/')) {
-        opts.headers['x-account-token'] = accountToken;
-    }
-    if (body !== undefined && body !== null) {
-        if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
-            // A streamed request body (the upload progress path). duplex:'half'
-            // is mandatory in undici/fetch for any non-buffered body.
-            opts.body = body;
-            opts.duplex = 'half';
-        } else if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
-            opts.body = body;
-        } else if (typeof body === 'string') {
-            // Raw string body (e.g. a base64 upload). Trust the caller's
-            // Content-Type; don't JSON-encode it.
-            opts.body = body;
-            if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'text/plain';
-        } else {
-            opts.headers['Content-Type'] = 'application/json';
-            opts.body = JSON.stringify(body);
+    let verb = method;
+    let payload = body;
+    let hdrs = Object.assign({}, headers);
+
+    for (let hop = 0; ; hop++) {
+        const authed = trusted(url);
+        if (!authed) console.warn('[net] withholding credentials from untrusted origin: ' + url);
+
+        const opts = {
+            method: verb,
+            headers: Object.assign({ Accept: 'application/json' }, authed ? authHeader() : {}, hdrs),
+            // We manage the cookie by hand; never let a jar interfere.
+            redirect: 'manual',
+            signal
+        };
+        // Board accounts are mandatory server-side. Attach the token at THIS
+        // level so every board call carries it — including uploads and the
+        // lounge:// attachment proxy, which don't go through board().
+        let onBoardPath = false;
+        try { onBoardPath = new URL(url).pathname.startsWith('/api/board/'); } catch (e) { /* keep false */ }
+        if (authed && accountToken && onBoardPath) {
+            opts.headers['x-account-token'] = accountToken;
         }
-    }
-
-    const res = await fetch(url, opts);
-
-    // The middleware refreshes the cookie on login; pick up any rotation too.
-    // Only from an allow-listed origin: otherwise an untrusted host could hand
-    // us an sb_auth value of its choosing and have it persisted as our session.
-    if (authed) {
-        const fresh = captureCookie(res);
-        if (fresh !== null && fresh !== cookie) {
-            cookie = fresh;
-            store.writeSession(cookie);
+        if (payload !== undefined && payload !== null) {
+            if (typeof ReadableStream !== 'undefined' && payload instanceof ReadableStream) {
+                // A streamed request body (the upload progress path). duplex:'half'
+                // is mandatory in undici/fetch for any non-buffered body.
+                opts.body = payload;
+                opts.duplex = 'half';
+            } else if (payload instanceof Uint8Array || Buffer.isBuffer(payload)) {
+                opts.body = payload;
+            } else if (typeof payload === 'string') {
+                // Raw string body (e.g. a base64 upload). Trust the caller's
+                // Content-Type; don't JSON-encode it.
+                opts.body = payload;
+                if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'text/plain';
+            } else {
+                opts.headers['Content-Type'] = 'application/json';
+                opts.body = JSON.stringify(payload);
+            }
         }
-    }
 
-    return res;
+        const res = await fetch(url, opts);
+
+        // The middleware refreshes the cookie on login; pick up any rotation
+        // too — but only from an allow-listed origin, otherwise an untrusted
+        // host could hand us an sb_auth value of its choosing and have it
+        // persisted as our session.
+        if (authed) {
+            const fresh = captureCookie(res);
+            if (fresh !== null && fresh !== cookie) {
+                cookie = fresh;
+                store.writeSession(cookie);
+            }
+        }
+
+        const location = (res.status >= 300 && res.status <= 399)
+            ? res.headers.get('location') : null;
+        if (!location) return res;
+
+        // Everything past here abandons this response; an unconsumed body pins
+        // its keep-alive connection until GC.
+        if (hop >= MAX_REDIRECTS) {
+            try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+            throw new Error('Too many redirects');
+        }
+        const next = new URL(location, url).href;
+        try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+
+        // 303 always, and 301/302 by universal practice, turn the follow-up
+        // into a bodiless GET.
+        if (res.status === 303 || (payload != null && (res.status === 301 || res.status === 302))) {
+            verb = 'GET';
+            payload = undefined;
+            delete hdrs['Content-Type'];
+            delete hdrs['content-type'];
+        } else if (streamed) {
+            // 307/308 preserve the body, and a stream has already been consumed
+            // by the hop that just failed — it cannot be replayed.
+            throw new Error('Cannot follow a redirect for a streamed upload');
+        }
+        url = next;
+    }
 }
 
 // ---- auth ----------------------------------------------------------------
@@ -285,8 +338,31 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
     if (bm) bookmark = bm;
 
     if (res.status === 401) {
+        let msg = 'unauthorized';
+        try {
+            const d = await res.json();
+            if (d && d.error) msg = d.error;
+        } catch (e) { /* no readable body — keep the generic message */ }
+
+        // A 401 from the account namespace is about the ACCOUNT credential, not
+        // the board gate. Clearing both (and returning needsAuth, which the
+        // renderer reads as "session expired") meant a mistyped account
+        // password threw away a perfectly good gate session and bounced the
+        // user all the way back to the site password screen.
+        const key = String(pathname).split('?')[0].toLowerCase();
+        if (key.startsWith('account/')) {
+            // Only the endpoints that authenticate WITH the token say anything
+            // about whether it is still alive; login/register/verify/resend are
+            // establishing one, so a 401 there is a bad password or code.
+            if (ACCOUNT_TOKEN_AUTHED.has(key)) {
+                accountToken = '';
+                store.clearAccountToken();
+            }
+            return { success: false, error: msg, needsAccount: true };
+        }
+
         clearCredentials();
-        return { success: false, error: 'unauthorized', needsAuth: true };
+        return { success: false, error: msg, needsAuth: true };
     }
 
     let data;
@@ -302,6 +378,14 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
 // ---- board accounts --------------------------------------------------------
 // The token lives here (main process) exactly like the sb_auth cookie: the
 // renderer only ever sees parsed results, never the credential.
+
+// Account endpoints that authenticate WITH the token, so a 401 from one means
+// the token itself is dead. Everything else in the namespace (login, register,
+// verify, resend) is establishing a token rather than presenting one.
+const ACCOUNT_TOKEN_AUTHED = new Set([
+    'account/me', 'account/manage', 'account/logout',
+    'account/twofactor', 'account/users'
+]);
 
 async function accountRegister(username, password, email, clientId) {
     // Success now means "verification code sent" — the token arrives from

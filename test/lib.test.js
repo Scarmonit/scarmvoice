@@ -110,6 +110,19 @@ describe('mentionsMe', () => {
         expect(() => mentionsMe('@x', 'what(')).not.toThrow();
         expect(mentionsMe('@x', 'what(')).toBe(false);
     });
+
+    it('bounds both sides on the same character class', () => {
+        // The trailing class used to allow '_' while the leading one didn't, so
+        // "@alice_smith" pinged "alice" — the exact false positive the trailing
+        // boundary exists to prevent.
+        expect(mentionsMe('@alice_smith shipped it', 'alice')).toBe(false);
+        expect(mentionsMe('mail bob@alice.com', 'alice')).toBe(false);
+        expect(mentionsMe('@Alexander said so', 'Alex')).toBe(false);
+        // …while the real thing still matches, including at either end.
+        expect(mentionsMe('@alice', 'alice')).toBe(true);
+        expect(mentionsMe('hi @alice!', 'alice')).toBe(true);
+        expect(mentionsMe('@alice_smith', 'alice_smith')).toBe(true);
+    });
 });
 
 describe('formatting', () => {

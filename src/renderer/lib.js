@@ -58,10 +58,21 @@
     // a ZWJ, a variation selector or whitespace disqualifies it.
     function isOnlyEmoji(body) {
         const t = String(body || '').trim();
-        if (!t || t.length > 40) return false;
-        if (!/\p{Extended_Pictographic}/u.test(t)) return false;
-        if (/[^\s\p{Extended_Pictographic}‍️\u{1f3fb}-\u{1f3ff}]/u.test(t)) return false;
-        return [...t].filter((c) => /\p{Extended_Pictographic}/u.test(c)).length <= 6;
+        // Counted in code points, not UTF-16 units: a ZWJ family emoji is 11
+        // units on its own, so six of them blew a length-40 cap that was meant
+        // to be generous.
+        const cps = [...t];
+        if (!cps.length || cps.length > 60) return false;
+        // Flags are regional-indicator pairs, which are NOT Extended_Pictographic
+        // — without allowing them here a message of nothing but flags failed
+        // both tests below and rendered at normal size.
+        const EMOJI = /[\p{Extended_Pictographic}\u{1f1e6}-\u{1f1ff}]/u;
+        if (!EMOJI.test(t)) return false;
+        if (/[^\s\p{Extended_Pictographic}\u{1f1e6}-\u{1f1ff}‍️\u{1f3fb}-\u{1f3ff}]/u.test(t)) return false;
+        // Regional indicators come in pairs, so each flag counts once.
+        const flags = cps.filter((c) => /[\u{1f1e6}-\u{1f1ff}]/u.test(c)).length / 2;
+        const pictos = cps.filter((c) => /\p{Extended_Pictographic}/u.test(c)).length;
+        return pictos + flags <= 6;
     }
 
     // @mention of a given display name. "Anonymous" is excluded because it is the
@@ -75,8 +86,11 @@
             // "bob@alice.com" notified user "alice", and without the trailing
             // one "@Alexander" notified user "Alex" — false-positive pings for
             // messages that don't even render a mention chip.
+            // Both classes must exclude '_' alike: with it allowed on the
+            // trailing side only, "@alice_smith" still pinged user "alice" —
+            // the very false positive the trailing boundary is here to stop.
             const esc = me.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp('(^|[^A-Za-z0-9_])@' + esc + '($|[^A-Za-z0-9])', 'i').test(body || '');
+            return new RegExp('(^|[^A-Za-z0-9_])@' + esc + '($|[^A-Za-z0-9_])', 'i').test(body || '');
         } catch (e) { return false; }
     }
 

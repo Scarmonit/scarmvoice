@@ -55,7 +55,13 @@ function rotate() {
     bytes = 0;
     const s = stream;
     stream = null;   // lines during the swap are dropped; that beats a giant log
+    // Guarded because both paths below can reach it: if s.end() throws we call
+    // finish() synchronously, and the 'close' listener can still fire after.
+    // Running twice would open a second write stream and orphan the first fd.
+    let done = false;
     const finish = () => {
+        if (done) return;
+        done = true;
         try {
             const old = file + '.1';
             try { fs.unlinkSync(old); } catch (e) { /* no previous generation */ }

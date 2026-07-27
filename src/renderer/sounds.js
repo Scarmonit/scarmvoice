@@ -21,6 +21,7 @@
     const SETTLE_MS = 1500;
 
     let settings = {};
+    let initialized = false;       // init() is re-entered on every board-open
     let ctx = null;
     let messageBuf = null;
     let messageEl = null;          // fallback if Web Audio is unavailable
@@ -58,6 +59,13 @@
 
     function init(initialSettings) {
         settings = Object.assign({}, initialSettings || {});
+
+        // init() runs once per board-open, so signing out and back in calls it
+        // again. Everything below is one-time setup; without this the second
+        // pass refetched the buffer, rebuilt the chime elements, and added a
+        // second pair of capture-phase unlock listeners.
+        if (initialized) return;
+        initialized = true;
 
         // The renderer's one shared AudioContext (audio.js) — this used to open
         // its own, which counted against Chromium's six-context page limit for
