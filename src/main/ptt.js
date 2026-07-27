@@ -183,27 +183,35 @@ function apply() {
         { action: 'toggleDeafen', raw: s.deafenBinding }
     ].filter((t) => t.raw && t.raw.code);
 
-    const native = isAvailable() && (binding || wanted.some((t) => resolveBinding(t.raw)));
-    if (native) {
+    // PTT's transport is decided by the PTT binding ALONE. It used to ride on
+    // "the hook is worth starting", which is also true when only a mute/deafen
+    // binding resolved — and then PTT got no native hold, no fallback
+    // accelerator either, yet apply() still reported a mode and a bound key, so
+    // the Settings screen showed a hotkey that did nothing.
+    const hookUsable = isAvailable() && (binding || wanted.some((t) => resolveBinding(t.raw)));
+    toggles = [];
+    if (hookUsable) {
         startHook();
         toggles = wanted
             .map((t) => ({ action: t.action, binding: resolveBinding(t.raw), held: false }))
             .filter((t) => t.binding);
-        // A mouse-button toggle still works through the hook even when the
-        // PTT binding itself fell back — but if a KEY toggle didn't resolve,
-        // register it as a plain accelerator alongside.
-        wanted.forEach((t) => {
-            if (!resolveBinding(t.raw)) {
-                registerAccel(toAccelerator(t.raw), () => actionListener(t.action));
-            }
-        });
-        return { mode: binding ? 'native' : 'toggle', bound: describe(s.pttBinding) };
     }
 
-    toggles = [];
+    // Anything the hook can't carry (no hook at all, or a binding it couldn't
+    // resolve) becomes a plain accelerator instead.
+    wanted.forEach((t) => {
+        if (hookUsable && resolveBinding(t.raw)) return;
+        registerAccel(toAccelerator(t.raw), () => actionListener(t.action));
+    });
+
+    if (hookUsable && binding) {
+        return { mode: 'native', bound: describe(s.pttBinding) };
+    }
+
+    // No native hold for PTT — fall back to the press-to-talk/press-to-stop
+    // accelerator, and report only what actually registered.
     const accel = toAccelerator(s.pttBinding) || s.pttKey;
     const ok = registerFallback(accel);
-    wanted.forEach((t) => registerAccel(toAccelerator(t.raw), () => actionListener(t.action)));
     return { mode: ok ? 'toggle' : 'none', bound: ok ? accel : null };
 }
 

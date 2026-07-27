@@ -24,6 +24,15 @@ function baseUrl() {
     return (store.get().baseUrl || 'https://scarmonit.com').replace(/\/+$/, '');
 }
 
+// Both credentials are bearer-equivalent, so they only ever go to an origin we
+// ship (store.isAllowedOrigin). The gate is on the RESOLVED url rather than on
+// the pathname: baseUrl is settings-driven, and a path is concatenated onto it
+// unparsed, so nothing about the caller's arguments can be trusted to say which
+// host the request actually reaches.
+function trusted(url) {
+    return store.isAllowedOrigin(url);
+}
+
 function hasSession() {
     return !!cookie;
 }
@@ -34,7 +43,19 @@ function authHeader() {
 
 // Expose the header to the WebSocket bridge, which needs the same credential.
 function cookieHeader() {
-    return authHeader();
+    return trusted(baseUrl()) ? authHeader() : {};
+}
+
+// Headers for the realtime WebSocket. The account token rides along because the
+// server resolves WHO a socket belongs to from a real credential — a browser
+// can't set headers so it uses a signed ticket instead, but a native client
+// can, and without it this socket has no identity: device merging, voice
+// takeover and (since DM pushes are addressed by account) DM delivery all stop.
+function socketHeaders() {
+    if (!trusted(baseUrl())) return {};
+    const h = authHeader();
+    if (accountToken) h['x-account-token'] = accountToken;
+    return h;
 }
 
 // Pull sb_auth out of a response's Set-Cookie header(s).
@@ -64,9 +85,12 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
         if (qs) url += (url.includes('?') ? '&' : '?') + qs;
     }
 
+    const authed = trusted(url);
+    if (!authed) console.warn('[net] withholding credentials from untrusted origin: ' + url);
+
     const opts = {
         method,
-        headers: Object.assign({ Accept: 'application/json' }, authHeader(), headers),
+        headers: Object.assign({ Accept: 'application/json' }, authed ? authHeader() : {}, headers),
         // We manage the cookie by hand; never let a jar interfere.
         redirect: 'follow',
         signal: AbortSignal.timeout(timeout || TIMEOUT_MS)
@@ -74,7 +98,7 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
     // Board accounts are mandatory server-side. Attach the token at THIS level
     // so every board call carries it — including uploads and the lounge://
     // attachment proxy, which don't go through board().
-    if (accountToken && pathname.startsWith('/api/board/')) {
+    if (authed && accountToken && pathname.startsWith('/api/board/')) {
         opts.headers['x-account-token'] = accountToken;
     }
     if (body !== undefined && body !== null) {
@@ -99,10 +123,14 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
     const res = await fetch(url, opts);
 
     // The middleware refreshes the cookie on login; pick up any rotation too.
-    const fresh = captureCookie(res);
-    if (fresh !== null && fresh !== cookie) {
-        cookie = fresh;
-        store.writeSession(cookie);
+    // Only from an allow-listed origin: otherwise an untrusted host could hand
+    // us an sb_auth value of its choosing and have it persisted as our session.
+    if (authed) {
+        const fresh = captureCookie(res);
+        if (fresh !== null && fresh !== cookie) {
+            cookie = fresh;
+            store.writeSession(cookie);
+        }
     }
 
     return res;
@@ -148,27 +176,49 @@ async function login(password) {
     return { success: false, error: 'Incorrect password.' };
 }
 
-async function logout() {
-    try { await request('/auth/logout', { method: 'POST' }); } catch (e) { /* best effort */ }
+// The gate cookie and the account token are two halves of one identity, so they
+// are dropped together. Clearing only the cookie used to leave a live bearer
+// token in account.bin that the next launch would happily send.
+function clearCredentials() {
     cookie = '';
     store.clearSession();
+    accountToken = '';
+    store.clearAccountToken();
+}
+
+async function logout() {
+    try { await request('/auth/logout', { method: 'POST' }); } catch (e) { /* best effort */ }
+    clearCredentials();
     return { success: true };
 }
 
 // Verify the stored cookie is still valid (30-day TTL server-side).
 async function status() {
     if (!cookie) { console.log('[auth] no session cookie held'); return { authed: false }; }
+
+    let res;
     try {
-        const res = await request('/auth/status');
-        const data = await res.json();
-        const authed = !!(data && data.authed);
-        console.log('[auth] /auth/status -> ' + res.status + ' authed=' + authed);
-        if (!authed) { cookie = ''; store.clearSession(); }
-        return { authed };
+        res = await request('/auth/status');
     } catch (e) {
         // Offline: keep the cookie, report unknown rather than logging the user out.
         return { authed: false, offline: true, error: e.message };
     }
+
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* an error page, not JSON */ }
+    if (!data || typeof data.authed !== 'boolean') {
+        // A 500 (or an HTML error page from in front of the Worker) says the
+        // SERVER is unwell, not that we are signed out — reporting it as a
+        // definite "not authed" would throw away a session that is probably
+        // still good, so it is treated like being offline.
+        console.warn('[auth] /auth/status -> ' + res.status + ' with an unreadable body');
+        return { authed: false, offline: true, error: `Bad response (${res.status})` };
+    }
+
+    const authed = data.authed;
+    console.log('[auth] /auth/status -> ' + res.status + ' authed=' + authed);
+    if (!authed) clearCredentials();
+    return { authed };
 }
 
 // ---- board API -----------------------------------------------------------
@@ -235,8 +285,7 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
     if (bm) bookmark = bm;
 
     if (res.status === 401) {
-        cookie = '';
-        store.clearSession();
+        clearCredentials();
         return { success: false, error: 'unauthorized', needsAuth: true };
     }
 
@@ -397,8 +446,7 @@ async function upload(name, type, bytes, onProgress) {
     }
 
     if (res.status === 401) {
-        cookie = '';
-        store.clearSession();
+        clearCredentials();
         return { success: false, error: 'unauthorized', needsAuth: true };
     }
     try {
@@ -412,5 +460,5 @@ module.exports = {
     init, login, logout, status, board, request, fileStream, upload,
     accountRegister, accountLogin, accountLogout, accountMe, hasAccount,
     accountVerify, accountResend,
-    hasSession, cookieHeader, baseUrl, MAX_UPLOAD
+    hasSession, cookieHeader, socketHeaders, baseUrl, MAX_UPLOAD
 };

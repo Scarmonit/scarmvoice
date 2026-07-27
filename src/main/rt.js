@@ -33,6 +33,20 @@ let isAlive = true;             // set true by any inbound frame or pong
 let attempts = 0;              // consecutive failed connects (for the status label)
 let emit = () => {};            // set by start()
 
+// Outstanding wake() probes. They used to share `isAlive`, so two window-focus
+// events three seconds apart meant the first probe's timer read the second
+// probe's "no answer yet" and terminated a socket that was perfectly healthy.
+// Each probe now carries its own token, and any inbound traffic satisfies every
+// token in flight at once.
+const probes = new Set();
+
+function markAlive() {
+    isAlive = true;
+    if (!probes.size) return;
+    for (const p of probes) p.alive = true;
+    probes.clear();
+}
+
 // state: 'connected' | 'reconnecting' | 'disconnected'
 function emitStatus(state) {
     emit('status', { connected: state === 'connected', state });
@@ -56,11 +70,14 @@ function stopHeartbeat() {
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
 }
 
-function startHeartbeat() {
+function startHeartbeat(sock) {
     stopHeartbeat();
     isAlive = true;
     pingTimer = setInterval(() => {
-        if (!ws) { stopHeartbeat(); return; }
+        // Only the live socket gets probed: a heartbeat left over from a socket
+        // that has since been replaced would be pinging (and eventually
+        // terminating) the wrong connection.
+        if (!ws || (sock && sock !== ws)) { stopHeartbeat(); return; }
         // No pong (and no other traffic) since the last tick → the peer is gone.
         // terminate() destroys the socket immediately; close() could hang waiting
         // on a handshake the dead peer will never complete.
@@ -90,41 +107,52 @@ function connect() {
     attempts++;
     emitStatus(attempts >= OFFLINE_AFTER ? 'disconnected' : 'reconnecting');
 
+    // Every handler below closes over THIS socket, not the module-level `ws`,
+    // and refuses to act unless it is still the current one. stop()+start()
+    // (what rebindRealtime does) can leave a socket whose handshake is still
+    // running — handshakeTimeout is 15s, so the window is long — and its late
+    // 'close' would otherwise null out the socket that replaced it, or its
+    // 'error' terminate whichever connection happened to be live.
+    let sock;
     try {
         // handshakeTimeout matters: without it, a peer that accepts the TCP
         // connection but never answers the HTTP upgrade leaves the socket in
         // CONNECTING forever — no 'open', no 'error', no 'close' — and every
         // reconnect attempt no-ops on the `ws` guard above. With it, ws aborts
         // the handshake, emits 'error' + 'close', and reconnect proceeds.
-        ws = new WebSocket(wsUrl(), { headers: net.cookieHeader(), handshakeTimeout: 15000 });
+        sock = new WebSocket(wsUrl(), { headers: net.socketHeaders(), handshakeTimeout: 15000 });
+        ws = sock;
     } catch (e) {
         ws = null;
         scheduleReconnect();
         return;
     }
 
-    ws.on('open', () => {
+    sock.on('open', () => {
+        if (sock !== ws) return;
         console.info('[rt] connected');
         backoff = BACKOFF_START;
         attempts = 0;
         setConnected(true);
         const s = store.get();
         send({ t: 'hello', cid: s.clientId, name: s.displayName || 'Anonymous' });
-        startHeartbeat();
+        startHeartbeat(sock);
     });
 
     // Any inbound frame proves the socket is alive.
-    ws.on('message', (raw) => {
-        isAlive = true;
+    sock.on('message', (raw) => {
+        if (sock !== ws) return;
+        markAlive();
         let m;
         try { m = JSON.parse(raw.toString()); } catch (e) { return; }
         if (!m || !m.t) return;
         emit('message', m);
     });
 
-    ws.on('pong', () => { isAlive = true; });
+    sock.on('pong', () => { if (sock === ws) markAlive(); });
 
-    ws.on('close', () => {
+    sock.on('close', () => {
+        if (sock !== ws) return;
         console.info('[rt] closed (attempt ' + attempts + ')');
         ws = null;
         stopHeartbeat();
@@ -133,7 +161,8 @@ function connect() {
     });
 
     // 'error' always precedes 'close'; swallow it so it can't crash the process.
-    ws.on('error', () => { try { ws && ws.terminate(); } catch (e) {} });
+    // It kills its OWN socket — `ws` may by now be a different, healthy one.
+    sock.on('error', () => { try { sock.terminate(); } catch (e) {} });
 }
 
 function send(obj) {
@@ -154,8 +183,16 @@ function stop() {
     manualClose = true;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     stopHeartbeat();
-    try { if (ws) ws.terminate(); } catch (e) {}
+    probes.clear();
+    const sock = ws;
     ws = null;
+    if (sock) {
+        // Listeners go first: this socket is being killed deliberately, so its
+        // 'close'/'error' must not run at all — not against it, and certainly
+        // not against whatever start() puts in its place a moment later.
+        try { sock.removeAllListeners(); } catch (e) {}
+        try { sock.terminate(); } catch (e) {}
+    }
     attempts = 0;
     setConnected(false);
     emitStatus('disconnected');
@@ -177,29 +214,32 @@ function reconnectNow() {
 function wake() {
     if (manualClose) return;
     console.info('[rt] wake (connected=' + connected + ')');
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const sock = ws;
+    if (!sock || sock.readyState !== WebSocket.OPEN) {
         backoff = BACKOFF_START;
         attempts = 0;
-        if (!ws) {
+        if (!sock) {
             connect();
         } else {
             // A socket stuck in CONNECTING/CLOSING blocks connect() via the
             // `ws` guard, so scheduling a reconnect around it would spin
             // forever. Kill it; 'close' fires and drives the reconnect.
-            try { ws.terminate(); } catch (e) {}
+            try { sock.terminate(); } catch (e) {}
             scheduleReconnect();
         }
         return;
     }
-    // Verify the "open" socket is genuinely alive.
-    isAlive = false;
-    try { ws.ping(); } catch (e) {}
+    // Verify the "open" socket is genuinely alive. The probe's verdict lives in
+    // its own token so a second wake() cannot invalidate this one's answer.
+    const probe = { alive: false };
+    probes.add(probe);
+    try { sock.ping(); } catch (e) {}
     send({ t: 'ping' });
     setTimeout(() => {
-        if (!ws) return;
-        if (isAlive === false) {
-            try { ws.terminate(); } catch (e) {}   // zombie → 'close' → reconnect
-        }
+        probes.delete(probe);
+        if (probe.alive) return;
+        if (sock !== ws) return;                   // already replaced — not ours to kill
+        try { sock.terminate(); } catch (e) {}     // zombie → 'close' → reconnect
     }, 3000);
 }
 

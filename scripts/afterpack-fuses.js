@@ -21,8 +21,9 @@ module.exports = async function afterPack(context) {
 
     await flipFuses(binary, {
         version: FuseVersion.V1,
-        // ELECTRON_RUN_AS_NODE — makes the .exe run as plain Node.js. The app uses
-        // child_process.exec (real net.exe), never fork, so disabling is safe.
+        // ELECTRON_RUN_AS_NODE — makes the .exe run as plain Node.js. The app
+        // never spawns a child process at all (the elevation probe is a readdir,
+        // see main.js), so nothing depends on it and disabling is safe.
         [FuseV1Options.RunAsNode]: false,
         // NODE_OPTIONS / NODE_EXTRA_CA_CERTS env vars — unused; deny injection.
         [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,

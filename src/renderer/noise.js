@@ -16,6 +16,19 @@
     let ctx = null;             // dedicated 48 kHz context — RNNoise's native rate
     let workletReady = null;
     let enabled = false;
+    let active = 0;             // wrapped streams still alive
+
+    // An AudioContext holds a real audio device open. Left running between calls
+    // it kept the render thread (and on some drivers the device itself) awake for
+    // the rest of the session, so it goes away with the last wrapped stream.
+    function release() {
+        active = Math.max(0, active - 1);
+        if (active || !ctx) return;
+        const dying = ctx;
+        ctx = null;
+        workletReady = null;    // the module registration dies with the context
+        dying.close().catch(() => {});
+    }
 
     function ensureWorklet() {
         if (!ctx) ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
@@ -44,23 +57,30 @@
             node.connect(dest);
 
             const track = dest.stream.getAudioTracks()[0];
+            const srcTracks = raw.getAudioTracks();
             let done = false;
+            active++;
             const cleanup = () => {
                 if (done) return;
                 done = true;
+                // When the teardown came from track.stop() rather than from an
+                // 'ended' event, {once} never fired and these would otherwise
+                // pile up one set per mic acquisition.
+                srcTracks.forEach((t) => { try { t.removeEventListener('ended', cleanup); } catch (e) {} });
                 try { node.port.postMessage('close'); } catch (e) {}
                 try { src.disconnect(); } catch (e) {}
                 try { node.disconnect(); } catch (e) {}
                 // The consumer only ever sees the processed track; stopping the
                 // REAL mic here is what turns the OS mic indicator off.
                 raw.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+                release();
             };
 
             const origStop = track.stop.bind(track);
             track.stop = () => { origStop(); cleanup(); };
             // Device unplugged / revoked upstream: tear down rather than
             // feeding the call eternal silence from a dead graph.
-            raw.getAudioTracks().forEach((t) => t.addEventListener('ended', cleanup, { once: true }));
+            srcTracks.forEach((t) => t.addEventListener('ended', cleanup, { once: true }));
 
             const out = new MediaStream([track]);
             raw.getVideoTracks().forEach((t) => out.addTrack(t));

@@ -188,9 +188,24 @@ describe('request', () => {
 describe('baseUrl', () => {
     it('strips trailing slashes', async () => {
         const { store, net } = await load();
-        store.set({ baseUrl: 'https://example.test///' });
-        expect(net.baseUrl()).toBe('https://example.test');
+        store.set({ baseUrl: 'https://scarmonit.com///' });
+        expect(net.baseUrl()).toBe('https://scarmonit.com');
     });
+
+    it('allows a loopback dev server', async () => {
+        const { store, net } = await load();
+        store.set({ baseUrl: 'http://localhost:8788' });
+        expect(net.baseUrl()).toBe('http://localhost:8788');
+    });
+
+    it('refuses an origin we do not ship', async () => {
+        // baseUrl decides who receives the session cookie AND the account token,
+        // so a free-text value is a one-field credential handover.
+        const { store, net } = await load();
+        store.set({ baseUrl: 'https://evil.test' });
+        expect(net.baseUrl()).toBe('https://scarmonit.com');
+    });
+
 });
 
 describe('board', () => {

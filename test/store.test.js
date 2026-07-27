@@ -215,6 +215,54 @@ describe('settings', () => {
         expect(second.get().clientId).toBe(id);
     });
 
+    it('refuses a baseUrl outside the allow-list', async () => {
+        // baseUrl decides who receives the sb_auth cookie and the account
+        // token, so "point the app at this mirror" would hand both over.
+        const store = await loadStore();
+        store.init();
+
+        store.set({ baseUrl: 'https://evil.test', displayName: 'Scarm' });
+
+        expect(store.get().baseUrl).toBe(store.DEFAULTS.baseUrl);
+        expect(store.get().displayName).toBe('Scarm');    // the rest of the patch still applies
+    });
+
+    it('refuses a downgrade to http on the real host', async () => {
+        const store = await loadStore();
+        store.init();
+        store.set({ baseUrl: 'http://scarmonit.com' });
+        expect(store.get().baseUrl).toBe(store.DEFAULTS.baseUrl);
+    });
+
+    it('still allows a loopback dev server', async () => {
+        const store = await loadStore();
+        store.init();
+        store.set({ baseUrl: 'http://localhost:8788' });
+        expect(store.get().baseUrl).toBe('http://localhost:8788');
+    });
+
+    it('resets a baseUrl that was smuggled into settings.json', async () => {
+        seedCurrent({ 'settings.json': JSON.stringify({ baseUrl: 'https://evil.test' }) });
+
+        const store = await loadStore();
+        store.init();
+
+        expect(store.get().baseUrl).toBe(store.DEFAULTS.baseUrl);
+    });
+
+    it('refuses a prototype-polluting key in a patch', async () => {
+        // The patch comes from the renderer over IPC; Object.assign honours a
+        // "__proto__" key and would re-point the settings cache's prototype.
+        const store = await loadStore();
+        store.init();
+
+        store.set(JSON.parse('{"__proto__":{"pwned":true},"displayName":"Scarm"}'));
+
+        expect(store.get().pwned).toBeUndefined();
+        expect({}.pwned).toBeUndefined();
+        expect(store.get().displayName).toBe('Scarm');
+    });
+
     it('ignores a non-object patch', async () => {
         const store = await loadStore();
         store.init();
@@ -244,6 +292,39 @@ describe('session storage', () => {
         store.writeSession('sb_auth_secret');
 
         expect(store.readSession()).toBe('sb_auth_secret');
+    });
+
+    it('does not hand back a plaintext blob as if it had been decrypted', async () => {
+        // safeStorage can be available on one launch and not the next. Without a
+        // recorded mode, a plaintext blob read while encryption IS available
+        // either throws (silent sign-out) or — worse for the account token —
+        // returns bytes that are then sent as a credential.
+        env.encryptionAvailable = false;
+        const plain = await loadStore();
+        plain.init();
+        plain.writeSession('sb_auth_secret');
+        plain.writeAccountToken('account_secret');
+
+        env.encryptionAvailable = true;
+        const encrypted = await loadStore();
+        encrypted.init();
+
+        expect(encrypted.readSession()).toBe('sb_auth_secret');
+        expect(encrypted.readAccountToken()).toBe('account_secret');
+    });
+
+    it('reports an encrypted blob as unusable when safeStorage disappears', async () => {
+        const first = await loadStore();
+        first.init();
+        first.writeSession('sb_auth_secret');
+
+        env.encryptionAvailable = false;
+        const second = await loadStore();
+        second.init();
+
+        // Signed out is the honest answer; the alternative is handing the
+        // ciphertext to the server as a cookie value.
+        expect(second.readSession()).toBe('');
     });
 
     it('returns empty rather than throwing when the session cannot be decrypted', async () => {

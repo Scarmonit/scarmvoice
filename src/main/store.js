@@ -70,6 +70,34 @@ const DEFAULTS = {
     speakThreshold: 6
 };
 
+// baseUrl decides which host receives the sb_auth cookie AND the account token,
+// both bearer-equivalent credentials. Left as free text it is a one-field
+// account takeover ("point the app at this mirror"), in cleartext if the value
+// is http:. So only origins we actually ship may be set, plus loopback for
+// running against a local `wrangler pages dev`. Compared by scheme + hostname so
+// a dev server on any port still works.
+const ALLOWED_ORIGINS = [
+    'https://scarmonit.com',
+    'http://localhost',
+    'http://127.0.0.1'
+];
+
+// Keys that reach Object.prototype if they are ever assigned through a plain
+// property write — a renderer-supplied patch must never be able to re-point the
+// settings cache's prototype.
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+// Accepts anything parseable whose scheme+host is allow-listed; used both to
+// validate what the renderer asks us to store and (in net.js) to decide whether
+// a resolved request URL may carry credentials.
+function isAllowedOrigin(value) {
+    let u;
+    try { u = new URL(String(value || '')); } catch (e) { return false; }
+    // ws:/wss: are the same origins reached by rt.js's socket.
+    const scheme = u.protocol === 'wss:' ? 'https:' : (u.protocol === 'ws:' ? 'http:' : u.protocol);
+    return ALLOWED_ORIGINS.includes(scheme + '//' + u.hostname);
+}
+
 // The app used to be called "The Lounge", and productName decides
 // app.getPath('userData'). Renaming it would silently strand the old settings
 // and session, signing everyone out — so adopt the old profile once.
@@ -136,12 +164,21 @@ function migrateLegacyProfile() {
 }
 
 function load() {
+    let merged;
     try {
         const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        return Object.assign({}, DEFAULTS, raw);
+        merged = Object.assign({}, DEFAULTS, raw);
     } catch (e) {
         return Object.assign({}, DEFAULTS);
     }
+    // A hand-edited (or previously written) settings.json is just as capable of
+    // aiming the credentials somewhere else as the renderer is, so the file is
+    // held to the same rule.
+    if (!isAllowedOrigin(merged.baseUrl)) {
+        console.warn(`[store] stored baseUrl "${merged.baseUrl}" is not an allowed origin — using the default`);
+        merged.baseUrl = DEFAULTS.baseUrl;
+    }
+    return merged;
 }
 
 // Writes are ATOMIC: a full file is written to a sibling temp path and then
@@ -199,53 +236,112 @@ function get() {
     return Object.assign({}, cache);
 }
 
+// Every value here arrives from the renderer over IPC, so the patch is applied
+// key by key rather than with Object.assign: assign honours a "__proto__" key
+// (it writes through the setter) and would re-point the cache's prototype, and
+// it has no place to reject a value the app must not act on.
 function set(patch) {
     if (!patch || typeof patch !== 'object') return get();
-    Object.assign(cache, patch);
+    for (const key of Object.keys(patch)) {
+        if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+        if (UNSAFE_KEYS.includes(key)) {
+            console.warn('[store] refused a prototype-polluting settings key: ' + key);
+            continue;
+        }
+        if (key === 'baseUrl' && !isAllowedOrigin(patch[key])) {
+            console.warn(`[store] refused baseUrl "${patch[key]}" — not an allowed origin`);
+            continue;
+        }
+        cache[key] = patch[key];
+    }
     prunePeerMaps();
     save();
     return get();
 }
 
-// ---- session cookie ------------------------------------------------------
+// ---- credential blobs ------------------------------------------------------
+// safeStorage is not guaranteed to be available on every launch — a broken
+// keyring on Linux, a profile copied to another machine, an OSCrypt key that
+// went missing — and the mode can therefore differ between the write and the
+// read. Unmarked, that is silent corruption in both directions: a plaintext blob
+// read as ciphertext throws and reads as "signed out", and an encrypted blob
+// read as plaintext hands back binary garbage that is then sent as a credential.
+// So each blob records the mode it was written in and the reader dispatches on
+// it. Files written before the marker existed carry no prefix and keep the old
+// best-effort handling.
+const BLOB_MAGIC = Buffer.from('SV');    // "written by this scheme"
+const BLOB_ENCRYPTED = 0x01;
+const BLOB_PLAINTEXT = 0x00;
 
-function readSession() {
+// Returns null when there is no file at all, '' when it exists but is unusable.
+function readSecret(file, label) {
     let buf;
-    try {
-        buf = fs.readFileSync(sessionPath);
-    } catch (e) {
-        console.log('[store] no stored session');
-        return '';
-    }
-    try {
-        if (safeStorage.isEncryptionAvailable()) {
-            const s = safeStorage.decryptString(buf);
-            console.log('[store] session restored (' + s.length + ' chars)');
-            return s;
+    try { buf = fs.readFileSync(file); } catch (e) { return null; }
+
+    const marked = buf.length >= 3 && buf[0] === BLOB_MAGIC[0] && buf[1] === BLOB_MAGIC[1] &&
+        (buf[2] === BLOB_ENCRYPTED || buf[2] === BLOB_PLAINTEXT);
+    if (marked) {
+        const payload = buf.subarray(3);
+        if (buf[2] === BLOB_PLAINTEXT) return payload.toString('utf8');
+        if (!safeStorage.isEncryptionAvailable()) {
+            console.error(`[store] the stored ${label} is encrypted but safeStorage is unavailable here`);
+            return '';
         }
-        console.log('[store] safeStorage unavailable — reading session as plaintext');
+        try {
+            return safeStorage.decryptString(payload);
+        } catch (e) {
+            console.error(`[store] could not decrypt the stored ${label}: ` + e.message);
+            return '';
+        }
+    }
+
+    try {
+        if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(buf);
+        console.log(`[store] safeStorage unavailable — reading the ${label} as plaintext`);
         return buf.toString('utf8');
     } catch (e) {
-        console.error('[store] could not decrypt the stored session: ' + e.message);
+        console.error(`[store] could not decrypt the stored ${label}: ` + e.message);
         return '';
     }
 }
 
-function writeSession(token) {
-    try {
-        if (!token) { clearSession(); return; }
-        const data = safeStorage.isEncryptionAvailable()
-            ? safeStorage.encryptString(token)
-            : Buffer.from(token, 'utf8');
-        // Atomic for the same reason settings.json is: a crash mid-write would
-        // leave a truncated blob that fails to decrypt and silently signs the
-        // user out on next launch.
-        const tmp = sessionPath + '.tmp';
-        fs.writeFileSync(tmp, data);
-        fs.renameSync(tmp, sessionPath);
-    } catch (e) {
-        console.error('[store] failed to save session:', e.message);
+// Atomic for the same reason settings.json is: a crash mid-write would leave a
+// truncated blob that fails to decrypt and silently signs the user out on the
+// next launch. The temp file is removed when the rename fails, or a readable
+// credential is left lying around in a path nothing ever cleans up.
+function writeSecret(file, token, label) {
+    const encrypted = safeStorage.isEncryptionAvailable();
+    if (!encrypted) {
+        console.warn(`[store] safeStorage unavailable — the ${label} is being written as PLAINTEXT`);
     }
+    const tmp = file + '.tmp';
+    try {
+        const body = encrypted ? safeStorage.encryptString(token) : Buffer.from(token, 'utf8');
+        const data = Buffer.concat([
+            BLOB_MAGIC,
+            Buffer.from([encrypted ? BLOB_ENCRYPTED : BLOB_PLAINTEXT]),
+            Buffer.from(body)
+        ]);
+        fs.writeFileSync(tmp, data);
+        fs.renameSync(tmp, file);
+    } catch (e) {
+        console.error(`[store] failed to save the ${label}:`, e.message);
+        try { fs.unlinkSync(tmp); } catch (_) { /* nothing to clean up */ }
+    }
+}
+
+// ---- session cookie ------------------------------------------------------
+
+function readSession() {
+    const s = readSecret(sessionPath, 'session');
+    if (s === null) { console.log('[store] no stored session'); return ''; }
+    if (s) console.log('[store] session restored (' + s.length + ' chars)');
+    return s;
+}
+
+function writeSession(token) {
+    if (!token) { clearSession(); return; }
+    writeSecret(sessionPath, token, 'session');
 }
 
 function clearSession() {
@@ -256,29 +352,13 @@ function clearSession() {
 // Same treatment as the session cookie: safeStorage-encrypted, atomic write.
 
 function readAccountToken() {
-    let buf;
-    try { buf = fs.readFileSync(accountPath); } catch (e) { return ''; }
-    try {
-        if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(buf);
-        return buf.toString('utf8');
-    } catch (e) {
-        console.error('[store] could not decrypt the account token: ' + e.message);
-        return '';
-    }
+    const s = readSecret(accountPath, 'account token');
+    return s === null ? '' : s;
 }
 
 function writeAccountToken(token) {
-    try {
-        if (!token) { clearAccountToken(); return; }
-        const data = safeStorage.isEncryptionAvailable()
-            ? safeStorage.encryptString(token)
-            : Buffer.from(token, 'utf8');
-        const tmp = accountPath + '.tmp';
-        fs.writeFileSync(tmp, data);
-        fs.renameSync(tmp, accountPath);
-    } catch (e) {
-        console.error('[store] failed to save account token:', e.message);
-    }
+    if (!token) { clearAccountToken(); return; }
+    writeSecret(accountPath, token, 'account token');
 }
 
 function clearAccountToken() {
@@ -288,5 +368,5 @@ function clearAccountToken() {
 module.exports = {
     init, get, set, flush, readSession, writeSession, clearSession,
     readAccountToken, writeAccountToken, clearAccountToken,
-    migrateLegacyProfile, DEFAULTS
+    migrateLegacyProfile, isAllowedOrigin, DEFAULTS
 };

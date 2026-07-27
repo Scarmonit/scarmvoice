@@ -2223,6 +2223,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   text-transform: uppercase; letter-spacing: .4px;
 }
 .dm-empty { color: var(--muted); text-align: center; margin-top: 24px; }
+.dm-empty .dm-retry { display: block; margin: 10px auto 0; }
 .dm-msg { display: flex; align-items: flex-end; gap: 8px; max-width: 88%; align-self: flex-start; }
 .dm-msg.mine { align-self: flex-end; flex-direction: row-reverse; }
 .dm-bubble {

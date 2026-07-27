@@ -168,7 +168,20 @@ function createWindow() {
     // Coming back from the tray / a minimize is exactly when a socket that died
     // while hidden needs to be checked and revived — verify the connection and
     // tell the renderer to resync any messages it missed while it was away.
-    const onResume = () => { rt.wake(); if (win) win.webContents.send('app:resync'); };
+    //
+    // Rate-limited because one alt-tab can fire 'restore', 'show' AND 'focus',
+    // and each of those costs a socket probe plus a full refetch in the
+    // renderer. A few seconds of coalescing loses nothing: the heartbeat covers
+    // anything that dies in between.
+    const RESUME_COOLDOWN_MS = 5000;
+    let lastResume = 0;
+    const onResume = () => {
+        const now = Date.now();
+        if (now - lastResume < RESUME_COOLDOWN_MS) return;
+        lastResume = now;
+        rt.wake();
+        if (win) win.webContents.send('app:resync');
+    };
     win.on('restore', onResume);
     win.on('show', onResume);
     win.on('focus', onResume);
@@ -364,7 +377,90 @@ function configurePermissions() {
     }, { useSystemPicker: false });
 }
 
+// ---- outbound url safety -------------------------------------------------
+// Remote image URLs arrive from message content, so they are chosen by whoever
+// posted the message. Fetching one from the main process — no CORS, no browser
+// sandbox, on this machine's network — is an SSRF primitive: without a host
+// check it reaches loopback services, the router, and cloud metadata endpoints
+// that nothing on the internet can see.
+
+const PRIVATE_V4 = [
+    /^0\./, /^10\./, /^127\./, /^169\.254\./, /^192\.168\./,
+    /^172\.(1[6-9]|2[0-9]|3[01])\./,
+    /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./   // CGNAT
+];
+
+function isPrivateHost(hostname) {
+    const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (!h) return true;
+    if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') ||
+        h.endsWith('.internal') || h.endsWith('.home.arpa')) return true;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) return PRIVATE_V4.some((re) => re.test(h));
+    if (h.includes(':')) {
+        // IPv6: loopback, unique-local (fc00::/7) and link-local (fe80::/10).
+        if (h === '::1' || h === '::') return true;
+        if (/^f[cd]/.test(h) || /^fe[89ab]/.test(h)) return true;
+        // ::ffff:127.0.0.1 and friends.
+        const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(h);
+        if (v4) return PRIVATE_V4.some((re) => re.test(v4[1]));
+    }
+    return false;
+}
+
+// Our own board is allowed whatever scheme it is configured with (a local
+// wrangler dev server is http://localhost, which the private-host rule would
+// otherwise refuse); everything else must be https: and publicly routable.
+function boardOrigin() {
+    try { return new URL(net.baseUrl()).origin; } catch (e) { return null; }
+}
+
+function safeRemoteUrl(raw) {
+    let u;
+    try { u = new URL(String(raw || '')); } catch (e) { return null; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (u.origin === boardOrigin()) return u;
+    if (u.protocol !== 'https:') return null;
+    if (isPrivateHost(u.hostname)) return null;
+    return u;
+}
+
+// Redirects are followed by hand so every hop is re-checked — otherwise a
+// public https: URL that 302s to http://169.254.169.254 walks straight past the
+// check above.
+async function fetchRemoteImage(raw) {
+    let target = safeRemoteUrl(raw);
+    if (!target) throw new Error('unsupported url');
+
+    for (let hop = 0; ; hop++) {
+        const res = await fetch(target.href, {
+            signal: AbortSignal.timeout(20000),
+            redirect: 'manual'
+        });
+        if (res.status < 300 || res.status > 399) return res;
+        if (hop >= 3) throw new Error('Too many redirects');
+        const next = safeRemoteUrl(new URL(res.headers.get('location') || '', target.href).href);
+        if (!next) throw new Error('unsupported url');
+        try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+        target = next;
+    }
+}
+
 // ---- IPC -----------------------------------------------------------------
+
+// Every account/ endpoint that mints or returns the account token has its own
+// handler below, so the credential never crosses into the renderer. The generic
+// proxy therefore allows only the read-only corner of that namespace, and the
+// path is normalised first: it is concatenated into the request URL unparsed,
+// so an equality check against 'account/login' is trivially sidestepped with
+// 'account/login?x=1' or '//account/login'.
+const ACCOUNT_PROXYABLE = new Set([
+    'account/me', 'account/users', 'account/manage',
+    'account/twofactor', 'account/logout', 'account/resend'
+]);
+
+function normalizeBoardPath(p) {
+    return String(p || '').split('?')[0].split('#')[0].replace(/^\/+/, '').toLowerCase();
+}
 
 function registerIpc() {
     ipcMain.handle('auth:login', async (_e, password) => {
@@ -386,10 +482,10 @@ function registerIpc() {
 
     ipcMain.handle('board:call', async (_e, { path: p, opts }) => {
         const pathStr = String(p || '');
-        // register/login responses carry the account token — those go through
-        // the dedicated handlers below so the credential never enters the
-        // renderer, same policy as the sb_auth cookie.
-        if (pathStr === 'account/register' || pathStr === 'account/login') {
+        // register/login/verify responses all carry the account token, so the
+        // whole namespace is denied except the read-only paths the UI needs.
+        const norm = normalizeBoardPath(pathStr);
+        if (norm.startsWith('account/') && !ACCOUNT_PROXYABLE.has(norm)) {
             return { success: false, error: 'use the account bridge' };
         }
         return net.board(pathStr, opts || {});
@@ -452,10 +548,27 @@ function registerIpc() {
             if (!res.ok) throw new Error(`Server returned ${res.status}`);
             return Buffer.from(await res.arrayBuffer());
         }
-        if (!/^https?:\/\//i.test(url || '')) throw new Error('unsupported url');
-        const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+        // Host-restricted (see safeRemoteUrl) and content-type checked, exactly
+        // like board:fetchImage: everything reaching here saves to disk or goes
+        // on the clipboard, so "whatever that URL returns" is not good enough.
+        const res = await fetchRemoteImage(url);
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+        if (!type.startsWith('image/')) throw new Error('That link is not an image');
         return Buffer.from(await res.arrayBuffer());
+    }
+
+    // Only paths this process actually wrote may be revealed. The renderer hands
+    // back the path it was given, but the channel accepts any string, so without
+    // this an Explorer window can be opened on any file on the machine.
+    const revealable = new Set();
+    const MAX_REVEALABLE = 100;
+
+    function rememberRevealable(filePath) {
+        if (revealable.size >= MAX_REVEALABLE) {
+            revealable.delete(revealable.values().next().value);
+        }
+        revealable.add(path.resolve(filePath));
     }
 
     // Save an attachment to disk. The bytes have to come through the
@@ -468,6 +581,7 @@ function registerIpc() {
         if (target.canceled || !target.filePath) return { success: false, canceled: true };
         try {
             await fsp.writeFile(target.filePath, await imageBytes({ key, url }));
+            rememberRevealable(target.filePath);
             return { success: true, path: target.filePath };
         } catch (e) {
             return { success: false, error: e.message };
@@ -475,7 +589,15 @@ function registerIpc() {
     });
 
     ipcMain.handle('board:revealFile', (_e, filePath) => {
-        if (filePath) shell.showItemInFolder(filePath);
+        if (!filePath) return false;
+        // The save dialog's destination is wherever the user chose, so the rule
+        // is "a file we just produced", not a fixed directory.
+        if (!revealable.has(path.resolve(String(filePath)))) {
+            console.warn('[app] refused to reveal a path this process did not write');
+            return false;
+        }
+        shell.showItemInFolder(path.resolve(String(filePath)));
+        return true;
     });
 
     // Straight to the Downloads folder, no dialog. Never silently clobbers an
@@ -495,6 +617,7 @@ function registerIpc() {
                 target = path.join(dir, `${stem} (${n})${ext}`);
             }
             await fsp.writeFile(target, buf);
+            rememberRevealable(target);
             return { success: true, path: target };
         } catch (e) {
             return { success: false, error: e.message };
@@ -525,8 +648,9 @@ function registerIpc() {
     // text — and because an arbitrary remote host won't send CORS headers.
     ipcMain.handle('board:fetchImage', async (_e, url) => {
         try {
-            if (!/^https?:\/\//i.test(url)) return { success: false, error: 'unsupported url' };
-            const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+            // Same host restriction as imageBytes — a dragged image URL is no
+            // more trustworthy than one embedded in a message.
+            const res = await fetchRemoteImage(url);
             if (!res.ok) return { success: false, error: `Server returned ${res.status}` };
 
             const type = (res.headers.get('content-type') || '').split(';')[0].trim();

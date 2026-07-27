@@ -31,7 +31,9 @@ function boot({ session = 'SESSION123', settings = {} } = {}) {
     const store = loadMain('store.js');
     store.init();
     store.set({
-        baseUrl: 'https://board.test',
+        // Only allow-listed origins are settable — baseUrl decides which host
+        // receives the session cookie the socket carries.
+        baseUrl: 'https://scarmonit.com',
         room: 'lounge',
         displayName: 'Scarm',
         clientId: 'c123',
@@ -72,7 +74,7 @@ describe('connecting', () => {
         // A renderer socket from file:// could never carry this cookie — that's
         // the whole reason the socket lives in the main process.
         expect(socket().options.headers.Cookie).toBe('sb_auth=SESSION123');
-        expect(socket().url).toBe('wss://board.test/api/rt/lounge?cid=c123&name=Scarm');
+        expect(socket().url).toBe('wss://scarmonit.com/api/rt/lounge?cid=c123&name=Scarm');
     });
 
     it('maps http to ws and encodes room, name and client id', () => {
@@ -256,6 +258,22 @@ describe('wake', () => {
         expect(socket().terminated).toBe(false);
     });
 
+    it('does not let an earlier probe kill a socket a later one proved healthy', () => {
+        // Two focus events inside the 3s probe window shared one liveness flag,
+        // so the first probe's timer read the second's "no answer yet" and
+        // terminated a socket that had just ponged.
+        boot();
+        socket().acceptConnection();
+
+        rt.wake();
+        vi.advanceTimersByTime(1000);
+        rt.wake();
+        socket().replyPong();
+        vi.advanceTimersByTime(3000);
+
+        expect(socket().terminated).toBe(false);
+    });
+
     it('connects instead of probing when there is no socket', () => {
         boot();
         socket().acceptConnection();
@@ -264,6 +282,44 @@ describe('wake', () => {
 
         rt.start((type, payload) => events.push({ type, payload }));
         expect(sockets().length).toBe(1);
+    });
+});
+
+describe('stale sockets', () => {
+    it('ignores a late close from a socket that has already been replaced', () => {
+        // A socket whose handshake is still running lingers for up to 15s
+        // (handshakeTimeout), so it can outlive the connection that replaced
+        // it. Its eventual 'close' used to null out the live socket and report
+        // the app as disconnected while it was in fact connected.
+        boot();
+        const first = socket();
+        first.terminate();               // 'close' → reconnect
+        vi.advanceTimersByTime(1000);
+
+        const second = socket();
+        expect(second).not.toBe(first);
+        second.acceptConnection();
+        expect(rt.isConnected()).toBe(true);
+
+        first._fire('close');            // the stale socket, arriving late
+
+        expect(rt.isConnected()).toBe(true);
+        expect(second.terminated).toBe(false);
+    });
+
+    it('an error on a stale socket kills only itself', () => {
+        boot();
+        const first = socket();
+        first.terminate();
+        vi.advanceTimersByTime(1000);
+
+        const second = socket();
+        second.acceptConnection();
+
+        first._fire('error', new Error('handshake timed out'));
+
+        expect(second.terminated).toBe(false);
+        expect(rt.isConnected()).toBe(true);
     });
 });
 

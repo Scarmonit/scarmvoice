@@ -30,6 +30,13 @@ class FakeWebSocket {
         for (const fn of this._handlers[event] || []) fn(...args);
     }
 
+    // rt.js detaches a socket it is deliberately killing before terminating it,
+    // so a late 'close' can't run against the socket that replaced it.
+    removeAllListeners() {
+        this._handlers = {};
+        return this;
+    }
+
     send(data) {
         if (this.readyState !== FakeWebSocket.OPEN) throw new Error('socket is not open');
         this.sent.push(data);

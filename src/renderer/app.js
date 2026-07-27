@@ -574,27 +574,46 @@
         $('login-totp-code').focus();
     }
 
+    function backToAccountStep() {
+        pendingTotp = null;
+        pendingVerifyUser = null;
+        $('login-totp').hidden = true;
+        $('login-verify').hidden = true;
+        showAccountStep();
+    }
+
     async function totpLoginSubmit() {
+        const btn = $('login-totp-btn');
+        if (btn.disabled) return;          // a submit is already in flight
         const err = $('login-error');
+        // The step can outlive its state (a stale overlay, a back-and-forth):
+        // replaying a sign-in with no credentials would throw here.
+        if (!pendingTotp) return backToAccountStep();
         const code = $('login-totp-code').value.trim();
         if (!/^\d{6}$/.test(code)) { err.textContent = 'Enter the 6-digit code from your app.'; return; }
         err.textContent = '';
-        const res = await L.account.login(pendingTotp.username, pendingTotp.password, code);
-        if (!res || !res.success) {
-            err.textContent = (res && res.error) || 'Could not sign in.';
-            $('login-totp-code').value = '';
-            $('login-totp-code').focus();
-            return;
+        btn.disabled = true;
+        try {
+            const res = await L.account.login(pendingTotp.username, pendingTotp.password, code);
+            if (!res || !res.success) {
+                err.textContent = (res && res.error) || 'Could not sign in.';
+                $('login-totp-code').value = '';
+                $('login-totp-code').focus();
+                return;
+            }
+            account = res.user;
+            pendingTotp = null;
+            if (!settings.displayName) await saveSettings({ displayName: account.username });
+            hideAccountStep();
+            $('login').hidden = true;
+            enterApp();
+        } finally {
+            btn.disabled = false;
         }
-        account = res.user;
-        pendingTotp = null;
-        if (!settings.displayName) await saveSettings({ displayName: account.username });
-        hideAccountStep();
-        $('login').hidden = true;
-        enterApp();
     }
 
     $('login-totp-btn').addEventListener('click', totpLoginSubmit);
+    $('login-totp-back').addEventListener('click', backToAccountStep);
     $('login-totp-code').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); totpLoginSubmit(); }
     });
@@ -613,26 +632,34 @@
     }
 
     async function verifySubmit() {
+        const btn = $('login-verify-btn');
+        if (btn.disabled) return;          // a submit is already in flight
         const err = $('login-error');
         const code = $('login-code').value.trim();
         if (!/^\d{6}$/.test(code)) { err.textContent = 'Enter the 6-digit code from the email.'; return; }
         err.textContent = '';
-        const res = await L.account.verify(pendingVerifyUser, code);
-        if (!res || !res.success) {
-            err.textContent = (res && res.error) || 'Could not verify.';
-            return;
+        btn.disabled = true;
+        try {
+            const res = await L.account.verify(pendingVerifyUser, code);
+            if (!res || !res.success) {
+                err.textContent = (res && res.error) || 'Could not verify.';
+                return;
+            }
+            account = res.user;
+            pendingVerifyUser = null;
+            if (!settings.displayName) await saveSettings({ displayName: account.username });
+            if (account.role === 'admin') toast('Account verified — you are the board admin');
+            else toast('Account verified — welcome, ' + account.username);
+            hideAccountStep();
+            $('login').hidden = true;
+            enterApp();
+        } finally {
+            btn.disabled = false;
         }
-        account = res.user;
-        pendingVerifyUser = null;
-        if (!settings.displayName) await saveSettings({ displayName: account.username });
-        if (account.role === 'admin') toast('Account verified — you are the board admin');
-        else toast('Account verified — welcome, ' + account.username);
-        hideAccountStep();
-        $('login').hidden = true;
-        enterApp();
     }
 
     $('login-verify-btn').addEventListener('click', verifySubmit);
+    $('login-verify-back').addEventListener('click', backToAccountStep);
     $('login-code').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); verifySubmit(); }
     });
@@ -643,6 +670,11 @@
     });
 
     async function loginAcctSubmit(mode) {
+        // Both buttons go down together: Enter in a field bypasses a disabled
+        // button, and "sign in" racing "create account" registers twice.
+        const signin = $('login-acct-signin');
+        const create = $('login-acct-create');
+        if (signin.disabled || create.disabled) return;
         const err = $('login-error');
         const username = $('login-acct-user').value.trim();
         const password = $('login-acct-pw').value;
@@ -650,42 +682,54 @@
         if (!username || !password) { err.textContent = 'Enter a username and a password.'; return; }
         if (mode === 'register' && !email) { err.textContent = 'Enter your email — new accounts must verify one.'; return; }
         err.textContent = '';
+        signin.disabled = true;
+        create.disabled = true;
 
-        const res = mode === 'register'
-            ? await L.account.register(username, password, email)
-            : await L.account.login(username, password);
-        // A new registration (or an unverified sign-in) moves to the code step.
-        if (res && (res.pendingVerification || res.needsVerify)) {
-            showVerifyStep(res.username || username);
-            return;
+        try {
+            const res = mode === 'register'
+                ? await L.account.register(username, password, email)
+                : await L.account.login(username, password);
+            // A new registration (or an unverified sign-in) moves to the code step.
+            if (res && (res.pendingVerification || res.needsVerify)) {
+                showVerifyStep(res.username || username);
+                return;
+            }
+            // 2FA account: ask for the authenticator code and replay the sign-in.
+            if (res && res.needsTotp) {
+                showTotpStep(res.username || username, password);
+                return;
+            }
+            if (!res || !res.success) {
+                err.textContent = (res && res.error) || 'Could not sign in.';
+                $('login-form').classList.add('shake');
+                setTimeout(() => $('login-form').classList.remove('shake'), 420);
+                return;
+            }
+            account = res.user;
+            $('login-acct-pw').value = '';
+            // A fresh install with no display name inherits the account name.
+            if (!settings.displayName) await saveSettings({ displayName: account.username });
+            if (mode === 'register' && account.role === 'admin') {
+                toast('Account created — you are the board admin');
+            }
+            hideAccountStep();
+            $('login').hidden = true;
+            enterApp();
+        } finally {
+            signin.disabled = false;
+            create.disabled = false;
         }
-        // 2FA account: ask for the authenticator code and replay the sign-in.
-        if (res && res.needsTotp) {
-            showTotpStep(res.username || username, password);
-            return;
-        }
-        if (!res || !res.success) {
-            err.textContent = (res && res.error) || 'Could not sign in.';
-            $('login-form').classList.add('shake');
-            setTimeout(() => $('login-form').classList.remove('shake'), 420);
-            return;
-        }
-        account = res.user;
-        $('login-acct-pw').value = '';
-        // A fresh install with no display name inherits the account name.
-        if (!settings.displayName) await saveSettings({ displayName: account.username });
-        if (mode === 'register' && account.role === 'admin') {
-            toast('Account created — you are the board admin');
-        }
-        hideAccountStep();
-        $('login').hidden = true;
-        enterApp();
     }
 
     $('login-acct-signin').addEventListener('click', () => loginAcctSubmit('login'));
     $('login-acct-create').addEventListener('click', () => loginAcctSubmit('register'));
-    $('login-acct-pw').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); loginAcctSubmit('login'); }
+    // All three account fields swallow Enter. Without this the keypress reached
+    // the enclosing #login-form and submitted the BOARD PASSWORD step with an
+    // empty password, answering the account step with "Incorrect password".
+    ['login-acct-user', 'login-acct-pw', 'login-acct-email'].forEach((id) => {
+        $(id).addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); loginAcctSubmit('login'); }
+        });
     });
 
     $('login-advanced').addEventListener('click', () => {
@@ -727,46 +771,67 @@
         $('login-pw').focus();
     });
 
+    // Five call sites reach enterApp() and none of them awaited it, so a throw
+    // from any of the ten awaits below used to surface as an unhandled rejection
+    // with #app already unhidden — a visible shell with no messages, no polling
+    // and no explanation. Everything past the reveal is guarded, and the guard
+    // also stops two overlapping entries (boot + a sign-in that raced it) from
+    // starting two sets of timers.
+    let entered = false;
+
     async function enterApp() {
-        settings = await L.settings.get();
-        if (!settings.displayName) {
-            const n = ($('login-name').value || '').trim();
-            if (n) await saveSettings({ displayName: n });
+        if (entered) return;
+        entered = true;
+        try {
+            settings = await L.settings.get();
+            if (!settings.displayName) {
+                const n = ($('login-name').value || '').trim();
+                if (n) await saveSettings({ displayName: n });
+            }
+            $('login').hidden = true;
+            $('app').hidden = false;
+            $('btn-send').disabled = true;
+
+            channel = settings.channel || 'general';
+            try { reads = JSON.parse(localStorage.getItem('lounge_reads') || '{}'); } catch (e) { reads = {}; }
+            // Anything left queued by a previous session goes out as soon as the
+            // first successful poll proves we're online.
+            loadOutbox();
+
+            applyChatFontSize(settings.chatFontSize);
+            applyChrome();
+            setChannelTitle(channel);
+            warnIfElevated();
+            window.loungeSounds.init(settings);
+            window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
+            setupVoice();
+            renderMe();
+            // BEFORE the socket opens: this registers the install against the
+            // account, and the realtime upgrade resolves that mapping server-side
+            // to merge your devices. A socket opened first would carry no identity.
+            await refreshAccount();
+            await L.rt.start();
+            await loadChannels();
+            await loadMessages(true);
+            startPolling();
+            startTextPresence();
+            loadDmThreads();
+            startDmPolling();
+            await L.ptt.apply();
+            refreshPttHint();
+            flushOutbox();
+
+            if (settings.autoJoinVoice) joinVoice();
+        } catch (e) {
+            console.error('[app] could not open the board:', e);
+            // Whatever did start has to be unwound, or the half-loaded session
+            // keeps heartbeating from behind the login overlay.
+            try { await teardownSession(); } catch (e2) { /* going back to login regardless */ }
+            $('app').hidden = true;
+            $('login').hidden = false;
+            $('login-error').textContent = 'Could not load the board. Try again.';
+            toast('Could not load the board — ' + ((e && e.message) || 'unknown error'), true);
         }
-        $('login').hidden = true;
-        $('app').hidden = false;
-        $('btn-send').disabled = true;
-
-        channel = settings.channel || 'general';
-        try { reads = JSON.parse(localStorage.getItem('lounge_reads') || '{}'); } catch (e) { reads = {}; }
-        // Anything left queued by a previous session goes out as soon as the
-        // first successful poll proves we're online.
-        loadOutbox();
-
-        applyChatFontSize(settings.chatFontSize);
-        applyChrome();
-        setChannelTitle(channel);
-        warnIfElevated();
-        window.loungeSounds.init(settings);
-        window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
-        setupVoice();
-        renderMe();
-        // BEFORE the socket opens: this registers the install against the
-        // account, and the realtime upgrade resolves that mapping server-side
-        // to merge your devices. A socket opened first would carry no identity.
-        await refreshAccount();
-        await L.rt.start();
-        await loadChannels();
-        await loadMessages(true);
-        startPolling();
-        startTextPresence();
-        loadDmThreads();
-        startDmPolling();
-        await L.ptt.apply();
-        refreshPttHint();
-        flushOutbox();
-
-        if (settings.autoJoinVoice) joinVoice();
     }
 
     // ---------- channels --------------------------------------------------
@@ -3142,15 +3207,33 @@
         });
 
         const list = Array.from(byId.values());
-        $('voice-count').textContent = list.length ? String(list.length) : '';
 
         // Join / leave chimes. Gated on actually being in the call, so they are
-        // never audible to someone who is only watching the roster.
+        // never audible to someone who is only watching the roster. Fed the
+        // per-INSTALL list: a chime tracks a connection arriving or going, not
+        // a person.
         window.loungeSounds.voiceRoster(list, inCall, settings.clientId, !!settings.dnd);
 
         list.forEach((p) => addRosterName(p.name));
-        renderVoiceUsers(list, inCall);
-        renderMembers(list, inCall);
+
+        // Everything shown to the user merges by account, the way the members
+        // sidebar does — one person on two devices is one row and one head in
+        // the count, not two.
+        const keyOf = (uid, cid) => (uid ? 'u' + uid : 'c' + cid);
+        const byKey = new Map();
+        list.forEach((p) => {
+            const key = keyOf(p.uid, p.id);
+            const prev = byKey.get(key);
+            // Keep the install we can actually reach — and our own over any
+            // other device of ours — so the surviving row keeps its popover and
+            // speaking highlight.
+            if (!prev || (prev.remoteOnly && !p.remoteOnly) || p.id === settings.clientId) byKey.set(key, p);
+        });
+        const merged = Array.from(byKey.values());
+
+        $('voice-count').textContent = merged.length ? String(merged.length) : '';
+        renderVoiceUsers(merged, inCall);
+        renderMembers(merged, inCall);
     }
 
     // Who is in the call, listed under the voice channel in the sidebar. Rows
@@ -3161,7 +3244,9 @@
         ul.innerHTML = '';
 
         list.forEach((p) => {
-            const isMe = p.id === settings.clientId;
+            // "You" by account as well as by install — the merged row may carry
+            // your other device's id.
+            const isMe = p.id === settings.clientId || !!(account && p.uid && p.uid === account.id);
             const localMuted = !isMe && settings.localMuted && settings.localMuted[p.id];
             // In the room but absent from our SFU peer list: present, yet unable
             // to exchange media with us.
@@ -3842,11 +3927,23 @@
         }, every);
     }
 
-    async function relogin() {
+    // Every way out of the app — expired session, account sign-out, full sign-out
+    // — has to release the same things. Account sign-out used to release none of
+    // them, so the timers kept polling, presence kept reporting you online and
+    // the microphone stayed open behind the login gate.
+    async function teardownSession() {
+        entered = false;
+        if (voice && voice.isJoined()) { heartbeatPresence(true); voice.leave(); }
         stopPolling();
         stopPresence();
+        // Awaited so the members list loses us now rather than on its next sweep.
+        try { await sendTextPresence(true); } catch (e) { /* leaving either way */ }
         stopTextPresence();
-        if (voice) voice.leave();
+        try { await L.rt.stop(); } catch (e) { /* socket is going away regardless */ }
+    }
+
+    async function relogin() {
+        await teardownSession();
         $('app').hidden = true;
         hideAccountStep();       // back to step 1 — the site password comes first
         $('login').hidden = false;
@@ -4225,6 +4322,12 @@
 
         $('acct-signed').hidden = !account;
         $('acct-forms').hidden = !!account;
+        // Both sub-panels belong to a state that has just ended: a stray verify
+        // form under a signed-in account, or — worse — the PREVIOUS account's
+        // TOTP secret still on screen for the next person who signs in.
+        $('acct-verify').hidden = true;
+        $('acct-2fa-setup').hidden = true;
+        $('acct-2fa-secret').textContent = '';
         if (account) {
             $('acct-user').textContent = account.username;
             $('acct-role').textContent = (account.role === 'admin' ? '(admin)' : '') +
@@ -4249,8 +4352,20 @@
     }
 
     async function start2faSetup() {
-        const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'setup' } });
+        // The server re-authenticates with the password before it will bind a
+        // new authenticator — a session token alone must not be enough to lock
+        // the real owner out of their own account.
+        const pw = await openDialog({
+            title: 'Confirm your password',
+            message: 'Enter your account password to set up two-factor authentication.',
+            ok: 'Continue', withInput: true
+        });
+        if (pw === null || pw === false) return;
+        const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'setup', password: String(pw) } });
         if (!res || !res.success) return toast((res && res.error) || 'Could not start 2FA setup', true);
+        // A success without the payload would paint the literal word "undefined"
+        // as the key someone is about to type into their authenticator.
+        if (!res.secret || !res.otpauth) return toast('2FA setup came back incomplete — try again', true);
         $('acct-2fa-secret').textContent = res.secret;
         drawQr($('acct-2fa-qr'), res.otpauth);
         $('acct-2fa-setup').hidden = false;
@@ -4261,14 +4376,23 @@
     $('btn-acct-2fa').addEventListener('click', async () => {
         if (!account) return;
         if (!account.totp) return start2faSetup();
-        // Turning it off needs a live code, so the server can trust the request.
+        // Turning it off needs BOTH a live code and the password, so neither a
+        // borrowed session nor a glimpsed code is enough on its own.
         const code = await openDialog({
             title: 'Turn off two-factor?',
             message: 'Enter a current code from your authenticator app to confirm.',
-            ok: 'Turn off', withInput: true, danger: true
+            ok: 'Next', withInput: true, danger: true
         });
         if (code === null || code === false) return;
-        const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'disable', code: String(code).trim() } });
+        const pw = await openDialog({
+            title: 'Confirm your password',
+            message: 'Enter your account password to turn two-factor off.',
+            ok: 'Turn off', withInput: true, danger: true
+        });
+        if (pw === null || pw === false) return;
+        const res = await L.board('account/twofactor', {
+            method: 'POST', body: { action: 'disable', code: String(code).trim(), password: String(pw) }
+        });
         if (!res || !res.success) return toast((res && res.error) || 'Could not turn 2FA off', true);
         account.totp = false;
         renderAccountCard();
@@ -4419,6 +4543,16 @@
                 manageMember({ action: 'resetPassword', userId: u.id, password: String(pw) });
             });
 
+            // The only way back from a lost authenticator: disabling 2FA
+            // normally requires a current code, which is exactly what they
+            // no longer have.
+            btn('Clear 2FA', false, () =>
+                manageMember({ action: 'clearTotp', userId: u.id }, {
+                    title: `Clear two-factor for ${u.username}?`,
+                    message: 'Use this when they have lost their authenticator. They are signed out everywhere and can sign in with just their password afterwards.',
+                    ok: 'Clear 2FA'
+                }));
+
             btn('Delete', true, () =>
                 manageMember({ action: 'delete', userId: u.id }, {
                     title: `Delete ${u.username}'s account?`,
@@ -4457,6 +4591,7 @@
         if (e.key === 'Enter') { e.preventDefault(); acctSubmit('login'); }
     });
     $('btn-acct-logout').addEventListener('click', async () => {
+        await teardownSession();
         await L.account.logout();
         account = null;
         dmThreads = [];
@@ -4465,7 +4600,7 @@
         renderDmSection();
         // Accounts are mandatory: without one, back to the gate (the board
         // session itself stays valid, so it's a one-field hop back in).
-        $('settings').hidden = true;
+        closeSettings();
         $('app').hidden = true;
         showAccountStep();
         toast('Signed out of your board account');
@@ -4860,11 +4995,7 @@
     bindKeyRecorder('set-deafen-key', 'deafenBinding');
 
     $('btn-logout').addEventListener('click', async () => {
-        if (voice.isJoined()) { heartbeatPresence(true); voice.leave(); }
-        stopPolling();
-        stopPresence();
-        await sendTextPresence(true);      // drop out of the members list now
-        stopTextPresence();
+        await teardownSession();
         // "Sign out" means out of EVERYTHING — board session and account —
         // so the next sign-in walks both steps again.
         await L.account.logout();
@@ -4872,8 +5003,7 @@
         dmThreads = [];
         closeDm();
         await L.auth.logout();
-        await L.rt.stop();
-        $('settings').hidden = true;
+        closeSettings();
         $('app').hidden = true;
         hideAccountStep();       // fresh sign-in starts at the password step
         $('login').hidden = false;
@@ -6218,8 +6348,12 @@
     let dmTimer = null;
     let dmLoadedOnce = false;
 
+    // The open conversation is being read right now. The row already hides its
+    // own badge; the rail and the taskbar badge read this total, so leaving it
+    // in kept them lit while you were looking at the messages.
     function dmUnreadTotal() {
-        return dmThreads.reduce((s, t) => s + (t.unread || 0), 0);
+        return dmThreads.reduce((s, t) =>
+            s + ((dmOpen && dmOpen.id === t.user.id) ? 0 : (t.unread || 0)), 0);
     }
 
     function renderDmSection() {
@@ -6251,6 +6385,12 @@
         const res = await L.board('dm/threads');
         if (res && res.success) {
             dmThreads = res.threads || [];
+            // The server's count for the open conversation lags its read marker
+            // by a poll; the drawer is on screen, so it is read by definition.
+            if (dmOpen) {
+                const t = dmThreads.find((x) => x.user.id === dmOpen.id);
+                if (t) t.unread = 0;
+            }
             dmLoadedOnce = true;
             renderDmSection();
         }
@@ -6271,6 +6411,7 @@
         $('dm-panel').hidden = false;
         closeThread();
         dmMsgs = [];
+        loadDmMessages.lastSig = null;    // the last conversation's payload isn't this one's
         $('dm-messages').innerHTML = '<div class="thread-loading">Loading…</div>';
         await loadDmMessages(true);
         const t = dmThreads.find((x) => x.user.id === user.id);
@@ -6281,6 +6422,7 @@
 
     function closeDm() {
         dmOpen = null;
+        loadDmMessages.lastSig = null;
         $('dm-panel').hidden = true;
         renderDmSection();
     }
@@ -6293,7 +6435,10 @@
         const res = await L.board('dm/list', { query: { with: forUser } });
         if (!dmOpen || dmOpen.id !== forUser) return;      // switched conversations mid-flight
         if (!res || !res.success) {
-            if (res && res.needsAccount) { closeDm(); toast('Sign into your board account to use DMs', true); }
+            if (res && res.needsAuth) return relogin();
+            if (res && res.needsAccount) { closeDm(); toast('Sign into your board account to use DMs', true); return; }
+            // Anything else used to leave the drawer on "Loading…" forever.
+            dmMessagesError((res && res.error) || 'Could not load this conversation.');
             return;
         }
         const sig = JSON.stringify(res.messages || []);
@@ -6301,6 +6446,17 @@
         loadDmMessages.lastSig = sig;
         dmMsgs = res.messages || [];
         renderDmMessages();
+    }
+
+    // The drawer's "Loading…" placeholder never clears on its own, so a failed
+    // first load has to replace it. Only when nothing is rendered yet — wiping a
+    // readable conversation because one background poll failed would be worse.
+    function dmMessagesError(msg) {
+        if (dmMsgs.length) return;
+        const box = $('dm-messages');
+        box.innerHTML = `<div class="dm-empty">${esc(msg)}` +
+            '<button type="button" class="keycap dm-retry">Retry</button></div>';
+        box.querySelector('.dm-retry').addEventListener('click', () => loadDmMessages(true));
     }
 
     function renderDmMessages() {
@@ -6387,11 +6543,14 @@
     function onDmEvent(m) {
         if (!m || !m.from) return;
         if (dmOpen && dmOpen.id === m.from.id) {
-            // Open conversation: append, and let the server mark it read via
-            // the next list call rather than double-counting unread.
-            dmMsgs.push({ id: m.id, body: m.body, created_at: m.created_at, fromMe: false });
-            renderDmMessages();
-            loadDmMessages(true);
+            // Open conversation: append and stop there. The event already
+            // carries the body, and the re-fetch that used to follow read from a
+            // replica that often hadn't seen the write yet — so the message we
+            // had just shown disappeared again until the next poll agreed.
+            if (!dmMsgs.some((x) => x.id === m.id)) {
+                dmMsgs.push({ id: m.id, body: m.body, created_at: m.created_at, fromMe: false });
+                renderDmMessages();
+            }
         } else {
             const t = dmThreads.find((x) => x.user.id === m.from.id);
             if (t) {
