@@ -1189,7 +1189,7 @@
         posts.forEach((p) => addRosterName(p.name));
         typingUsers = (res.typing || []).filter((t) => t.client_id !== settings.clientId);
         typingUsers.forEach((t) => addRosterName(t.name));
-        voicePresence = res.voice || [];
+        voicePresence = keepKnownUids(res.voice || []);
 
         if (res.maxId) {
             reads[channel] = res.maxId;
@@ -3428,8 +3428,17 @@
         // Key by ACCOUNT where we know it: the same person signed in on the
         // website and the app is one member, not two.
         const keyOf = (uid, cid) => (uid ? 'u' + uid : 'c' + cid);
-        const inVoice = new Map(voiceList.map((p) => [keyOf(p.uid, p.id), p]));
+        // Indexed under BOTH keys. An account key alone breaks the moment one
+        // side of the join is missing a user_id: the person is then keyed two
+        // different ways and rendered twice — once from text presence with
+        // their real status, once from the voice list forced to "online".
+        const inVoice = new Map();
+        voiceList.forEach((p) => {
+            inVoice.set(keyOf(p.uid, p.id), p);
+            if (p.id) inVoice.set('c' + p.id, p);
+        });
         const seen = new Set();
+        const seenClients = new Set();
         const rows = [];
 
         // Everyone the presence table knows about, plus anyone in the call who
@@ -3438,19 +3447,23 @@
             const key = keyOf(m.user_id, m.client_id);
             if (seen.has(key)) return;
             seen.add(key);
+            if (m.client_id) seenClients.add(m.client_id);
             rows.push({
                 id: m.client_id,
                 uid: m.user_id || null,
                 name: m.name || 'Anonymous',
                 status: (m.status === 'away' || m.status === 'dnd') ? m.status : 'online',
                 custom: m.custom || '',
-                voice: inVoice.get(key) || null
+                voice: inVoice.get(key) || (m.client_id ? inVoice.get('c' + m.client_id) : null) || null
             });
         });
         voiceList.forEach((p) => {
             const key = keyOf(p.uid, p.id);
-            if (seen.has(key)) return;
+            // The install check is what makes this safe against a uid-less row:
+            // the same install can never be two members.
+            if (seen.has(key) || (p.id && seenClients.has(p.id))) return;
             seen.add(key);
+            if (p.id) seenClients.add(p.id);
             rows.push({ id: p.id, uid: p.uid || null, name: p.name, status: 'online', custom: '', voice: p });
         });
 
@@ -3659,6 +3672,23 @@
         return 'online';
     }
 
+    // Voice rows arriving from /api/board/list historically carried no user_id.
+    // Dropping it re-keys that person from their account to their install, which
+    // stops matching their text-presence row and renders them twice. Carry
+    // forward any id we already know for the same install, from either source.
+    function keepKnownUids(list) {
+        if (!Array.isArray(list) || !list.length) return [];
+        if (list.every((p) => p && p.user_id)) return list;
+        const known = new Map();
+        members.forEach((m) => { if (m && m.client_id && m.user_id) known.set(m.client_id, m.user_id); });
+        voicePresence.forEach((p) => { if (p && p.client_id && p.user_id) known.set(p.client_id, p.user_id); });
+        return list.map((p) => (
+            (p && !p.user_id && known.has(p.client_id))
+                ? Object.assign({}, p, { user_id: known.get(p.client_id) })
+                : p
+        ));
+    }
+
     async function sendTextPresence(leaving) {
         const res = await L.board('presence', {
             method: 'POST',
@@ -3685,6 +3715,18 @@
 
     function stopTextPresence() {
         if (textPresenceTimer) { clearInterval(textPresenceTimer); textPresenceTimer = null; }
+    }
+
+    // myPresenceStatus() reports "away" while the window is blurred, so without
+    // this your own row stays away for up to TEXT_PRESENCE_MS after you click
+    // back in. Debounced because focus, show and restore can all fire together.
+    let presenceRefreshAt = 0;
+    function refreshPresenceSoon() {
+        if (!textPresenceTimer) return;          // only while the heartbeat is running
+        const now = Date.now();
+        if (now - presenceRefreshAt < 2000) return;
+        presenceRefreshAt = now;
+        sendTextPresence(false);
     }
 
     // ---------- voice presence heartbeat ----------------------------------
@@ -4224,7 +4266,13 @@
         else if (cmd === 'leaveVoice') leaveVoice();
     });
 
-    L.win.onFocus((focused) => { windowFocused = focused; });
+    L.win.onFocus((focused) => {
+        const was = windowFocused;
+        windowFocused = focused;
+        // Clicking back in makes you "online" again — say so now rather than at
+        // the next heartbeat, or the roster shows you away while you're typing.
+        if (focused && !was) refreshPresenceSoon();
+    });
 
     // Restore-from-tray / wake-from-sleep: main verifies the socket (rt.wake)
     // and fires this so we pull anything missed while hidden.
@@ -4237,6 +4285,7 @@
         if (document.hidden) return;
         L.rt.wake();
         resyncNow();
+        refreshPresenceSoon();
         // The thread and DM polls skip their ticks while hidden, so refresh
         // whichever panels are open now rather than leaving them stale until
         // their next interval.
