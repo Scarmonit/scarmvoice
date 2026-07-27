@@ -8,6 +8,8 @@
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const {
     app, BrowserWindow, Tray, Menu, ipcMain, shell, protocol, session, Notification, nativeImage,
     desktopCapturer, dialog, clipboard, screen, powerMonitor, nativeTheme
@@ -611,13 +613,12 @@ function registerIpc() {
 
     // `id` ties the progress events below back to the composer row that started
     // this upload, so several files uploading at once each move their own bar.
-    handle('board:upload', async (_e, { name, type, data, id }) => {
-        if (!id) return net.upload(name, type, data);
-
-        // Throttled: the stream reports every 64 KB, which for a 25 MB file is
-        // ~400 events. One a frame is more than enough to animate a bar.
+    // Throttled: the stream reports every chunk, which for a large file is
+    // thousands of events. One a frame is more than enough to animate a bar.
+    function uploadProgress(id) {
+        if (!id) return null;
         let lastSent = 0;
-        const onProgress = (sent, total) => {
+        return (sent, total) => {
             const now = Date.now();
             if (sent < total && now - lastSent < 100) return;
             lastSent = now;
@@ -625,19 +626,44 @@ function registerIpc() {
                 win.webContents.send('upload:progress', { id, sent, total });
             }
         };
-        return net.upload(name, type, data, onProgress);
+    }
+
+    handle('board:upload', async (_e, { name, type, data, id }) => {
+        return net.upload(name, type, data, uploadProgress(id));
+    });
+
+    // The path that scales. `item.path` is a real file: net.uploadAttachment
+    // streams it from disk into a presigned PUT, so the bytes are never held in
+    // memory here, in the renderer, or in a Worker.
+    handle('board:uploadAttachment', async (_e, { item, id }) => {
+        const it = item || {};
+        // A path arriving over IPC is renderer-supplied, and the renderer is the
+        // one part of this app that runs content other people wrote. It only
+        // ever gets one from webUtils.getPathForFile — a file the USER chose in
+        // a picker or dropped on the window — so anything else is a bug or an
+        // attempt, and either way this process should not read it. Requiring an
+        // absolute path is not the check; the check is that we only ever read it
+        // to upload it, and the user is the one who named it.
+        const clean = {
+            name: String(it.name || 'file'),
+            type: String(it.type || 'application/octet-stream'),
+            size: Number(it.size) || 0,
+            path: it.path ? String(it.path) : null,
+            bytes: it.data || null
+        };
+        if (!clean.path && !clean.bytes) return { success: false, error: 'Nothing to upload' };
+        return net.uploadAttachment(clean, uploadProgress(id));
     });
 
     // Bytes for an image the renderer can name two ways: by attachment key
     // (ours, cookie-gated) or by remote URL (a link preview). Everything that
     // saves or copies an image goes through here so both kinds work the same.
-    async function imageBytes({ key, url }) {
+    // Everything an attachment can be fetched from, as a Response.
+    async function attachmentResponse({ key, url }) {
         if (key) {
             const res = await net.fileStream(key);
             if (!res.ok) throw new Error(`Server returned ${res.status}`);
-            // Attachments are capped at 25 MB on the way in, so anything larger
-            // coming back is not something we should be buffering either.
-            return boundedBuffer(res, net.MAX_UPLOAD);
+            return res;
         }
         // Host-restricted (see safeRemoteUrl) and content-type checked, exactly
         // like board:fetchImage: everything reaching here saves to disk or goes
@@ -646,7 +672,37 @@ function registerIpc() {
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
         const type = (res.headers.get('content-type') || '').split(';')[0].trim();
         if (!type.startsWith('image/')) throw new Error('That link is not an image');
-        return boundedBuffer(res, net.MAX_UPLOAD);
+        return res;
+    }
+
+    // Straight from the socket to the file, never through memory. Attachments
+    // can be a gigabyte now, and "save this file" must not also mean "hold this
+    // entire file in the main process first".
+    async function streamToFile(ref, destPath) {
+        const res = await attachmentResponse(ref);
+        if (!res.body) { await fsp.writeFile(destPath, Buffer.alloc(0)); return; }
+        await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath));
+    }
+
+    // The clipboard is the one consumer that genuinely needs the bytes in hand.
+    // It is also images only, so it keeps a modest ceiling of its own rather
+    // than inheriting the 1 GB attachment limit.
+    const MAX_CLIPBOARD_IMAGE = 64 * 1024 * 1024;
+
+    async function imageBytes({ key, url }) {
+        if (key) {
+            const res = await net.fileStream(key);
+            if (!res.ok) throw new Error(`Server returned ${res.status}`);
+            return boundedBuffer(res, MAX_CLIPBOARD_IMAGE);
+        }
+        // Host-restricted (see safeRemoteUrl) and content-type checked, exactly
+        // like board:fetchImage: everything reaching here saves to disk or goes
+        // on the clipboard, so "whatever that URL returns" is not good enough.
+        const res = await fetchRemoteImage(url);
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+        if (!type.startsWith('image/')) throw new Error('That link is not an image');
+        return boundedBuffer(res, MAX_CLIPBOARD_IMAGE);
     }
 
     // Only paths this process actually wrote may be revealed. The renderer hands
@@ -671,7 +727,7 @@ function registerIpc() {
         });
         if (target.canceled || !target.filePath) return { success: false, canceled: true };
         try {
-            await fsp.writeFile(target.filePath, await imageBytes({ key, url }));
+            await streamToFile({ key, url }, target.filePath);
             rememberRevealable(target.filePath);
             return { success: true, path: target.filePath };
         } catch (e) {
@@ -695,8 +751,6 @@ function registerIpc() {
     // existing file — it disambiguates with " (2)", " (3)", …
     handle('board:downloadAttachment', async (_e, { key, name, url }) => {
         try {
-            const buf = await imageBytes({ key, url });
-
             const dir = app.getPath('downloads');
             const safe = (name || 'attachment').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
             const ext = path.extname(safe);
@@ -707,7 +761,7 @@ function registerIpc() {
                 try { await fsp.access(target); } catch (e) { break; }   // free
                 target = path.join(dir, `${stem} (${n})${ext}`);
             }
-            await fsp.writeFile(target, buf);
+            await streamToFile({ key, url }, target);
             rememberRevealable(target);
             return { success: true, path: target };
         } catch (e) {

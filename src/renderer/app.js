@@ -255,6 +255,94 @@
         } catch (e) { /* offline — the picker just shows the built-in set */ }
     }
 
+    // ---- profile images -------------------------------------------------------
+    // account id -> R2 key, from /api/board/avatars. ONE map serves every
+    // surface that already resolves a person to a user_id: messages, both
+    // member lists, the voice roster, the popover, the name pill. Nothing else
+    // in the app had to learn that profile images exist.
+    //
+    // Keys, not URLs: the server's URL is site-relative and means nothing from
+    // a file:// renderer, so it goes through L.fileUrl → lounge:// exactly like
+    // attachments and custom emoji do.
+    let avatarMap = {};
+    // `account` is assigned much later in this file; both of these are only ever
+    // called from render paths, long after it is set.
+    function myUserId() { return (account && account.id) || 0; }
+    // The SFU only ever knows install ids. Presence is what maps one back to an
+    // account, which is whose picture to draw.
+    function uidForClient(cid) {
+        if (!cid) return 0;
+        const m = members.find((x) => x.client_id === cid && x.user_id);
+        if (m) return m.user_id;
+        const v = voicePresence.find((x) => x.client_id === cid && x.user_id);
+        return (v && v.user_id) || 0;
+    }
+    function avatarSrc(uid) {
+        const key = uid && avatarMap[uid];
+        return key ? L.fileUrl(key) : '';
+    }
+    // Most avatars in this app are built inside an innerHTML string, so the
+    // picture is markup. The initials and the generated gradient stay
+    // UNDERNEATH it: they show while it loads, and remain if it 404s.
+    function avatarImgHtml(uid) {
+        const src = avatarSrc(uid);
+        return src ? `<img class="avatar-img" src="${esc(src)}" alt="" loading="lazy" draggable="false">` : '';
+    }
+    function avatarCls(uid) { return avatarSrc(uid) ? ' has-img' : ''; }
+    // A picture that fails to load takes itself off, which puts the letters back.
+    function wireAvatarFallback(root) {
+        if (!root) return;
+        root.querySelectorAll('img.avatar-img').forEach((img) => {
+            img.addEventListener('error', () => {
+                const holder = img.parentElement;
+                img.remove();
+                if (holder) holder.classList.remove('has-img');
+            });
+        });
+    }
+    // The DOM-built ones (the me-bar, the popover, the settings card).
+    function paintAvatarEl(el, name, uid) {
+        if (!el) return el;
+        el.textContent = initials(name);
+        el.setAttribute('style', avatarStyle(name));
+        el.classList.remove('has-img');
+        const src = avatarSrc(uid);
+        if (!src) return el;
+        const img = document.createElement('img');
+        img.className = 'avatar-img';
+        img.alt = ''; img.loading = 'lazy'; img.draggable = false;
+        img.addEventListener('error', () => { img.remove(); el.classList.remove('has-img'); });
+        img.src = src;
+        el.appendChild(img);
+        el.classList.add('has-img');
+        return el;
+    }
+
+    function sameAvatars(a, b) {
+        const ka = Object.keys(a), kb = Object.keys(b);
+        if (ka.length !== kb.length) return false;
+        return ka.every((k) => a[k] === b[k]);
+    }
+    async function loadAvatars() {
+        try {
+            const res = await L.board('avatars');
+            if (!res || !res.success || !res.avatars) return false;
+            if (sameAvatars(avatarMap, res.avatars)) return false;
+            avatarMap = res.avatars;
+            return true;
+        } catch (e) { return false; }
+    }
+    function repaintAvatars() {
+        renderMessages();          // the picture is part of each row's signature
+        renderVoiceRoster();
+        renderMe();
+        renderAccountCard();
+        if (threadOpen()) renderThread();
+    }
+    async function refreshAvatars() {
+        if (await loadAvatars()) repaintAvatars();
+    }
+
     function appendTextWithMentions(container, text, ctx) {
         // URLs are carved out FIRST: splitting on '@' before linkifying used
         // to cut https://youtube.com/@handle into a half-link plus a bogus
@@ -1018,9 +1106,17 @@
             // to merge your devices. A socket opened first would carry no identity.
             await refreshAccount();
             await L.rt.start();
-            // Before the first render: a message drawn without the set shows
-            // `:shrug:` as text and nothing redraws it afterwards.
+            // Before the first render. A message drawn without the emoji set
+            // shows `:shrug:` as text and nothing redraws it; a face drawn
+            // without the avatar map falls back to initials for the same reason.
             await loadCustomEmoji();
+            await loadAvatars();
+            // renderMe() and the account card ran before the map existed (they
+            // are part of the shell, drawn as soon as settings load), so they
+            // need the repaint the message list gets for free by rendering after
+            // this point.
+            renderMe();
+            renderAccountCard();
             await loadChannels();
             await loadMessages(true);
             startPolling();
@@ -1030,6 +1126,11 @@
             await L.ptt.apply();
             refreshPttHint();
             flushOutbox();
+
+            // Somebody else changing their picture is not worth a poll of its
+            // own — it happens about as often as people change their haircut.
+            // Your own change repaints immediately; this catches everyone else's.
+            setInterval(refreshAvatars, 5 * 60 * 1000);
 
             if (settings.autoJoinVoice) joinVoice();
         } catch (e) {
@@ -1577,6 +1678,7 @@
     function messageSig(p, grouped, compact) {
         return JSON.stringify([
             p.id, p.body, p.edited_at, p.pinned, p.reply_count, p.name,
+            avatarSrc(p.user_id),
             p.att_key, p.att_name, p.att_size, p.created_at,
             p.quote ? [p.quote.name, p.quote.body, p.quote.att_name, p.quote.missing] : 0,
             p.reactions || 0,
@@ -1740,8 +1842,8 @@
 
         el.innerHTML =
             '<div class="msg-gutter">' +
-            `<div class="msg-avatar" style="${avatarStyle(settings.displayName)}">` +
-            `${esc(initials(settings.displayName || 'You'))}</div></div>` +
+            `<div class="msg-avatar${avatarCls(myUserId())}" style="${avatarStyle(settings.displayName)}">` +
+            `${esc(initials(settings.displayName || 'You'))}${avatarImgHtml(myUserId())}</div></div>` +
             '<div class="msg-body">' +
             '<div class="msg-head">' +
             `<span class="msg-author">${esc(settings.displayName || 'You')}</span>` +
@@ -1751,6 +1853,7 @@
             '<div class="pending-note"></div>' +
             '</div>';
 
+        wireAvatarFallback(el);
         renderBody(entry.body, el.querySelector('.msg-text'));
 
         const note = el.querySelector('.pending-note');
@@ -1788,7 +1891,7 @@
         // The gutter holds the avatar, and — on a grouped message — the timestamp
         // that takes its place on hover.
         parts.push('<div class="msg-gutter">' +
-            `<div class="msg-avatar" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</div>` +
+            `<div class="msg-avatar${avatarCls(p.user_id)}" style="${avatarStyle(p.name)}">${esc(initials(p.name))}${avatarImgHtml(p.user_id)}</div>` +
             (grouped ? `<span class="msg-gutter-time">${esc(timeStr(p.created_at))}</span>` : '') +
             '</div>');
         parts.push('<div class="msg-body">');
@@ -1873,6 +1976,7 @@
             '</div>');
 
         el.innerHTML = parts.join('');
+        wireAvatarFallback(el);
 
         // Each message is a stop for keyboard navigation of the list, and an
         // article so it is announced as a unit rather than a run of loose text.
@@ -2212,7 +2316,9 @@
     // /api/board/upload, then POST the message carrying { key, name, type, size }
     // — so a desktop upload is indistinguishable from a browser one.
 
-    const MAX_UPLOAD = 25 * 1048576;
+    // 1 GiB. Only meaningful because the bytes go straight from disk to
+    // storage now — see uploadOne and main/net.js uploadAttachment.
+    const MAX_UPLOAD = 1024 * 1048576;
 
     function addUploadRow(name, size) {
         const row = document.createElement('div');
@@ -2259,21 +2365,33 @@
     async function uploadOne(item, caption, quoteId, chan) {
         const row = addUploadRow(item.name, item.size);
 
-        let buf = item.bytes;
-        if (!buf) {
-            try {
-                buf = await item.file.arrayBuffer();
-            } catch (e) {
-                failUploadRow(row, `Could not read ${item.name}`);
-                return false;
+        // A file that exists on disk is sent BY PATH: main streams it straight
+        // into storage, so nothing ever holds it — not this renderer, not the
+        // IPC channel, not a Worker. Reading it into an ArrayBuffer here (which
+        // is what this used to do unconditionally) is fine for a screenshot and
+        // fatal for a gigabyte.
+        const payload = { name: item.name, type: item.type || 'application/octet-stream', size: item.size };
+        if (item.path) {
+            payload.path = item.path;
+        } else {
+            let buf = item.bytes;
+            if (!buf) {
+                try {
+                    buf = await item.file.arrayBuffer();
+                } catch (e) {
+                    failUploadRow(row, `Could not read ${item.name}`);
+                    return false;
+                }
             }
+            payload.data = buf;
+            payload.size = buf.byteLength || item.size;
         }
 
         const uploadId = 'u' + (++uploadSeq);
-        uploadRows.set(uploadId, { row, size: item.size });
+        uploadRows.set(uploadId, { row, size: payload.size });
         let up;
         try {
-            up = await L.uploadFile(item.name, item.type || 'application/octet-stream', buf, uploadId);
+            up = await L.uploadAttachment(payload, uploadId);
         } finally {
             uploadRows.delete(uploadId);
         }
@@ -2414,7 +2532,7 @@
         let added = 0;
         for (const it of items) {
             let error = null;
-            if (it.size > MAX_UPLOAD) error = `Too large — ${fmtSize(it.size)} (max 25 MB)`;
+            if (it.size > MAX_UPLOAD) error = `Too large — ${fmtSize(it.size)} (max ${fmtSize(MAX_UPLOAD)})`;
             else if (!it.size) error = 'Empty file';
             else if (validStaged().length >= MAX_FILES) error = `Only ${MAX_FILES} files per message`;
 
@@ -2523,7 +2641,13 @@
     // ---- turning a drop / paste / picker into stageable items -------------
 
     function itemFromFile(file, name) {
-        return { name: name || file.name, type: file.type || '', size: file.size, file };
+        // The path is what lets main stream the file from disk instead of the
+        // renderer reading a gigabyte into an ArrayBuffer and pushing it across
+        // IPC. Empty for a File that has no path — a pasted screenshot, a
+        // recorded clip — which is the signal to send the bytes instead.
+        let path = '';
+        try { path = L.pathForFile(file) || ''; } catch (e) { /* older preload */ }
+        return { name: name || file.name, type: file.type || '', size: file.size, file, path };
     }
 
     // Recurse a dropped directory. Relative path is kept in the name so
@@ -3593,11 +3717,12 @@
                 (unreachable ? ' unreachable' : '');
             li.dataset.cid = p.id;
             li.innerHTML =
-                `<span class="av" style="${avatarStyle(p.name)}">${esc(initials(p.name))}</span>` +
+                `<span class="av${avatarCls(p.uid)}" style="${avatarStyle(p.name)}">${esc(initials(p.name))}${avatarImgHtml(p.uid)}</span>` +
                 `<span class="vp-name">${esc(p.name)}${isMe ? ' (you)' : ''}</span>` +
                 (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
                 (p.muted || localMuted ? '<span class="vp-flag">' + I('volume-off') + '</span>' : '');
 
+            wireAvatarFallback(li);
             if (!isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
             }
@@ -3695,7 +3820,7 @@
             const dotClass = r.status === 'away' ? ' away' : (r.status === 'dnd' ? ' dnd' : '');
             li.innerHTML =
                 '<span class="av-wrap">' +
-                `<span class="av" style="${avatarStyle(r.name)}">${esc(initials(r.name))}</span>` +
+                `<span class="av${avatarCls(r.uid)}" style="${avatarStyle(r.name)}">${esc(initials(r.name))}${avatarImgHtml(r.uid)}</span>` +
                 `<i class="presence${dotClass}" aria-hidden="true"></i>` +
                 '</span>' +
                 '<span class="vp-name">' + esc(r.name) + (isMe ? ' (you)' : '') +
@@ -3705,6 +3830,7 @@
                 (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
                 (p && (p.muted || localMuted) ? '<span class="vp-flag">' + I('volume-off') + '</span>' : '');
 
+            wireAvatarFallback(li);
             if (p && !isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
             }
@@ -3768,8 +3894,7 @@
         if (popFor === p.id && !pop.hidden) { closePopover(); return; }
         popFor = p.id;
 
-        $('pop-avatar').textContent = initials(p.name);
-        $('pop-avatar').setAttribute('style', avatarStyle(p.name));
+        paintAvatarEl($('pop-avatar'), p.name, p.uid || uidForClient(p.id));
         $('pop-name').textContent = p.name;
 
         // The custom status lives in the presence list, not the SFU roster.
@@ -4659,8 +4784,7 @@
     function renderMe() {
         const name = settings.displayName || 'Anonymous';
         $('me-name-text').textContent = name;
-        $('me-avatar').textContent = initials(name);
-        $('me-avatar').setAttribute('style', avatarStyle(name));
+        paintAvatarEl($('me-avatar'), name, myUserId());
         const st = $('me-status');
         st.textContent = settings.status || '';
         st.hidden = !settings.status;
@@ -4987,14 +5111,13 @@
     // ---- account card ----
     function renderAccountCard() {
         const name = settings.displayName || 'Anonymous';
-        const av = $('set-avatar');
-        av.textContent = initials(name);
-        av.setAttribute('style', avatarStyle(name));
+        paintAvatarEl($('set-avatar'), name, myUserId());
         $('set-avatar-name').textContent = name;
         const sub = $('set-avatar-status');
         sub.textContent = settings.status || '';
         sub.hidden = !settings.status;
 
+        syncAvatarButtons();
         $('acct-signed').hidden = !account;
         $('acct-forms').hidden = !!account;
         // Both sub-panels belong to a state that has just ended: a stray verify
@@ -5010,6 +5133,77 @@
             $('btn-acct-2fa').textContent = account.totp ? 'Turn off 2FA' : 'Enable 2FA';
         }
     }
+
+    // ---- profile picture ----
+    // 512 KB, matching the server. Checked here too so an obviously-too-big
+    // photo is refused instantly rather than after a base64 round trip.
+    const AVATAR_MAX_BYTES = 512 * 1024;
+
+    function avatarHint(msg, isErr) {
+        const el = $('avatar-hint');
+        if (!el) return;
+        if (!avatarHint.def) avatarHint.def = el.textContent;
+        el.textContent = msg || avatarHint.def;
+        el.classList.toggle('err', !!(msg && isErr));
+    }
+
+    function syncAvatarButtons() {
+        const clear = $('btn-avatar-clear');
+        if (clear) clear.hidden = !avatarSrc(myUserId());
+    }
+
+    // Applies the server's answer to the one map everything else reads, then
+    // repaints every surface that draws a face.
+    function adoptMyAvatar(key) {
+        const uid = myUserId();
+        if (uid) {
+            if (key) avatarMap[uid] = key; else delete avatarMap[uid];
+        }
+        if (account) account.avatar = key || null;
+        repaintAvatars();
+        syncAvatarButtons();
+    }
+
+    $('btn-avatar-pick').addEventListener('click', () => $('avatar-input').click());
+
+    $('avatar-input').addEventListener('change', async (e) => {
+        const file = (e.target.files || [])[0];
+        e.target.value = '';                       // allow re-picking the same file
+        if (!file) return;
+        if (file.size > AVATAR_MAX_BYTES) {
+            return avatarHint(`That image is ${fmtSize(file.size)} — 512 KB is the limit.`, true);
+        }
+        avatarHint('Uploading…');
+        $('btn-avatar-pick').disabled = true;
+        try {
+            const b64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+            const res = await L.board('account/avatar', { method: 'POST', body: { dataBase64: b64 } });
+            if (authGone(res)) return;
+            if (!res || !res.success) return avatarHint((res && res.error) || 'Could not set that image.', true);
+            adoptMyAvatar(res.avatar);
+            avatarHint('');
+            toast('Profile picture updated');
+        } catch (err) {
+            avatarHint('Could not read that image.', true);
+        } finally {
+            $('btn-avatar-pick').disabled = false;
+        }
+    });
+
+    $('btn-avatar-clear').addEventListener('click', async () => {
+        const btn = $('btn-avatar-clear');
+        btn.disabled = true;
+        try {
+            const res = await L.board('account/avatar', { method: 'DELETE' });
+            if (authGone(res)) return;
+            if (!res || !res.success) return avatarHint((res && res.error) || 'Could not remove it.', true);
+            adoptMyAvatar(null);
+            avatarHint('');
+            toast('Profile picture removed');
+        } finally {
+            btn.disabled = false;
+        }
+    });
 
     // ---- two-factor auth (TOTP) ----
 

@@ -502,7 +502,18 @@
             <div class="acct-name" id="set-avatar-name">Anonymous</div>
             <div class="acct-sub" id="set-avatar-status"></div>
           </div>
+          <!-- Unlike the display name below, the picture IS yours to choose:
+               it is decoration, not identity, so it can't be used to wear
+               somebody else's name. -->
+          <div class="acct-avatar-actions">
+            <button type="button" class="keycap" id="btn-avatar-pick">Upload image…</button>
+            <button type="button" class="keycap danger" id="btn-avatar-clear" hidden>Remove</button>
+          </div>
         </div>
+        <div class="row">
+          <span class="hint" id="avatar-hint">PNG, JPEG, GIF or WebP, up to 512 KB. Everyone on the board sees it — the website and phone app too.</span>
+        </div>
+        <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
         <!-- Read-only on purpose. The name everyone sees IS the account
              username, so nobody can sit in a channel wearing someone else's
              name. Changing it means changing the account. -->

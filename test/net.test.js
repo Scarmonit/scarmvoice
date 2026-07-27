@@ -99,19 +99,32 @@ describe('upload', () => {
         expect(calls.length).toBe(0);
     });
 
-    it('rejects a file over 25 MB without calling the network', async () => {
+    // upload() is the FALLBACK path now — base64 through the Worker — so its
+    // ceiling is a Worker's memory, not the board's attachment limit. The board
+    // limit is net.MAX_UPLOAD (1 GiB) and belongs to uploadAttachment below.
+    const LEGACY_MAX = 25 * 1024 * 1024;
+
+    it('rejects a file too large for the fallback path without calling the network', async () => {
         const { net } = await load();
-        const r = await net.upload('big.zip', 'application/zip', Buffer.alloc(net.MAX_UPLOAD + 1));
+        const r = await net.upload('big.zip', 'application/zip', Buffer.alloc(LEGACY_MAX + 1));
 
         expect(r.success).toBe(false);
-        expect(r.error).toMatch(/25 MB/);
+        expect(r.error).toMatch(/too large/i);
         expect(calls.length).toBe(0);
     });
 
-    it('allows a file exactly at the limit', async () => {
+    it('allows a file exactly at the fallback limit', async () => {
         const { net } = await load();
-        await net.upload('exact.zip', 'application/zip', Buffer.alloc(net.MAX_UPLOAD));
+        await net.upload('exact.zip', 'application/zip', Buffer.alloc(LEGACY_MAX));
         expect(calls.length).toBe(1);
+    });
+
+    it('the board limit is a gigabyte, and it is not the fallback limit', async () => {
+        // A regression guard with teeth: if someone "tidies" these back into one
+        // constant, the 1 GB path silently starts refusing at 25 MB again.
+        const { net } = await load();
+        expect(net.MAX_UPLOAD).toBe(1024 * 1024 * 1024);
+        expect(net.MAX_UPLOAD).toBeGreaterThan(LEGACY_MAX);
     });
 
     it('refuses to upload with no session', async () => {
@@ -701,5 +714,138 @@ describe('an unconfirmed 401 must not end the session', () => {
         const r = await net.upload('a.txt', 'text/plain', Buffer.from('hi'));
         expect(r.transient).toBe(true);
         expect(net.hasSession()).toBe(true);
+    });
+});
+
+// The path a real file takes: a presigned PUT straight to R2, streamed from
+// disk. Nothing here may buffer the file — that is the entire reason it exists —
+// so the tests pin the wire shape rather than the outcome alone.
+describe('uploadAttachment (presigned, streamed)', () => {
+    // Drains whatever was passed as a request body, stream or buffer.
+    async function readBody(body) {
+        if (!body) return Buffer.alloc(0);
+        if (Buffer.isBuffer(body)) return body;
+        if (body instanceof Uint8Array) return Buffer.from(body);
+        const chunks = [];
+        const reader = body.getReader();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(Buffer.from(value));
+        }
+        return Buffer.concat(chunks);
+    }
+
+    function writeTemp(name, bytes) {
+        const p = path.join(root, name);
+        fs.writeFileSync(p, bytes);
+        return p;
+    }
+
+    it('streams the file from disk to the presigned URL with an explicit length', async () => {
+        const bytes = Buffer.from('a real file on disk, byte for byte');
+        const file = writeTemp('note.txt', bytes);
+
+        stubFetch((url) => {
+            if (String(url).includes('/api/board/upload-url')) {
+                return jsonRes({ success: true, key: 'board/123-abc-note.txt', url: 'https://acct.r2.cloudflarestorage.com/bucket/board/123-abc-note.txt?sig' });
+            }
+            return new Response('', { status: 200 });
+        });
+
+        const { net } = await load();
+        const seen = [];
+        const r = await net.uploadAttachment(
+            { name: 'note.txt', type: 'text/plain', size: bytes.length, path: file },
+            (sent, total) => seen.push([sent, total])
+        );
+
+        expect(r.success).toBe(true);
+        expect(r.key).toBe('board/123-abc-note.txt');
+
+        const put = calls.find((c) => String(c.url).includes('r2.cloudflarestorage.com'));
+        expect(put).toBeTruthy();
+        expect(put.opts.method).toBe('PUT');
+        // Chunked transfer-encoding is refused by S3-compatible presigned PUTs,
+        // so the length has to be stated up front for a streamed body.
+        expect(put.opts.headers['Content-Length']).toBe(String(bytes.length));
+        expect(put.opts.duplex).toBe('half');
+        // The board's credentials must never travel to storage.
+        expect(put.opts.headers.Cookie).toBeUndefined();
+        expect((await readBody(put.opts.body)).equals(bytes)).toBe(true);
+        expect(seen.length).toBeGreaterThan(0);
+    });
+
+    it('refuses an upload URL that does not point at storage', async () => {
+        const file = writeTemp('x.bin', Buffer.from([1, 2, 3]));
+        stubFetch((url) => {
+            if (String(url).includes('/api/board/upload-url')) {
+                return jsonRes({ success: true, key: 'board/x', url: 'https://evil.example.com/anything' });
+            }
+            return new Response('', { status: 200 });
+        });
+
+        const { net } = await load();
+        const r = await net.uploadAttachment({ name: 'x.bin', type: '', size: 3, path: file });
+
+        expect(r.success).toBe(false);
+        expect(r.error).toMatch(/storage/i);
+        // The decisive part: the bytes never left.
+        expect(calls.some((c) => String(c.url).includes('evil.example.com'))).toBe(false);
+    });
+
+    it('falls back to the base64 endpoint when presigning is unavailable', async () => {
+        const bytes = Buffer.from('small enough for a Worker');
+        const file = writeTemp('small.txt', bytes);
+        stubFetch((url) => {
+            if (String(url).includes('/api/board/upload-url')) {
+                return jsonRes({ success: false, error: 'R2 credentials not configured', presignUnavailable: true }, { status: 503 });
+            }
+            return jsonRes({ success: true, key: 'board/fallback', name: 'small.txt', type: 'text/plain', size: bytes.length });
+        });
+
+        const { net } = await load();
+        const r = await net.uploadAttachment({ name: 'small.txt', type: 'text/plain', size: bytes.length, path: file });
+
+        expect(r.success).toBe(true);
+        const legacy = calls.find((c) => String(c.url).endsWith('/api/board/upload'));
+        expect(legacy).toBeTruthy();
+        expect(legacy.opts.headers['x-file-encoding']).toBe('base64');
+        expect(Buffer.from(legacy.opts.body, 'base64').equals(bytes)).toBe(true);
+    });
+
+    it('will not fall back for a file the fallback cannot carry', async () => {
+        // 26 MB of zeros on disk, never read into memory by the code under test.
+        const file = writeTemp('big.bin', Buffer.alloc(26 * 1024 * 1024));
+        stubFetch((url) => {
+            if (String(url).includes('/api/board/upload-url')) {
+                return jsonRes({ success: false, error: 'nope', presignUnavailable: true }, { status: 503 });
+            }
+            return jsonRes({ success: true });
+        });
+
+        const { net } = await load();
+        const r = await net.uploadAttachment({ name: 'big.bin', type: '', size: 26 * 1024 * 1024, path: file });
+
+        expect(r.success).toBe(false);
+        expect(r.error).toMatch(/unavailable/i);
+        expect(calls.some((c) => String(c.url).endsWith('/api/board/upload'))).toBe(false);
+    });
+
+    it('takes the size from the file on disk, not from the caller', async () => {
+        const bytes = Buffer.from('twelve bytes');
+        const file = writeTemp('lied.txt', bytes);
+        stubFetch((url) => {
+            if (String(url).includes('/api/board/upload-url')) {
+                return jsonRes({ success: true, key: 'board/k', url: 'https://acct.r2.cloudflarestorage.com/b/k?sig' });
+            }
+            return new Response('', { status: 200 });
+        });
+
+        const { net } = await load();
+        await net.uploadAttachment({ name: 'lied.txt', type: 'text/plain', size: 999999, path: file });
+
+        const ticket = calls.find((c) => String(c.url).includes('/api/board/upload-url'));
+        expect(JSON.parse(ticket.opts.body).size).toBe(bytes.length);
     });
 });

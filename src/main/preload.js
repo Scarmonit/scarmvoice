@@ -1,7 +1,7 @@
 // The only bridge between the sandboxed renderer and Node. Everything is an
 // explicit, narrow method — the renderer gets no ipcRenderer, no require, and
 // never sees the session cookie.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 function sub(channel, cb) {
     if (typeof cb !== 'function') return () => {};
@@ -33,8 +33,23 @@ contextBridge.exposeInMainWorld('lounge', {
 
     // Attachments. `data` is an ArrayBuffer of the raw file bytes. Pass an `id`
     // to receive upload:progress events tagged with it (see onUploadProgress).
+    // Small payloads only — see uploadAttachment for the path that scales.
     uploadFile: (name, type, data, id) => ipcRenderer.invoke('board:upload', { name, type, data, id }),
+    // The upload path for real files. `item` is { name, type, size, path } for
+    // anything that exists on disk — main streams it straight to storage, so a
+    // gigabyte never lands in the renderer's heap OR crosses IPC — or
+    // { name, type, size, data } for the things that were only ever in memory
+    // (a pasted screenshot, a finished voice recording).
+    uploadAttachment: (item, id) => ipcRenderer.invoke('board:uploadAttachment', { item, id }),
     onUploadProgress: (cb) => sub('upload:progress', cb),
+    // The real filesystem path behind a File from a drop or the picker.
+    // `File.path` was REMOVED in Electron 32; webUtils is the replacement, and
+    // it only works from the preload — the renderer cannot reach it. Returns ''
+    // for a File with no path (a pasted blob), which is the signal to fall back
+    // to sending the bytes.
+    pathForFile: (file) => {
+        try { return webUtils.getPathForFile(file) || ''; } catch (e) { return ''; }
+    },
     // `url` is the fallback for images that aren't ours (link previews): pass a
     // key for an attachment, or a remote http(s) url, not both.
     saveAttachment: (key, name, url) => ipcRenderer.invoke('board:saveAttachment', { key, name, url }),

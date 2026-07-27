@@ -7,6 +7,9 @@
 // explicitly, which is both deterministic and immune to SameSite semantics.
 //
 // The renderer never sees the cookie — it only gets parsed JSON back over IPC.
+const fs = require('fs');
+const fsp = require('fs/promises');
+const { Readable } = require('stream');
 const store = require('./store');
 
 const COOKIE_NAME = 'sb_auth';
@@ -552,10 +555,15 @@ async function fileStream(key) {
 }
 
 // Store an attachment in R2. Deliberately identical to what the website's
-// board.js does — raw body plus X-File-* headers, NOT multipart — so a file
-// uploaded from the desktop app is indistinguishable from a browser upload and
-// renders the same for everyone.
-const MAX_UPLOAD = 25 * 1024 * 1024;
+// board.js does, so a file uploaded from the desktop app is indistinguishable
+// from a browser upload and renders the same for everyone: a presigned PUT
+// straight to R2, with the old base64-through-the-Worker endpoint kept as the
+// fallback for when presigning is unavailable.
+const MAX_UPLOAD = 1024 * 1024 * 1024;
+
+// The ceiling on the fallback path. It is not a policy — it is how much a
+// Worker can hold in memory, which is why the fast path exists at all.
+const LEGACY_MAX_UPLOAD = 25 * 1024 * 1024;
 
 // The body is pushed in chunks this size so progress has somewhere to come from.
 // 64 KB is small enough to make the bar move smoothly on a slow uplink and large
@@ -585,8 +593,8 @@ async function upload(name, type, bytes, onProgress) {
 
     const buf = Buffer.from(bytes);
     if (!buf.length) return { success: false, error: 'That file is empty' };
-    if (buf.length > MAX_UPLOAD) {
-        return { success: false, error: `"${name}" is ${(buf.length / 1048576).toFixed(1)} MB — the limit is 25 MB` };
+    if (buf.length > LEGACY_MAX_UPLOAD) {
+        return { success: false, error: `"${name}" is ${(buf.length / 1048576).toFixed(1)} MB — too large for the fallback upload path` };
     }
 
     // Send base64, not raw bytes: Cloudflare's WAF content-scans raw upload
@@ -659,8 +667,137 @@ async function upload(name, type, bytes, onProgress) {
     }
 }
 
+// ---- large attachments: presigned PUT straight to R2 -----------------------
+//
+// The bytes must not pass through a Worker. A Worker request body is capped far
+// below a gigabyte and has ~128 MB of memory to buffer it in, and `upload()`
+// above base64-encodes precisely because Cloudflare's managed WAF content-scans
+// raw upload bodies — three separate reasons the old path could never carry a
+// large file, none of them fixable by raising a number.
+//
+// So the board hands out a presigned PUT (one key, PUT only, two hours) and we
+// stream the file from DISK into it. Nothing is ever fully in memory: not in the
+// renderer, not over IPC, not here.
+
+// The presigned URL comes from our own server, so it is trusted — but it is also
+// the one place this process is told "send these bytes over there", and a
+// tampered response should not be able to aim a user's file at an arbitrary
+// host. No credential of ours is attached to this request either way.
+function presignHostOk(url) {
+    try {
+        const u = new URL(url);
+        return u.protocol === 'https:' && /(^|\.)r2\.cloudflarestorage\.com$/.test(u.hostname);
+    } catch (e) {
+        return false;
+    }
+}
+
+// A web ReadableStream over a file on disk that reports how much has been handed
+// to the socket. Same "sent, not acknowledged" caveat as progressStream above.
+function fileProgressStream(filePath, total, onProgress) {
+    const nodeStream = fs.createReadStream(filePath, { highWaterMark: 256 * 1024 });
+    const reader = Readable.toWeb(nodeStream).getReader();
+    let sent = 0;
+    return new ReadableStream({
+        async pull(controller) {
+            const { done, value } = await reader.read();
+            if (done) { controller.close(); return; }
+            controller.enqueue(value);
+            sent += value.byteLength;
+            if (onProgress) { try { onProgress(sent, total); } catch (e) { /* never break the upload */ } }
+        },
+        cancel(reason) { try { reader.cancel(reason); } catch (e) {} }
+    });
+}
+
+// item: { name, type, size, path? , bytes? }
+// `path` is the streaming case (the file picker and drag-and-drop, via
+// webUtils.getPathForFile in the renderer). `bytes` is what is left: a pasted
+// screenshot, a finished voice recording, an image dragged out of a browser —
+// all things that were already in memory and are small.
+async function uploadAttachment(item, onProgress) {
+    if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
+
+    const name = item.name || 'file';
+    const type = item.type || 'application/octet-stream';
+    let size = Number(item.size) || 0;
+    let buf = null;
+
+    if (item.path) {
+        try {
+            const st = await fsp.stat(item.path);
+            size = st.size;                       // the file on disk is the truth
+        } catch (e) {
+            return { success: false, error: `Could not read ${name}` };
+        }
+    } else {
+        buf = Buffer.from(item.bytes || []);
+        size = buf.length;
+    }
+
+    if (!size) return { success: false, error: 'That file is empty' };
+    if (size > MAX_UPLOAD) {
+        return { success: false, error: `"${name}" is ${(size / 1073741824).toFixed(2)} GB — the limit is 1 GB` };
+    }
+
+    const ticket = await board('upload-url', { method: 'POST', body: { name, type, size } });
+    if (ticket && (ticket.needsAuth || ticket.needsAccount)) return ticket;
+
+    if (!ticket || !ticket.success || !ticket.url) {
+        // A refusal with a reason (too large, demo session) is the answer.
+        if (ticket && ticket.error && !ticket.presignUnavailable) {
+            return { success: false, error: ticket.error };
+        }
+        // Presigning genuinely unavailable — the old endpoint still works for
+        // anything that fits inside a Worker.
+        if (size > LEGACY_MAX_UPLOAD) {
+            return { success: false, error: 'Large uploads are unavailable right now — try again later' };
+        }
+        if (!buf) {
+            try { buf = await fsp.readFile(item.path); }
+            catch (e) { return { success: false, error: `Could not read ${name}` }; }
+        }
+        return upload(name, type, buf, onProgress ? (sent, total) => onProgress(sent, total) : null);
+    }
+
+    if (!presignHostOk(ticket.url)) {
+        return { success: false, error: 'Refused an upload URL that does not point at storage' };
+    }
+
+    try {
+        const body = item.path
+            ? fileProgressStream(item.path, size, onProgress)
+            : buf;
+        const opts = {
+            method: 'PUT',
+            body,
+            headers: {
+                'Content-Type': type,
+                // Explicit, so a streamed body goes out with a known length
+                // rather than chunked transfer-encoding, which S3-compatible
+                // endpoints do not accept for a presigned PUT.
+                'Content-Length': String(size)
+            }
+        };
+        // Required by undici before it will send a stream as a request body.
+        if (item.path) opts.duplex = 'half';
+        // Deliberately NO timeout: a gigabyte on a domestic uplink is a long,
+        // healthy upload, and a deadline would kill it at the worst moment. A
+        // genuinely dead socket still rejects.
+        const res = await fetch(ticket.url, opts);
+        if (!res.ok) {
+            return { success: false, error: `Storage rejected the upload (${res.status})` };
+        }
+    } catch (e) {
+        return { success: false, error: e.message || 'Upload failed', network: true };
+    }
+
+    if (onProgress) { try { onProgress(size, size); } catch (e) {} }
+    return { success: true, key: ticket.key, name, type, size };
+}
+
 module.exports = {
-    init, login, logout, status, board, request, fileStream, upload,
+    init, login, logout, status, board, request, fileStream, upload, uploadAttachment,
     accountRegister, accountLogin, accountLogout, accountMe, hasAccount,
     accountVerify, accountResend,
     hasSession, cookieHeader, socketHeaders, baseUrl, MAX_UPLOAD

@@ -2408,3 +2408,23 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   background: var(--input); border: 1px solid var(--line); border-radius: 6px;
   padding: 7px 9px; font-size: 12px; word-break: break-all; user-select: all;
 }
+
+/* ---------- profile images -------------------------------------------------
+   The generated gradient + initials stay UNDERNEATH every picture: they show
+   while it loads, and they are what remains if it 404s (the <img> removes
+   itself and drops .has-img, which puts the letters back). Absolutely
+   positioned so the presence dot still paints over it. */
+.avatar-img {
+  position: absolute; inset: 0; z-index: 0;
+  width: 100%; height: 100%;
+  border-radius: inherit; object-fit: cover; display: block;
+}
+.has-img { position: relative; color: transparent; }
+.has-img .presence { z-index: 1; }
+/* These draw a face but had no positioning context of their own. */
+.msg-avatar, .acct-avatar, .av, .pop-avatar { position: relative; }
+
+.acct-avatar-actions { display: flex; flex-direction: column; gap: 6px; margin-left: auto; }
+.acct-avatar-actions .keycap { min-width: 0; padding: 5px 12px; font-size: 12px; }
+.keycap.danger { color: var(--danger); }
+#avatar-hint.err { color: var(--danger); }
