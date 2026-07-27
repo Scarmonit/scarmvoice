@@ -4556,6 +4556,12 @@
         stopPresence();
         await sendTextPresence(true);      // drop out of the members list now
         stopTextPresence();
+        // "Sign out" means out of EVERYTHING — board session and account —
+        // so the next sign-in walks both steps again.
+        await L.account.logout();
+        account = null;
+        dmThreads = [];
+        closeDm();
         await L.auth.logout();
         await L.rt.stop();
         $('settings').hidden = true;

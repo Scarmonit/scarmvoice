@@ -71,6 +71,12 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
         redirect: 'follow',
         signal: AbortSignal.timeout(timeout || TIMEOUT_MS)
     };
+    // Board accounts are mandatory server-side. Attach the token at THIS level
+    // so every board call carries it — including uploads and the lounge://
+    // attachment proxy, which don't go through board().
+    if (accountToken && pathname.startsWith('/api/board/')) {
+        opts.headers['x-account-token'] = accountToken;
+    }
     if (body !== undefined && body !== null) {
         if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
             // A streamed request body (the upload progress path). duplex:'half'
@@ -189,9 +195,7 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
     const headers = {};
-    // The account token rides every board call once signed in; endpoints that
-    // don't know about accounts simply ignore it.
-    if (accountToken) headers['x-account-token'] = accountToken;
+    // (The account token is attached in request() for every /api/board/ call.)
     if (pathname === 'list' || pathname === 'thread') {
         headers['x-d1-bookmark'] = forcePrimary ? 'first-primary' : (bookmark || 'first-unconstrained');
         forcePrimary = false;
