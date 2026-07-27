@@ -5494,7 +5494,13 @@
         if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not add it', true);
 
-        customEmoji.set(res.emoji.name, res.emoji);
+        // Through L.fileUrl, exactly as loadCustomEmoji does. The server's `url`
+        // is site-relative (/api/board/file?key=…), which is right for the
+        // website and meaningless here — this renderer's origin is the app
+        // bundle, so a relative path resolves to file:///api/board/file… and the
+        // emoji you just added rendered as a broken image everywhere (the admin
+        // list, the picker, any message using it) until Settings was reopened.
+        customEmoji.set(res.emoji.name, Object.assign({}, res.emoji, { url: L.fileUrl(res.emoji.key) }));
         $('set-emoji-name').value = '';
         renderEmojiAdmin();
         renderMessages();
