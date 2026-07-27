@@ -211,7 +211,12 @@ describe('baseUrl', () => {
 describe('board', () => {
     it('clears the session on 401 and reports needsAuth', async () => {
         const { store, net } = await load();
-        stubFetch(() => new Response('unauthorized', { status: 401 }));
+        // /auth/status answers 200 {authed:boolean} — it never 401s (see
+        // _middleware.js). Stubbing it as a 401 modelled something the server
+        // cannot do, and a board 401 is only believed once the gate confirms it.
+        stubFetch((url) => (String(url).includes('/auth/status')
+            ? jsonRes({ authed: false })
+            : new Response('unauthorized', { status: 401 })));
 
         const r = await net.board('list');
 
@@ -613,12 +618,88 @@ describe('a 401 that means "no account" must not destroy the board session', () 
     // the session is gone — the behaviour above must not swallow it.
     it('still clears the session for a real board-gate 401', async () => {
         const { store, net } = await load();
-        stubFetch(() => jsonRes({ success: false, error: 'unauthorized' }, { status: 401 }));
+        stubFetch((url) => (String(url).includes('/auth/status')
+            ? jsonRes({ authed: false })
+            : jsonRes({ success: false, error: 'unauthorized' }, { status: 401 })));
 
         const r = await net.board('list');
 
         expect(r.needsAuth).toBe(true);
         expect(net.hasSession()).toBe(false);
         expect(store.readSession()).toBe('');
+    });
+});
+
+// Destroying a thirty-day credential requires PROOF, not a single 401.
+//
+// enterApp() fires half a dozen board calls at once. Any one of them coming
+// back 401 for a transient reason used to call clearCredentials(), which the
+// renderer turns into "Your session expired. Sign in again." — so the app could
+// announce an expiry the moment it opened, on a session that was fine. A 401
+// that claims the board session is dead is now checked against /auth/status
+// first, and only a gate that agrees may end the session.
+describe('an unconfirmed 401 must not end the session', () => {
+    // 401 on the board call; /auth/status still says we are signed in.
+    function contradictory(status = { authed: true }) {
+        stubFetch((url) => (String(url).includes('/auth/status')
+            ? jsonRes(status)
+            : jsonRes({ success: false, error: 'unauthorized' }, { status: 401 })));
+    }
+
+    it('keeps the credential when the gate says we are still authed', async () => {
+        const { store, net } = await load();
+        contradictory();
+
+        const r = await net.board('list');
+
+        expect(r.transient).toBe(true);
+        expect(r.needsAuth).toBeUndefined();
+        expect(net.hasSession()).toBe(true);
+        expect(store.readSession()).toBe('SESSION123');
+    });
+
+    it('keeps it when the gate cannot be reached — "cannot confirm" is not "signed out"', async () => {
+        const { store, net } = await load();
+        stubFetch((url) => (String(url).includes('/auth/status')
+            ? Promise.reject(new Error('network down'))
+            : jsonRes({ success: false, error: 'unauthorized' }, { status: 401 })));
+
+        const r = await net.board('list');
+
+        expect(r.transient).toBe(true);
+        expect(net.hasSession()).toBe(true);
+        expect(store.readSession()).toBe('SESSION123');
+    });
+
+    it('keeps it when the gate answers with something unreadable', async () => {
+        const { net } = await load();
+        stubFetch((url) => (String(url).includes('/auth/status')
+            ? new Response('<html>502</html>', { status: 502 })
+            : jsonRes({ success: false, error: 'unauthorized' }, { status: 401 })));
+
+        const r = await net.board('list');
+        expect(r.transient).toBe(true);
+        expect(net.hasSession()).toBe(true);
+    });
+
+    // …but a session that really is dead must still end, or the app would sit
+    // there retrying forever with a credential the server has forgotten.
+    it('DOES clear when the gate confirms we are signed out', async () => {
+        const { store, net } = await load();
+        contradictory({ authed: false });
+
+        const r = await net.board('list');
+
+        expect(r.needsAuth).toBe(true);
+        expect(net.hasSession()).toBe(false);
+        expect(store.readSession()).toBe('');
+    });
+
+    it('applies to uploads too', async () => {
+        const { net } = await load();
+        contradictory();
+        const r = await net.upload('a.txt', 'text/plain', Buffer.from('hi'));
+        expect(r.transient).toBe(true);
+        expect(net.hasSession()).toBe(true);
     });
 });

@@ -298,6 +298,29 @@ async function status() {
     return { authed };
 }
 
+// Does the gate itself agree that we are signed out?
+//
+// Deliberately NOT status(): that one calls clearCredentials() on a negative
+// answer, and this runs inside the decision about whether to clear at all. It
+// also has to fail safe — "I could not ask" is not "you are signed out".
+async function confirmSignedOut() {
+    if (!cookie) return { signedOut: true, why: 'no cookie held' };
+    let res;
+    try {
+        res = await request('/auth/status');
+    } catch (e) {
+        return { signedOut: false, why: 'unreachable: ' + (e && e.message) };
+    }
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* an error page, not JSON */ }
+    if (!data || typeof data.authed !== 'boolean') {
+        return { signedOut: false, why: 'unreadable ' + res.status };
+    }
+    return data.authed
+        ? { signedOut: false, why: 'still authed' }
+        : { signedOut: true, why: 'gate says signed out' };
+}
+
 // ---- board API -----------------------------------------------------------
 
 // D1 read replication: carry the bookmark so reads stay sequentially consistent,
@@ -402,6 +425,29 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
             return { success: false, error: msg, needsAccount: true };
         }
 
+        // A 401 that claims the BOARD session is dead has to be confirmed before
+        // it is believed, because believing it is destructive: clearCredentials()
+        // throws away a thirty-day cookie, and the renderer turns that into
+        // "Your session expired. Sign in again."
+        //
+        // enterApp() fires half a dozen board calls at once, so a single
+        // unconfirmed 401 anywhere in that burst — a D1 blip inside the
+        // middleware's own account lookup, an edge hiccup, a request that raced
+        // a cookie rotation — signs the user out of a session that is provably
+        // fine. From the outside that is the app announcing an expiry the moment
+        // it opens, having been given no chance to be wrong.
+        //
+        // So: ask the gate directly. Only a gate that agrees we are signed out
+        // may end the session. Anything else (still authed, or unreachable) is
+        // reported as transient and the credential is kept — an unconfirmable
+        // 401 must never be the thing that logs someone out.
+        const verdict = await confirmSignedOut();
+        if (!verdict.signedOut) {
+            console.warn('[net] 401 on ' + pathname + ' NOT confirmed by /auth/status (' +
+                verdict.why + ') — keeping the session');
+            return { success: false, error: msg, transient: true };
+        }
+        console.warn('[net] 401 on ' + pathname + ' confirmed signed out — clearing credentials');
         clearCredentials();
         return { success: false, error: msg, needsAuth: true };
     }
@@ -596,6 +642,12 @@ async function upload(name, type, bytes, onProgress) {
         try { body = await res.json(); } catch (e) { /* no readable body */ }
         if (body && body.needsAccount) {
             return { success: false, error: body.error || 'account required', needsAccount: true };
+        }
+        // Confirmed before believed, exactly as in board() above.
+        const verdict = await confirmSignedOut();
+        if (!verdict.signedOut) {
+            console.warn('[net] 401 on upload NOT confirmed (' + verdict.why + ') — keeping the session');
+            return { success: false, error: (body && body.error) || 'Upload failed', transient: true };
         }
         clearCredentials();
         return { success: false, error: (body && body.error) || 'unauthorized', needsAuth: true };
