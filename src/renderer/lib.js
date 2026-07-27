@@ -66,13 +66,35 @@
         // Flags are regional-indicator pairs, which are NOT Extended_Pictographic
         // — without allowing them here a message of nothing but flags failed
         // both tests below and rendered at normal size.
-        const EMOJI = /[\p{Extended_Pictographic}\u{1f1e6}-\u{1f1ff}]/u;
+        // U+20E3 is listed too: a keycap's only emoji-ish code point is the
+        // enclosing mark itself, which is Me rather than Extended_Pictographic.
+        const EMOJI = /[\p{Extended_Pictographic}\u{1f1e6}-\u{1f1ff}⃣]/u;
         if (!EMOJI.test(t)) return false;
-        if (/[^\s\p{Extended_Pictographic}\u{1f1e6}-\u{1f1ff}‍️\u{1f3fb}-\u{1f3ff}]/u.test(t)) return false;
-        // Regional indicators come in pairs, so each flag counts once.
-        const flags = cps.filter((c) => /[\u{1f1e6}-\u{1f1ff}]/u.test(c)).length / 2;
-        const pictos = cps.filter((c) => /\p{Extended_Pictographic}/u.test(c)).length;
-        return pictos + flags <= 6;
+        // Everything permitted alongside the pictographs: whitespace, regional
+        // indicators, the ZWJ and VS16 that glue sequences together, skin-tone
+        // modifiers, and the two halves of a KEYCAP. Keycaps were the gap here —
+        // the '1' in "1️⃣" is a plain ASCII digit, not Extended_Pictographic, so
+        // a message of nothing but keycaps failed this test and rendered small.
+        if (/[^\s\p{Extended_Pictographic}\u{1f1e6}-\u{1f1ff}‍️\u{1f3fb}-\u{1f3ff}0-9#*⃣]/u.test(t)) return false;
+        // …but a digit only earns its place as part of a keycap. Without this a
+        // bare "911" would now pass the class above.
+        if (/[0-9#*](?!️?⃣)/u.test(t)) return false;
+        // Count what the reader SEES. Code points are the wrong unit: a ZWJ
+        // family is four pictographs, so two of them counted as eight and blew
+        // a cap that is meant to read "six emoji". Grapheme clusters are exactly
+        // the "one visual character" rule — they hold ZWJ sequences, flag pairs,
+        // keycaps and skin tones together.
+        let count = 0;
+        try {
+            const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+            for (const g of seg.segment(t)) { if (g.segment.trim()) count++; }
+        } catch (e) {
+            // No Intl.Segmenter: fall back to the old approximation rather than
+            // refusing to enlarge anything.
+            const flags = cps.filter((c) => /[\u{1f1e6}-\u{1f1ff}]/u.test(c)).length / 2;
+            count = cps.filter((c) => /\p{Extended_Pictographic}/u.test(c)).length + flags;
+        }
+        return count > 0 && count <= 6;
     }
 
     // @mention of a given display name. "Anonymous" is excluded because it is the
@@ -89,8 +111,17 @@
             // Both classes must exclude '_' alike: with it allowed on the
             // trailing side only, "@alice_smith" still pinged user "alice" —
             // the very false positive the trailing boundary is here to stop.
+            //
+            // The classes are UNICODE-aware, not [A-Za-z0-9_]. An ASCII-only
+            // boundary treats every non-Latin letter as a separator, so "@alice"
+            // matched inside "@alicesson" written in any script that isn't
+            // Latin — "@алиса" and "@alice漢字" both pinged "alice". \p{L} and
+            // \p{N} cover the letters and digits of every script, which is what
+            // "still part of the name" actually means. Display names are free
+            // text, so the name itself may be non-ASCII too.
             const esc = me.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp('(^|[^A-Za-z0-9_])@' + esc + '($|[^A-Za-z0-9_])', 'i').test(body || '');
+            const NOT_NAME = '[^\\p{L}\\p{N}_]';
+            return new RegExp('(^|' + NOT_NAME + ')@' + esc + '($|' + NOT_NAME + ')', 'iu').test(body || '');
         } catch (e) { return false; }
     }
 

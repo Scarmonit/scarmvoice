@@ -411,6 +411,21 @@ const ACCOUNT_TOKEN_AUTHED = new Set([
     'account/twofactor', 'account/users'
 ]);
 
+// An install belongs to ONE account, so the server will not hand this one's
+// client id to a different account — that reassignment was a seizure bug. What
+// it does instead, when the id we asked for is already someone else's, is mint
+// this account an id of its own and return it here. Storing it is the whole
+// unbind path: without it the second account on a shared machine is 403'd out
+// of presence, typing and voice permanently, with nothing in the UI to fix it.
+//
+// Handled main-side because that is where the store lives, which also means
+// login, verify and me are all covered without the renderer knowing.
+function adoptRotatedClient(res) {
+    if (!res || !res.clientId || res.clientId === store.get().clientId) return;
+    store.set({ clientId: res.clientId });
+    console.info('[net] this account was issued its own install id for this device');
+}
+
 async function accountRegister(username, password, email, clientId) {
     // Success now means "verification code sent" — the token arrives from
     // accountVerify once the emailed code is redeemed.
@@ -422,6 +437,7 @@ async function accountVerify(username, code, clientId) {
     if (res && res.success && res.token) {
         accountToken = res.token;
         store.writeAccountToken(accountToken);
+        adoptRotatedClient(res);
         return { success: true, user: res.user };
     }
     return res;
@@ -436,6 +452,7 @@ async function accountLogin(username, password, clientId, totpCode) {
     if (res && res.success && res.token) {
         accountToken = res.token;
         store.writeAccountToken(accountToken);
+        adoptRotatedClient(res);
         return { success: true, user: res.user };
     }
     return res && res.success ? { success: false, error: 'No token returned' } : res;
@@ -458,6 +475,7 @@ async function accountMe() {
         accountToken = '';
         store.clearAccountToken();
     }
+    if (res && res.success && res.user) adoptRotatedClient(res);
     return res;
 }
 

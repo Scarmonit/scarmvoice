@@ -500,3 +500,61 @@ describe('redirects', () => {
         expect(calls.length).toBe(2);
     });
 });
+
+// An install belongs to ONE account. When two people share a computer the
+// second one asks for a client id the first already owns, and the server refuses
+// to reassign it — reassignment was how you seized someone else's install. What
+// it does instead is mint the second account an id of its own and return it, and
+// storing that is the only thing standing between them and a permanent 403 from
+// presence, typing and voice.
+describe('client id rotation', () => {
+    it('adopts the id the server issues on login', async () => {
+        const { store, net } = await load();
+        const before = store.get().clientId;
+        expect(before).toBeTruthy();
+
+        stubFetch(() => jsonRes({
+            success: true, token: 'T', clientId: 'cFRESH', clientRotated: true,
+            user: { id: 2, username: 'bob', role: 'member' }
+        }));
+        const r = await net.accountLogin('bob', 'pw', before);
+
+        expect(r.success).toBe(true);
+        expect(store.get().clientId).toBe('cFRESH');
+        expect(store.get().clientId).not.toBe(before);
+    });
+
+    it('adopts it on the startup me() probe too', async () => {
+        const { store, net } = await load();
+        stubFetch(() => jsonRes({ success: true, token: 'T', clientId: 'cA', user: { id: 1, username: 'a', role: 'admin' } }));
+        await net.accountLogin('a', 'pw', store.get().clientId);
+
+        stubFetch(() => jsonRes({
+            success: true, clientId: 'cROTATED', clientRotated: true,
+            user: { id: 1, username: 'a', role: 'admin' }
+        }));
+        await net.accountMe();
+        expect(store.get().clientId).toBe('cROTATED');
+    });
+
+    it('leaves the stored id alone when the server keeps it', async () => {
+        const { store, net } = await load();
+        const before = store.get().clientId;
+        stubFetch(() => jsonRes({
+            success: true, token: 'T', clientId: before, clientRotated: false,
+            user: { id: 1, username: 'a', role: 'member' }
+        }));
+        await net.accountLogin('a', 'pw', before);
+        expect(store.get().clientId).toBe(before);
+    });
+
+    // Older servers don't send the field at all; the client must not wipe its
+    // own id because a response happened not to mention it.
+    it('keeps the stored id when the response omits one', async () => {
+        const { store, net } = await load();
+        const before = store.get().clientId;
+        stubFetch(() => jsonRes({ success: true, token: 'T', user: { id: 1, username: 'a', role: 'member' } }));
+        await net.accountLogin('a', 'pw', before);
+        expect(store.get().clientId).toBe(before);
+    });
+});

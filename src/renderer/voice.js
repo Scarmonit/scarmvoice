@@ -1173,7 +1173,16 @@
                 // its constraints builder, sourced only from self.setDevice() —
                 // so without this the call silently used audioInputDevices[0]
                 // while the Settings meter dutifully metered the chosen one.
-                await selectSavedMic();
+                //
+                // Device enumeration is slow and this is the FIRST await after
+                // joined = true, which made it the one await in join() with no
+                // generation check behind it: a session expiring here resumed
+                // afterwards and called setDevice() on the meeting leave() had
+                // already discarded, re-opening the microphone behind the login
+                // gate. selectSavedMic re-checks internally too, because its own
+                // awaits are just as long.
+                await selectSavedMic(gen);
+                if (gen !== joinGen) return;
 
                 // Bandwidth priority: without this, audio and a multi-megabit
                 // screen share compete as equals on the same bundle, and voice
@@ -1197,6 +1206,14 @@
                 if (gen !== joinGen) return;   // leave() already cleaned up
                 joining = false;
                 joined = false;
+                // wire() ran before joinFn, so a join that throws leaves this
+                // meeting's handlers attached — and leave() cannot collect them
+                // later because it returns early on (!joined && !joining), which
+                // the two lines above have just made true. They close over the
+                // live audioEls/sharers maps, so a late event from the abandoned
+                // meeting would detach a NEXT session's participant: someone
+                // still in the call, silenced by a listener from a failed one.
+                unwire();
                 try { if (meeting && meeting.leave) meeting.leave(); } catch (_) {}
                 meeting = null;
 
@@ -1211,13 +1228,20 @@
         //
         // Best-effort by design: an unplugged or renamed device just leaves the
         // SDK on its default rather than failing the join.
-        async function selectSavedMic() {
+        //
+        // `gen` is the caller's join generation. Both awaits below outlive a
+        // leave(), and `self` is captured BEFORE them — so nulling `meeting` in
+        // leave() does not stop this function; only the generation check does.
+        // setDevice() acquires the microphone, so running it after teardown is
+        // the hot-mic-behind-the-login-gate case joinGen exists to prevent.
+        async function selectSavedMic(gen) {
             const want = settings.micDeviceId;
             if (!want || !meeting || !meeting.self) return;
             try {
                 const self = meeting.self;
                 if (typeof self.getAudioDevices !== 'function' || typeof self.setDevice !== 'function') return;
                 const devices = await self.getAudioDevices();
+                if (gen !== joinGen) return;
                 const match = (devices || []).find((d) => d && d.deviceId === want);
                 if (!match) {
                     console.warn('[voice] saved microphone is not present — staying on the default');

@@ -86,6 +86,35 @@ describe('isOnlyEmoji', () => {
         expect(isOnlyEmoji(null)).toBe(false);
         expect(isOnlyEmoji('🎉'.repeat(7))).toBe(false);
     });
+
+    it('accepts keycaps, whose digit is plain ASCII', () => {
+        // The '1' in 1️⃣ is not Extended_Pictographic and the enclosing keycap
+        // is Me, not So — so a keycap failed both the "contains an emoji" test
+        // and the "contains nothing else" test, and rendered at normal size.
+        expect(isOnlyEmoji('1️⃣')).toBe(true);
+        expect(isOnlyEmoji('1️⃣2️⃣3️⃣')).toBe(true);
+        expect(isOnlyEmoji('#️⃣')).toBe(true);
+    });
+
+    it('still rejects bare digits, which the keycap allowance could let in', () => {
+        expect(isOnlyEmoji('911')).toBe(false);
+        expect(isOnlyEmoji('2024')).toBe(false);
+        expect(isOnlyEmoji('1️⃣ 2')).toBe(false);
+    });
+
+    it('counts a ZWJ sequence as ONE emoji, not one per person in it', () => {
+        // A family is four pictographs joined by ZWJ. Counting code points made
+        // two families count as eight and fail a cap that reads "six emoji".
+        expect(isOnlyEmoji('👨‍👩‍👧‍👦')).toBe(true);
+        expect(isOnlyEmoji('👨‍👩‍👧‍👦👨‍👩‍👧‍👦')).toBe(true);
+        expect(isOnlyEmoji('👨‍👩‍👧‍👦'.repeat(6))).toBe(true);
+        expect(isOnlyEmoji('👨‍👩‍👧‍👦'.repeat(7))).toBe(false);
+    });
+
+    it('counts a flag as one emoji, not two regional indicators', () => {
+        expect(isOnlyEmoji('🇺🇸🇬🇧')).toBe(true);
+        expect(isOnlyEmoji('🇺🇸'.repeat(7))).toBe(false);
+    });
 });
 
 describe('mentionsMe', () => {
@@ -122,6 +151,18 @@ describe('mentionsMe', () => {
         expect(mentionsMe('@alice', 'alice')).toBe(true);
         expect(mentionsMe('hi @alice!', 'alice')).toBe(true);
         expect(mentionsMe('@alice_smith', 'alice_smith')).toBe(true);
+    });
+
+    it('treats non-Latin letters as part of the name, not as a boundary', () => {
+        // [A-Za-z0-9_] classes any non-ASCII letter as a separator, so every
+        // script but Latin punched straight through the boundary and pinged
+        // whoever's name happened to be a prefix.
+        expect(mentionsMe('@alice漢字 said so', 'alice')).toBe(false);
+        expect(mentionsMe('@алисаиванова', 'алиса')).toBe(false);
+        expect(mentionsMe('@aliceé', 'alice')).toBe(false);
+        // Display names are free text, so a non-ASCII name must still match.
+        expect(mentionsMe('привет @алиса', 'алиса')).toBe(true);
+        expect(mentionsMe('@José here', 'josé')).toBe(true);
     });
 });
 

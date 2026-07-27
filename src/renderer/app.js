@@ -806,6 +806,16 @@
     // starting two sets of timers.
     let entered = false;
 
+    // Bumped by every teardownSession(). The same job joinGen does inside
+    // voice.js: anything holding a stream or a timer across an await compares
+    // the generation it started in against this, so a session that ended while
+    // it was suspended does not get to finish its work in the next one. It
+    // matters most for the microphone — teardown's stopRecording()/stopMicTest()
+    // are no-ops while the OS permission prompt is still up, so without this the
+    // stream is assigned AFTER the teardown that was supposed to release it and
+    // the mic indicator stays lit behind the login gate.
+    let sessionGen = 0;
+
     async function enterApp() {
         if (entered) return;
         entered = true;
@@ -1673,7 +1683,7 @@
 
         // Hover actions. Edit and delete are yours-only, so they're omitted
         // entirely on other people's messages rather than shown and rejected.
-        const mine = p.client_id && p.client_id === settings.clientId;
+        const mine = ownsPost(p);
         parts.push('<div class="msg-actions">' +
             '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>' +
             '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>' +
@@ -2731,6 +2741,7 @@
 
     async function startRecording() {
         if (recording()) return;
+        const gen = sessionGen;
         let stream;
         try {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -2738,6 +2749,16 @@
             toast(e && e.name === 'NotAllowedError'
                 ? 'Microphone access is needed to record a voice message'
                 : 'Could not open the microphone', true);
+            return;
+        }
+        // The OS permission prompt can hold this await open for as long as the
+        // user stares at it, and teardownSession()'s stopRecording() does
+        // nothing while mediaRec is still null. Without this check the session
+        // could end mid-prompt and we would then open the microphone anyway,
+        // start a MediaRecorder nobody can see, and arm a five-minute timer that
+        // tries to SEND the clip with the credential already gone.
+        if (gen !== sessionGen) {
+            try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             return;
         }
         recStream = stream;
@@ -4074,6 +4095,7 @@
     // the microphone stayed open behind the login gate.
     async function teardownSession() {
         entered = false;
+        sessionGen++;
         if (voice && voice.isJoined()) heartbeatPresence(true);
         // Unconditional: leave() self-guards on (joined || joining), and calling
         // it only when isJoined() is true meant a session that expired DURING a
@@ -4088,9 +4110,8 @@
         // just ended, and nothing may be sent with the credential gone.
         stopRecording(false);
         if (recMaxTimer) { clearTimeout(recMaxTimer); recMaxTimer = null; }
-        // The two manual sign-outs call closeSettings() right afterwards, which
-        // stops the test for them; an expired session and a failed enterApp()
-        // do not, so doing it here is what covers all four ways out.
+        // Covered again by the closeSettings() below, but kept explicit: the
+        // mic must be released whether or not the sheet was ever open.
         stopMicTest();
         // The thread poll runs on its own timer and would otherwise survive
         // teardown: with no credential every tick 401s and calls relogin(),
@@ -4100,6 +4121,24 @@
         // editor left open by the teardown does not just leak — it freezes the
         // message list for the whole of the next session.
         cancelEdit();
+        // #settings is a SIBLING of #app, not a child, so hiding #app leaves it
+        // on screen — and both are .overlay { z-index: 100 } with settings later
+        // in the document, so an expired session painted the settings sheet over
+        // the login card. Worse, closeSettings() is what calls releaseFocus():
+        // without it the focus trap stayed armed and the password field could
+        // not be reached at all.
+        closeSettings();
+        // Both of these are one-shot coalescing timeouts rather than intervals,
+        // so each survives teardown by at most a quarter second — but each then
+        // fires a request with no credential, 401s, and calls relogin() again,
+        // which re-focuses the password field out from under someone already
+        // typing into it.
+        if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+        clearTimeout(filterTimer);
+        filterTimer = null;
+        // The DM drawer holds its own poll-independent state; leaving it open
+        // means the next session starts with a stranger's conversation on screen.
+        closeDm();
         stopDmPolling();
         stopPolling();
         stopPresence();
@@ -4610,6 +4649,21 @@
     let account = null;               // { id, username, role } | null
     const isAdmin = () => !!(account && account.role === 'admin');
 
+    // Did I write this post? Mirrors the author half of _authz.js mayModifyPost
+    // on the server, and has to stay mirrored: the affordance and the rule that
+    // enforces it disagreeing is how you end up with an Edit button that 403s.
+    //
+    // Authorship is posts.user_id. It is NOT client_id — that is published with
+    // every post in the listing, so it identifies an install to everyone rather
+    // than proving anything, and it used to be what this test asked. Rows
+    // written before accounts existed carry no user_id and no way to recover
+    // one, so the server reserves them for admins; their real author sees no
+    // Edit button rather than one that cannot work. (Admins still get the
+    // separate "Delete (admin)" entry on anything that isn't theirs.)
+    function ownsPost(p) {
+        return !!(p && p.user_id && account && p.user_id === account.id);
+    }
+
     async function refreshAccount() {
         try {
             const res = await L.account.me();
@@ -4873,6 +4927,7 @@
 
     async function startMicTest() {
         stopMicTest();
+        const gen = sessionGen;
         let stream;
         try {
             // The SAME processing chain the call uses. Testing with plain
@@ -4887,6 +4942,13 @@
             toast(e && e.name === 'NotAllowedError'
                 ? 'Microphone access is needed to test your mic'
                 : 'Could not open the microphone', true);
+            return;
+        }
+        // Same race as startRecording(): teardown's stopMicTest() is a no-op
+        // while micTest is still null, so a session ending during the permission
+        // prompt would leave this stream open behind the login gate.
+        if (gen !== sessionGen) {
+            try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             return;
         }
 
@@ -5394,7 +5456,7 @@
     document.addEventListener('scroll', closeCtxMenu, true);
 
     function messageMenuItems(p, el) {
-        const mine = p.client_id && p.client_id === settings.clientId;
+        const mine = ownsPost(p);
         // In a thread, "Reply" means the thread composer — quoting a reply back
         // into the same thread would just be noise.
         const inThread = !!el.closest('#thread-list');
@@ -5892,7 +5954,14 @@
                 method: 'POST', body: { id: p.id, clientId: settings.clientId, body }
             });
 
-            if (res && res.needsAuth) { editingId = null; editingRestore = null; return relogin(); }
+            // restore(), NOT a bare state reset. Clearing editingRestore first
+            // is what made this unrecoverable: relogin() calls teardownSession()
+            // which calls cancelEdit(), and cancelEdit's whole job is to invoke
+            // the handle this line had just thrown away. The .msg-edit node then
+            // outlived the session with its textarea still disabled, and
+            // renderMessages() bails whenever one exists — so the next session
+            // opened onto a message list frozen at the moment the token expired.
+            if (res && res.needsAuth) { restore(); return relogin(); }
             if (!res || !res.success) {
                 // Keep the editor open with their text intact so nothing is lost.
                 ta.disabled = false;
@@ -5911,7 +5980,7 @@
     }
 
     async function deletePost(p) {
-        if (!isAdmin() && p.client_id !== settings.clientId) return toast('You can only delete your own messages', true);
+        if (!isAdmin() && !ownsPost(p)) return toast('You can only delete your own messages', true);
 
         const preview = (p.body || p.att_name || '').slice(0, 80);
         const ok = await askConfirm(
@@ -6486,15 +6555,21 @@
 
         const sig = JSON.stringify(threadPosts);
         if (!force && sig === threadSig) return;
-        threadSig = sig;
-        renderThread();
+        // Only claim this payload as rendered if it actually rendered. Stamping
+        // the signature up front meant a renderThread() that bailed for an open
+        // editor recorded replies it never painted, and the poll then skipped
+        // them for as long as nothing else changed — new messages in the thread
+        // simply never appeared.
+        if (renderThread()) threadSig = sig;
     }
 
+    // Returns false when it declined to paint, so the caller knows not to treat
+    // the payload as displayed.
     function renderThread() {
         const list = $('thread-list');
         // Same courtesy the main list extends: a thread poll must not destroy
         // an inline editor someone is typing into.
-        if (editingId && list.querySelector('.msg-edit')) return;
+        if (editingId && list.querySelector('.msg-edit')) return false;
         const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
 
         const replies = threadPosts.length - 1;
@@ -6510,6 +6585,7 @@
             prev = p;
         });
         if (atBottom) list.scrollTop = list.scrollHeight;
+        return true;
     }
 
     $('thread-close').addEventListener('click', closeThread);
@@ -6710,6 +6786,12 @@
         loadDmMessages.lastSig = null;    // the last conversation's payload isn't this one's
         $('dm-messages').innerHTML = '<div class="thread-loading">Loading…</div>';
         await loadDmMessages(true);
+        // Everything below assumes this conversation is still the open one. It
+        // may not be: a close, a session teardown, or simply opening someone
+        // else can all land during the fetch, and the tail used to run anyway —
+        // scrolling a panel that had moved on and pulling focus into a hidden
+        // input.
+        if (!dmOpen || dmOpen.id !== user.id) return;
         // Opening a conversation always lands on the newest message; only the
         // background re-renders defer to where the reader already is.
         const box = $('dm-messages');
