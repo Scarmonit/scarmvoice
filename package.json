@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
@@ -12,8 +12,8 @@
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
-    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/make-icon.js",
-    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js",
+    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js && node scripts/make-icon.js",
+    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js",
     "icon": "node scripts/make-icon.js",
     "start": "electron .",
     "dev": "electron . --dev",
@@ -40,6 +40,7 @@
     "electron-builder": "^25.1.8",
     "highlight.js": "^11.9.0",
     "jsdom": "^29.1.1",
+    "qrcode-generator": "^2.0.4",
     "vitest": "^4.1.10"
   },
   "build": {

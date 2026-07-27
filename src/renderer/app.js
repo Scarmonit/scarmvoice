@@ -557,8 +557,47 @@
         $('login-advanced').hidden = false;
         $('login-acct').hidden = true;
         $('login-verify').hidden = true;
+        $('login-totp').hidden = true;
         $('login-sub').textContent = 'Enter the board password to connect';
     }
+
+    // ---- 2FA challenge at sign-in ----
+    // The username+password we already collected, replayed with the code.
+    let pendingTotp = null;    // { username, password }
+
+    function showTotpStep(username, password) {
+        pendingTotp = { username, password };
+        $('login-acct').hidden = true;
+        $('login-totp').hidden = false;
+        $('login-sub').textContent = 'Two-factor is on — enter the code from your authenticator app';
+        $('login-totp-code').value = '';
+        $('login-totp-code').focus();
+    }
+
+    async function totpLoginSubmit() {
+        const err = $('login-error');
+        const code = $('login-totp-code').value.trim();
+        if (!/^\d{6}$/.test(code)) { err.textContent = 'Enter the 6-digit code from your app.'; return; }
+        err.textContent = '';
+        const res = await L.account.login(pendingTotp.username, pendingTotp.password, code);
+        if (!res || !res.success) {
+            err.textContent = (res && res.error) || 'Could not sign in.';
+            $('login-totp-code').value = '';
+            $('login-totp-code').focus();
+            return;
+        }
+        account = res.user;
+        pendingTotp = null;
+        if (!settings.displayName) await saveSettings({ displayName: account.username });
+        hideAccountStep();
+        $('login').hidden = true;
+        enterApp();
+    }
+
+    $('login-totp-btn').addEventListener('click', totpLoginSubmit);
+    $('login-totp-code').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); totpLoginSubmit(); }
+    });
 
     // The username whose emailed code we're waiting on.
     let pendingVerifyUser = null;
@@ -618,6 +657,11 @@
         // A new registration (or an unverified sign-in) moves to the code step.
         if (res && (res.pendingVerification || res.needsVerify)) {
             showVerifyStep(res.username || username);
+            return;
+        }
+        // 2FA account: ask for the authenticator code and replay the sign-in.
+        if (res && res.needsTotp) {
+            showTotpStep(res.username || username, password);
             return;
         }
         if (!res || !res.success) {
@@ -4149,9 +4193,65 @@
         $('acct-forms').hidden = !!account;
         if (account) {
             $('acct-user').textContent = account.username;
-            $('acct-role').textContent = account.role === 'admin' ? '(admin)' : '';
+            $('acct-role').textContent = (account.role === 'admin' ? '(admin)' : '') +
+                (account.totp ? ' · 2FA on' : '');
+            $('btn-acct-2fa').textContent = account.totp ? 'Turn off 2FA' : 'Enable 2FA';
         }
     }
+
+    // ---- two-factor auth (TOTP) ----
+
+    function drawQr(container, text) {
+        container.innerHTML = '';
+        try {
+            // Type 0 = auto-size for the payload; 'M' error correction.
+            const qr = window.qrcode(0, 'M');
+            qr.addData(text);
+            qr.make();
+            container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true });
+        } catch (e) {
+            container.textContent = 'Could not draw the QR code — use the key below.';
+        }
+    }
+
+    async function start2faSetup() {
+        const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'setup' } });
+        if (!res || !res.success) return toast((res && res.error) || 'Could not start 2FA setup', true);
+        $('acct-2fa-secret').textContent = res.secret;
+        drawQr($('acct-2fa-qr'), res.otpauth);
+        $('acct-2fa-setup').hidden = false;
+        $('acct-2fa-code').value = '';
+        $('acct-2fa-code').focus();
+    }
+
+    $('btn-acct-2fa').addEventListener('click', async () => {
+        if (!account) return;
+        if (!account.totp) return start2faSetup();
+        // Turning it off needs a live code, so the server can trust the request.
+        const code = await openDialog({
+            title: 'Turn off two-factor?',
+            message: 'Enter a current code from your authenticator app to confirm.',
+            ok: 'Turn off', withInput: true, danger: true
+        });
+        if (code === null || code === false) return;
+        const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'disable', code: String(code).trim() } });
+        if (!res || !res.success) return toast((res && res.error) || 'Could not turn 2FA off', true);
+        account.totp = false;
+        renderAccountCard();
+        toast('Two-factor authentication is off');
+    });
+
+    $('btn-acct-2fa-confirm').addEventListener('click', async () => {
+        const code = $('acct-2fa-code').value.trim();
+        if (!/^\d{6}$/.test(code)) return toast('Enter the 6-digit code from your app', true);
+        const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'enable', code } });
+        if (!res || !res.success) return toast((res && res.error) || 'Could not turn 2FA on', true);
+        account.totp = true;
+        $('acct-2fa-setup').hidden = true;
+        renderAccountCard();
+        toast('Two-factor authentication is on — you\'ll need your app to sign in');
+    });
+    $('btn-acct-2fa-cancel').addEventListener('click', () => { $('acct-2fa-setup').hidden = true; });
 
     // ---- board account (username + role on top of the shared password) ----
 

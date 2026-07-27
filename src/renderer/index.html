@@ -397,6 +397,14 @@
         <button type="button" id="login-acct-create">Create account</button>
       </div>
     </div>
+    <!-- 2FA challenge: accounts with an authenticator app enabled. -->
+    <div id="login-totp" hidden>
+      <input type="text" id="login-totp-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+             placeholder="Authenticator code" autocomplete="one-time-code">
+      <div class="login-acct-btns">
+        <button type="button" id="login-totp-btn" class="primary">Verify</button>
+      </div>
+    </div>
     <!-- Step 3, new accounts only: redeem the emailed 6-digit code. -->
     <div id="login-verify" hidden>
       <input type="text" id="login-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
@@ -449,7 +457,21 @@
           <span>Board account</span>
           <div class="acct-board" id="acct-signed" hidden>
             <span class="acct-signed-as">Signed in as <b id="acct-user"></b> <em class="hint" id="acct-role"></em></span>
+            <button type="button" class="keycap" id="btn-acct-2fa">Enable 2FA</button>
             <button type="button" class="keycap" id="btn-acct-logout">Sign out</button>
+          </div>
+          <div class="acct-board acct-2fa-setup" id="acct-2fa-setup" hidden>
+            <div id="acct-2fa-qr" class="acct-qr"></div>
+            <div class="acct-2fa-side">
+              <span class="hint">Scan with Google Authenticator, Authy, or any TOTP app —
+                or enter this key manually:</span>
+              <code id="acct-2fa-secret"></code>
+              <input type="text" id="acct-2fa-code" inputmode="numeric" maxlength="6" placeholder="Code from the app">
+              <div class="acct-btns">
+                <button type="button" class="keycap" id="btn-acct-2fa-confirm">Turn on</button>
+                <button type="button" class="keycap" id="btn-acct-2fa-cancel">Cancel</button>
+              </div>
+            </div>
           </div>
           <div class="acct-board" id="acct-forms">
             <input type="text" id="acct-username" maxlength="24" placeholder="Username" autocomplete="off">
@@ -826,6 +848,7 @@
      icons.js hydrates every data-icon placeholder above, so it has to run
      before app.js starts querying and cloning those nodes. -->
 <script src="vendor/hljs.js"></script>
+<script src="vendor/qrcode.js"></script>
 <!-- lib.js holds the renderer's pure helpers (the unit-tested half); audio.js
      owns the single AudioContext and the shared meter tick. Both have to be
      defined before app.js, voice.js and sounds.js reach for them. -->

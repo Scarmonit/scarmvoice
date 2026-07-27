@@ -274,8 +274,8 @@ async function accountResend(username) {
     return board('account/resend', { method: 'POST', body: { username } });
 }
 
-async function accountLogin(username, password, clientId) {
-    const res = await board('account/login', { method: 'POST', body: { username, password, clientId } });
+async function accountLogin(username, password, clientId, totpCode) {
+    const res = await board('account/login', { method: 'POST', body: { username, password, clientId, totpCode: totpCode || undefined } });
     if (res && res.success && res.token) {
         accountToken = res.token;
         store.writeAccountToken(accountToken);

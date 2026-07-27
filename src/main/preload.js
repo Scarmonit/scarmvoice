@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('lounge', {
     // the session cookie) never reaches the renderer.
     account: {
         register: (username, password, email) => ipcRenderer.invoke('account:register', { username, password, email }),
-        login: (username, password) => ipcRenderer.invoke('account:login', { username, password }),
+        login: (username, password, totpCode) => ipcRenderer.invoke('account:login', { username, password, totpCode }),
         verify: (username, code) => ipcRenderer.invoke('account:verify', { username, code }),
         resend: (username) => ipcRenderer.invoke('account:resend', { username }),
         logout: () => ipcRenderer.invoke('account:logout'),

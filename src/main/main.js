@@ -399,8 +399,8 @@ function registerIpc() {
     ipcMain.handle('account:register', async (_e, { username, password, email }) => {
         return net.accountRegister(String(username || ''), String(password || ''), String(email || ''), store.get().clientId);
     });
-    ipcMain.handle('account:login', async (_e, { username, password }) => {
-        return net.accountLogin(String(username || ''), String(password || ''), store.get().clientId);
+    ipcMain.handle('account:login', async (_e, { username, password, totpCode }) => {
+        return net.accountLogin(String(username || ''), String(password || ''), store.get().clientId, String(totpCode || ''));
     });
     ipcMain.handle('account:verify', async (_e, { username, code }) => {
         return net.accountVerify(String(username || ''), String(code || ''), store.get().clientId);
