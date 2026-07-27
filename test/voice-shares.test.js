@@ -65,6 +65,14 @@ beforeEach(async () => {
 
     meeting = makeMeeting();
     window.RealtimeKitClient = { init: vi.fn(async () => meeting) };
+    // The SDK is fetched on the first join rather than shipped in index.html,
+    // so the engine asks the lazy loader for it instead of reading the global.
+    window.ScarmLazy = {
+        realtimekit: vi.fn(async () => window.RealtimeKitClient),
+        hljs: async () => null,
+        qrcode: async () => null,
+        has: (name) => !!window[name]
+    };
     window.lounge = { voiceToken: vi.fn(async () => ({ success: true, token: 't' })) };
 
     const code = fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');

@@ -13,6 +13,12 @@ const ROOT = path.join(__dirname, '..');
 const SOURCE = path.join(ROOT, 'build', 'icon-source.png');
 const OUT = path.join(ROOT, 'build', 'icon.ico');
 
+// The in-app logo, generated from the same master. 128 px is 2x the largest
+// place it is drawn (the 64 px sign-in mark), so it stays crisp on a HiDPI
+// display without shipping the full-resolution original.
+const LOGO_SIZE = 128;
+const LOGO_OUT = path.join(ROOT, 'src', 'renderer', 'logo.png');
+
 // ---- PNG decoding --------------------------------------------------------
 
 function decodePNG(buf) {
@@ -242,6 +248,24 @@ function main() {
     fs.writeFileSync(OUT, buildICO(entries));
     console.log(`[icon] ${path.relative(ROOT, SOURCE)} (${src.width}px) -> ` +
         `${path.relative(ROOT, OUT)} (${SIZES.join('/')}px, ${Math.round(fs.statSync(OUT).size / 1024)} KB)`);
+
+    makeRendererLogo(src);
+}
+
+// The renderer's logo used to be the full-resolution master — a ~260 KB PNG
+// displayed at 48 px in the rail and 64 px on the sign-in screen. Every launch
+// decoded all of it to draw a thumbnail, on the critical path to first paint.
+// Same source, same resampler, sized for what it is actually used at (2x the
+// largest use, so it stays sharp on a HiDPI display).
+function makeRendererLogo(src) {
+    const size = LOGO_SIZE;
+    const scaled = (size === src.width && size === src.height)
+        ? src.rgba
+        : resize(src.rgba, src.width, src.height, size);
+    const png = encodePNG(scaled, size);
+    fs.writeFileSync(LOGO_OUT, png);
+    console.log(`[icon] ${path.relative(ROOT, LOGO_OUT)} (${size}px, ` +
+        `${Math.round(png.length / 1024)} KB)`);
 }
 
 main();

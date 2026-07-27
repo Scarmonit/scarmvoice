@@ -174,7 +174,12 @@
                 try { sender.track.contentHint = prof.contentHint; } catch (e) {}
                 try {
                     const p = sender.getParameters();
-                    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+                    // Never fabricate an encoding: setParameters rejects an
+                    // encodings array whose length differs from the one
+                    // getParameters returned, so the old `p.encodings = [{}]`
+                    // guaranteed an InvalidModificationError (swallowed by the
+                    // catch below) on the exact call it was meant to rescue.
+                    if (!p.encodings || !p.encodings.length) return;
                     if (p.encodings.length === 1) {
                         p.encodings[0].scaleResolutionDownBy = 1;
                         p.encodings[0].maxBitrate = prof.maxBitrate;
@@ -195,20 +200,56 @@
         return found;
     }
 
+    // Bumped by every re-tune, including a mid-share quality/motion change.
+    // SHARE_GEN only moves on start/stop, so without this a user cycling
+    // 720p -> 1080p -> 1440p left three retry loops running concurrently, each
+    // re-asserting a profile the others had just overwritten.
+    let TUNE_GEN = 0;
+
     // The producer/sender appears asynchronously after enableScreenShare.
     function forceScreenQualityRetry() {
         let tries = 0;
-        const gen = SHARE_GEN;
+        const shareGen = SHARE_GEN;
+        const tuneGen = ++TUNE_GEN;
         (function go() {
-            // If the share stopped (or restarted) while this loop was still
-            // running, forceScreenQuality's "tune any video sender" fallback
-            // would apply share encoder params (16 Mbps, maintain-resolution)
-            // to the CAMERA. Stop instead.
-            if (gen !== SHARE_GEN) return;
+            // Stop if the share ended/restarted, or a newer tune superseded us.
+            if (shareGen !== SHARE_GEN || tuneGen !== TUNE_GEN) return;
             const found = forceScreenQuality();
             if (tries === 0) console.info('[share] video senders found:', found, 'across', PCS.length, 'peer connections');
+            // Each setParameters that moves degradationPreference can make
+            // Chromium reconfigure the encoder, so once the settings are
+            // confirmed on the wire there is nothing to gain from hammering it
+            // five more times over the next seven seconds.
+            if (found > 0 && shareSettingsApplied()) return;
             if (++tries < 6) setTimeout(go, tries * 500);
         })();
+    }
+
+    // Read back what the sender actually accepted — the only proof that the
+    // pinning took, as opposed to being silently clamped or ignored.
+    function shareSettingsApplied() {
+        const prof = shareProfile();
+        const id = SHARE_TRACK_ID;
+        if (!id) return false;
+        let confirmed = false;
+        PCS.forEach((pc) => {
+            if (confirmed || !pc || typeof pc.getSenders !== 'function') return;
+            let senders;
+            try { senders = pc.getSenders(); } catch (e) { return; }
+            senders.forEach((sender) => {
+                if (confirmed || !sender || !sender.track || sender.track.id !== id) return;
+                try {
+                    const p = sender.getParameters();
+                    if (!p.encodings || !p.encodings.length) return;
+                    const top = p.encodings.length === 1 ? p.encodings[0]
+                        : p.encodings.reduce((a, b) =>
+                            ((b.scaleResolutionDownBy || 1) < (a.scaleResolutionDownBy || 1)) ? b : a);
+                    if (top.maxBitrate === prof.maxBitrate &&
+                        p.degradationPreference === prof.degradation) confirmed = true;
+                } catch (e) { /* unreadable — assume not applied */ }
+            });
+        });
+        return confirmed;
     }
 
     // Is the share actually leaving this machine? bytesSent climbing on an
@@ -457,12 +498,17 @@
 
         // ---- remote audio attach/detach ----------------------------------
 
+        // Which track each participant's <audio> is currently carrying, so an
+        // event that doesn't actually change the track is a no-op.
+        const audioTrackIds = Object.create(null);
+
         function attachAudio(p) {
             const cid = cidOf(p);
             if (!cid || !p.audioTrack) return;
             ensureSink();
 
             let el = audioEls[cid];
+            const fresh = !el;
             if (!el) {
                 el = document.createElement('audio');
                 el.autoplay = true;
@@ -471,16 +517,49 @@
                 audioEls[cid] = el;
                 applySinkId(el);
             }
+
+            // This runs on every audioUpdate, which fires on every remote mute
+            // and unmute. Rebuilding unconditionally swapped srcObject and tore
+            // down the WebAudio boost graph and the speaking analyser each time
+            // — an audible click for anyone boosted above 100%, and a dropped
+            // speaking dot. The camera and screen-share paths already guard on
+            // track identity; this is the one that didn't.
+            if (!fresh && audioTrackIds[cid] === p.audioTrack.id) {
+                applyLocalAudio(cid);          // volume/mute prefs may still have moved
+                return;
+            }
+
             let stream;
             try {
                 stream = new MediaStream([p.audioTrack]);
                 el.srcObject = stream;
             } catch (e) { return; }
+            audioTrackIds[cid] = p.audioTrack.id;
 
             dropGain(cid);            // stream changed — rebuild any boost graph
             applyLocalAudio(cid);
             watchSpeaking(cid, stream, false);
+            tuneReceiver(p.audioTrack);
             el.play().catch(() => {});
+        }
+
+        // Trim NetEq's conservative default buffering on the receiving end.
+        // Chromium clamps whatever we ask for and grows it back on a bad link,
+        // so this is a hint toward lower conversational latency, not a promise.
+        function tuneReceiver(track) {
+            if (!track) return;
+            prunePCS();
+            PCS.forEach((pc) => {
+                if (!pc || typeof pc.getReceivers !== 'function') return;
+                let receivers;
+                try { receivers = pc.getReceivers(); } catch (e) { return; }
+                receivers.forEach((r) => {
+                    if (!r || !r.track || r.track.id !== track.id) return;
+                    // Both are Chromium-specific and absent elsewhere.
+                    try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = 40; } catch (e) {}
+                    try { if ('playoutDelayHint' in r) r.playoutDelayHint = 0; } catch (e) {}
+                });
+            });
         }
 
         function detachAudio(p) {
@@ -488,6 +567,7 @@
             if (!cid) return;
             dropGain(cid);
             stopSpeaking(cid);
+            delete audioTrackIds[cid];   // or a rejoin reusing the id would skip the rebuild
             const el = audioEls[cid];
             if (el) {
                 try { el.srcObject = null; el.remove(); } catch (e) {}
@@ -603,7 +683,46 @@
                 try { (pj.toArray ? pj.toArray() : []).forEach(attachAudio); } catch (e) {}
             }
             bind(m.self, 'videoUpdate', () => pushCams());
+            wireReconnect(m);
             wireShare(m);
+        }
+
+        // The SDK survives a transport drop by tearing the peer connection down
+        // and REBUILDING the producers. Everything forceScreenQuality() pinned —
+        // maxBitrate, maxFramerate, scaleResolutionDownBy, degradationPreference,
+        // contentHint — lives on the old sender and dies with it, and
+        // SHARE_TRACK_ID still names the dead track so nothing would re-match.
+        //
+        // Without this listener, one Wi-Fi blip mid-share dropped the share to
+        // the SFU default (~720p) for the rest of the session, silently. That is
+        // precisely the failure the whole quality-pinning mechanism exists to
+        // prevent, so it has to be re-applied when the transport comes back.
+        function wireReconnect(m) {
+            const onBack = (why) => {
+                prunePCS();
+                if (!joined) return;
+                console.info('[voice] media transport re-established (' + why + ') — re-applying tuning');
+                // The producers are new, so anything keyed to the old track id
+                // has to be re-read rather than reused.
+                SHARE_TRACK_ID = null;
+                applyStreamPriorities();
+                applyAllLocalAudio();
+                if (localSharing) {
+                    SHARE_GEN++;
+                    refreshShareTrackId();
+                    tuneLocalShare();
+                }
+            };
+
+            bind(m.meta, 'mediaConnectionUpdate', (s) => {
+                // Shape varies by SDK build; treat anything that isn't an
+                // explicit connected/reconnected signal as noise.
+                const state = s && (s.state || s.transportState);
+                if (state === 'connected' || state === 'reconnected') onBack('mediaConnectionUpdate');
+            });
+            bind(m.self, 'roomJoined', (d) => {
+                if (d && d.reconnected) onBack('roomJoined');
+            });
         }
 
         // ---- camera ------------------------------------------------------
@@ -787,13 +906,21 @@
                     Promise.resolve(meeting.self.updateScreenshareConstraints(cap)).catch(() => {});
                 }
                 forceScreenQualityRetry();
+                // The share sender does not exist at join time, so this is the
+                // first chance to de-prioritise it against the voice stream.
+                applyStreamPriorities();
+                const tuneGen = TUNE_GEN;
                 setTimeout(() => {
+                    if (tuneGen !== TUNE_GEN) return;   // superseded by a newer tune
                     try {
                         const v2 = meeting.self.screenShareTracks && meeting.self.screenShareTracks.video;
                         if (v2) v2.contentHint = shareProfile().contentHint;
                     } catch (e) {}
                 }, 1500);
-                setTimeout(() => reportShareStats('t+5s'), 5000);
+                setTimeout(() => {
+                    if (tuneGen !== TUNE_GEN) return;
+                    reportShareStats('t+5s');
+                }, 5000);
             } catch (e) {}
         }
 
@@ -886,6 +1013,24 @@
 
         let pttHeld = false;
 
+        // Shared by the engine and the Settings mic test, so the meter is
+        // calibrated against the same processing chain the call actually uses.
+        function browserNoiseSuppression() {
+            if (settings.noiseSuppressionAI) return false;   // RNNoise owns it
+            return settings.noiseSuppression !== false;
+        }
+
+        function micTestConstraints() {
+            const audio = {
+                echoCancellation: settings.echoCancellation !== false,
+                autoGainControl: !!settings.autoGainControl,
+                noiseSupression: browserNoiseSuppression(),
+                noiseSuppression: browserNoiseSuppression()
+            };
+            if (settings.micDeviceId) audio.deviceId = { exact: settings.micDeviceId };
+            return { audio };
+        }
+
         function modeAllowsTransmit() {
             if (settings.voiceMode === 'ptt') return pttHeld;
             return true;
@@ -932,7 +1077,14 @@
             pushState();
 
             try {
-                if (!window.RealtimeKitClient) throw new Error('RealtimeKit SDK failed to load');
+                // Fetched on the first join rather than at startup — 647 KB that
+                // used to be parsed before the window could even appear, for a
+                // feature plenty of sessions never touch. voice.js and noise.js
+                // have long since installed their RTCPeerConnection /
+                // getDisplayMedia / getUserMedia patches by the time this runs.
+                const SDK = await window.ScarmLazy.realtimekit();
+                if (gen !== joinGen) return;   // left while the SDK was loading
+                if (!SDK) throw new Error('RealtimeKit SDK failed to load');
 
                 const res = await window.lounge.voiceToken({
                     clientId: settings.clientId,
@@ -948,8 +1100,14 @@
                     autoGainControl: !!settings.autoGainControl,
                     // The SDK reads the MISSPELLED getUserMedia key (one 's').
                     // Pass both so today's build and any future fix both work.
-                    noiseSupression: settings.noiseSuppression !== false,
-                    noiseSuppression: settings.noiseSuppression !== false,
+                    //
+                    // Chromium's own suppressor is turned OFF when RNNoise is
+                    // doing the job: cascading two of them is the classic cause
+                    // of pumping and chewed-up consonants, and the browser's runs
+                    // upstream so the model only ever sees an already-mangled
+                    // signal. Every ML-suppression product does the same.
+                    noiseSupression: browserNoiseSuppression(),
+                    noiseSuppression: browserNoiseSuppression(),
                     enableHighBitrate: true
                 };
                 // 'ideal', not 'exact': a saved mic that has since been unplugged
@@ -957,7 +1115,7 @@
                 // quietly falling back to the default device.
                 if (settings.micDeviceId) audioCfg.deviceId = { ideal: settings.micDeviceId };
 
-                const m = await window.RealtimeKitClient.init({
+                const m = await SDK.init({
                     authToken: res.token,
                     defaults: {
                         // In push-to-talk, start with the mic off so joining never
@@ -1001,6 +1159,23 @@
                 muted = false;
                 lastTransmit = null;
 
+                // The saved microphone has to be selected THROUGH THE SDK. The
+                // deviceId in mediaConfiguration.audio above is never read for
+                // device selection — the SDK takes the device as an argument to
+                // its constraints builder, sourced only from self.setDevice() —
+                // so without this the call silently used audioInputDevices[0]
+                // while the Settings meter dutifully metered the chosen one.
+                await selectSavedMic();
+
+                // Bandwidth priority: without this, audio and a multi-megabit
+                // screen share compete as equals on the same bundle, and voice
+                // is what breaks up when the uplink saturates.
+                applyStreamPriorities();
+
+                // Speaking meters read 0.0 forever if the shared context is
+                // suspended when the analysers are built.
+                try { if (window.ScarmAudio) window.ScarmAudio.resume(); } catch (e) {}
+
                 // In push-to-talk we must start silent; in open mic, start live.
                 applyTransmit();
                 applyAllLocalAudio();
@@ -1022,6 +1197,62 @@
                 fail('join', e);
                 throw e;
             }
+        }
+
+        // Point the SDK at the microphone the user picked in Settings.
+        //
+        // Best-effort by design: an unplugged or renamed device just leaves the
+        // SDK on its default rather than failing the join.
+        async function selectSavedMic() {
+            const want = settings.micDeviceId;
+            if (!want || !meeting || !meeting.self) return;
+            try {
+                const self = meeting.self;
+                if (typeof self.getAudioDevices !== 'function' || typeof self.setDevice !== 'function') return;
+                const devices = await self.getAudioDevices();
+                const match = (devices || []).find((d) => d && d.deviceId === want);
+                if (!match) {
+                    console.warn('[voice] saved microphone is not present — staying on the default');
+                    return;
+                }
+                const current = self.audioTrack && self.audioTrack.getSettings
+                    ? self.audioTrack.getSettings().deviceId : null;
+                if (current === want) return;      // already on it
+                await self.setDevice(match);
+                console.info('[voice] microphone set to', match.label || want);
+            } catch (e) {
+                console.warn('[voice] could not select the saved microphone:', e && e.message);
+            }
+        }
+
+        // Tell Chromium which stream to protect when the uplink is congested.
+        // Audio is the one that must survive; a screen share degrading is
+        // recoverable, a chopped voice call is not.
+        function applyStreamPriorities() {
+            prunePCS();
+            const shareId = SHARE_TRACK_ID;
+            PCS.forEach((pc) => {
+                if (!pc || typeof pc.getSenders !== 'function') return;
+                let senders;
+                try { senders = pc.getSenders(); } catch (e) { return; }
+                senders.forEach((sender) => {
+                    if (!sender || !sender.track) return;
+                    const isAudio = sender.track.kind === 'audio';
+                    const isShare = shareId && sender.track.id === shareId;
+                    if (!isAudio && !isShare) return;     // leave the camera alone
+                    try {
+                        const p = sender.getParameters();
+                        // setParameters rejects an encodings array of a different
+                        // length than getParameters returned, so never fabricate one.
+                        if (!p.encodings || !p.encodings.length) return;
+                        p.encodings.forEach((enc) => {
+                            enc.networkPriority = isAudio ? 'high' : 'low';
+                            enc.priority = isAudio ? 'high' : 'low';
+                        });
+                        Promise.resolve(sender.setParameters(p)).catch(() => {});
+                    } catch (e) { /* unsupported here — the default stands */ }
+                });
+            });
         }
 
         // Analyse our own published track so the local speaking dot is honest
@@ -1089,6 +1320,7 @@
                 dropGain(cid);
                 try { audioEls[cid].srcObject = null; audioEls[cid].remove(); } catch (e) {}
                 delete audioEls[cid];
+                delete audioTrackIds[cid];
             });
 
             on.onParticipants([]);
@@ -1102,6 +1334,7 @@
             leave,
             state,
             roster,
+            micTestConstraints,
 
             startShare,
             stopShare,

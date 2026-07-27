@@ -14,7 +14,12 @@
     const I = (name, cls) => window.ScarmIcons.markup(name, cls || 'ico');
 
     const POLL_ACTIVE_MS = 4000;    // socket down → poll this often
-    const POLL_IDLE_MS = 15000;     // socket up → slow safety-net poll
+    // Socket up → this is a SAFETY NET, not the delivery mechanism: the Durable
+    // Object pushes every post, rt.js runs a 20s ping/pong liveness check, and
+    // reconnecting triggers a full resync. At 15s it was re-fetching the page
+    // and the channel list 8 times a minute to re-learn what the socket had
+    // already told us.
+    const POLL_IDLE_MS = 60000;
     const PRESENCE_MS = 5000;       // voice presence heartbeat (server TTL is 12s)
     const TYPING_MS = 3000;
     const PAGE = 40;
@@ -316,8 +321,20 @@
     // highlight.js is vendored and already loaded, so this is synchronous —
     // unlike the website, which lazy-loads it from a CDN.
     function highlightCodeBlocks(container) {
-        if (!container || !window.hljs) return;
-        container.querySelectorAll('pre.msg-code code:not([data-hl])').forEach((code) => {
+        if (!container) return;
+        const pending = container.querySelectorAll('pre.msg-code code:not([data-hl])');
+        if (!pending.length) return;
+
+        // hljs is fetched on first use rather than at startup. Until it lands
+        // the code block renders as plain monospace text, which is exactly what
+        // it looked like before highlighting was added — so nothing waits on it.
+        if (!window.hljs) {
+            window.ScarmLazy.hljs().then((hl) => {
+                if (hl) highlightCodeBlocks(container);
+            });
+            return;
+        }
+        pending.forEach((code) => {
             code.setAttribute('data-hl', '1');
             try { window.hljs.highlightElement(code); } catch (e) { /* leave it plain */ }
         });
@@ -1619,7 +1636,9 @@
             if (kind === 'audio') {
                 parts.push(`<div class="au-mount" data-src="${esc(url)}" data-name="${esc(p.att_name || 'audio')}"></div>`);
             } else if (kind === 'image') {
-                parts.push(`<img src="${esc(url)}" alt="${esc(p.att_name)}" loading="lazy" ` +
+                // decoding="async" keeps image decode off the main thread, so a
+                // big attachment scrolling into view can't stall the UI.
+                parts.push(`<img src="${esc(url)}" alt="${esc(p.att_name)}" loading="lazy" decoding="async" ` +
                     `data-lightbox="1" data-att-key="${esc(p.att_key)}" data-att-name="${esc(p.att_name || 'image')}">`);
             } else if (kind === 'video') {
                 parts.push(`<video src="${esc(url)}" controls preload="metadata"></video>`);
@@ -4157,6 +4176,14 @@
         if (document.hidden) return;
         L.rt.wake();
         resyncNow();
+        // The thread and DM polls skip their ticks while hidden, so refresh
+        // whichever panels are open now rather than leaving them stale until
+        // their next interval.
+        if (threadOpen()) loadThread(true);
+        if (account) {
+            loadDmThreads();
+            if (dmOpen) loadDmMessages(true);
+        }
     });
 
     // ---------- identity --------------------------------------------------
@@ -4466,11 +4493,19 @@
 
     // ---- two-factor auth (TOTP) ----
 
-    function drawQr(container, text) {
+    // The generator is fetched on demand — 2FA enrolment is the only thing that
+    // has ever needed it, and most accounts never run it.
+    async function drawQr(container, text) {
         container.innerHTML = '';
+        container.textContent = 'Drawing QR code…';
+        const gen = await window.ScarmLazy.qrcode();
+        if (!gen) {
+            container.textContent = 'Could not load the QR generator — use the key below.';
+            return;
+        }
         try {
             // Type 0 = auto-size for the payload; 'M' error correction.
-            const qr = window.qrcode(0, 'M');
+            const qr = gen(0, 'M');
             qr.addData(text);
             qr.make();
             container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true });
@@ -4806,9 +4841,14 @@
         stopMicTest();
         let stream;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: settings.micDeviceId ? { deviceId: { exact: settings.micDeviceId } } : true
-            });
+            // The SAME processing chain the call uses. Testing with plain
+            // `{audio:true}` meant the meter saw browser defaults — AGC ON,
+            // where the call runs AGC off by design — so the speaking threshold
+            // was calibrated against a levelled signal and then applied to an
+            // unlevelled one. Quiet talkers tested fine and went unheard.
+            stream = await navigator.mediaDevices.getUserMedia(
+                voice ? voice.micTestConstraints()
+                    : { audio: settings.micDeviceId ? { deviceId: { exact: settings.micDeviceId } } : true });
         } catch (e) {
             toast(e && e.name === 'NotAllowedError'
                 ? 'Microphone access is needed to test your mic'
@@ -6357,7 +6397,14 @@
         await loadThread(true);
         $('thread-input').focus();
         if (threadTimer) clearInterval(threadTimer);
-        threadTimer = setInterval(() => loadThread(false), THREAD_POLL_MS);
+        // 2.5s is tight because an open thread is being read right now. A hidden
+        // window is not being read, and this timer used to keep firing at full
+        // rate for as long as the panel was left open — 24 requests a minute
+        // into the tray.
+        threadTimer = setInterval(() => {
+            if (document.hidden) return;
+            loadThread(false);
+        }, THREAD_POLL_MS);
     }
 
     function closeThread() {
@@ -6591,6 +6638,10 @@
         if (dmTimer) clearInterval(dmTimer);
         dmTimer = setInterval(() => {
             if (!account || $('app').hidden) return;
+            // DMs arrive over the socket ('dm' events), so while it is healthy
+            // this poll is a safety net — and a hidden window has nothing to
+            // repaint. ($('app').hidden is the login gate, not window visibility.)
+            if (document.hidden && rtConnected) return;
             loadDmThreads();
             if (dmOpen) loadDmMessages(false);
         }, DM_POLL_MS);

@@ -112,10 +112,13 @@ describe('liveness', () => {
         boot();
         socket().acceptConnection();
 
-        // First tick: probe.
+        // First tick: probe. The protocol-level ping is the whole probe — the
+        // app-level {t:'ping'} frame that used to accompany it was redundant
+        // (markAlive fires on 'pong' and on any inbound frame) and cost a
+        // Durable Object invocation every 20s per client.
         vi.advanceTimersByTime(PING_MS);
         expect(socket().pings).toBe(1);
-        expect(socket().lastSent()).toEqual({ t: 'ping' });
+        expect(socket().lastSent()).not.toEqual({ t: 'ping' });
         expect(socket().terminated).toBe(false);
 
         // Second tick with no reply: the peer is gone.

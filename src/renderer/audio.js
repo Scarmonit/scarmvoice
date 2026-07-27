@@ -69,16 +69,31 @@
 
     // ---- the shared tick -------------------------------------------------
 
+    // Everything on this tick drives something you can SEE — speaking dots and
+    // the mic-test bar. With backgroundThrottling disabled on the window (so the
+    // presence heartbeat survives the tray), Chromium does not throttle this for
+    // us, so a five-person call minimised to the tray kept running 20 Hz × 5
+    // analysers — a 512-sample RMS loop each — to animate indicators on a window
+    // nobody is looking at. Suspending while hidden is free: the first tick
+    // after the window comes back re-reads live levels within 50 ms.
+    function shouldRun() {
+        return (meters.size || tickers.size) && !document.hidden;
+    }
+
     function ensureTimer() {
-        if (timer || (!meters.size && !tickers.size)) return;
+        if (timer || !shouldRun()) return;
         timer = setInterval(() => {
             meters.forEach((m) => m.sample());
             tickers.forEach((fn) => {
                 try { fn(); } catch (e) { console.error('[audio] ticker threw:', e); }
             });
-            if (!meters.size && !tickers.size) stopTimer();
+            if (!shouldRun()) stopTimer();
         }, TICK_MS);
     }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) stopTimer(); else ensureTimer();
+    });
 
     function stopTimer() {
         if (!timer) return;

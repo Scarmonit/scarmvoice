@@ -316,18 +316,50 @@ both decisions are re-made against the allow-list every time.
 
 These match what the website already verified against this SFU:
 
-- `enableHighBitrate: true` gives 64 kbps mono Opus, which is the ceiling for a
-  mono source. This SDK has **no** numeric bitrate field, and enabling stereo on
-  a mono mic doubles the bytes for zero gain.
-- **AGC defaults to off.** Its level loop audibly self-modulates the volume.
+- `enableHighBitrate: true` gives 64 kbps mono Opus. This SDK has **no** numeric
+  bitrate field — the only other setting is `enableStereo`, which raises it to
+  128 kbps *and* forces `channelCount: 2`. The two are welded together in the
+  SDK, so 128 kbps mono is not reachable, and stereo on a mono mic doubles the
+  bytes for nothing (RNNoise forces mono anyway).
+- **AGC defaults to off.** Its level loop audibly self-modulates the volume. The
+  mic test in Settings builds its constraints from the same `micTestConstraints()`
+  the engine uses, so the speaking threshold is calibrated against the chain the
+  call actually runs — testing with browser defaults (AGC **on**) meant quiet
+  talkers passed the meter and then sat below the threshold in the call.
 - The SDK reads the *misspelled* getUserMedia key `noiseSupression` (one `s`),
-  so `voice.js` passes both spellings.
+  so `voice.js` passes both spellings. Chromium's suppressor is turned **off**
+  when RNNoise is enabled: cascading two suppressors is what produces pumping
+  and chewed-up consonants.
+- The microphone must be selected with `meeting.self.setDevice()`. A `deviceId`
+  in `mediaConfiguration.audio` is silently ignored — the SDK takes the device
+  as an argument to its constraints builder, sourced only from `setDevice` — so
+  without that call the SDK just uses `audioInputDevices[0]` and the picker in
+  Settings changes nothing but the test meter.
 - Participants are keyed by `customParticipantId` (which equals the board's
   client id) rather than the per-session participant id, so per-person volume
   and mute settings survive restarts and match the website's.
+- Audio senders are set to `networkPriority: 'high'` and the screen share to
+  `'low'`. They share one bundle, and at default priority a multi-megabit share
+  and the voice stream compete as equals — so voice is what broke up when the
+  uplink saturated.
 - The RealtimeKit SDK is **pinned to 2.0.0** — the version those behaviours were
   verified against — and vendored from `node_modules` instead of a CDN so the
-  packaged app has no external script dependency.
+  packaged app has no external script dependency. It is **fetched on the first
+  join**, not at startup: 647 KB of parse and execute that used to sit between
+  launching the app and seeing a window, for a feature many sessions never use.
+
+### Quality survives a reconnect
+
+A transport drop makes the SDK tear the peer connection down and rebuild the
+producers. Everything `forceScreenQuality()` pinned — bitrate, framerate,
+`scaleResolutionDownBy`, `degradationPreference` — lives on the old sender and
+dies with it, and `SHARE_TRACK_ID` still names the dead track, so nothing would
+re-match even on a manual retry. One Wi-Fi blip mid-share used to drop the share
+to the SFU default (~720p) for the rest of the session, silently.
+
+`wireReconnect()` listens for `mediaConnectionUpdate` / `roomJoined` and
+re-applies the tuning, so the pinning is restored rather than merely established
+once.
 
 ### Link previews
 
@@ -616,6 +648,5 @@ wraps `RTCPeerConnection` to keep a registry of peer connections and calls
 
 Carried by the website but not yet ported:
 
-- RNNoise voice isolation (the browser's own noise suppression is used instead)
 - Web Push — the app uses native OS notifications instead, which is the better
   mechanism for a desktop client

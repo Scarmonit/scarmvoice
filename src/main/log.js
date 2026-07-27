@@ -137,6 +137,40 @@ function install() {
     } catch (e) {
         console.warn('[log] crashReporter unavailable:', e.message);
     }
+    pruneCrashDumps();
+}
+
+// With uploadToServer off, nothing ever collects the minidumps Crashpad writes,
+// and each is typically several MB. In an app that lives in the tray for weeks,
+// a renderer that dies repeatedly quietly fills the disk. The log file itself is
+// already bounded (MAX_BYTES + one generation); this gives the dumps the same
+// treatment — keep the newest few, which is all anyone attaches to a report.
+const KEEP_DUMPS = 5;
+
+function pruneCrashDumps() {
+    let dumpDir;
+    try {
+        dumpDir = path.join(app.getPath('crashDumps'), 'reports');
+    } catch (e) { return; }
+
+    let entries;
+    try {
+        entries = fs.readdirSync(dumpDir)
+            .filter((n) => n.endsWith('.dmp'))
+            .map((n) => {
+                const p = path.join(dumpDir, n);
+                try { return { p, at: fs.statSync(p).mtimeMs }; } catch (e2) { return null; }
+            })
+            .filter(Boolean)
+            .sort((a, b) => b.at - a.at);
+    } catch (e) { return; }   // no reports directory yet — nothing to do
+
+    if (entries.length <= KEEP_DUMPS) return;
+    let removed = 0;
+    entries.slice(KEEP_DUMPS).forEach((e) => {
+        try { fs.unlinkSync(e.p); removed++; } catch (e2) { /* locked — next launch */ }
+    });
+    if (removed) console.log(`[log] pruned ${removed} old crash dump(s)`);
 }
 
 function openFolder() {

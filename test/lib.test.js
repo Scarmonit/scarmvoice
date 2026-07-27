@@ -159,6 +159,41 @@ describe('formatting', () => {
         expect(dayStr(noon - 86400000, noon)).toBe('Yesterday');
         expect(dayStr(noon - 10 * 86400000, noon)).not.toBe('Today');
     });
+
+    it('labels days by the calendar, not by subtracting 24 hours', () => {
+        // The old implementation derived "yesterday" as `now - 86400000`, which
+        // lands on the wrong date whenever a DST change makes the local day 23
+        // or 25 hours long — so around a clock change the day separators were
+        // off by one. Anchored to local noon so the assertions hold in any zone.
+        const localNoon = (y, m, d) => new Date(y, m, d, 12, 0, 0).getTime();
+        const dayBefore = (y, m, d) => {
+            const x = new Date(y, m, d, 12, 0, 0);
+            x.setDate(x.getDate() - 1);
+            return x.getTime();
+        };
+        // US spring-forward (2025-03-09) and fall-back (2025-11-02).
+        for (const [y, m, d] of [[2025, 2, 10], [2025, 10, 3]]) {
+            const now = localNoon(y, m, d);
+            expect(dayStr(now, now)).toBe('Today');
+            expect(dayStr(dayBefore(y, m, d), now)).toBe('Yesterday');
+            // Two calendar days back is never "Yesterday", DST or not.
+            const twoBack = new Date(y, m, d, 12, 0, 0);
+            twoBack.setDate(twoBack.getDate() - 2);
+            expect(dayStr(twoBack.getTime(), now)).not.toBe('Yesterday');
+        }
+    });
+
+    it('memoises without letting Today/Yesterday go stale overnight', () => {
+        // The production path (no explicit clock) caches by local day; the cache
+        // has to be dropped when the day rolls over or a window left open past
+        // midnight keeps calling the previous day "Today".
+        const now = Date.now();
+        expect(dayStr(now)).toBe('Today');
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        expect(dayStr(now, tomorrow.getTime())).toBe('Yesterday');
+        expect(dayStr(now)).toBe('Today');
+    });
 });
 
 describe('attachmentKind', () => {

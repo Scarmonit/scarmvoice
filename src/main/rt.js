@@ -87,8 +87,12 @@ function startHeartbeat(sock) {
             return;   // 'close' will fire and drive reconnect
         }
         isAlive = false;
-        try { ws.ping(); } catch (e) {}     // protocol-level ping
-        send({ t: 'ping' });                 // app-level ping (DO replies + keeps warm)
+        // The protocol-level ping alone is enough: markAlive() fires on 'pong'
+        // and on any inbound frame, so liveness is already covered. The extra
+        // app-level {t:'ping'} that used to go with it added a JSON frame AND a
+        // Durable Object invocation every 20s per client — ~4,300 a day each —
+        // to learn nothing the pong doesn't already tell us.
+        try { ws.ping(); } catch (e) {}
     }, PING_MS);
 }
 

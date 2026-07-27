@@ -232,3 +232,50 @@ test('registers the lounge:// attachment protocol', async () => {
 test('starts up without an uncaught renderer exception', async () => {
     expect(pageErrors).toEqual([]);
 });
+
+test('does not load the big vendor bundles until something needs them', async () => {
+    // hljs (350 KB), qrcode (57 KB) and the RealtimeKit SDK (647 KB) used to be
+    // blocking <script> tags in index.html — over a megabyte parsed and executed
+    // before the window was allowed to appear, for three features that cannot be
+    // needed at first paint. Re-adding a tag would silently undo that, and
+    // nothing else in the suite would notice.
+    const state = await page.evaluate(() => ({
+        hasLoader: typeof window.ScarmLazy === 'object' && window.ScarmLazy !== null,
+        loaderApi: window.ScarmLazy ? Object.keys(window.ScarmLazy).sort() : [],
+        hljs: typeof window.hljs,
+        qrcode: typeof window.qrcode,
+        sdk: typeof window.RealtimeKitClient,
+        // Anything still hard-wired into the document would show up here.
+        vendorTags: Array.from(document.querySelectorAll('script[src]'))
+            .map((s) => s.getAttribute('src'))
+            .filter((s) => /hljs|qrcode|realtimekit/.test(s))
+    }));
+
+    expect(state.hasLoader).toBe(true);
+    expect(state.loaderApi).toEqual(['has', 'hljs', 'qrcode', 'realtimekit']);
+    expect(state.vendorTags).toEqual([]);
+    expect(state.hljs).toBe('undefined');
+    expect(state.qrcode).toBe('undefined');
+    expect(state.sdk).toBe('undefined');
+});
+
+test('fetches a lazy bundle on demand and caches it', async () => {
+    const result = await page.evaluate(async () => {
+        const first = await window.ScarmLazy.hljs();
+        const second = await window.ScarmLazy.hljs();
+        return {
+            loaded: !!first,
+            // The global the bundle defines, now resident.
+            global: typeof window.hljs,
+            // Same object both times — one fetch, one evaluation.
+            cached: first === second,
+            // Exactly one tag was injected, not one per call.
+            tags: document.querySelectorAll('script[src*="hljs"]').length
+        };
+    });
+
+    expect(result.loaded).toBe(true);
+    expect(result.global).toBe('object');
+    expect(result.cached).toBe(true);
+    expect(result.tags).toBe(1);
+});

@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
@@ -66,7 +66,8 @@
       "src/**/*",
       "!src/renderer/vendor/.gitkeep",
       "build/icon.ico",
-      "package.json"
+      "package.json",
+      "!**/node_modules/uiohook-napi/prebuilds/!(win32-x64)/**"
     ],
     "win": {
       "icon": "build/icon.ico",

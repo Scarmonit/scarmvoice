@@ -849,8 +849,16 @@
      the SDK's peer connections.
      icons.js hydrates every data-icon placeholder above, so it has to run
      before app.js starts querying and cloning those nodes. -->
-<script src="vendor/hljs.js"></script>
-<script src="vendor/qrcode.js"></script>
+<!-- hljs (350 KB), qrcode (57 KB) and the RealtimeKit SDK (647 KB) used to load
+     here as blocking scripts — just over 1 MB parsed and executed before the
+     window was allowed to appear, for three features that cannot possibly be
+     needed at first paint: syntax highlighting waits for a message containing a
+     code fence, the QR generator is only reachable from 2FA enrolment, and the
+     SDK is only touched when you join voice. They are fetched on first use by
+     lazy.js instead. The SDK still evaluates AFTER voice.js/noise.js, so its
+     RTCPeerConnection/getDisplayMedia/getUserMedia patches are installed in
+     time — by minutes rather than by milliseconds. -->
+<script src="lazy.js"></script>
 <!-- lib.js holds the renderer's pure helpers (the unit-tested half); audio.js
      owns the single AudioContext and the shared meter tick. Both have to be
      defined before app.js, voice.js and sounds.js reach for them. -->
@@ -859,7 +867,6 @@
 <script src="noise.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
-<script src="vendor/realtimekit.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 </body>
