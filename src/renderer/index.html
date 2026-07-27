@@ -391,9 +391,19 @@
     <div id="login-acct" hidden>
       <input type="text" id="login-acct-user" placeholder="Username" maxlength="24" autocomplete="username">
       <input type="password" id="login-acct-pw" placeholder="Account password (8+ characters)" autocomplete="off">
+      <input type="email" id="login-acct-email" placeholder="Email (needed to create an account)" maxlength="254" autocomplete="email">
       <div class="login-acct-btns">
         <button type="button" id="login-acct-signin" class="primary">Sign in</button>
         <button type="button" id="login-acct-create">Create account</button>
+      </div>
+    </div>
+    <!-- Step 3, new accounts only: redeem the emailed 6-digit code. -->
+    <div id="login-verify" hidden>
+      <input type="text" id="login-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+             placeholder="6-digit code" autocomplete="one-time-code">
+      <div class="login-acct-btns">
+        <button type="button" id="login-verify-btn" class="primary">Verify</button>
+        <button type="button" id="login-resend">Resend code</button>
       </div>
     </div>
     <div class="login-error" id="login-error"></div>
@@ -444,12 +454,19 @@
           <div class="acct-board" id="acct-forms">
             <input type="text" id="acct-username" maxlength="24" placeholder="Username" autocomplete="off">
             <input type="password" id="acct-password" maxlength="72" placeholder="Password (8+ characters)">
+            <input type="email" id="acct-email" maxlength="254" placeholder="Email (needed to create an account)">
             <div class="acct-btns">
               <button type="button" class="keycap" id="btn-acct-login">Sign in</button>
               <button type="button" class="keycap" id="btn-acct-register">Create account</button>
             </div>
-            <span class="hint">An account unlocks direct messages, and admins can moderate any message.
-              The first account created on the board becomes the admin.</span>
+            <span class="hint">New accounts verify their email with a 6-digit code — one account per address.</span>
+          </div>
+          <div class="acct-board" id="acct-verify" hidden>
+            <input type="text" id="acct-code" inputmode="numeric" maxlength="6" placeholder="6-digit code">
+            <div class="acct-btns">
+              <button type="button" class="keycap" id="btn-acct-verify">Verify</button>
+              <button type="button" class="keycap" id="btn-acct-resend">Resend</button>
+            </div>
           </div>
           <span class="hint acct-err" id="acct-error" hidden></span>
         </div>

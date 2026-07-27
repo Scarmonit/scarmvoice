@@ -254,14 +254,24 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
 // The token lives here (main process) exactly like the sb_auth cookie: the
 // renderer only ever sees parsed results, never the credential.
 
-async function accountRegister(username, password, clientId) {
-    const res = await board('account/register', { method: 'POST', body: { username, password, clientId } });
+async function accountRegister(username, password, email, clientId) {
+    // Success now means "verification code sent" — the token arrives from
+    // accountVerify once the emailed code is redeemed.
+    return board('account/register', { method: 'POST', body: { username, password, email, clientId } });
+}
+
+async function accountVerify(username, code, clientId) {
+    const res = await board('account/verify', { method: 'POST', body: { username, code, clientId } });
     if (res && res.success && res.token) {
         accountToken = res.token;
         store.writeAccountToken(accountToken);
         return { success: true, user: res.user };
     }
-    return res && res.success ? { success: false, error: 'No token returned' } : res;
+    return res;
+}
+
+async function accountResend(username) {
+    return board('account/resend', { method: 'POST', body: { username } });
 }
 
 async function accountLogin(username, password, clientId) {
@@ -400,5 +410,6 @@ async function upload(name, type, bytes, onProgress) {
 module.exports = {
     init, login, logout, status, board, request, fileStream, upload,
     accountRegister, accountLogin, accountLogout, accountMe, hasAccount,
+    accountVerify, accountResend,
     hasSession, cookieHeader, baseUrl, MAX_UPLOAD
 };

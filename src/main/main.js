@@ -396,11 +396,17 @@ function registerIpc() {
     });
 
     // ---- board accounts ----
-    ipcMain.handle('account:register', async (_e, { username, password }) => {
-        return net.accountRegister(String(username || ''), String(password || ''), store.get().clientId);
+    ipcMain.handle('account:register', async (_e, { username, password, email }) => {
+        return net.accountRegister(String(username || ''), String(password || ''), String(email || ''), store.get().clientId);
     });
     ipcMain.handle('account:login', async (_e, { username, password }) => {
         return net.accountLogin(String(username || ''), String(password || ''), store.get().clientId);
+    });
+    ipcMain.handle('account:verify', async (_e, { username, code }) => {
+        return net.accountVerify(String(username || ''), String(code || ''), store.get().clientId);
+    });
+    ipcMain.handle('account:resend', async (_e, { username }) => {
+        return net.accountResend(String(username || ''));
     });
     ipcMain.handle('account:logout', async () => net.accountLogout());
     ipcMain.handle('account:me', async () => net.accountMe());

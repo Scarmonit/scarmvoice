@@ -23,8 +23,10 @@ contextBridge.exposeInMainWorld('lounge', {
     // Board accounts. register/login run main-side so the account token (like
     // the session cookie) never reaches the renderer.
     account: {
-        register: (username, password) => ipcRenderer.invoke('account:register', { username, password }),
+        register: (username, password, email) => ipcRenderer.invoke('account:register', { username, password, email }),
         login: (username, password) => ipcRenderer.invoke('account:login', { username, password }),
+        verify: (username, code) => ipcRenderer.invoke('account:verify', { username, code }),
+        resend: (username) => ipcRenderer.invoke('account:resend', { username }),
         logout: () => ipcRenderer.invoke('account:logout'),
         me: () => ipcRenderer.invoke('account:me')
     },

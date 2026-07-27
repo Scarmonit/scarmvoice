@@ -556,19 +556,70 @@
         $('login-btn').hidden = false;
         $('login-advanced').hidden = false;
         $('login-acct').hidden = true;
+        $('login-verify').hidden = true;
         $('login-sub').textContent = 'Enter the board password to connect';
     }
+
+    // The username whose emailed code we're waiting on.
+    let pendingVerifyUser = null;
+
+    function showVerifyStep(username) {
+        pendingVerifyUser = username;
+        $('login-acct').hidden = true;
+        $('login-verify').hidden = false;
+        $('login-sub').textContent = `We emailed a 6-digit code for "${username}" — enter it to finish`;
+        $('login-error').textContent = '';
+        $('login-code').value = '';
+        $('login-code').focus();
+    }
+
+    async function verifySubmit() {
+        const err = $('login-error');
+        const code = $('login-code').value.trim();
+        if (!/^\d{6}$/.test(code)) { err.textContent = 'Enter the 6-digit code from the email.'; return; }
+        err.textContent = '';
+        const res = await L.account.verify(pendingVerifyUser, code);
+        if (!res || !res.success) {
+            err.textContent = (res && res.error) || 'Could not verify.';
+            return;
+        }
+        account = res.user;
+        pendingVerifyUser = null;
+        if (!settings.displayName) await saveSettings({ displayName: account.username });
+        if (account.role === 'admin') toast('Account verified — you are the board admin');
+        else toast('Account verified — welcome, ' + account.username);
+        hideAccountStep();
+        $('login').hidden = true;
+        enterApp();
+    }
+
+    $('login-verify-btn').addEventListener('click', verifySubmit);
+    $('login-code').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); verifySubmit(); }
+    });
+    $('login-resend').addEventListener('click', async () => {
+        const res = await L.account.resend(pendingVerifyUser);
+        $('login-error').textContent = (res && res.success) ? '' : ((res && res.error) || 'Could not resend.');
+        if (res && res.success) toast('Code sent — check your email');
+    });
 
     async function loginAcctSubmit(mode) {
         const err = $('login-error');
         const username = $('login-acct-user').value.trim();
         const password = $('login-acct-pw').value;
+        const email = $('login-acct-email').value.trim();
         if (!username || !password) { err.textContent = 'Enter a username and a password.'; return; }
+        if (mode === 'register' && !email) { err.textContent = 'Enter your email — new accounts must verify one.'; return; }
         err.textContent = '';
 
         const res = mode === 'register'
-            ? await L.account.register(username, password)
+            ? await L.account.register(username, password, email)
             : await L.account.login(username, password);
+        // A new registration (or an unverified sign-in) moves to the code step.
+        if (res && (res.pendingVerification || res.needsVerify)) {
+            showVerifyStep(res.username || username);
+            return;
+        }
         if (!res || !res.success) {
             err.textContent = (res && res.error) || 'Could not sign in.';
             $('login-form').classList.add('shake');
@@ -4127,11 +4178,20 @@
     async function acctSubmit(mode) {
         const username = $('acct-username').value.trim();
         const password = $('acct-password').value;
+        const email = $('acct-email').value.trim();
         if (!username || !password) return acctError('Enter a username and password.');
+        if (mode === 'register' && !email) return acctError('Enter your email — new accounts must verify one.');
         acctError('');
         const res = mode === 'register'
-            ? await L.account.register(username, password)
+            ? await L.account.register(username, password, email)
             : await L.account.login(username, password);
+        if (res && (res.pendingVerification || res.needsVerify)) {
+            pendingVerifyUser = res.username || username;
+            $('acct-verify').hidden = false;
+            acctError('Check your email for the 6-digit code, then enter it above.');
+            $('acct-code').focus();
+            return;
+        }
         if (!res || !res.success) return acctError((res && res.error) || 'Could not sign in.');
         account = res.user;
         $('acct-password').value = '';
@@ -4231,6 +4291,26 @@
 
     $('btn-acct-login').addEventListener('click', () => acctSubmit('login'));
     $('btn-acct-register').addEventListener('click', () => acctSubmit('register'));
+    $('btn-acct-verify').addEventListener('click', async () => {
+        const code = $('acct-code').value.trim();
+        if (!/^\d{6}$/.test(code)) return acctError('Enter the 6-digit code from the email.');
+        const res = await L.account.verify(pendingVerifyUser, code);
+        if (!res || !res.success) return acctError((res && res.error) || 'Could not verify.');
+        account = res.user;
+        pendingVerifyUser = null;
+        $('acct-verify').hidden = true;
+        $('acct-code').value = '';
+        $('acct-password').value = '';
+        acctError('');
+        renderAccountCard();
+        renderDmSection();
+        loadDmThreads();
+        toast('Account verified — signed in as ' + account.username);
+    });
+    $('btn-acct-resend').addEventListener('click', async () => {
+        const res = await L.account.resend(pendingVerifyUser);
+        acctError((res && res.success) ? 'Code sent — check your email.' : ((res && res.error) || 'Could not resend.'));
+    });
     $('acct-password').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); acctSubmit('login'); }
     });
