@@ -4038,7 +4038,11 @@
         const was = rtConnected;
         rtConnected = connected;
         setRtStatus(state || (connected ? 'connected' : 'reconnecting'));
-        startPolling();   // re-arm at the appropriate cadence
+        // Re-arm at the appropriate cadence — but only inside a session.
+        // rt.start(), rt.stop() and a credential-less connect() all emit a
+        // status event, so this fires while the login card is up too, and
+        // startPolling() refuses those (see the note there).
+        startPolling();
         // A fresh reconnection is exactly when to pull whatever we missed while
         // the socket was down, rather than waiting for the next live event.
         if (connected && !was) resyncNow();
@@ -4193,9 +4197,29 @@
     }
 
     function startPolling() {
-        if (pollTimer) clearInterval(pollTimer);
+        stopPolling();
+        // NOTHING may poll outside a live session. The poll's first act is a
+        // board call, and a board call without a credential comes back
+        // needsAuth/needsAccount, which authGone() turns into "Your session
+        // expired. Sign in again." on the login card.
+        //
+        // That is not hypothetical, it was a loop with no exit: rt.stop() ends
+        // by emitting a status event, so teardownSession()'s stopPolling() was
+        // undone a few lines later by its own L.rt.stop() — the onStatus
+        // handler below re-armed the timer that had just been cleared. Four
+        // seconds later the tick 401'd, called relogin(), and the whole thing
+        // went round again, re-printing the expiry banner and yanking focus
+        // back to the password field every POLL_ACTIVE_MS forever. The same
+        // edge armed it at boot: auth:status starts the socket before the
+        // account step, so its status event began polling from behind the
+        // login card on every launch.
+        if (!entered) return;
         const every = rtConnected ? POLL_IDLE_MS : POLL_ACTIVE_MS;
+        const gen = sessionGen;
         pollTimer = setInterval(async () => {
+            // A session that ended between ticks takes its timer with it, in
+            // case anything ever arms one behind teardown again.
+            if (!entered || gen !== sessionGen) { stopPolling(); return; }
             if (document.hidden && rtConnected) return;
             const stick = nearBottom();
             await loadMessages(stick);
