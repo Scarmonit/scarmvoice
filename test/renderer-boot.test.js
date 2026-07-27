@@ -145,6 +145,11 @@ beforeAll(() => {
 
     run('lib.js');
     run('audio.js');
+    // Same order as index.html. soundboard.js patches getUserMedia and is a
+    // no-op when navigator.mediaDevices is absent, which it is in jsdom — but
+    // it still has to parse and still has to define window.ScarmBoard, which is
+    // exactly the class of breakage this tier exists to catch.
+    run('soundboard.js');
     run('voice.js');
     run('sounds.js');
     run('icons.js');
@@ -158,6 +163,23 @@ describe('renderer boot', () => {
         expect(typeof window.ScarmIcons).toBe('object');
         expect(typeof window.createVoice).toBe('function');
         expect(typeof window.loungeSounds).toBe('object');
+        expect(typeof window.ScarmBoard).toBe('object');
+    });
+
+    it('exposes a soundboard with clips and a clamped volume', () => {
+        const sounds = window.ScarmBoard.sounds();
+        expect(Array.isArray(sounds)).toBe(true);
+        expect(sounds.length).toBeGreaterThan(0);
+        expect(sounds.every((s) => s.id && s.label)).toBe(true);
+
+        // Volume is published to the whole call, so an out-of-range value
+        // reaching the gain node is everyone's problem, not just the sender's.
+        window.ScarmBoard.setVolume(5);
+        expect(window.ScarmBoard.getVolume()).toBe(1);
+        window.ScarmBoard.setVolume(-2);
+        expect(window.ScarmBoard.getVolume()).toBe(0);
+        window.ScarmBoard.setVolume('nonsense');
+        expect(window.ScarmBoard.getVolume()).toBe(0.8);
     });
 
     it('evaluates app.js without throwing', () => {

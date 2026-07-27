@@ -256,7 +256,13 @@ module.exports = {
     start, stop, send, reconnectNow, wake,
     isConnected: () => connected,
     // Convenience wrappers matching the website's boardRT surface.
-    notifyPosted: (channel) => send({ t: 'posted', channel: channel || 'general' }),
+    notifyPosted: (channel, mentions) => send({
+        t: 'posted', channel: channel || 'general',
+        // Names this message @-mentions, so a reader with the channel on
+        // mentions-only can tell an @you from ordinary chatter without the
+        // body ever going over the wire. Omitted when there are none.
+        mentions: Array.isArray(mentions) && mentions.length ? mentions.slice(0, 16) : undefined
+    }),
     sendTyping: (channel, stop_) => send({
         t: 'typing', channel: channel || 'general',
         name: store.get().displayName || 'Anonymous', stop: !!stop_

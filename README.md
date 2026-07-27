@@ -65,12 +65,23 @@ Start-menu entry and desktop shortcut.
   audible
 - Microphone and speaker selection, echo cancellation / noise suppression /
   AGC toggles
+- **Soundboard** — a tray of clips that everyone in the call hears, not just
+  you. A clip is mixed into the outgoing microphone track, which is the only
+  way it reaches the SFU; see [The soundboard is in the mic, not the
+  speakers](#the-soundboard-is-in-the-mic-not-the-speakers). Clips are served
+  from the website's existing `/assets/audio/` library, and the level is
+  remembered
 
 **Presence**
 - **Members list** — everyone here, not just the call: online / away, their
   status line, and who's in voice, in one list. People in voice keep the
   per-person volume controls
 - **Custom status** — set a status beside your name, shared with the website
+- **Moderation** (admins) — from the person popover: **Remove from voice**, which
+  ends their call on every device they have open, and **Ban**, which signs them
+  out everywhere and keeps them out. Deleting anyone's message and the full
+  member list (roles, ban/unban, password reset, 2FA reset, delete) are in
+  Settings → Members. See [A kick is two halves](#a-kick-is-two-halves)
 
 **Chat**
 - Channels with unread badges; create, rename, delete
@@ -85,6 +96,10 @@ Start-menu entry and desktop shortcut.
   both; see [Formatting is DOM, not markup](#formatting-is-dom-not-markup)
 - **Emoji picker** — react with any emoji from the message menu or the hover
   bar, and insert emoji into the composer. Same set as the website
+- **Custom emoji** — upload an image under a name and use it as `:name:` in any
+  message or as a reaction. Stored on the server, so the website and the phone
+  app see the same set; add and remove them in Settings → Custom emoji. Anyone
+  can add one, you can remove your own, and an admin can remove any
 - **Replies and threads** — reply to quote a message above your own, or open a
   thread panel to read and post replies in place. Reply counts on the message
   open the thread
@@ -165,6 +180,11 @@ Start-menu entry and desktop shortcut.
   the X never drops you from a call
 - Desktop notifications when the window isn't focused, preferring an @mention of
   your display name over the newest message — matching the website's rule
+- **Per-channel notifications** — each channel is **All messages**, **Only
+  @mentions**, or **Nothing**, from the channel's right-click menu or Settings →
+  Notifications. A quieted channel is dimmed and stays out of the taskbar badge.
+  Mentions-only works for channels you aren't looking at too; see
+  [Mentions-only in a channel you can't see](#mentions-only-in-a-channel-you-cant-see)
 - Remembers window size and position
 
 ## Development
@@ -628,6 +648,74 @@ Losing window focus mid-hold releases PTT, but **only when the native hook is
 unavailable**. With the hook loaded, holding the key while working in another
 window is the entire point; without it the key-up lands in whatever window took
 over and the mic would stay open indefinitely.
+
+### The soundboard is in the mic, not the speakers
+
+Playing a clip through the speakers reaches exactly one person: whoever pressed
+the button. For it to reach the call it has to be **mixed into the outgoing
+microphone track**, because that track is the only audio this client publishes.
+
+So `soundboard.js` patches `getUserMedia` and returns the mic summed with a
+soundboard bus. That is the same trick `noise.js` uses, and the load order in
+`index.html` is load-bearing: `noise.js` is first, so its patch is the inner one
+and the stream we mix into is already denoised. That ordering is the point —
+RNNoise is a *speech* model, and running a vine boom through it mangles it.
+
+The cost is one extra `MediaStreamSource`→`MediaStreamDestination` hop on every
+mic acquisition, whether or not a clip is ever played. That is accepted on
+purpose. The alternative is republishing the mic track the first time somebody
+hits a sound, which drops audio mid-sentence for the whole room; and the mic
+already round-trips through RNNoise's worklet, so this is the same class of cost
+the pipeline pays anyway.
+
+Every failure path returns the **original** stream untouched. A soundboard is a
+toy and a microphone is not, so a broken mixer must cost you the toy.
+
+The clip is also connected to `ctx.destination`, so you hear what you played —
+without that second tap the presser is the only person in the room who can't.
+
+### A kick is two halves
+
+`POST /api/board/voice/kick` clears the target's `voice_presence` rows **and**
+pushes a `voicekick` event to every device that account has open. Doing only the
+first is worse than doing nothing: the voice engine heartbeats into
+`/voice/presence` on a timer, so the row it just lost comes back within about two
+seconds and the person "removed" flickers out of the roster and returns, having
+been able to talk the whole time. Doing only the second leaves their tile behind
+after they've gone.
+
+It is addressed by **account**, never by client id — a cid is published with
+every post, so accepting one would let any member evict any other.
+
+A kick is deliberately not a ban. It ends the current call and they may rejoin
+immediately; `account/manage` with `action: 'ban'` is the one that sticks, and
+the confirm dialog says so rather than implying permanence it doesn't have.
+
+### Mentions-only in a channel you can't see
+
+Three levels per channel — all, mentions, nothing — are easy for the channel on
+screen, where `loadMessages` has the message bodies and can just look. The hard
+case is a channel you are *not* looking at: the realtime nudge is
+`{ t: 'posted', channel, cid }` and carries no body by design, so mentions-only
+had no way to tell an @you from ordinary chatter and the honest answer was
+silence. That made the setting useless everywhere except the one channel that
+needed it least.
+
+The fix is to send the matched **names** rather than the body: the poster runs
+the same `mentionsMe` matcher over the roster and puts the hits in the `posted`
+event, so the wire carries `["ava"]` instead of the message. The receiver checks
+whether it's in that list.
+
+It is sender-supplied and therefore untrusted, which is fine for what it does —
+the worst a liar achieves is a notification for a message that doesn't mention
+you, which they could already get by typing your name. The Durable Object clips
+and caps the list so it can't be used to fan out bulk data, and a client too old
+to send it reads as "no mentions", which is exactly the behaviour that existed
+before the hint did.
+
+`mutedChannels` (the old binary list) is still written alongside the new
+`channelAlerts` map, so a channel silenced here stays silenced on the website and
+in older builds.
 
 ### Screen sharing
 

@@ -843,7 +843,12 @@ function registerIpc() {
     handle('rt:stop', () => { rt.stop(); return { connected: false }; });
     handle('rt:wake', () => { rt.wake(); return { connected: rt.isConnected() }; });
     handle('rt:send', (_e, obj) => rt.send(obj));
-    handle('rt:posted', (_e, channel) => rt.notifyPosted(channel));
+    handle('rt:posted', (_e, arg) => {
+        // Older renderers passed the channel as a bare string; the object form
+        // carries the @mention hint alongside it.
+        if (arg && typeof arg === 'object') return rt.notifyPosted(arg.channel, arg.mentions);
+        return rt.notifyPosted(arg);
+    });
     handle('rt:typing', (_e, { channel, stop }) => rt.sendTyping(channel, stop));
     handle('rt:voice', (_e, { inVoice, muted }) => rt.sendVoice(inVoice, muted));
 

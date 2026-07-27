@@ -61,10 +61,15 @@ const DEFAULTS = {
 
     // Notifications
     dnd: false,                  // do not disturb: silences every alert + sound
-    mutedChannels: [],           // channel names that never notify
+    mutedChannels: [],           // legacy binary mute; still written for older builds + the website
+    channelAlerts: {},           // channel -> 'all' | 'mentions' | 'none' ('all' is implied by absence)
 
     // Privacy — local only; the board has no server-side block
     blocked: {},                 // clientId -> display name
+
+    // Soundboard clip level, 0–1. Clips are mixed into the outgoing mic, so
+    // this is how loud everyone ELSE hears them, not just you.
+    soundboardVolume: 0.8,
 
     // RMS x100 above which you read as "speaking"; see voice.js
     speakThreshold: 6

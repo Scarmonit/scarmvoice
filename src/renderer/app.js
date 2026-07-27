@@ -157,13 +157,68 @@
         return best;
     }
 
+    // ---- custom emoji -------------------------------------------------------
+    // name -> { name, url }, filled from /api/board/emoji at boot and after any
+    // add/remove. Shared with the website and the phone app, which read the same
+    // table, so `:shrug:` means the same picture everywhere.
+    const customEmoji = new Map();
+
+    // Emits `text` into `container`, turning `:name:` into the image it names.
+    //
+    // An unknown `:name:` stays literal text on purpose: it is far more often
+    // ordinary punctuation ("10:30:00", a URL already carved out above, a
+    // ratio) than a typo'd emoji, and silently eating it would be worse than
+    // showing it. Code spans never reach here — renderInline splits on
+    // backticks before any of this runs — so `:name:` in code stays literal too.
+    function appendTextWithEmoji(container, text) {
+        if (!text) return;
+        if (!customEmoji.size || text.indexOf(':') === -1) {
+            container.appendChild(document.createTextNode(text));
+            return;
+        }
+        const re = /:([a-z0-9_]{2,32}):/g;
+        let last = 0, m;
+        while ((m = re.exec(text)) !== null) {
+            const em = customEmoji.get(m[1]);
+            if (!em) continue;                 // not ours — leave it as text
+            if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
+            container.appendChild(emojiImg(em));
+            last = m.index + m[0].length;
+        }
+        if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+    }
+
+    function emojiImg(em, big) {
+        const img = document.createElement('img');
+        img.className = 'cemoji' + (big ? ' cemoji-lg' : '');
+        img.src = em.url;
+        img.alt = ':' + em.name + ':';
+        img.title = ':' + em.name + ':';
+        // These are chat-sized and already capped server-side; loading them
+        // lazily keeps a long scrollback from firing hundreds of requests.
+        img.loading = 'lazy';
+        img.draggable = false;
+        return img;
+    }
+
+    // A reaction as HTML, for the one place messages are built as a string
+    // rather than as nodes (renderMessages' innerHTML pass). Unknown tokens and
+    // plain glyphs fall through as escaped text, so a reaction left behind by a
+    // deleted emoji shows as `:name:` instead of a broken image.
+    function reactionGlyph(token) {
+        const m = /^:([a-z0-9_]{2,32}):$/.exec(String(token || ''));
+        const em = m && customEmoji.get(m[1]);
+        if (!em) return esc(token);
+        return `<img class="cemoji" src="${esc(em.url)}" alt="${esc(token)}" loading="lazy" draggable="false">`;
+    }
+
     // Mention chips within a segment that is already known to be URL-free.
     function appendMentionSegment(container, text, ctx) {
         let i = 0;
         while (i < text.length) {
             const at = text.indexOf('@', i);
-            if (at === -1) { container.appendChild(document.createTextNode(text.slice(i))); break; }
-            if (at > i) container.appendChild(document.createTextNode(text.slice(i, at)));
+            if (at === -1) { appendTextWithEmoji(container, text.slice(i)); break; }
+            if (at > i) appendTextWithEmoji(container, text.slice(i, at));
             const rest = text.slice(at + 1);
             let matched = matchRosterName(rest, ctx.roster);
             if (!matched) { const g = /^[A-Za-z0-9_]+/.exec(rest); if (g) matched = g[0]; }
@@ -179,6 +234,25 @@
                 i = at + 1;
             }
         }
+    }
+
+    // Fetches the shared set. Failure is not fatal anywhere: an empty map means
+    // `:name:` renders as the text it already was.
+    async function loadCustomEmoji() {
+        try {
+            const res = await L.board('emoji');
+            if (!res || !res.success || !Array.isArray(res.emoji)) return;
+            customEmoji.clear();
+            res.emoji.forEach((e) => {
+                if (!e || !e.name || !e.key) return;
+                // The server's `url` is site-relative (/api/board/file?key=…),
+                // which is correct for the website and meaningless here — this
+                // renderer's origin is the app bundle, not scarmonit.com, and
+                // the endpoint is cookie-gated besides. lounge:// is the proxy
+                // that fetches those bytes with the credential held in main.
+                customEmoji.set(e.name, Object.assign({}, e, { url: L.fileUrl(e.key) }));
+            });
+        } catch (e) { /* offline — the picker just shows the built-in set */ }
     }
 
     function appendTextWithMentions(container, text, ctx) {
@@ -944,6 +1018,9 @@
             // to merge your devices. A socket opened first would carry no identity.
             await refreshAccount();
             await L.rt.start();
+            // Before the first render: a message drawn without the set shows
+            // `:shrug:` as text and nothing redraws it afterwards.
+            await loadCustomEmoji();
             await loadChannels();
             await loadMessages(true);
             startPolling();
@@ -990,9 +1067,9 @@
             const b = document.createElement('button');
             const unread = c.name === channel ? 0 : (c.unread || 0);
             total += unread;
-            if (!channelMuted(c.name)) alerting += unread;
+            if (!channelQuieted(c.name)) alerting += unread;
             b.className = 'chan' + (c.name === channel ? ' active' : '') +
-                (unread ? ' unread' : '') + (channelMuted(c.name) ? ' muted' : '');
+                (unread ? ' unread' : '') + (channelQuieted(c.name) ? ' muted' : '');
             b.dataset.channel = c.name;
             b.innerHTML = `<span class="hash">#</span><span class="chan-name">${esc(c.name)}</span>` +
                 (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
@@ -1261,7 +1338,10 @@
                 const maxFreshId = fresh[fresh.length - 1].id;
                 if (maxFreshId > lastSoundId) {
                     lastSoundId = maxFreshId;
-                    if (alertsAllowed(channel)) window.loungeSounds.playMessage();
+                    // A mentions-only channel still chimes for an actual
+                    // mention — the whole point of the middle setting.
+                    const hasMention = fresh.some((p) => mentionsMe(p.body));
+                    if (alertsAllowed(channel, hasMention)) window.loungeSounds.playMessage();
                 }
                 notifyForPosts(fresh);
             }
@@ -1770,7 +1850,7 @@
             parts.push('<div class="msg-reactions">' + p.reactions.map((r) => {
                 const mine = (r.who || []).includes(settings.clientId);
                 return `<button class="reaction${mine ? ' mine' : ''}" data-emoji="${esc(r.emoji)}">` +
-                    `<span class="rx-emoji">${esc(r.emoji)}</span><span class="rx-n">${r.count}</span></button>`;
+                    `<span class="rx-emoji">${reactionGlyph(r.emoji)}</span><span class="rx-n">${r.count}</span></button>`;
             }).join('') + '</div>');
         }
 
@@ -1974,7 +2054,7 @@
                 }
             }
             if (ok) {
-                L.rt.notifyPosted(forChannel);
+                announcePosted(forChannel, body);
                 await loadMessages(true);
             }
             if (!bodyPosted && body) {
@@ -2005,7 +2085,7 @@
             updateSendEnabled();  // the button was disabled at submit — re-enable it
             return;
         }
-        L.rt.notifyPosted(forChannel);
+        announcePosted(forChannel, body);
         await loadMessages(true);
     });
 
@@ -2102,7 +2182,7 @@
                 if (res && res.success) {
                     outbox = outbox.filter((o) => o !== entry);
                     saveOutbox();
-                    L.rt.notifyPosted(entry.channel);
+                    announcePosted(entry.channel, entry.body);
                     continue;
                 }
 
@@ -2973,6 +3053,11 @@
                 $('btn-cam').classList.toggle('on', !!st.cam);
                 $('btn-cam-label').textContent = st.cam ? 'Turn off camera' : 'Turn on camera';
 
+                $('btn-soundboard').hidden = !st.joined;
+                // Leaving the call with the tray open would strand it above an
+                // empty voice panel with nothing it can do.
+                if (!st.joined) closeSoundboard();
+
                 // Both tray buttons are icon-only, so the label doubles as the
                 // tooltip rather than being read off the button face.
                 $('btn-cam').title = $('btn-cam-label').textContent;
@@ -3643,6 +3728,9 @@
     // but it needs a switch and a slider, which a menu of items cannot express.
 
     let popFor = null;
+    // The ACCOUNT behind the open popover, when one is known — the admin
+    // actions act on this, never on popFor (an install id).
+    let popUid = null;
     // Matches --tb and titleBarOverlay's height: the popover is position:fixed,
     // so without this clamp it can slide under the native caption buttons.
     const POP_TITLEBAR = 38;
@@ -3704,6 +3792,21 @@
         $('pop-block-label').textContent = blocked ? 'Unblock' : 'Block';
         $('pop-block').classList.toggle('danger', !blocked);
 
+        // ---- admin actions ----
+        // Both act on an ACCOUNT id, never an install id: an install is
+        // published with every post, so acting on one would let anybody name
+        // anybody. No account resolved (a pre-accounts row, or a person the
+        // presence list hasn't caught up with) means nothing to act on, so the
+        // buttons stay hidden rather than offering a request that must 400.
+        popUid = p.uid || (m && m.user_id) || null;
+        const isMe = p.id === settings.clientId || !!(account && popUid && popUid === account.id);
+        const canModerate = isAdmin() && !!popUid && !isMe;
+        // In voice right now? Only then is there a call to remove them from.
+        const inVoice = canModerate && voicePresence.some((v) => v.user_id === popUid);
+        $('pop-kick').hidden = !inVoice;
+        $('pop-ban').hidden = !canModerate;
+        $('pop-admin-sep').hidden = !canModerate;
+
         pop.hidden = false;              // shown before measuring, so it has a size
         placePopover(pop, anchor);
     }
@@ -3742,6 +3845,48 @@
         if (!cid) return;
         if (isBlocked(cid)) unblockPerson(cid); else blockPerson(cid, name);
     });
+
+    $('pop-kick').addEventListener('click', () => {
+        const uid = popUid, name = $('pop-name').textContent;
+        closePopover();
+        if (uid) kickFromVoice(uid, name);
+    });
+
+    $('pop-ban').addEventListener('click', () => {
+        const uid = popUid, name = $('pop-name').textContent;
+        closePopover();
+        if (uid) banMember(uid, name);
+    });
+
+    // Ending someone's call is loud but undoable — they may rejoin at once — so
+    // it asks once and says so, rather than pretending to be permanent.
+    async function kickFromVoice(userId, name) {
+        const who = name || 'them';
+        const ok = await askConfirm('Remove ' + who + ' from voice?',
+            'They are dropped from the call immediately and told an admin removed ' +
+            'them. Nothing stops them rejoining — ban them if it needs to stick.',
+            'Remove', true);
+        if (!ok) return;
+        const res = await L.board('voice/kick', { method: 'POST', body: { userId } });
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not remove them', true);
+        toast('Removed ' + who + ' from voice');
+    }
+
+    async function banMember(userId, name) {
+        const who = name || 'them';
+        const ok = await askConfirm('Ban ' + who + '?',
+            'They are signed out everywhere and cannot sign in again. Their messages ' +
+            'stay. You can lift this from Settings → Members.',
+            'Ban', true);
+        if (!ok) return;
+        const res = await L.board('account/manage', { method: 'POST', body: { userId, action: 'ban' } });
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not ban them', true);
+        toast('Banned ' + who);
+        // Keep the Settings → Members list honest if it happens to be open.
+        if (isAdmin()) renderMemberAdmin();
+    }
 
     document.addEventListener('mousedown', (e) => {
         if ($('popover').hidden) return;
@@ -4123,6 +4268,19 @@
                     if (m.cid !== settings.clientId) notifyOtherChannel(m);
                 }
                 break;
+            // An admin ended our call. Unicast by account, so every device this
+            // person has open leaves — otherwise the phone stays in the call
+            // after the desktop is removed and the server keeps seeing them.
+            //
+            // Leaving is the half that actually matters: the server has already
+            // cleared the voice_presence row, and the heartbeat would put it
+            // straight back if the engine stayed connected.
+            case 'voicekick':
+                if (voice && voice.isJoined()) {
+                    leaveVoice();
+                    toast(m.by ? m.by + ' removed you from the call' : 'An admin removed you from the call', true);
+                }
+                break;
             case 'typing':
                 if (m.channel && m.channel !== channel) break;
                 if (m.cid === settings.clientId) break;
@@ -4187,11 +4345,38 @@
     // @mention of my display name, matching the website's matcher.
     const mentionsMe = (body) => window.ScarmLib.mentionsMe(body, settings.displayName);
 
+    // Which known people this text mentions.
+    //
+    // The realtime 'posted' nudge deliberately carries no message body, so a
+    // reader whose channel is set to mentions-only had no way to tell an @you
+    // from ordinary chatter in a channel they aren't looking at — the honest
+    // answer was to stay silent, which made the setting useless anywhere but the
+    // channel already on screen. Sending the matched NAMES instead of the body
+    // fixes that without putting message text on the wire.
+    //
+    // It runs the same matcher the receiver would, once per known name, so the
+    // two can never disagree about what counts as a mention. The roster is a
+    // handful of people on this board; if it ever isn't, this is the line to
+    // revisit.
+    function mentionNamesIn(body) {
+        if (!body) return [];
+        try {
+            return getRoster()
+                .filter((nm) => window.ScarmLib.mentionsMe(body, nm))
+                .slice(0, 16);
+        } catch (e) { return []; }
+    }
+
+    // Tell everyone else a message landed. `body` is optional — edits and
+    // deletes are refresh nudges, not new messages, and carry none.
+    function announcePosted(channelName, body) {
+        L.rt.notifyPosted(channelName, mentionNamesIn(body));
+    }
+
     // Rich notification for fresh posts in the CURRENT channel — the mention is
     // preferred over the newest message, same as the website.
     async function notifyForPosts(all) {
         if (settings.notifications === false) return;
-        if (!alertsAllowed(channel)) return;     // do not disturb, or a muted channel
         if (windowFocused) return;   // you're already looking at it
 
         // Blocked authors are filtered out of the rendered list, so notifying
@@ -4200,6 +4385,10 @@
         if (!fresh.length) return;
 
         const mention = fresh.find((p) => mentionsMe(p.body));
+        // Ordered after the mention scan, not before it: on 'mentions' the
+        // answer depends on what these posts actually contain.
+        if (!alertsAllowed(channel, !!mention)) return;
+
         const p = mention || fresh[fresh.length - 1];
         const title = mention
             ? `${p.name || 'Someone'} mentioned you`
@@ -4214,11 +4403,24 @@
     // this stays deliberately terse; the unread badge carries the rest.
     async function notifyOtherChannel(m) {
         if (settings.notifications === false) return;
-        if (!alertsAllowed(m.channel)) return;
+        const mentioned = namesIncludeMe(m && m.mentions);
+        if (!alertsAllowed(m.channel, mentioned)) return;
         await L.app.notify({
-            title: '#' + (m.channel || 'general'),
-            body: m.name ? `${m.name} sent a message` : 'New message'
+            title: (mentioned ? '@you · #' : '#') + (m.channel || 'general'),
+            body: m.name
+                ? `${m.name} ${mentioned ? 'mentioned you' : 'sent a message'}`
+                : (mentioned ? 'You were mentioned' : 'New message')
         });
+    }
+
+    // Does this list of mentioned names include me? Sent by the poster (see
+    // mentionNamesIn); absent from an older client, which reads as "no", i.e.
+    // exactly the behaviour before the hint existed.
+    function namesIncludeMe(names) {
+        if (!Array.isArray(names) || !names.length) return false;
+        const me = String(settings.displayName || '').toLowerCase();
+        if (!me || me === 'anonymous') return false;
+        return names.some((n) => String(n || '').toLowerCase() === me);
     }
 
     function startPolling() {
@@ -4578,10 +4780,34 @@
 
     // ---------- do not disturb, muted channels, blocked people -------------
 
+    // Per-channel alert level. 'all' is the default and needs no stored entry,
+    // so a fresh profile and a profile that has never touched this setting are
+    // the same thing.
+    //
+    // `mutedChannels` is the old binary form and is still read here: a profile
+    // written by an older build has its muted list honoured as 'none' rather
+    // than silently reverting to 'all' on upgrade. Writes go to channelAlerts
+    // AND keep mutedChannels in step, because downgrading to an older build (or
+    // the website, which still reads the binary list) must not resurrect a
+    // channel someone deliberately silenced.
+    const ALERT_MODES = ['all', 'mentions', 'none'];
+
+    function channelAlertMode(name) {
+        if (!name) return 'all';
+        const m = (settings.channelAlerts || {})[name];
+        if (ALERT_MODES.includes(m)) return m;
+        return channelMuted(name) ? 'none' : 'all';
+    }
+
     // One place decides whether anything is allowed to make a noise or a toast.
-    function alertsAllowed(channelName) {
+    // `isMention` is what separates 'mentions' from 'none'; callers that cannot
+    // know (a terse cross-channel nudge carries no body) pass false, which is
+    // the quiet answer — see notifyOtherChannel.
+    function alertsAllowed(channelName, isMention) {
         if (settings.dnd) return false;
-        if (channelName && channelMuted(channelName)) return false;
+        const mode = channelAlertMode(channelName);
+        if (mode === 'none') return false;
+        if (mode === 'mentions') return !!isMention;
         return true;
     }
 
@@ -4589,10 +4815,22 @@
         return Array.isArray(settings.mutedChannels) && settings.mutedChannels.includes(name);
     }
 
-    async function setChannelMuted(name, muted) {
+    // True when the channel is anything other than fully alerting — this is what
+    // dims the row and keeps it out of the taskbar badge, so 'mentions' looks
+    // calm without looking dead.
+    function channelQuieted(name) { return channelAlertMode(name) !== 'all'; }
+
+    async function setChannelAlertMode(name, mode) {
+        if (!ALERT_MODES.includes(mode)) return;
+        const alerts = Object.assign({}, settings.channelAlerts || {});
+        if (mode === 'all') delete alerts[name];
+        else alerts[name] = mode;
+
+        // Keep the legacy list in step for older builds and the website.
         const list = (settings.mutedChannels || []).filter((c) => c !== name);
-        if (muted) list.push(name);
-        await saveSettings({ mutedChannels: list });
+        if (mode === 'none') list.push(name);
+
+        await saveSettings({ channelAlerts: alerts, mutedChannels: list });
         renderChannels();
         renderMutedChannels();
     }
@@ -4643,10 +4881,18 @@
         if (!row) return;
         e.preventDefault();
         const name = row.dataset.channel;
-        const muted = channelMuted(name);
+        const mode = channelAlertMode(name);
+        // Three radio-ish items rather than one toggle: the middle setting is
+        // the whole point, and a toggle cannot express it. `check` marks the
+        // active one so the menu shows the current state instead of an action
+        // whose meaning depends on state you have to remember.
         openCtxMenu([
-            { label: muted ? 'Unmute #' + name : 'Mute #' + name, icon: muted ? 'bell' : 'bell-off',
-                onClick: () => setChannelMuted(name, !muted) },
+            { label: 'All messages', icon: 'bell', check: mode === 'all',
+                onClick: () => setChannelAlertMode(name, 'all') },
+            { label: 'Only @mentions', icon: 'at', check: mode === 'mentions',
+                onClick: () => setChannelAlertMode(name, 'mentions') },
+            { label: 'Nothing', icon: 'bell-off', check: mode === 'none',
+                onClick: () => setChannelAlertMode(name, 'none') },
             // Reshaping a channel is admin-only server-side — deleting one drops
             // every message in it, its reactions and its attachments. Offering
             // the item to a member just produces a 403 toast.
@@ -4714,6 +4960,9 @@
         renderAccountCard();
         renderMutedChannels();
         renderBlocked();
+        // Refetched rather than drawn from cache: someone else may have added
+        // one since this client booted, and Settings is where you'd look.
+        loadCustomEmoji().then(renderEmojiAdmin);
 
         await populateDevices();
         refreshPttHint();
@@ -5079,15 +5328,188 @@
             return;
         }
         channels.forEach((c) => {
-            const lab = document.createElement('label');
-            lab.className = 'chan-mute';
-            lab.innerHTML = '<input type="checkbox">' + I('bell-off', 'ico') +
+            const mode = channelAlertMode(c.name);
+            const row = document.createElement('div');
+            row.className = 'chan-mute';
+            // The icon tracks the level, so the list is readable at a glance
+            // without parsing three dropdowns.
+            row.innerHTML = I(mode === 'all' ? 'bell' : mode === 'mentions' ? 'at' : 'bell-off', 'ico') +
                 `<span>#${esc(c.name)}</span>`;
-            const cb = lab.querySelector('input');
-            cb.checked = channelMuted(c.name);
-            cb.addEventListener('change', () => setChannelMuted(c.name, cb.checked));
-            box.appendChild(lab);
+            const sel = document.createElement('select');
+            [['all', 'All messages'], ['mentions', 'Only @mentions'], ['none', 'Nothing']]
+                .forEach(([v, label]) => {
+                    const o = document.createElement('option');
+                    o.value = v; o.textContent = label;
+                    if (v === mode) o.selected = true;
+                    sel.appendChild(o);
+                });
+            sel.addEventListener('change', () => setChannelAlertMode(c.name, sel.value));
+            row.appendChild(sel);
+            box.appendChild(row);
         });
+    }
+
+    // ---------- soundboard --------------------------------------------------
+    // The engine lives in soundboard.js (it has to patch getUserMedia before the
+    // SDK loads); this is only the tray.
+
+    let soundboardBuilt = false;
+
+    function buildSoundboard() {
+        if (soundboardBuilt) return;
+        soundboardBuilt = true;
+        const grid = $('sb-grid');
+        window.ScarmBoard.sounds().forEach((s) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'sb-btn';
+            b.textContent = s.label;
+            b.title = s.label;
+            b.addEventListener('click', async () => {
+                // Flashed immediately rather than on success: the fetch+decode
+                // of a first play is long enough that an unacknowledged click
+                // reads as a dead button and gets pressed again.
+                b.classList.add('playing');
+                setTimeout(() => b.classList.remove('playing'), 350);
+                const ok = await window.ScarmBoard.play(s.id);
+                if (!ok) toast('Could not play ' + s.label, true);
+            });
+            grid.appendChild(b);
+        });
+    }
+
+    function closeSoundboard() { $('soundboard').hidden = true; }
+
+    $('btn-soundboard').addEventListener('click', () => {
+        const el = $('soundboard');
+        if (!el.hidden) { closeSoundboard(); return; }
+        buildSoundboard();
+        window.ScarmBoard.setBaseUrl(settings.baseUrl);
+        const vol = settings.soundboardVolume === undefined ? 0.8 : Number(settings.soundboardVolume);
+        window.ScarmBoard.setVolume(vol);
+        $('sb-volume').value = String(Math.round(vol * 100));
+        el.hidden = false;
+    });
+
+    $('sb-volume').addEventListener('input', async (e) => {
+        const v = Number(e.target.value) / 100;
+        window.ScarmBoard.setVolume(v);
+        await saveSettings({ soundboardVolume: v });
+    });
+
+    $('sb-stop').addEventListener('click', () => window.ScarmBoard.stopAll());
+
+    document.addEventListener('mousedown', (e) => {
+        if ($('soundboard').hidden) return;
+        if (!e.target.closest('#soundboard') && !e.target.closest('#btn-soundboard')) closeSoundboard();
+    });
+
+    // ---- custom emoji admin ----
+    // Anyone may add; you may remove your own, an admin may remove any. The
+    // server enforces both — this only decides what to draw.
+
+    const EMOJI_MAX_BYTES = 256 * 1024;
+
+    function renderEmojiAdmin() {
+        const box = $('set-emoji');
+        if (!box) return;
+        box.innerHTML = '';
+        if (!customEmoji.size) {
+            box.innerHTML = '<span class="hint">No custom emoji yet — add one below.</span>';
+            return;
+        }
+        customEmoji.forEach((em) => {
+            const row = document.createElement('div');
+            row.className = 'emoji-row';
+            row.appendChild(emojiImg(em, true));
+
+            const nm = document.createElement('span');
+            nm.className = 'emoji-row-name';
+            nm.textContent = ':' + em.name + ':';
+            row.appendChild(nm);
+
+            const by = document.createElement('span');
+            by.className = 'emoji-row-by';
+            by.textContent = em.created_by ? 'by ' + em.created_by : '';
+            row.appendChild(by);
+
+            const mine = !!(account && em.user_id && em.user_id === account.id);
+            if (mine || isAdmin()) {
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'icon-btn danger';
+                del.title = 'Remove :' + em.name + ':';
+                del.innerHTML = I('trash', 'ico');
+                del.addEventListener('click', () => removeCustomEmoji(em.name));
+                row.appendChild(del);
+            }
+            box.appendChild(row);
+        });
+    }
+
+    async function removeCustomEmoji(name) {
+        const ok = await askConfirm('Remove :' + name + '?',
+            'Messages that already use it will show :' + name + ': as text.', 'Remove', true);
+        if (!ok) return;
+        // `query`, not a hand-built string: boardpath.js rejects a path
+        // carrying anything but lowercase words and slashes.
+        const res = await L.board('emoji', { method: 'DELETE', query: { name } });
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not remove it', true);
+        customEmoji.delete(name);
+        renderEmojiAdmin();
+        renderMessages();
+        toast('Removed :' + name + ':');
+    }
+
+    $('set-emoji-add').addEventListener('click', () => {
+        const name = ($('set-emoji-name').value || '').trim().toLowerCase();
+        // Checked before the file dialog rather than after: picking an image and
+        // only then being told the name is wrong wastes the whole interaction.
+        if (!/^[a-z0-9_]{2,32}$/.test(name)) {
+            return toast('Give it a name first — 2–32 letters, numbers or _', true);
+        }
+        if (customEmoji.has(name)) return toast(':' + name + ': already exists', true);
+        $('emoji-input').click();
+    });
+
+    $('emoji-input').addEventListener('change', async (e) => {
+        const file = (e.target.files || [])[0];
+        e.target.value = '';                  // allow re-picking the same file
+        if (!file) return;
+        const name = ($('set-emoji-name').value || '').trim().toLowerCase();
+        if (!/^[a-z0-9_]{2,32}$/.test(name)) return;
+
+        if (file.size > EMOJI_MAX_BYTES) {
+            return toast('That image is too big — 256 KB max', true);
+        }
+        let b64;
+        try {
+            b64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+        } catch (err) {
+            return toast('Could not read that image', true);
+        }
+
+        const res = await L.board('emoji', { method: 'POST', body: { name, dataBase64: b64 } });
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not add it', true);
+
+        customEmoji.set(res.emoji.name, res.emoji);
+        $('set-emoji-name').value = '';
+        renderEmojiAdmin();
+        renderMessages();
+        toast('Added :' + res.emoji.name + ':');
+    });
+
+    // Chunked so a 256 KB image can't blow the argument limit of String
+    // .fromCharCode the way `apply(null, wholeArray)` does.
+    function bytesToBase64(bytes) {
+        let bin = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        return btoa(bin);
     }
 
     // ---- blocked people ----
@@ -5636,10 +6058,15 @@
             }
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'ctx-item' + (it.danger ? ' danger' : '');
+            b.className = 'ctx-item' + (it.danger ? ' danger' : '') + (it.check ? ' checked' : '');
             // it.icon is a name in the icon set, never a glyph.
+            // A `check` item is one option of a set (per-channel alerts), so it
+            // carries a tick on the trailing edge showing the current choice
+            // rather than an action label that flips meaning.
             b.innerHTML = (it.icon ? I(it.icon, 'ico ctx-ico') : '<span class="ctx-ico"></span>') +
-                `<span class="ctx-label">${esc(it.label)}</span>`;
+                `<span class="ctx-label">${esc(it.label)}</span>` +
+                (it.check ? I('check', 'ico ctx-check') : '');
+            if (it.check) b.setAttribute('aria-checked', 'true');
             // Greyed out rather than hidden: a Paste that would do nothing still
             // tells you the menu has a Paste.
             if (it.disabled) b.disabled = true;
@@ -5769,13 +6196,26 @@
         try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(next)); } catch (e) {}
     }
 
+    // A stored recent is a token: a unicode glyph, or `:name:`. Resolves back to
+    // what button() wants. A `:name:` whose emoji has since been deleted returns
+    // null so it drops out of the row rather than rendering a broken image.
+    function resolveEmojiToken(tok) {
+        const m = /^:([a-z0-9_]{2,32}):$/.exec(String(tok || ''));
+        if (!m) return tok || null;
+        return customEmoji.get(m[1]) || null;
+    }
+
     // Matches on the keywords above and, so an unlisted emoji is still findable,
-    // on its category name.
+    // on its category name. Custom emoji match on their name.
     function searchEmojis(query) {
         const q = String(query || '').trim().toLowerCase();
         if (!q) return null;
         const terms = q.split(/\s+/);
         const out = [];
+        customEmoji.forEach((em) => {
+            const hay = em.name + ' custom';
+            if (terms.every((t) => hay.includes(t))) out.push(em);
+        });
         Object.keys(EMOJIS).forEach((cat) => {
             EMOJIS[cat].forEach((em) => {
                 const hay = (EMOJI_WORDS[em] || '') + ' ' + cat.toLowerCase();
@@ -5809,16 +6249,27 @@
         grid.className = 'emoji-grid';
         pop.appendChild(grid);
 
+        // `em` is either a unicode glyph or a custom-emoji record. Both flow
+        // through the same callback as a STRING — a glyph, or `:name:` — so
+        // every consumer (composer insert, reaction) stays unchanged and the
+        // stored reaction is portable to the website and phone.
         function button(em) {
             const b = document.createElement('button');
             b.type = 'button';
-            b.textContent = em;
-            b.title = EMOJI_WORDS[em] ? EMOJI_WORDS[em].split(' ')[0] : '';
+            const custom = typeof em !== 'string';
+            const token = custom ? ':' + em.name + ':' : em;
+            if (custom) {
+                b.appendChild(emojiImg(em));
+                b.title = token;
+            } else {
+                b.textContent = em;
+                b.title = EMOJI_WORDS[em] ? EMOJI_WORDS[em].split(' ')[0] : '';
+            }
             b.addEventListener('click', () => {
                 const cb = emojiCb;
-                noteEmojiUsed(em);
+                noteEmojiUsed(token);
                 closeEmojiPop();
-                if (cb) cb(em);
+                if (cb) cb(token);
             });
             return b;
         }
@@ -5849,10 +6300,17 @@
                 return;
             }
 
-            const recent = recentEmojis();
+            const recent = recentEmojis().map(resolveEmojiToken).filter(Boolean);
             if (recent.length) {
                 grid.appendChild(heading('Frequently used'));
                 recent.forEach((em) => grid.appendChild(button(em)));
+            }
+            // Custom first: it is the short, board-specific list people are
+            // actually reaching for, and burying it under 110 unicode glyphs
+            // would mean scrolling past everything to find it every time.
+            if (customEmoji.size) {
+                grid.appendChild(heading('Custom'));
+                customEmoji.forEach((em) => grid.appendChild(button(em)));
             }
             Object.keys(EMOJIS).forEach((cat) => {
                 grid.appendChild(heading(cat));
@@ -6865,7 +7323,7 @@
             $('thread-input').value = body;     // hand the text back
             return toast((res && res.error) || 'Could not reply', true);
         }
-        L.rt.notifyPosted(channel);
+        announcePosted(channel, body);
         await loadThread(true);
         $('thread-list').scrollTop = $('thread-list').scrollHeight;
         await loadMessages(nearBottom());       // refresh the reply count

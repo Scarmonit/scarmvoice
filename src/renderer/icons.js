@@ -97,6 +97,13 @@
         at: '<circle cx="12" cy="12" r="3.6"/>' +
             '<path d="M15.6 8.4v4.8a2.8 2.8 0 0 0 5.6 0V12a9.2 9.2 0 1 0-3.6 7.3"/>',
         ban: '<circle cx="12" cy="12" r="8.6"/><path d="M5.9 5.9l12.2 12.2"/>',
+        // A struck-through person, for banning an ACCOUNT — distinct from `ban`
+        // (the plain circle-slash), which already means "block this person for
+        // me". The two actions sit next to each other in the popover, so they
+        // must not share a glyph.
+        'user-ban': '<circle cx="10" cy="8" r="3.8"/>' +
+            '<path d="M3.4 20.2a6.8 6.8 0 0 1 11.1-5.3"/>' +
+            '<circle cx="17.4" cy="17.4" r="4.2"/><path d="M14.4 14.4l6 6"/>',
         bell: '<path d="M18 8.8a6 6 0 0 0-12 0c0 6-2.4 7.6-2.4 7.6h16.8S18 14.8 18 8.8"/>' +
             '<path d="M13.7 20.2a2 2 0 0 1-3.4 0"/>',
         'bell-off': '<path d="M18 8.8a6 6 0 0 0-12 0c0 6-2.4 7.6-2.4 7.6h16.8S18 14.8 18 8.8"/>' +

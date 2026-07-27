@@ -65,7 +65,7 @@ contextBridge.exposeInMainWorld('lounge', {
         stop: () => ipcRenderer.invoke('rt:stop'),
         wake: () => ipcRenderer.invoke('rt:wake'),
         send: (obj) => ipcRenderer.invoke('rt:send', obj),
-        notifyPosted: (channel) => ipcRenderer.invoke('rt:posted', channel),
+        notifyPosted: (channel, mentions) => ipcRenderer.invoke('rt:posted', { channel, mentions }),
         sendTyping: (channel, stop) => ipcRenderer.invoke('rt:typing', { channel, stop }),
         sendVoice: (inVoice, muted) => ipcRenderer.invoke('rt:voice', { inVoice, muted }),
         onMessage: (cb) => sub('rt:message', cb),

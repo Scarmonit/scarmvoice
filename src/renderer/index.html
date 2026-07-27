@@ -157,7 +157,30 @@
           <span class="ico" data-icon="screen"></span>
           <span id="btn-share-label">Share screen</span>
         </button>
+        <!-- Only while connected: a clip is mixed into the outgoing mic, so
+             outside a call there is nowhere for it to go. -->
+        <button id="btn-soundboard" class="btn-share" hidden>
+          <span class="ico" data-icon="music"></span>
+          <span>Soundboard</span>
+        </button>
       </div>
+    </div>
+
+    <!-- Soundboard tray, anchored above the voice panel. -->
+    <div id="soundboard" class="soundboard" hidden>
+      <header class="sb-head">
+        <span class="sb-title">Soundboard</span>
+        <label class="sb-vol">
+          <span class="ico" data-icon="volume"></span>
+          <input type="range" id="sb-volume" min="0" max="100" step="1"
+                 aria-label="Soundboard volume">
+        </label>
+        <button type="button" class="icon-btn" id="sb-stop" title="Stop all sounds">
+          <span class="ico" data-icon="x"></span>
+        </button>
+      </header>
+      <div class="sb-grid" id="sb-grid"></div>
+      <p class="sb-hint">Everyone in the call hears these.</p>
     </div>
 
     <div id="me-bar">
@@ -333,6 +356,9 @@
         </div>
       </div>
       <input type="file" id="file-input" multiple hidden>
+    <!-- Separate from the attachment picker so the accept filter can be narrow:
+         these must be a format /api/board/file will serve inline. -->
+    <input type="file" id="emoji-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
     </form>
 
     <!-- Thread panel: a drawer over the right of the message list. -->
@@ -627,8 +653,23 @@
           <span>Join &amp; leave sounds <em class="hint">— only audible while you're in the call</em></span>
         </label>
         <div class="row stack">
-          <span>Muted channels</span>
+          <span>Channel notifications</span>
           <div class="chan-mutes" id="set-muted-channels"></div>
+        </div>
+      </section>
+
+      <section class="set-group">
+        <h3>Custom emoji</h3>
+        <p class="hint set-hint">
+          Shared with everyone on the board — the website and the phone app see
+          the same set. Type <code>:name:</code> in a message, or pick one from
+          the emoji button.
+        </p>
+        <div class="emoji-admin" id="set-emoji"></div>
+        <div class="row emoji-add-row">
+          <input type="text" id="set-emoji-name" class="emoji-name-input"
+                 placeholder="name" maxlength="32" aria-label="New emoji name">
+          <button type="button" class="btn" id="set-emoji-add">Add image…</button>
         </div>
       </section>
 
@@ -810,6 +851,17 @@
   <button type="button" class="pop-action danger" id="pop-block">
     <span class="ico" data-icon="ban"></span><span id="pop-block-label">Block</span>
   </button>
+
+  <!-- Admin-only. Hidden outright rather than disabled for a member: these are
+       not things a member can be persuaded to unlock, and offering them would
+       only ever produce a 403 toast. -->
+  <div class="pop-sep" id="pop-admin-sep" hidden></div>
+  <button type="button" class="pop-action danger" id="pop-kick" hidden>
+    <span class="ico" data-icon="phone-off"></span><span>Remove from voice</span>
+  </button>
+  <button type="button" class="pop-action danger" id="pop-ban" hidden>
+    <span class="ico" data-icon="user-ban"></span><span>Ban from the board</span>
+  </button>
 </div>
 
 <!-- Screen-share source picker. Electron on Windows has no system picker, so
@@ -900,6 +952,11 @@
 <script src="lib.js"></script>
 <script src="audio.js"></script>
 <script src="noise.js"></script>
+<!-- AFTER noise.js and BEFORE voice.js: each patches getUserMedia, and the
+     order decides what wraps what. noise.js must be innermost (the soundboard
+     clip has to bypass RNNoise, which is a speech model), and both must be in
+     place before the SDK ever calls getUserMedia. -->
+<script src="soundboard.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
 <script src="icons.js"></script>
