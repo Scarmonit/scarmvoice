@@ -2044,14 +2044,22 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   padding: 6px 9px; border-radius: 6px; font-size: 13.5px;
 }
 .emoji-row:hover { background: var(--hover); }
-.emoji-row-name { color: var(--text); font-family: var(--font-mono, monospace); }
+/* --mono, not --font-mono: this block arrived with the website's variable
+   names, none of which exist in this stylesheet. --font-mono is undefined, so
+   `:name:` fell back to generic monospace instead of the app's code font. */
+.emoji-row-name { color: var(--text); font-family: var(--mono); }
 .emoji-row-by { color: var(--dim); font-size: 12px; margin-left: auto; }
 .emoji-row .icon-btn { flex: 0 0 auto; }
 .emoji-add-row { gap: 8px; }
+/* --input-bg and --border are the website's names and are undefined here.
+   --border had no fallback, and an unresolved var() is invalid at computed-value
+   time — so the whole `border` declaration was dropped and the field lost its
+   outline. --hover/--line-2 are the real ones, and both are re-themed by the
+   light-mode block, which hardcoded colours would not have been. */
 .emoji-name-input {
   flex: 1 1 auto; min-width: 0; font: inherit; font-size: 13px;
-  color: var(--text); background: var(--input-bg, var(--hover));
-  border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px;
+  color: var(--text); background: var(--hover);
+  border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 9px;
 }
 .emoji-name-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .set-hint { margin: 0 0 8px; }
@@ -2131,10 +2139,13 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 /* The channel name takes the slack so every dropdown lines up on the right
    edge regardless of how long the names are. */
 .chan-mute > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Same undefined-variable slip as .emoji-name-input — both blocks landed in the
+   same release carrying the website's names. --border resolves to nothing here
+   and has no fallback, so these dropdowns were drawn with no border at all. */
 .chan-mute select {
   flex: 0 0 auto; font: inherit; font-size: 12.5px;
-  color: var(--text); background: var(--input-bg, var(--hover));
-  border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; cursor: pointer;
+  color: var(--text); background: var(--hover);
+  border: 1px solid var(--line-2); border-radius: 5px; padding: 3px 6px; cursor: pointer;
 }
 .chan-mute select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 

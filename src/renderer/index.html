@@ -669,7 +669,12 @@
         <div class="row emoji-add-row">
           <input type="text" id="set-emoji-name" class="emoji-name-input"
                  placeholder="name" maxlength="32" aria-label="New emoji name">
-          <button type="button" class="btn" id="set-emoji-add">Add image…</button>
+          <!-- .keycap, not .btn: there is no .btn rule in styles.css and this
+               was the only element in the app using one, so the button fell all
+               the way back to Chromium's default chrome — a white rectangle in
+               the middle of a dark sheet. Every other button in Settings is a
+               .keycap. -->
+          <button type="button" class="keycap" id="set-emoji-add">Add image…</button>
         </div>
       </section>
 
