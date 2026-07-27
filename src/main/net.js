@@ -293,7 +293,8 @@ async function accountLogout() {
 
 async function accountMe() {
     if (!accountToken) return { success: true, user: null };
-    const res = await board('account/me');
+    // clientId registers this install against the account (device merging).
+    const res = await board('account/me', { query: { clientId: store.get().clientId } });
     // An expired/revoked token is not an account — drop it so the UI offers
     // sign-in again instead of silently sending a dead header forever.
     if (res && res.success && !res.user) {

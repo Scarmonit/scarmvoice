@@ -3117,11 +3117,17 @@
         const live = inCall ? voice.roster() : [];
         const byId = new Map();
 
-        live.forEach((p) => byId.set(p.id, p));
+        // Install id -> account id. The SFU only knows installs, so this is how
+        // a person signed in on two devices stays one row.
+        const uidByCid = new Map();
+        voicePresence.forEach((p) => { if (p.user_id) uidByCid.set(p.client_id, p.user_id); });
+
+        live.forEach((p) => byId.set(p.id, Object.assign({}, p, { uid: uidByCid.get(p.id) || null })));
         voicePresence.forEach((p) => {
             if (!byId.has(p.client_id)) {
                 byId.set(p.client_id, {
                     id: p.client_id,
+                    uid: p.user_id || null,
                     name: p.name || 'Anonymous',
                     isMe: p.client_id === settings.clientId,
                     muted: !!p.muted,
@@ -3179,25 +3185,33 @@
     // volume controls.
     function renderMembers(voiceList, inCall) {
         const ul = $('members-list');
-        const inVoice = new Map(voiceList.map((p) => [p.id, p]));
+        // Key by ACCOUNT where we know it: the same person signed in on the
+        // website and the app is one member, not two.
+        const keyOf = (uid, cid) => (uid ? 'u' + uid : 'c' + cid);
+        const inVoice = new Map(voiceList.map((p) => [keyOf(p.uid, p.id), p]));
         const seen = new Set();
         const rows = [];
 
         // Everyone the presence table knows about, plus anyone in the call who
         // hasn't heartbeated yet (a website user who only joined voice).
         members.forEach((m) => {
-            seen.add(m.client_id);
+            const key = keyOf(m.user_id, m.client_id);
+            if (seen.has(key)) return;
+            seen.add(key);
             rows.push({
                 id: m.client_id,
+                uid: m.user_id || null,
                 name: m.name || 'Anonymous',
                 status: (m.status === 'away' || m.status === 'dnd') ? m.status : 'online',
                 custom: m.custom || '',
-                voice: inVoice.get(m.client_id) || null
+                voice: inVoice.get(key) || null
             });
         });
         voiceList.forEach((p) => {
-            if (seen.has(p.id)) return;
-            rows.push({ id: p.id, name: p.name, status: 'online', custom: '', voice: p });
+            const key = keyOf(p.uid, p.id);
+            if (seen.has(key)) return;
+            seen.add(key);
+            rows.push({ id: p.id, uid: p.uid || null, name: p.name, status: 'online', custom: '', voice: p });
         });
 
         // Within a group, whoever is in the call comes first, then alphabetical.
@@ -3219,7 +3233,9 @@
 
         const memberRow = (r) => {
             const p = r.voice;
-            const isMe = r.id === settings.clientId;
+            // "You" by account as well as by install — the merged row may carry
+            // your other device's id.
+            const isMe = r.id === settings.clientId || !!(account && r.uid && r.uid === account.id);
             const li = document.createElement('li');
             li.className = 'vp' + (isMe ? ' me' : '') +
                 (r.status === 'away' ? ' away' : '') +
@@ -3744,6 +3760,15 @@
                 break;
             case 'dm':
                 onDmEvent(m);
+                break;
+            case 'voiceTakeover':
+                // The same account joined voice somewhere else — one voice
+                // session per person, so this device steps aside.
+                if (voice && voice.isJoined()) {
+                    heartbeatPresence(true);
+                    voice.leave();
+                    toast('You joined voice from another device — disconnected here');
+                }
                 break;
             case 'welcome':
                 if (m.voice) {
