@@ -363,10 +363,27 @@ async function board(pathname, { method = 'GET', body, query } = {}) {
 
     if (res.status === 401) {
         let msg = 'unauthorized';
+        let body = null;
         try {
-            const d = await res.json();
-            if (d && d.error) msg = d.error;
+            body = await res.json();
+            if (body && body.error) msg = body.error;
         } catch (e) { /* no readable body — keep the generic message */ }
+
+        // THE SERVER SAYS WHICH CREDENTIAL IS MISSING; believe it.
+        //
+        // _middleware.js answers every /api/board/* call that has no account
+        // with `{ needsAccount: true }` and a 401 — on `list`, `presence`,
+        // `channels`, anything. Only the /account/ prefix was treated as an
+        // account problem, so those 401s fell through to clearCredentials()
+        // below and threw away a THIRTY-DAY board session that was perfectly
+        // healthy. The renderer reads needsAuth as "session expired", so the
+        // visible symptom was the board password screen announcing an
+        // expiry that had not happened — most cruelly in the middle of
+        // creating an account, where the poll timers of a previous session
+        // were still running and one tick was enough to wipe the flow.
+        if (body && body.needsAccount) {
+            return { success: false, error: msg, needsAccount: true };
+        }
 
         // A 401 from the account namespace is about the ACCOUNT credential, not
         // the board gate. Clearing both (and returning needsAuth, which the
@@ -572,8 +589,16 @@ async function upload(name, type, bytes, onProgress) {
     }
 
     if (res.status === 401) {
+        // Same rule as board(): /api/board/upload is account-gated, so a 401
+        // here is usually "no account", not "dead board session". Clearing the
+        // cookie for it would sign the user out of a session that is fine.
+        let body = null;
+        try { body = await res.json(); } catch (e) { /* no readable body */ }
+        if (body && body.needsAccount) {
+            return { success: false, error: body.error || 'account required', needsAccount: true };
+        }
         clearCredentials();
-        return { success: false, error: 'unauthorized', needsAuth: true };
+        return { success: false, error: (body && body.error) || 'unauthorized', needsAuth: true };
     }
     try {
         return await res.json();

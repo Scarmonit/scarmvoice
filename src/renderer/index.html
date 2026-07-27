@@ -381,21 +381,37 @@
   <form class="login-card" id="login-form">
     <img class="login-mark" src="logo.png" alt="" aria-hidden="true">
     <h1 class="login-title">ScarmVoice</h1>
-    <p class="login-sub" id="login-sub">Enter the board password to connect</p>
-    <input type="password" id="login-pw" placeholder="Password" autocomplete="current-password" autofocus>
-    <input type="text" id="login-name" placeholder="Display name" maxlength="40" autocomplete="off">
+    <!-- Step 1 is the SHARED door key for the app, which is not anybody's
+         account password. Saying so here is the whole point of the copy: the
+         two password fields in this flow are for different things, and reading
+         "Password" twice is what made people try their account password. -->
+    <p class="login-sub" id="login-sub">Step 1 of 2 — the shared password for ScarmVoice itself</p>
+    <input type="password" id="login-pw" placeholder="Board password" autocomplete="off" autofocus>
+    <p class="login-hint" id="login-pw-hint">This is the password that unlocks the app for everyone.
+      You'll sign into your own account next.</p>
     <button type="submit" id="login-btn">Connect</button>
     <!-- Step 2: everyone needs their own account (the board password alone no
          longer gets you in). Shown after the password is accepted, unless a
-         stored account token already vouches for this install. -->
+         stored account token already vouches for this install.
+         Sign-in and account creation are SEPARATE panels: sharing one set of
+         fields meant the email box sat there on a sign-in with nothing saying
+         whether it was wanted, and the two buttons side by side read as a
+         choice about this form rather than about which flow you're in. -->
     <div id="login-acct" hidden>
       <input type="text" id="login-acct-user" placeholder="Username" maxlength="24" autocomplete="username">
-      <input type="password" id="login-acct-pw" placeholder="Account password (8+ characters)" autocomplete="off">
-      <input type="email" id="login-acct-email" placeholder="Email (needed to create an account)" maxlength="254" autocomplete="email">
-      <div class="login-acct-btns">
-        <button type="button" id="login-acct-signin" class="primary">Sign in</button>
-        <button type="button" id="login-acct-create">Create account</button>
-      </div>
+      <input type="password" id="login-acct-pw" placeholder="Your account password" autocomplete="current-password">
+      <button type="button" id="login-acct-signin" class="primary wide">Sign in</button>
+      <button type="button" class="linkish" id="login-goto-create">Don't have an account? Create one</button>
+    </div>
+    <!-- Step 2b: create an account. -->
+    <div id="login-create" hidden>
+      <input type="text" id="login-new-user" placeholder="Choose a username" maxlength="24" autocomplete="username">
+      <input type="password" id="login-new-pw" placeholder="Choose a password (8+ characters)" autocomplete="new-password">
+      <input type="email" id="login-new-email" placeholder="Email" maxlength="254" autocomplete="email">
+      <p class="login-hint">We'll email you a 6-digit code to confirm it's you.
+        Your username is the name everyone sees.</p>
+      <button type="button" id="login-create-btn" class="primary wide">Create account</button>
+      <button type="button" class="linkish" id="login-goto-signin">Already have an account? Sign in</button>
     </div>
     <!-- 2FA challenge: accounts with an authenticator app enabled. -->
     <div id="login-totp" hidden>
@@ -406,10 +422,15 @@
         <button type="button" id="login-totp-back">Back</button>
       </div>
     </div>
-    <!-- Step 3, new accounts only: redeem the emailed 6-digit code. -->
+    <!-- Step 3, new accounts only: redeem the emailed 6-digit code.
+         This screen WAITS. The user is off in their email client, which can
+         take minutes, and nothing may take the step away from them while they
+         are gone — see holdingLogin() in app.js. -->
     <div id="login-verify" hidden>
       <input type="text" id="login-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
              placeholder="6-digit code" autocomplete="one-time-code">
+      <p class="login-hint">Take your time — this page will wait for you.
+        Check your spam folder if it hasn't arrived.</p>
       <div class="login-acct-btns">
         <button type="button" id="login-verify-btn" class="primary">Verify</button>
         <button type="button" id="login-resend">Resend code</button>
@@ -447,10 +468,15 @@
             <div class="acct-sub" id="set-avatar-status"></div>
           </div>
         </div>
+        <!-- Read-only on purpose. The name everyone sees IS the account
+             username, so nobody can sit in a channel wearing someone else's
+             name. Changing it means changing the account. -->
         <label class="row">
           <span>Display name</span>
-          <input type="text" id="set-name" maxlength="40">
+          <input type="text" id="set-name" maxlength="40" readonly
+                 title="Your display name is your account username">
         </label>
+        <p class="hint set-name-hint">Everyone sees your account username, so names can't be impersonated.</p>
         <label class="row">
           <span>Custom status</span>
           <input type="text" id="set-status" maxlength="80" placeholder="What you're up to">

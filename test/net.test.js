@@ -558,3 +558,67 @@ describe('client id rotation', () => {
         expect(store.get().clientId).toBe(before);
     });
 });
+
+// The two credentials fail INDEPENDENTLY, and conflating them is what produced
+// "Your session expired." on a session that had thirty days left on it.
+//
+// _middleware.js answers any /api/board/* call that has no account with a 401
+// and `needsAccount: true` — on `list`, on `presence`, on anything. Only the
+// /account/ prefix was treated as an account problem, so those 401s reached the
+// clearCredentials() path and destroyed the board cookie. The renderer reads
+// needsAuth as "session expired", so an expired ACCOUNT token silently logged
+// you out of the BOARD, mid-flow, including while creating an account.
+describe('a 401 that means "no account" must not destroy the board session', () => {
+    function accountRequired() {
+        stubFetch(() => jsonRes(
+            { success: false, error: 'account required', needsAccount: true },
+            { status: 401 }
+        ));
+    }
+
+    it('keeps the board cookie and reports needsAccount, not needsAuth', async () => {
+        const { store, net } = await load();
+        accountRequired();
+
+        const r = await net.board('list');
+
+        expect(r.needsAccount).toBe(true);
+        expect(r.needsAuth).toBeUndefined();
+        expect(net.hasSession()).toBe(true);
+        expect(store.readSession()).toBe('SESSION123');
+    });
+
+    it('holds for every board path, not just the account namespace', async () => {
+        for (const path of ['list', 'presence', 'channels', 'typing', 'voice/token']) {
+            const { net } = await load();
+            accountRequired();
+            const r = await net.board(path);
+            expect(r.needsAccount, path).toBe(true);
+            expect(net.hasSession(), path).toBe(true);
+        }
+    });
+
+    it('applies to uploads too', async () => {
+        const { store, net } = await load();
+        accountRequired();
+
+        const r = await net.upload('a.txt', 'text/plain', Buffer.from('hi'));
+
+        expect(r.needsAccount).toBe(true);
+        expect(net.hasSession()).toBe(true);
+        expect(store.readSession()).toBe('SESSION123');
+    });
+
+    // A board-gate 401 has no needsAccount flag, and that one really does mean
+    // the session is gone — the behaviour above must not swallow it.
+    it('still clears the session for a real board-gate 401', async () => {
+        const { store, net } = await load();
+        stubFetch(() => jsonRes({ success: false, error: 'unauthorized' }, { status: 401 }));
+
+        const r = await net.board('list');
+
+        expect(r.needsAuth).toBe(true);
+        expect(net.hasSession()).toBe(false);
+        expect(store.readSession()).toBe('');
+    });
+});

@@ -206,3 +206,75 @@ describe('renderer boot', () => {
         expect(['none', 'running', 'suspended']).toContain(stats.context);
     });
 });
+
+// The login card is a small state machine across four panels, and every bug the
+// user hit was a transition getting it wrong: the wrong panel visible, focus
+// pulled out of the field being typed into, or a step replaced while its owner
+// was in their email client fetching a code.
+describe('login flow', () => {
+    const $ = (id) => document.getElementById(id);
+    const visible = (id) => !$(id).hidden;
+
+    // Panels are mutually exclusive; the click handlers are the real ones,
+    // wired at IIFE scope when app.js evaluated.
+    function panels() {
+        return {
+            pw: visible('login-pw'),
+            signin: visible('login-acct'),
+            create: visible('login-create'),
+            verify: visible('login-verify'),
+            totp: visible('login-totp')
+        };
+    }
+
+    it('starts on the board password step, alone', async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        expect(panels()).toEqual({ pw: true, signin: false, create: false, verify: false, totp: false });
+    });
+
+    it('says the first password is the app\'s, not an account\'s', () => {
+        // The whole complaint: two password fields in one flow, both labelled
+        // "Password", so people tried their account password on the door.
+        expect($('login-pw').placeholder).toBe('Board password');
+        expect($('login-pw-hint').textContent).toMatch(/unlocks the app/i);
+        expect($('login-sub').textContent).toMatch(/shared password/i);
+    });
+
+    it('has no display name field to impersonate anyone with', () => {
+        // The name everyone sees is the account username. There is no free-text
+        // name on the login card, and Settings shows rather than asks.
+        expect($('login-name')).toBeNull();
+        expect($('set-name').readOnly).toBe(true);
+    });
+
+    it('keeps sign-in and account creation on separate panels', () => {
+        $('login-goto-create').click();
+        expect(panels()).toEqual({ pw: false, signin: false, create: true, verify: false, totp: false });
+        // The email field belongs to creation only — on the sign-in panel it
+        // used to sit there with nothing saying whether it was wanted.
+        expect($('login-create').contains($('login-new-email'))).toBe(true);
+        expect($('login-acct').contains($('login-new-email'))).toBe(false);
+
+        $('login-goto-signin').click();
+        expect(panels()).toEqual({ pw: false, signin: true, create: false, verify: false, totp: false });
+    });
+
+    it('does not pull focus out of a field being typed into', () => {
+        // The reported bug: type a username, Tab to the password, and focus
+        // snaps back up to the username mid-word. Any re-entry of a panel that
+        // is already up called focus() unconditionally.
+        $('login-goto-signin').click();
+        $('login-acct-pw').focus();
+        expect(document.activeElement.id).toBe('login-acct-pw');
+
+        $('login-goto-signin').click();      // re-enter the panel it is already on
+        expect(document.activeElement.id).toBe('login-acct-pw');
+
+        $('login-goto-create').click();      // a real transition may take focus
+        expect(document.activeElement.id).toBe('login-new-user');
+    });
+
+    it('tells the user the code screen will wait for them', () => {
+        expect($('login-verify').textContent).toMatch(/wait for you/i);
+    });
+});

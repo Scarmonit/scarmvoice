@@ -451,7 +451,7 @@
         }
     }
 
-    function openDialog({ title, message, value, ok, danger, withInput, label2, value2 }) {
+    function openDialog({ title, message, value, ok, danger, withInput, label2, value2, placeholder }) {
         return new Promise((resolve) => {
             // A second dialog opening over the first used to overwrite
             // dialogDone, so the first promise never settled and whatever was
@@ -471,6 +471,7 @@
             const inp = $('dialog-input');
             inp.hidden = !withInput;
             inp.value = value || '';
+            inp.placeholder = placeholder || '';
             // Optional second field (the name editor uses it for the status).
             const lab2 = $('dialog-label2'), inp2 = $('dialog-input2');
             lab2.textContent = label2 || '';
@@ -501,11 +502,14 @@
         return openDialog({ title, value, ok, withInput: true });
     }
     // Resolves { name, status } or null.
-    function askNameAndStatus(name, status) {
+    // Status only. This dialog used to edit the display name alongside it,
+    // which is exactly the impersonation route that had to go: the name
+    // everyone sees is the account username, and nothing in the UI changes it.
+    function askStatus(status) {
         return openDialog({
-            title: 'You', value: name, ok: 'Save', withInput: true,
-            label2: 'Status (optional)', value2: status
-        }).then((v) => (v === null || v === false ? null : { name: v, status: $('dialog-input2').value }));
+            title: 'Your status', value: status, ok: 'Save', withInput: true,
+            placeholder: "What you're up to"
+        }).then((v) => (v === null || v === false ? null : v));
     }
     // Resolves true/false.
     function askConfirm(title, message, ok, danger) {
@@ -537,7 +541,6 @@
     async function boot() {
         settings = await L.settings.get();
         $('login-base').value = settings.baseUrl || '';
-        $('login-name').value = settings.displayName || '';
         $('set-version').textContent = 'ScarmVoice v' + (await L.app.version());
 
         const st = await L.auth.status();
@@ -564,28 +567,102 @@
         return false;
     }
 
-    function showAccountStep() {
+    // Is the card waiting on a CODE the user has to go and fetch?
+    //
+    // This is the one state nothing may interrupt. The email step asks for six
+    // digits that live in another application, so the user is gone — for a
+    // minute, or ten — and the step has to still be there when they come back.
+    // Losing it means losing a half-created account, which is what happened:
+    // the screen was replaced with "Your session expired" while its owner was
+    // reading their email, and the registration had to start over.
+    function holdingCode() {
+        return !$('login').hidden && (!$('login-verify').hidden || !$('login-totp').hidden);
+    }
+
+    // Any step-2 panel. A weaker claim than holdingCode(): it stops background
+    // work from re-entering a panel that is already up (which is what yanked
+    // focus back to the username field mid-password), but a genuinely dead
+    // board session may still rewind past it, because from the sign-in panel
+    // that costs the user nothing but a re-typed password.
+    function holdingLogin() {
+        return holdingCode() || (!$('login').hidden &&
+            (!$('login-acct').hidden || !$('login-create').hidden));
+    }
+
+    // Focus a login field WITHOUT stealing it from one the user is already
+    // typing in. Re-entering a step used to call focus() unconditionally, so a
+    // background refresh that re-showed the sign-in panel yanked the caret out
+    // of the password field and back up to the username — mid-word.
+    //
+    // The test is specifically "a still-visible INPUT has focus". Guarding on
+    // anything focused inside the card is too strong: switching panels happens
+    // by clicking a button that is itself inside the card, and that transition
+    // SHOULD land the caret in the new panel's first field. An input that the
+    // transition just hid isn't being typed into either.
+    function focusLogin(id) {
+        const active = document.activeElement;
+        const typing = active && active.tagName === 'INPUT' &&
+            $('login').contains(active) && !active.closest('[hidden]');
+        if (typing) return;
+        $(id).focus();
+    }
+
+    // The step-2 panels are mutually exclusive; one function owns which is up so
+    // they can't both be visible (or both hidden) after a transition.
+    function showLoginStep(which) {
         $('login').hidden = false;
         $('login-pw').hidden = true;
-        $('login-name').hidden = true;
+        $('login-pw-hint').hidden = true;
         $('login-btn').hidden = true;
         $('login-advanced').hidden = true;
         $('login-advanced-box').hidden = true;
-        $('login-acct').hidden = false;
-        $('login-sub').textContent = 'One more step — sign into your account, or create one';
+        $('login-acct').hidden = which !== 'signin';
+        $('login-create').hidden = which !== 'create';
+        $('login-verify').hidden = which !== 'verify';
+        $('login-totp').hidden = which !== 'totp';
+    }
+
+    function showAccountStep() {
+        showLoginStep('signin');
+        $('login-sub').textContent = 'Step 2 of 2 — sign into your account';
         $('login-error').textContent = '';
-        $('login-acct-user').focus();
+        focusLogin('login-acct-user');
+    }
+
+    function showCreateStep() {
+        showLoginStep('create');
+        $('login-sub').textContent = 'Create your ScarmVoice account';
+        $('login-error').textContent = '';
+        focusLogin('login-new-user');
     }
 
     function hideAccountStep() {
         $('login-pw').hidden = false;
-        $('login-name').hidden = false;
+        $('login-pw-hint').hidden = false;
         $('login-btn').hidden = false;
         $('login-advanced').hidden = false;
         $('login-acct').hidden = true;
+        $('login-create').hidden = true;
         $('login-verify').hidden = true;
         $('login-totp').hidden = true;
-        $('login-sub').textContent = 'Enter the board password to connect';
+        $('login-sub').textContent = 'Step 1 of 2 — the shared password for ScarmVoice itself';
+    }
+
+    $('login-goto-create').addEventListener('click', showCreateStep);
+    $('login-goto-signin').addEventListener('click', showAccountStep);
+
+    // The name everyone else sees IS the account username — always, not just on
+    // a fresh install. It used to be a free-text field seeded from the username
+    // only when blank, which meant anyone could set it to somebody else's name
+    // and sit in a channel wearing it. There is no display name to impersonate
+    // now; the only way to change what people see is to change the account.
+    //
+    // Called on EVERY successful sign-in, so an account renamed elsewhere (or a
+    // profile carried over from an older build) is corrected on the way in.
+    async function adoptAccountName() {
+        if (!account || !account.username) return;
+        if (settings.displayName === account.username) return;
+        await saveSettings({ displayName: account.username });
     }
 
     // ---- 2FA challenge at sign-in ----
@@ -594,8 +671,7 @@
 
     function showTotpStep(username, password) {
         pendingTotp = { username, password };
-        $('login-acct').hidden = true;
-        $('login-totp').hidden = false;
+        showLoginStep('totp');
         $('login-sub').textContent = 'Two-factor is on — enter the code from your authenticator app';
         $('login-totp-code').value = '';
         $('login-totp-code').focus();
@@ -604,8 +680,6 @@
     function backToAccountStep() {
         pendingTotp = null;
         pendingVerifyUser = null;
-        $('login-totp').hidden = true;
-        $('login-verify').hidden = true;
         showAccountStep();
     }
 
@@ -630,7 +704,7 @@
             }
             account = res.user;
             pendingTotp = null;
-            if (!settings.displayName) await saveSettings({ displayName: account.username });
+            await adoptAccountName();
             hideAccountStep();
             $('login').hidden = true;
             enterApp();
@@ -650,8 +724,7 @@
 
     function showVerifyStep(username) {
         pendingVerifyUser = username;
-        $('login-acct').hidden = true;
-        $('login-verify').hidden = false;
+        showLoginStep('verify');
         $('login-sub').textContent = `We emailed a 6-digit code for "${username}" — enter it to finish`;
         $('login-error').textContent = '';
         $('login-code').value = '';
@@ -674,7 +747,7 @@
             }
             account = res.user;
             pendingVerifyUser = null;
-            if (!settings.displayName) await saveSettings({ displayName: account.username });
+            await adoptAccountName();
             if (account.role === 'admin') toast('Account verified — you are the board admin');
             else toast('Account verified — welcome, ' + account.username);
             hideAccountStep();
@@ -697,20 +770,19 @@
     });
 
     async function loginAcctSubmit(mode) {
-        // Both buttons go down together: Enter in a field bypasses a disabled
-        // button, and "sign in" racing "create account" registers twice.
-        const signin = $('login-acct-signin');
-        const create = $('login-acct-create');
-        if (signin.disabled || create.disabled) return;
+        // Each panel owns its own fields and its own button, so a submit only
+        // ever needs to lock the one it came from.
+        const register = mode === 'register';
+        const btn = register ? $('login-create-btn') : $('login-acct-signin');
+        if (btn.disabled) return;          // a submit is already in flight
         const err = $('login-error');
-        const username = $('login-acct-user').value.trim();
-        const password = $('login-acct-pw').value;
-        const email = $('login-acct-email').value.trim();
+        const username = $(register ? 'login-new-user' : 'login-acct-user').value.trim();
+        const password = $(register ? 'login-new-pw' : 'login-acct-pw').value;
+        const email = register ? $('login-new-email').value.trim() : '';
         if (!username || !password) { err.textContent = 'Enter a username and a password.'; return; }
-        if (mode === 'register' && !email) { err.textContent = 'Enter your email — new accounts must verify one.'; return; }
+        if (register && !email) { err.textContent = 'Enter your email — new accounts must verify one.'; return; }
         err.textContent = '';
-        signin.disabled = true;
-        create.disabled = true;
+        btn.disabled = true;
 
         try {
             const res = mode === 'register'
@@ -734,28 +806,33 @@
             }
             account = res.user;
             $('login-acct-pw').value = '';
-            // A fresh install with no display name inherits the account name.
-            if (!settings.displayName) await saveSettings({ displayName: account.username });
-            if (mode === 'register' && account.role === 'admin') {
+            $('login-new-pw').value = '';
+            await adoptAccountName();
+            if (register && account.role === 'admin') {
                 toast('Account created — you are the board admin');
             }
             hideAccountStep();
             $('login').hidden = true;
             enterApp();
         } finally {
-            signin.disabled = false;
-            create.disabled = false;
+            btn.disabled = false;
         }
     }
 
     $('login-acct-signin').addEventListener('click', () => loginAcctSubmit('login'));
-    $('login-acct-create').addEventListener('click', () => loginAcctSubmit('register'));
-    // All three account fields swallow Enter. Without this the keypress reached
-    // the enclosing #login-form and submitted the BOARD PASSWORD step with an
-    // empty password, answering the account step with "Incorrect password".
-    ['login-acct-user', 'login-acct-pw', 'login-acct-email'].forEach((id) => {
+    $('login-create-btn').addEventListener('click', () => loginAcctSubmit('register'));
+    // Every account field swallows Enter. Without this the keypress reached the
+    // enclosing #login-form and submitted the BOARD PASSWORD step with an empty
+    // password, answering the account step with "Incorrect password". Each
+    // field submits the panel it belongs to.
+    ['login-acct-user', 'login-acct-pw'].forEach((id) => {
         $(id).addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); loginAcctSubmit('login'); }
+        });
+    });
+    ['login-new-user', 'login-new-pw', 'login-new-email'].forEach((id) => {
+        $(id).addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); loginAcctSubmit('register'); }
         });
     });
 
@@ -769,14 +846,12 @@
         const btn = $('login-btn');
         const err = $('login-error');
         const base = $('login-base').value.trim();
-        const name = $('login-name').value.trim();
 
         err.textContent = '';
         btn.disabled = true;
         btn.textContent = 'Connecting…';
 
         if (base && base !== settings.baseUrl) await saveSettings({ baseUrl: base.replace(/\/+$/, '') });
-        if (name) await saveSettings({ displayName: name });
 
         const res = await L.auth.login($('login-pw').value);
         btn.disabled = false;
@@ -821,10 +896,10 @@
         entered = true;
         try {
             settings = await L.settings.get();
-            if (!settings.displayName) {
-                const n = ($('login-name').value || '').trim();
-                if (n) await saveSettings({ displayName: n });
-            }
+            // Belt and braces: whatever route got us here, the name on screen is
+            // the account username. A stored token that skipped the sign-in
+            // panels never passed through adoptAccountName() otherwise.
+            await adoptAccountName();
             $('login').hidden = true;
             $('app').hidden = false;
             $('btn-send').disabled = true;
@@ -879,7 +954,7 @@
         const res = await L.board('channels', { method: 'POST', body });
         // The response is returned so callers that ASKED for a change (create)
         // can tell whether it happened; a plain refresh still ignores it.
-        if (res && res.needsAuth) { relogin(); return res; }
+        if (authGone(res)) return res;
         if (!res || !res.success) return res;
         channels = res.channels || [];
         renderChannels();
@@ -1112,7 +1187,7 @@
         });
         if (forChannel !== channel) return;   // stale — a switch happened mid-flight
 
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) {
             if (res && res.network && !rtConnected) setRtStatus('disconnected');
             return;
@@ -1891,7 +1966,7 @@
             body: { body, name: settings.displayName || 'Anonymous', clientId: settings.clientId, channel: forChannel, quoteId }
         });
 
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) {
             // A network failure is not the user's problem to solve — queue it
             // and retry when the connection comes back. Anything the server
@@ -1998,7 +2073,7 @@
                     }
                 });
 
-                if (res && res.needsAuth) { entry.sending = false; return relogin(); }
+                if (authGone(res)) { entry.sending = false; return; }
 
                 if (res && res.success) {
                     outbox = outbox.filter((o) => o !== entry);
@@ -2098,7 +2173,7 @@
         } finally {
             uploadRows.delete(uploadId);
         }
-        if (up && up.needsAuth) { row.remove(); relogin(); return false; }
+        if (isAuthLoss(up)) { row.remove(); authGone(up); return false; }
         if (!up || !up.success) {
             failUploadRow(row, (up && up.error) || `Upload of ${item.name} failed`);
             return false;
@@ -2117,7 +2192,7 @@
         });
 
         row.remove();
-        if (res && res.needsAuth) { relogin(); return false; }
+        if (authGone(res)) return false;
         if (!res || !res.success) {
             toast((res && res.error) || 'Could not post the attachment', true);
             return false;
@@ -4193,10 +4268,42 @@
     async function relogin() {
         await teardownSession();
         $('app').hidden = true;
+        // Never take away a code screen. relogin() is called from a dozen
+        // places, all of them background work, and it used to slam the card
+        // back to step 1 regardless — so one stale 401 wiped the verification
+        // step while its owner was in their email client looking up the code,
+        // and told them their session had expired. It hadn't: the board cookie
+        // is good for thirty days, and the 401 was about the ACCOUNT (see
+        // net.js). If the board session really has died, the code submit will
+        // say so inline rather than throwing the flow away.
+        if (holdingCode()) return;
         hideAccountStep();       // back to step 1 — the site password comes first
         $('login').hidden = false;
         $('login-error').textContent = 'Your session expired. Sign in again.';
-        $('login-pw').focus();
+        focusLogin('login-pw');
+    }
+
+    // A 401 that says "you need an account", not "your session died". The board
+    // cookie is untouched, so this is a one-field hop back rather than the full
+    // rewind relogin() performs — and it too leaves an in-progress step alone.
+    async function requireAccount() {
+        await teardownSession();
+        account = null;
+        $('app').hidden = true;
+        if (holdingLogin()) return;
+        showAccountStep();
+    }
+
+    // The two credentials fail differently and must be answered differently, so
+    // every background call routes its 401 through here instead of assuming the
+    // worse of the two. isAuthLoss() is the pure test, for callers that need to
+    // clean up before the screen changes.
+    function isAuthLoss(res) { return !!(res && (res.needsAuth || res.needsAccount)); }
+
+    function authGone(res) {
+        if (!isAuthLoss(res)) return false;
+        if (res.needsAccount) requireAccount(); else relogin();
+        return true;
     }
 
     function stopPolling() {
@@ -4318,15 +4425,11 @@
     // Name and status together, like the website's name pill — they're the two
     // things that describe you to everyone else.
     async function changeName() {
-        const r = await askNameAndStatus(settings.displayName || '', settings.status || '');
+        const r = await askStatus(settings.status || '');
         if (r === null) return;
-        await saveSettings({
-            displayName: r.name.trim().slice(0, 40),
-            status: r.status.trim().slice(0, 80)
-        });
+        await saveSettings({ status: r.trim().slice(0, 80) });
         renderMe();
         renderAccountCard();
-        $('set-name').value = settings.displayName;
         $('set-status').value = settings.status || '';
         sendTextPresence(false);      // publish it now rather than up to 20s later
     }
@@ -5127,11 +5230,9 @@
         });
     }
 
-    $('set-name').addEventListener('change', async (e) => {
-        await saveSettings({ displayName: e.target.value.trim().slice(0, 40) });
-        renderMe();
-        renderAccountCard();
-    });
+    // #set-name is readonly: the display name IS the account username, so there
+    // is nothing to listen for. It stays in the sheet because that is where
+    // people look for their name — it just shows rather than asks.
     $('set-base').addEventListener('change', async (e) => {
         await saveSettings({ baseUrl: e.target.value.trim().replace(/\/+$/, '') });
         toast('Server changed — sign out and back in to apply');
@@ -6010,7 +6111,7 @@
             // outlived the session with its textarea still disabled, and
             // renderMessages() bails whenever one exists — so the next session
             // opened onto a message list frozen at the moment the token expired.
-            if (res && res.needsAuth) { restore(); return relogin(); }
+            if (isAuthLoss(res)) { restore(); authGone(res); return; }
             if (!res || !res.success) {
                 // Keep the editor open with their text intact so nothing is lost.
                 ta.disabled = false;
@@ -6042,7 +6143,7 @@
 
         // clientId lets the server enforce ownership for signed-in members.
         const res = await L.board('delete', { method: 'POST', body: { id: p.id, clientId: settings.clientId } });
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not delete', true);
 
         posts = posts.filter((x) => x.id !== p.id);
@@ -6412,7 +6513,7 @@
             query: { q, channel, scope: searchScope, limit: 40 }
         });
         if (seq !== searchSeq) return;
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) { hideSearchResults(); return; }
         renderSearchResults(res.results || [], q);
     }
@@ -6595,7 +6696,7 @@
         const root = threadRootId;
         const res = await L.board('thread', { query: { root } });
         if (root !== threadRootId) return;               // switched while in flight
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) return;
 
         threadPosts = res.posts || [];
@@ -6665,7 +6766,7 @@
         });
         $('thread-send').disabled = false;
 
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) {
             $('thread-input').value = body;     // hand the text back
             return toast((res && res.error) || 'Could not reply', true);
@@ -6681,7 +6782,7 @@
 
     async function pinPost(id, pinned) {
         const res = await L.board('pin', { method: 'POST', body: { id, pinned, clientId: settings.clientId } });
-        if (res && res.needsAuth) return relogin();
+        if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not pin', true);
         // Reflect immediately, then refresh from the server.
         const p = posts.find((x) => x.id === id);
@@ -6866,7 +6967,7 @@
         const res = await L.board('dm/list', { query: { with: forUser } });
         if (!dmOpen || dmOpen.id !== forUser) return;      // switched conversations mid-flight
         if (!res || !res.success) {
-            if (res && res.needsAuth) return relogin();
+            if (authGone(res)) return;
             if (res && res.needsAccount) { closeDm(); toast('Sign into your board account to use DMs', true); return; }
             // Anything else used to leave the drawer on "Loading…" forever.
             dmMessagesError((res && res.error) || 'Could not load this conversation.');
