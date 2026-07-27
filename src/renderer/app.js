@@ -68,12 +68,14 @@
         pinned: false,
         mentions: false,
         edited: false,
-        fromIds: null,              // every client_id belonging to the chosen person
+        // The chosen person as an IDENTITY — { label, names, userIds } — not as
+        // a list of install ids. See postFrom() in lib.js.
+        from: null,
         fromName: null
     };
     function filterActive() {
         return !!(filter.text || filter.types.size || filter.pinned ||
-            filter.mentions || filter.edited || filter.fromIds);
+            filter.mentions || filter.edited || filter.from);
     }
 
     // ---------- utilities -------------------------------------------------
@@ -1297,6 +1299,10 @@
         renderMessages();
         renderTyping();
         renderVoiceRoster();
+        // The "From" list is built from the loaded messages, so paging back —
+        // which the filtered empty state explicitly invites — can reveal people
+        // who were not in the dropdown when it was opened.
+        if (filterOpen()) populateFromSelect();
 
         if (before) {
             // Keep the reader anchored where they were when older history loads in.
@@ -6115,7 +6121,6 @@
         if (!textEl) return;
         editingId = p.id;
 
-        const original = textEl.innerHTML;
         const wrap = document.createElement('div');
         wrap.className = 'msg-edit';
         wrap.innerHTML =
@@ -6124,7 +6129,17 @@
         const ta = wrap.querySelector('textarea');
         ta.value = p.body || '';
 
-        textEl.replaceWith(wrap);
+        // HIDE the rendered body and put the editor beside it, rather than
+        // stashing textEl.innerHTML and re-parsing it on cancel. innerHTML
+        // round-trips the markup but not the LISTENERS renderBody attached, and
+        // a spoiler's click-to-reveal is one of those — so cancelling an edit on
+        // a message containing ||spoiler|| left it permanently unclickable
+        // (renderMessages keeps the node, because the message itself never
+        // changed). Keeping the original node keeps its behaviour. Same approach
+        // the web board's editor uses.
+        const prevDisplay = textEl.style.display;
+        textEl.style.display = 'none';
+        textEl.after(wrap);
         ta.focus();
         ta.setSelectionRange(ta.value.length, ta.value.length);
         ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
@@ -6132,10 +6147,8 @@
         const restore = () => {
             editingId = null;
             editingRestore = null;
-            const back = document.createElement('div');
-            back.className = 'msg-text';
-            back.innerHTML = original;
-            wrap.replaceWith(back);
+            wrap.remove();                       // no-op if the row is already gone
+            textEl.style.display = prevDisplay;
             renderMessages();      // resync anything the poll held back
         };
         editingRestore = restore;
@@ -6393,7 +6406,7 @@
         filter.text = '';
         filter.types.clear();
         filter.pinned = filter.mentions = filter.edited = false;
-        filter.fromIds = filter.fromName = null;
+        filter.from = filter.fromName = null;
         $('filter-input').value = '';
         const fs = $('filter-from'); if (fs) fs.value = '';
         applyFilter();
@@ -6439,7 +6452,7 @@
         if (filter.pinned) chips.push({ icon: 'pin', label: 'Pinned', off: () => { filter.pinned = false; } });
         if (filter.mentions) chips.push({ icon: 'at', label: 'Mentions me', off: () => { filter.mentions = false; } });
         if (filter.edited) chips.push({ icon: 'pencil', label: 'Edited', off: () => { filter.edited = false; } });
-        if (filter.fromIds) chips.push({ icon: 'users', label: 'From ' + (filter.fromName || 'user'), off: () => { filter.fromIds = filter.fromName = null; const fs = $('filter-from'); if (fs) fs.value = ''; } });
+        if (filter.from) chips.push({ icon: 'users', label: 'From ' + (filter.fromName || 'user'), off: () => { filter.from = filter.fromName = null; const fs = $('filter-from'); if (fs) fs.value = ''; } });
         if (filter.text) chips.push({ icon: 'search', label: filter.text, off: () => { filter.text = ''; $('filter-input').value = ''; } });
 
         box.hidden = chips.length === 0;
@@ -6472,27 +6485,52 @@
     }
 
     // Populate the "From" dropdown from everyone seen in the loaded messages.
+    // The people the "From" dropdown offers, keyed by the label it shows.
+    // Rebuilt whenever the dropdown is populated; the SELECTED entry is held on
+    // `filter.from`, so it survives a repopulate.
+    let fromChoices = new Map();
+
     function populateFromSelect() {
         const sel = $('filter-from');
         if (!sel) return;
-        // Group by display name, not client_id: one person posting from two
-        // devices is still one person, and every poster who never set a name
-        // would otherwise get their own duplicate "Anonymous" row.
-        const byName = new Map();
+        // Group by display name — one person posting from two devices is still
+        // one person — and collect the ACCOUNT ids seen under that name. The
+        // option used to carry a list of client_ids instead, which is a list of
+        // installs: it missed the person's other devices, missed rows written
+        // before their install id was rotated, and skipped rows with no install
+        // id at all (`if (!p.client_id) return`). See postFrom() in lib.js.
+        const byLabel = new Map();
         posts.forEach((p) => {
-            if (!p.client_id) return;
-            const name = wroteByMe(p) ? 'You' : (p.name || 'Anonymous');
-            if (!byName.has(name)) byName.set(name, new Set());
-            byName.get(name).add(p.client_id);
+            const name = p.name || 'Anonymous';
+            const label = wroteByMe(p) ? 'You' : name;
+            if (!byLabel.has(label)) byLabel.set(label, { label, names: new Set(), userIds: new Set() });
+            const e = byLabel.get(label);
+            e.names.add(name);
+            if (p.user_id) e.userIds.add(p.user_id);
         });
-        const cur = filter.fromIds ? filter.fromIds.join(',') : '';
+        fromChoices = byLabel;
+
+        // Repopulating must not silently drop a filter that is still applied —
+        // the old code compared a joined id list, so one new install id for the
+        // selected person reset the dropdown to "anyone" while the list stayed
+        // filtered. The label is stable, so the selection survives.
+        const cur = filter.from ? filter.from.label : '';
         sel.innerHTML = '<option value="">anyone</option>';
-        [...byName.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([name, ids]) => {
+        [...byLabel.values()].sort((a, b) => a.label.localeCompare(b.label)).forEach((c) => {
             const o = document.createElement('option');
-            o.value = [...ids].join(',');
-            o.textContent = name;
+            o.value = c.label;
+            o.textContent = c.label;
             sel.appendChild(o);
         });
+        // A selected person whose messages are no longer loaded still belongs in
+        // the list, or the filter and the dropdown disagree.
+        if (cur && !byLabel.has(cur)) {
+            const o = document.createElement('option');
+            o.value = cur;
+            o.textContent = cur;
+            sel.appendChild(o);
+            fromChoices.set(cur, filter.from);
+        }
         sel.value = cur;
     }
 
@@ -6519,8 +6557,9 @@
     });
 
     $('filter-from').addEventListener('change', (e) => {
-        filter.fromIds = e.target.value ? e.target.value.split(',') : null;
-        filter.fromName = e.target.value ? e.target.options[e.target.selectedIndex].textContent : null;
+        const chosen = e.target.value ? fromChoices.get(e.target.value) : null;
+        filter.from = chosen || null;
+        filter.fromName = chosen ? chosen.label : null;
         applyFilter();
     });
 

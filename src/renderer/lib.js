@@ -300,6 +300,33 @@
 
     // ---- filtering ---------------------------------------------------------
 
+    // Set-or-array, so a test can pass a plain array.
+    function asSet(v) { return v instanceof Set ? v : new Set(v || []); }
+
+    // Does this post belong to the person the "From" filter names?
+    //
+    // It used to be `filter.fromIds.includes(p.client_id)` — a list of INSTALL
+    // ids snapshotted when the dropdown was built. A client_id is per-install
+    // and the server hands out a fresh one whenever the id a device holds
+    // already belongs to another account, so one person's history routinely
+    // spans several of them (other devices, rotations, rows written before
+    // accounts existed with no id at all). Every one of those messages was
+    // silently missing from a filter that claimed to show everything they
+    // wrote — and because the list was frozen at open, "Load earlier messages
+    // to widen results" made it worse rather than better.
+    //
+    // So resolve the person the way everything else in this app does: the
+    // ACCOUNT first, the display name (which the server derives from the
+    // credential, so it cannot be worn by someone else) as the fallback for
+    // rows that have no account.
+    function postFrom(p, from) {
+        if (!from) return true;
+        const uids = asSet(from.userIds);
+        const names = asSet(from.names);
+        if (p.user_id && uids.has(p.user_id)) return true;
+        return names.has(p.name || 'Anonymous');
+    }
+
     // Types combine as OR; every other criterion is AND. `filter.types` may be a
     // Set or an array so this can be called from a test without building one.
     function postMatchesFilter(p, filter, displayName) {
@@ -308,7 +335,7 @@
             ? filter.types
             : new Set(filter.types || []);
 
-        if (filter.fromIds && !filter.fromIds.includes(p.client_id)) return false;
+        if (filter.from && !postFrom(p, filter.from)) return false;
         if (filter.pinned && !p.pinned) return false;
         if (filter.mentions && !mentionsMe(p.body, displayName)) return false;
         if (filter.edited && !p.edited_at) return false;
@@ -361,7 +388,7 @@
         timeStr, dayStr, fmtSize, fmtDuration, splitName,
         attachmentKind, fileIcon,
         extractUrls, isImageUrl, safeHttpUrl, urlFileName, youtubeId,
-        postMatchesFilter,
+        postMatchesFilter, postFrom,
         FONT_SIZES, fontSizeIndex,
         matchesPttBinding,
         URL_RE

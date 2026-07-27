@@ -367,9 +367,26 @@ describe('postMatchesFilter', () => {
         expect(postMatchesFilter(post(), { types: ['links'] })).toBe(false);
     });
 
-    it('filters by author id', () => {
-        expect(postMatchesFilter(post(), { fromIds: ['c1', 'c2'] })).toBe(true);
-        expect(postMatchesFilter(post(), { fromIds: ['c9'] })).toBe(false);
+    it('filters by author, resolved on the account rather than the install', () => {
+        const alice = { label: 'Alice', names: ['Alice'], userIds: [7] };
+
+        // Any install, any device — the account is the identity.
+        expect(postMatchesFilter(post({ user_id: 7, client_id: 'cA' }), { from: alice })).toBe(true);
+        expect(postMatchesFilter(post({ user_id: 7, client_id: 'cWHATEVER' }), { from: alice })).toBe(true);
+        expect(postMatchesFilter(post({ user_id: 9, name: 'Bob' }), { from: alice })).toBe(false);
+
+        // Rows written before accounts existed have no user_id and often no
+        // client_id either; the display name is the only thing left, and it is
+        // server-derived so nobody else can wear it. The old client_id list
+        // dropped both of these.
+        expect(postMatchesFilter(post({ user_id: null, name: 'Alice', client_id: '' }), { from: alice })).toBe(true);
+        expect(postMatchesFilter(post({ user_id: null, name: 'Bob' }), { from: alice })).toBe(false);
+
+        // A renamed account still matches on its id.
+        expect(postMatchesFilter(post({ user_id: 7, name: 'Alice (old)' }), { from: alice })).toBe(true);
+
+        // No selection matches everyone.
+        expect(postMatchesFilter(post({ name: 'Bob' }), { from: null })).toBe(true);
     });
 
     it('needs the display name to filter by mention', () => {
