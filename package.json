@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "test:watch": "vitest",
     "build": "electron-builder --win --publish never",
     "dist": "electron-builder --win --publish never",
-    "release": "electron-builder --win --publish always",
+    "release": "node scripts/preflight-release.js && electron-builder --win --publish always",
     "test:e2e": "playwright test"
   },
   "dependencies": {
