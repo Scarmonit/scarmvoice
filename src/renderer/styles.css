@@ -2257,3 +2257,14 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .login-acct-btns button:hover { background: var(--elev); }
 .login-acct-btns button.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
 .login-acct-btns button.primary:hover { background: var(--accent-hi); }
+
+/* Member management (admin) in Settings > Account. */
+.member-admin-list { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.ma-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: 8px; background: var(--input);
+}
+.ma-row.banned { opacity: .65; }
+.ma-who { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; }
+.ma-row .keycap { min-width: 0; padding: 6px 10px; font-size: 12px; }
+.ma-row .keycap.danger { color: var(--danger); border-color: var(--danger-line); }

@@ -4014,6 +4014,8 @@
 
     async function openSettings() {
         settings = await L.settings.get();
+        $('acct-members').hidden = !isAdmin();
+        if (isAdmin()) renderMemberAdmin();
         $('set-name').value = settings.displayName || '';
         $('set-base').value = settings.baseUrl || '';
         $('set-mode').value = settings.voiceMode || 'open';
@@ -4140,6 +4142,91 @@
             ? `Account created — welcome, ${account.username}` +
               (account.role === 'admin' ? '. You are the admin.' : '')
             : `Signed in as ${account.username}`);
+    }
+
+    // ---- member management (admin only) --------------------------------
+    // Lives in Settings > Account. Every action round-trips through
+    // /api/board/account/manage, which re-checks the admin role server-side.
+
+    async function manageMember(body, confirmText) {
+        if (confirmText) {
+            const ok = await askConfirm(confirmText.title, confirmText.message, confirmText.ok, confirmText.danger);
+            if (!ok) return;
+        }
+        const res = await L.board('account/manage', { method: 'POST', body });
+        if (!res || !res.success) return toast((res && res.error) || 'Could not update that member', true);
+        toast('Done');
+        renderMemberAdmin();
+    }
+
+    async function renderMemberAdmin() {
+        const box = $('member-admin-list');
+        box.textContent = 'Loading…';
+        const res = await L.board('account/users');
+        if (!res || !res.success) { box.textContent = (res && res.error) || 'Could not load members.'; return; }
+        box.innerHTML = '';
+
+        const others = (res.users || []).filter((u) => !account || u.id !== account.id);
+        if (!others.length) {
+            box.textContent = 'No other members yet — accounts show up here as people register.';
+            return;
+        }
+
+        others.forEach((u) => {
+            const row = document.createElement('div');
+            row.className = 'ma-row' + (u.banned ? ' banned' : '');
+
+            const who = document.createElement('span');
+            who.className = 'ma-who';
+            who.innerHTML = `<b>${esc(u.username)}</b>` +
+                `<em class="hint">${u.role === 'admin' ? 'admin' : 'member'}${u.banned ? ' · banned' : ''}</em>`;
+            row.appendChild(who);
+
+            const btn = (label, danger, fn) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'keycap' + (danger ? ' danger' : '');
+                b.textContent = label;
+                b.addEventListener('click', fn);
+                row.appendChild(b);
+            };
+
+            btn(u.role === 'admin' ? 'Make member' : 'Make admin', false, () =>
+                manageMember({ action: 'setRole', userId: u.id, role: u.role === 'admin' ? 'member' : 'admin' },
+                    u.role === 'admin' ? null : {
+                        title: `Make ${u.username} an admin?`,
+                        message: 'Admins can delete and pin anyone\'s messages and manage members — including you.',
+                        ok: 'Make admin'
+                    }));
+
+            btn(u.banned ? 'Unban' : 'Ban', !u.banned, () =>
+                manageMember({ action: u.banned ? 'unban' : 'ban', userId: u.id },
+                    u.banned ? null : {
+                        title: `Ban ${u.username}?`,
+                        message: 'They are signed out everywhere immediately and cannot sign back in until unbanned.',
+                        ok: 'Ban', danger: true
+                    }));
+
+            btn('Reset password', false, async () => {
+                const pw = await openDialog({
+                    title: `New password for ${u.username}`,
+                    message: 'They are signed out everywhere and sign back in with this. Tell them privately.',
+                    ok: 'Reset', withInput: true
+                });
+                if (pw === null || pw === false) return;
+                if (String(pw).length < 8) return toast('Password must be at least 8 characters', true);
+                manageMember({ action: 'resetPassword', userId: u.id, password: String(pw) });
+            });
+
+            btn('Delete', true, () =>
+                manageMember({ action: 'delete', userId: u.id }, {
+                    title: `Delete ${u.username}'s account?`,
+                    message: 'Their account and direct messages are removed permanently. Board messages they posted stay.',
+                    ok: 'Delete', danger: true
+                }));
+
+            box.appendChild(row);
+        });
     }
 
     $('btn-acct-login').addEventListener('click', () => acctSubmit('login'));
