@@ -1234,7 +1234,7 @@
             // Blocked authors chime and notify for a message that is never
             // drawn, which is the opposite of what blocking promises.
             const fresh = posts.filter((p) => p.id > prevMax &&
-                p.client_id !== settings.clientId && !isBlocked(p.client_id));
+                !wroteByMe(p) && !isBlocked(p.client_id));
             if (fresh.length) {
                 // Poll and socket nudge can both see the same post as fresh;
                 // the id watermark guarantees a single chime.
@@ -1413,7 +1413,7 @@
         // blocked authors and anything the active filter hides, so the badge
         // promised messages that jumping to the bottom would never reveal.
         const n = away
-            ? displayedPosts().filter((p) => p.id > seenTopId && p.client_id !== settings.clientId).length
+            ? displayedPosts().filter((p) => p.id > seenTopId && !wroteByMe(p)).length
             : 0;
         const badge = $('jump-count');
         badge.textContent = n > 99 ? '99+' : String(n);
@@ -3424,7 +3424,8 @@
                     id: p.client_id,
                     uid: p.user_id || null,
                     name: p.name || 'Anonymous',
-                    isMe: p.client_id === settings.clientId,
+                    isMe: p.client_id === settings.clientId ||
+                        !!(account && p.user_id && p.user_id === account.id),
                     muted: !!p.muted,
                     remoteOnly: true
                 });
@@ -4838,6 +4839,18 @@
     // separate "Delete (admin)" entry on anything that isn't theirs.)
     function ownsPost(p) {
         return !!(p && p.user_id && account && p.user_id === account.id);
+    }
+
+    // "Did I write this?" — the cosmetic question, as opposed to ownsPost's
+    // "may I change this". Broader on purpose: a message you sent from the web
+    // board or another install is still yours, so it must not chime at you or
+    // count as unread here. `settings.clientId` alone answered no to all of
+    // those, because a client_id is per-install and the server hands out a
+    // fresh one when the id a device holds already belongs to someone else.
+    function wroteByMe(p) {
+        if (!p) return false;
+        if (p.user_id && account) return p.user_id === account.id;
+        return p.client_id === settings.clientId;
     }
 
     async function refreshAccount() {
@@ -6450,7 +6463,7 @@
         const byName = new Map();
         posts.forEach((p) => {
             if (!p.client_id) return;
-            const name = (p.client_id === settings.clientId) ? 'You' : (p.name || 'Anonymous');
+            const name = wroteByMe(p) ? 'You' : (p.name || 'Anonymous');
             if (!byName.has(name)) byName.set(name, new Set());
             byName.get(name).add(p.client_id);
         });
@@ -6583,7 +6596,7 @@
             top.className = 'sr-top';
             const nm = document.createElement('span');
             nm.className = 'sr-name';
-            nm.textContent = r.client_id === settings.clientId ? 'You' : (r.name || 'Anonymous');
+            nm.textContent = wroteByMe(r) ? 'You' : (r.name || 'Anonymous');
             const ch = document.createElement('span');
             ch.className = 'sr-ch';
             ch.textContent = '#' + r.channel + (r.thread_root_id ? ' · thread' : '');
