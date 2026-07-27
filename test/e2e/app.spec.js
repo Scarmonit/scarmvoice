@@ -163,6 +163,31 @@ test('grants the fullscreen permission instead of hanging', async () => {
     await page.evaluate(() => document.exitFullscreen().catch(() => {}));
 });
 
+test('lets RNNoise compile its WebAssembly, without opening up eval', async () => {
+    // The original bug: the renderer's CSP was `script-src 'self'`, and Chromium
+    // gates WebAssembly compilation on script-src. So the AI noise suppression
+    // could not start at ALL — the worklet's WebAssembly.instantiate threw
+    // "Refused to compile or instantiate WebAssembly module", and turning the
+    // setting on flipped it straight back off with an error toast. Nothing in
+    // the suite noticed, because everything else about the feature was fine.
+    //
+    // The second assertion is the other half: 'wasm-unsafe-eval' must not be
+    // quietly widened to 'unsafe-eval' later. Message bodies reach this window,
+    // so real eval staying shut is the point.
+    const csp = await page.evaluate(async () => {
+        const out = {};
+        const emptyModule = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
+        try { await WebAssembly.instantiate(emptyModule); out.wasm = 'allowed'; }
+        catch (e) { out.wasm = 'blocked: ' + e.message; }
+        try { new Function('return 1')(); out.evalJs = 'allowed'; }
+        catch (e) { out.evalJs = 'blocked'; }
+        return out;
+    });
+
+    expect(csp.wasm).toBe('allowed');
+    expect(csp.evalJs).toBe('blocked');
+});
+
 test('denies a permission that is not on the allow list', async () => {
     const state = await page.evaluate(async () => {
         try {

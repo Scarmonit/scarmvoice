@@ -2,9 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- 'wasm-unsafe-eval' is what lets RNNoise run. Chromium gates WebAssembly
+     compilation on script-src, so with a bare 'self' the AI noise suppression
+     never started at all: the worklet's WebAssembly.instantiate threw
+     "Refused to compile or instantiate WebAssembly module", noise.js reported
+     the failure, and app.js switched the toggle straight back off with an
+     error toast. The setting could not be turned on.
+     It is the NARROW directive for exactly this — it permits WebAssembly and
+     nothing else. eval() and new Function() stay blocked, which is what
+     'unsafe-eval' would have opened up. -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
-  script-src 'self';
+  script-src 'self' 'wasm-unsafe-eval';
   style-src 'self' 'unsafe-inline';
   img-src 'self' data: blob: lounge: https:;
   media-src 'self' data: blob: lounge: https:;

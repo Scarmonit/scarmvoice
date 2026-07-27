@@ -42,7 +42,21 @@
     let pollTimer = null;
     let presenceTimer = null;
     let typingSentAt = 0;
-    let windowFocused = true;
+    // Assume NOT focused until the main process says otherwise.
+    //
+    // This used to start `true` and only ever move on a 'focus'/'blur' event —
+    // and a window that is never shown emits neither. So launching straight to
+    // the tray ("start with Windows, minimized", or --openAsHidden) left this
+    // stuck at true for the whole session: notifyForPosts() and the DM notifier
+    // both bail on `if (windowFocused) return`, so the one configuration where
+    // notifications are the ONLY way to learn about a message was the one
+    // configuration that never raised any. It also reported you as "online" in
+    // everyone's member list while the window had never been opened.
+    //
+    // Starting false is the safe direction: main.js re-checks win.isFocused()
+    // before it will show a notification, so a stale false can never produce
+    // one you shouldn't get. boot() asks for the real answer either way.
+    let windowFocused = false;
     let loading = false;
     let lastSoundId = 0;            // watermark so one message chimes exactly once
     let filterTimer = null;
@@ -539,6 +553,10 @@
     // ---------- auth ------------------------------------------------------
 
     async function boot() {
+        // The real focus state, once. A 'focus' event fired before this file
+        // attached its listener is lost, and a window that starts hidden in the
+        // tray never fires one at all — see the note on `windowFocused`.
+        try { windowFocused = !!(await L.win.isFocused()); } catch (e) { /* keep false */ }
         settings = await L.settings.get();
         $('login-base').value = settings.baseUrl || '';
         $('set-version').textContent = 'ScarmVoice v' + (await L.app.version());

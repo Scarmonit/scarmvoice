@@ -330,6 +330,15 @@ These match what the website already verified against this SFU:
   so `voice.js` passes both spellings. Chromium's suppressor is turned **off**
   when RNNoise is enabled: cascading two suppressors is what produces pumping
   and chewed-up consonants.
+- **RNNoise needs `'wasm-unsafe-eval'` in the renderer's CSP.** Chromium gates
+  WebAssembly compilation on `script-src`, so under a bare `'self'` the worklet's
+  `WebAssembly.instantiate` threw *"Refused to compile or instantiate WebAssembly
+  module"*, `noise.js` reported the failure, and `app.js` switched the toggle
+  straight back off with an error toast — the setting could not be turned on at
+  all. `'wasm-unsafe-eval'` is the narrow directive for exactly this: it permits
+  WebAssembly and nothing else, leaving `eval()` and `new Function()` blocked.
+  Both halves are asserted in the e2e suite, so widening it to `'unsafe-eval'`
+  later would fail the tests.
 - The microphone must be selected with `meeting.self.setDevice()`. A `deviceId`
   in `mediaConfiguration.audio` is silently ignored — the SDK takes the device
   as an argument to its constraints builder, sourced only from `setDevice` — so
