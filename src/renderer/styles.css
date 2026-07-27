@@ -1429,8 +1429,27 @@ button { font-family: inherit; }
 
 /* ---------- thread panel ----------------------------------------------- */
 
+/* Both drawers are OVERLAYS over the whole main column, header and composer
+   included. Without the shift below, opening one buries the send / emoji /
+   microphone buttons and the header's pinned + members buttons underneath it —
+   they are still there, still focusable, and completely unclickable. The web
+   board had the identical layout and the identical bug.
+   `margin-right` on the column's own children keeps the drawer where it is
+   (absolute, flush to the right edge) and simply narrows what sits behind it. */
+#main { --drawer-w: min(420px, 62%); --drawer-shift: 0px; }
+#main:has(> #thread-panel:not([hidden])),
+#main:has(> #dm-panel:not([hidden])) { --drawer-shift: var(--drawer-w); }
+#main > #chan-head,
+#main > #filter-bar,
+#main > #pinned-panel,
+#main > #stage,
+#main > #camera-stage,
+#main > #messages-wrap,
+#main > #typing-line,
+#main > #composer { margin-right: var(--drawer-shift); }
+
 #thread-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 62%); z-index: 40;
+  position: absolute; top: 0; right: 0; bottom: 0; width: var(--drawer-w); z-index: 40;
   display: flex; flex-direction: column;
   background: var(--chat-2);
   box-shadow: -16px 0 44px rgba(0, 0, 0, .45);
@@ -2224,7 +2243,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 /* DM conversation drawer — same shell as the thread panel. */
 #dm-panel {
   position: absolute; top: 0; right: 0; bottom: 0;
-  width: min(420px, 62%); z-index: 40;
+  width: var(--drawer-w); z-index: 40;
   display: flex; flex-direction: column;
   background: var(--chat-2);
   box-shadow: -16px 0 44px rgba(0, 0, 0, .45);
