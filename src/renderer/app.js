@@ -751,12 +751,17 @@
         window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
         setupVoice();
         renderMe();
+        // BEFORE the socket opens: this registers the install against the
+        // account, and the realtime upgrade resolves that mapping server-side
+        // to merge your devices. A socket opened first would carry no identity.
+        await refreshAccount();
         await L.rt.start();
         await loadChannels();
         await loadMessages(true);
         startPolling();
         startTextPresence();
-        refreshAccount().then(() => { loadDmThreads(); startDmPolling(); });
+        loadDmThreads();
+        startDmPolling();
         await L.ptt.apply();
         refreshPttHint();
         flushOutbox();
@@ -3752,8 +3757,11 @@
                 break;
             case 'voice':
                 if (Array.isArray(m.list)) {
+                    // user_id is what lets the roster treat one person's
+                    // devices as one entry — keep it.
                     voicePresence = m.list.map((v) => ({
-                        client_id: v.cid || v.client_id, name: v.name, muted: v.muted
+                        client_id: v.cid || v.client_id, user_id: v.user_id || null,
+                        name: v.name, muted: v.muted
                     }));
                     renderVoiceRoster();
                 }
@@ -3773,7 +3781,8 @@
             case 'welcome':
                 if (m.voice) {
                     voicePresence = (m.voice || []).map((v) => ({
-                        client_id: v.cid || v.client_id, name: v.name, muted: v.muted
+                        client_id: v.cid || v.client_id, user_id: v.user_id || null,
+                        name: v.name, muted: v.muted
                     }));
                     renderVoiceRoster();
                 }
@@ -4294,6 +4303,12 @@
         renderDmSection();
     }
 
+    // Signing in mid-session: the socket was opened without an account, so
+    // reopen it to pick up the identity that merges this device with the others.
+    async function rebindRealtime() {
+        try { await L.rt.stop(); await L.rt.start(); } catch (e) { /* it will retry on its own */ }
+    }
+
     function acctError(msg) {
         const el = $('acct-error');
         el.textContent = msg || '';
@@ -4322,6 +4337,7 @@
         $('acct-password').value = '';
         renderAccountCard();
         renderDmSection();
+        rebindRealtime();
         loadDmThreads();
         toast(mode === 'register'
             ? `Account created — welcome, ${account.username}` +
@@ -4429,6 +4445,7 @@
         acctError('');
         renderAccountCard();
         renderDmSection();
+        rebindRealtime();
         loadDmThreads();
         toast('Account verified — signed in as ' + account.username);
     });
