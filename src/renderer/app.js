@@ -4221,6 +4221,10 @@
         const dot = $('me-presence');
         dot.classList.toggle('dnd', !!settings.dnd);
         dot.title = settings.dnd ? 'Do not disturb' : 'Online';
+        // Rename/delete are admin-only server-side; leaving the header buttons
+        // up for a member is a control that can only ever return a 403.
+        $('btn-rename-channel').hidden = !isAdmin();
+        $('btn-delete-channel').hidden = !isAdmin();
     }
 
     // Name and status together, like the website's name pill — they're the two
@@ -4403,11 +4407,16 @@
         openCtxMenu([
             { label: muted ? 'Unmute #' + name : 'Mute #' + name, icon: muted ? 'bell' : 'bell-off',
                 onClick: () => setChannelMuted(name, !muted) },
-            'sep',
-            { label: 'Rename channel', icon: 'pencil', disabled: name === 'general',
-                onClick: () => { switchChannel(name).then(() => $('btn-rename-channel').click()); } },
-            { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
-                onClick: () => { switchChannel(name).then(() => $('btn-delete-channel').click()); } }
+            // Reshaping a channel is admin-only server-side — deleting one drops
+            // every message in it, its reactions and its attachments. Offering
+            // the item to a member just produces a 403 toast.
+            ...(isAdmin() ? [
+                'sep',
+                { label: 'Rename channel', icon: 'pencil', disabled: name === 'general',
+                    onClick: () => { switchChannel(name).then(() => $('btn-rename-channel').click()); } },
+                { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
+                    onClick: () => { switchChannel(name).then(() => $('btn-delete-channel').click()); } }
+            ] : [])
         ], e.clientX, e.clientY);
     });
 
@@ -4610,6 +4619,9 @@
         }
         renderAccountCard();
         renderDmSection();
+        // The role decides which channel controls exist, and this is the point
+        // it becomes known — enterApp() renders the shell before it resolves.
+        renderMe();
     }
 
     // Signing in mid-session: the socket was opened without an account, so
