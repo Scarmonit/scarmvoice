@@ -83,6 +83,82 @@ describe('the dark surface ramp', () => {
     });
 });
 
+describe('the settings card', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('is a card on a dimmed app, not a takeover', () => {
+        // Filling the window is the single thing that made this read as an older
+        // program: the reference leaves the app visible around all four sides.
+        const modal = /\.settings-modal \{[^}]*\}/.exec(css)[0];
+        expect(modal).toMatch(/width: min\(1400px, 88vw\)/);
+        expect(modal).toMatch(/border-radius: 8px/);
+        expect(modal).toMatch(/border: 1px solid/);
+        const sheet = /#settings \{[^}]*\}/.exec(css)[0];
+        expect(sheet).toMatch(/place-items: center/);
+        // Dimmed, NOT blurred. Measured on the reference: text behind the panel
+        // is as sharp as text inside it.
+        expect(sheet).toMatch(/background: rgba\(0, 0, 0, \.68\)/);
+        expect(sheet).toMatch(/backdrop-filter: none/);
+    });
+
+    it('floats above the app rather than reusing its shades', () => {
+        // The panel was the same values as the main window, so it read as the
+        // same layer. It is lighter than what is behind it now.
+        expect(/\.settings-modal \{[^}]*background: var\(--chat-2\)/.test(css)).toBe(true);
+        expect(/\.set-nav \{[^}]*background: var\(--chat\)/.test(css)).toBe(true);
+        expect(lum(hex('chat-2', dark))).toBeGreaterThan(lum(hex('chat', dark)));
+    });
+
+    it('gives the nav a column instead of a gutter', () => {
+        // 194px of nav floated to the right of a 604px column left 400px of
+        // nothing — the pre-redesign shape.
+        expect(/\.settings-modal \{[^}]*grid-template-columns: 252px/.test(css)).toBe(true);
+        expect(/\.set-nav \{[^}]*flex-direction: column/.test(css)).toBe(true);
+        expect(/\.set-nav-item \{[^}]*height: 36px/.test(css)).toBe(true);
+        expect(/\.set-nav-item \.ico \{[^}]*width: 18px/.test(css)).toBe(true);
+        expect(/\.set-search \{[^}]*height: 38px/.test(css)).toBe(true);
+    });
+
+    it('opens the nav with who you are, and a search you can find', () => {
+        expect(src()).toMatch(/me\.className = 'set-me'/);
+        expect(src()).toMatch(/function paintSettingsMe\(\)/);
+        // The magnifier the field had none of.
+        expect(src()).toMatch(/searchWrap\.innerHTML = I\('search'\)/);
+    });
+
+    it('carries the section name in a header bar, not in the body', () => {
+        expect(html()).toContain('class="set-head"');
+        expect(html()).toContain('id="settings-title"');
+        // The ring-and-ESC is gone; the reference has a plain x in the bar.
+        expect(html()).not.toContain('set-esc');
+        expect(src()).toMatch(/\$\('settings-title'\)\.textContent = h \? h\.textContent/);
+        // And the body's own copy of the title is out of the way rather than
+        // saying the same thing twice.
+        expect(css).toMatch(/\.set-group h3 \{ position: absolute; width: 1px/);
+    });
+
+    it('centres the reading column', () => {
+        expect(/\.set-group \{ max-width: 700px; margin: 0 auto; \}/.test(css)).toBe(true);
+    });
+
+    it('keeps the nav dim and the labels bright, not the reverse', () => {
+        // A clickable nav item and a static field label were rendering
+        // identically at the same mid-grey.
+        expect(/\.set-nav-item \{[^}]*color: var\(--nav-idle\)/.test(css)).toBe(true);
+        expect(lum(hex('nav-idle', dark))).toBeLessThan(lum(hex('muted', dark)));
+        expect(css).toMatch(/\.settings-modal \.row > span:first-child \{[\s\S]{0,120}color: var\(--text-strong\)/);
+    });
+
+    it('draws flat rows with rules, and destructive buttons in red', () => {
+        // Every group being a filled container is most of what made this
+        // heavier than the reference, and the sections ran together.
+        expect(css).toMatch(/\.settings-modal \.acct-card \{[\s\S]{0,160}box-shadow: 0 1px 0 var\(--line-2\)/);
+        expect(css).toMatch(/\.settings-modal \.acct-card \{[\s\S]{0,80}background: none/);
+        expect(css).toMatch(/\.settings-modal \.keycap\.danger \{[\s\S]{0,80}background: var\(--danger\)/);
+    });
+});
+
 describe('the user panel', () => {
     it('is an inset card, not a full-bleed strip', () => {
         // The card is the DOCK: it holds the voice section and the user panel

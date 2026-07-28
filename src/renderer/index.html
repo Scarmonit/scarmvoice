@@ -636,11 +636,14 @@
      they are first mentioned); data-nav-icon is any name from icons.js. -->
 <div id="settings" class="overlay" hidden>
   <div class="modal settings-modal">
-    <!-- Out of flow, so it does not scroll away with the section body. -->
-    <button type="button" class="set-esc" id="settings-close" aria-label="Close settings">
-      <span class="set-esc-ring"><span class="ico" data-icon="x"></span></span>
-      <span class="set-esc-cap">ESC</span>
-    </button>
+    <!-- A header bar inside the card: the section you are on, and the way out.
+         The body scrolls under it, so the title never leaves. -->
+    <header class="set-head">
+      <h2 id="settings-title">Account</h2>
+      <button type="button" class="set-x" id="settings-close" data-tip="Close (Esc)" aria-label="Close settings">
+        <span class="ico" data-icon="x"></span>
+      </button>
+    </header>
 
     <div class="modal-body" id="settings-body">
 

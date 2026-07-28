@@ -58,6 +58,9 @@
   /* The channel header's idle glyphs, a step below --muted: they are always
      there and never the thing you came to look at. */
   --ch-icon:    #96979e;
+  /* Settings nav, when it is not the page you are on. Dimmer than --muted so
+     the one you ARE on is the only bright thing in that column. */
+  --nav-idle:   #9a9aa0;
   /* The user panel's own type ramp. Both lines were brighter than the
      reference — the name by 24 points and the status by 19 — which is what made
      the panel shout next to a channel list that whispers. */
@@ -1867,42 +1870,75 @@ input[readonly] { opacity: .75; cursor: default; }
 .modal-body { padding: 6px 18px 20px; overflow-y: auto; min-height: 0; }
 
 /* ---------- settings ---------------------------------------------------- */
-/* Full-window rather than a card on a scrim. Settings is somewhere you go and
-   then leave, not a question you answer in front of the thing you were doing,
-   and a card that small forced the sections into a single long scroll.
-   Inset by the title bar so the OS window buttons stay live and the window can
-   still be dragged while it is open. */
+/* A card on a dimmed app, not a takeover. Filling the window was the single
+   thing that made this read as an older program: the reference leaves the app
+   visible around all four sides, which is what says "you are still in it".
+   Inset by the title bar so the OS window buttons stay live. */
 #settings {
   inset: var(--tb) 0 0 0;
-  place-items: stretch;
-  background: none;
+  place-items: center;
+  /* Dimmed hard, and NOT blurred. Measured on the reference: text behind the
+     panel is as sharp as text inside it, and the app drops to roughly a third
+     of its brightness. Blur here costs a full-screen filter every frame and
+     buys nothing the dim does not already do. */
+  background: rgba(0, 0, 0, .68);
   backdrop-filter: none;
 }
-/* Two columns: a nav whose CONTENT hugs the divider (the gutter left of it
-   grows with the window, as in the reference) and a reading column beside it. */
 .settings-modal {
   position: relative;
-  max-width: none; width: 100%; height: 100%; max-height: none;
-  border: 0; border-radius: 0; box-shadow: none;
-  background: var(--chat);
+  width: min(1400px, 88vw); height: min(760px, 86vh);
+  max-width: none; max-height: none;
+  background: var(--chat-2);
+  border: 1px solid var(--line-2); border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(232px, 1fr) minmax(0, 2.2fr);
-  grid-template-rows: minmax(0, 1fr);
-  grid-template-areas: "nav body";
+  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-areas: "nav head" "nav body";
 }
+/* A fixed column with the nav against its left edge. The old layout put a 194px
+   nav at the far right of a 604px column — a 400px gutter of nothing, which is
+   exactly the pre-redesign shape. */
 .set-nav {
-  grid-area: nav; min-height: 0; overflow-y: auto;
-  background: var(--side);
-  display: flex; justify-content: flex-end;
-  padding: 56px 6px 60px 20px;
+  grid-area: nav / nav / body / nav; min-height: 0; overflow-y: auto;
+  background: var(--chat);
+  display: flex; flex-direction: column;
+  padding: 16px 8px 24px;
 }
-.set-nav-in { width: 194px; display: flex; flex-direction: column; gap: 2px; }
 
+/* Who you are, at the top of your own settings. */
+.set-me {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 6px 8px; margin-bottom: 10px;
+  background: none; border: 0; border-radius: 4px; cursor: pointer;
+  text-align: left;
+}
+.set-me:hover { background: var(--hover); }
+.set-me-av {
+  width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%;
+  display: grid; place-items: center; position: relative;
+  font-size: 12px; font-weight: 800; color: var(--on-accent);
+}
+.set-me-text { min-width: 0; display: flex; flex-direction: column; }
+.set-me-name {
+  font-size: 14px; font-weight: 600; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-transform: lowercase;
+}
+.set-me-sub { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--panel-sub); }
+.set-me-sub .ico { width: 12px; height: 12px; flex: 0 0 12px; }
+
+.set-search-wrap { position: relative; margin-bottom: 12px; }
+.set-search-wrap .ico {
+  position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: var(--dim); pointer-events: none;
+}
 .set-search {
-  width: 100%; margin-bottom: 14px;
-  padding: 6px 9px; border-radius: 4px;
-  background: var(--rail); border: 1px solid transparent; outline: none;
-  color: var(--text); font-size: 13px;
+  width: 100%; height: 38px;
+  padding: 0 10px 0 31px; border-radius: 4px;
+  background: var(--sunk); border: 1px solid transparent; outline: none;
+  color: var(--text); font-size: 14px;
 }
 .set-search::placeholder { color: var(--dim); }
 .set-search:focus { border-color: var(--accent); }
@@ -1912,63 +1948,75 @@ input[readonly] { opacity: .75; cursor: default; }
 .set-nav-head {
   margin-top: 16px; padding: 6px 10px 4px;
   border-top: 1px solid var(--line);
-  font-size: 11px; font-weight: 700; letter-spacing: .04em;
-  text-transform: uppercase; color: var(--dim);
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: var(--dim);
 }
 .set-nav-in > .set-nav-head:first-of-type { margin-top: 0; border-top: 0; }
 .set-nav-head[hidden] { display: none; }
+.set-nav-in { display: flex; flex-direction: column; gap: 2px; }
 
 .set-nav-item {
   display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 6px 10px; border-radius: 4px; cursor: pointer;
+  height: 36px; padding: 0 10px; border-radius: 4px; cursor: pointer;
   background: none; border: 0; text-align: left;
-  color: var(--muted); font-size: 14px; font-weight: 500; line-height: 20px;
+  /* Dimmer than it was: the only thing on this column that should read as
+     bright is the one you are on. */
+  color: var(--nav-idle); font-size: 15px; font-weight: 500;
 }
 /* display:flex above outranks the UA's [hidden] rule, so the filter needs this
    or hiding a nav item does nothing at all. */
 .set-nav-item[hidden] { display: none; }
-.set-nav-item .ico { width: 17px; height: 17px; flex: 0 0 17px; opacity: .85; }
+.set-nav-item .ico { width: 18px; height: 18px; flex: 0 0 18px; stroke-width: 2; }
 .set-nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-nav-item:hover { background: var(--hover); color: var(--text); }
-.set-nav-item.on { background: var(--active); color: var(--text-strong); font-weight: 600; }
-.set-nav-item.on .ico { opacity: 1; }
+.set-nav-item.on { background: var(--float-2); color: var(--text-strong); font-weight: 600; }
 
-.settings-modal .modal-body { grid-area: body; padding: 56px 40px 80px; }
-
-/* The way out. A ring rather than a chrome button, captioned with the key that
-   does the same thing — the shortcut is only discoverable if it is written
-   somewhere. */
-.set-esc {
-  position: absolute; top: 56px; right: 26px; z-index: 2;
-  display: flex; flex-direction: column; align-items: center; gap: 7px;
-  background: none; border: 0; cursor: pointer; color: var(--dim);
+/* A header bar inside the card: the section's name on the left, the way out on
+   the right, and the body scrolling under it. */
+.set-head {
+  grid-area: head;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 16px 0 24px;
+  box-shadow: 0 1px 0 var(--line-2);
 }
-.set-esc-ring {
-  width: 36px; height: 36px; border-radius: 50%;
-  border: 2px solid currentColor;
-  display: grid; place-items: center;
-  transition: background .12s ease, transform .12s ease;
+.set-head h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 16px; font-weight: 600; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.set-esc .ico { width: 17px; height: 17px; stroke-width: 2.4; }
-.set-esc-cap { font-size: 11px; font-weight: 700; letter-spacing: .05em; }
-.set-esc:hover { color: var(--text); }
-.set-esc:hover .set-esc-ring { background: var(--hover); }
-.set-esc:active .set-esc-ring { transform: scale(.94); }
-@media (prefers-reduced-motion: reduce) { .set-esc-ring { transition: none; } }
+.set-x {
+  width: 32px; height: 32px; flex: 0 0 32px;
+  display: grid; place-items: center; padding: 0;
+  background: none; border: 0; border-radius: 4px; cursor: pointer;
+  color: var(--ch-icon);
+}
+.set-x:hover { background: var(--hover); color: var(--text-strong); }
+.set-x .ico { width: 20px; height: 20px; }
 
-/* One section at a time, so it is a page rather than a slab of a long scroll:
-   its own heading is the page title. */
-.set-group { max-width: 740px; }
+/* Centred, not shoved against the left edge with half the pane empty. */
+.settings-modal .modal-body { grid-area: body; padding: 32px 24px 60px; }
+
+.set-group { max-width: 700px; margin: 0 auto; }
 .set-group[hidden] { display: none; }
-.set-group h3 {
-  font-size: 20px; line-height: 24px; font-weight: 700;
-  letter-spacing: 0; text-transform: none; color: var(--text-strong);
-  margin: 0 0 20px;
+/* The section name lives in the header bar now, so repeating it at the top of
+   the body would say the same thing twice. Kept in the DOM: the nav is built
+   from these headings and the search reads them. */
+.set-group h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Flat rows on the panel, divided by hairlines — not a stack of filled boxes.
+   Every group being a container is most of what made this heavier than the
+   reference, and it left the sections running together with nothing between
+   them. */
+.settings-modal .row { margin-bottom: 16px; }
+/* Labels are near-white and the nav is dim, not the other way round: a
+   clickable nav item and a static field label were rendering identically. */
+.settings-modal .row > span:first-child {
+  flex-basis: 190px; color: var(--text-strong); font-size: 14px; font-weight: 500;
 }
-/* Roomier rows than a modal could afford, and a control that stops at a
-   readable width instead of stretching the whole column. */
-.settings-modal .row { margin-bottom: 15px; }
-.settings-modal .row > span:first-child { flex-basis: 176px; }
+.settings-modal .row > span.hint:first-child { color: var(--panel-sub); font-weight: 400; }
+.settings-modal .row.check > span { color: var(--text-strong); }
+.settings-modal .hint { color: var(--panel-sub); font-size: 13px; }
+.settings-modal .row.stack > span:first-child { font-size: 14px; }
 .settings-modal .row > input[type="text"],
 .settings-modal .row > select { max-width: 340px; }
 .row { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; font-size: 13.5px; }
@@ -2441,6 +2489,29 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .row.stack { display: block; }
 .row.stack > span:first-child { display: block; margin-bottom: 8px; color: var(--muted); }
 
+/* Flat, with a rule under it rather than a filled box: the avatar row is the
+   first row of the section, not a card sitting on it. */
+.settings-modal .acct-card {
+  background: none; border: 0; border-radius: 0;
+  padding: 0 0 20px; margin-bottom: 20px;
+  box-shadow: 0 1px 0 var(--line-2);
+}
+.settings-modal .ma-row {
+  background: none; border-radius: 0;
+  box-shadow: 0 1px 0 var(--line);
+}
+.settings-modal .acct-board input { background: var(--sunk); }
+.settings-modal .row input[type="text"],
+.settings-modal .row select { background: var(--sunk); }
+/* Destructive actions are drawn as destructive: a red word on the same grey
+   plate as everything else is a link that happens to be coloured. */
+.settings-modal .keycap.danger {
+  background: var(--danger); color: #fff; border-color: transparent;
+}
+.settings-modal .keycap.danger:hover { background: var(--danger-hi); color: var(--rail); }
+.settings-modal .keycap { background: var(--float-2); }
+.settings-modal .keycap:hover { background: var(--elev); }
+
 .acct-card {
   display: flex; align-items: center; gap: 14px;
   padding: 14px; margin-bottom: 16px;
@@ -2554,6 +2625,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --dim:         #76767c;
   --panel-icon:  #5a5a61;
   --ch-icon:     #6a6a71;
+  --nav-idle:    #6f6f76;
   --placeholder: #8e8e96;
 
   /* Inverted: a white lift on a white surface is invisible, and the reference

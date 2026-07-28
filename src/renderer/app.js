@@ -5757,6 +5757,7 @@
             $('set-search').value = '';
             $('set-search').dispatchEvent(new Event('input'));
         }
+        paintSettingsMe();
         if (showSettingsPane) showSettingsPane(null);
         $('settings').hidden = false;
         trapFocus($('settings'), { label: 'Settings', initial: $('settings-close') });
@@ -6491,6 +6492,15 @@
 
     // The section whose heading reads like this, for the callers that want to
     // land somewhere specific rather than on the first pane.
+    // The identity block at the top of the settings nav.
+    function paintSettingsMe() {
+        const av = document.getElementById('set-me-av');
+        if (!av) return;
+        const name = settings.displayName || 'Anonymous';
+        document.getElementById('set-me-name').textContent = name;
+        paintAvatarEl(av, name, myUserId());
+    }
+
     function settingsPaneByTitle(title) {
         return [...document.querySelectorAll('#settings-body .set-group')]
             .find((g) => {
@@ -6508,13 +6518,33 @@
         inner.className = 'set-nav-in';
         nav.appendChild(inner);
 
+        // Who you are, at the top of your own settings — and a way straight to
+        // the pane that changes it.
+        const me = document.createElement('button');
+        me.type = 'button';
+        me.className = 'set-me';
+        me.id = 'set-me';
+        me.innerHTML =
+            '<span class="set-me-av" id="set-me-av"></span>' +
+            '<span class="set-me-text">' +
+            '<span class="set-me-name" id="set-me-name">Anonymous</span>' +
+            '<span class="set-me-sub">Edit Profile' + I('pencil') + '</span>' +
+            '</span>';
+        me.addEventListener('click', () => showPane(settingsPaneByTitle('Account')));
+        inner.appendChild(me);
+
+        const searchWrap = document.createElement('div');
+        searchWrap.className = 'set-search-wrap';
+        searchWrap.innerHTML = I('search');
+
         const search = document.createElement('input');
         search.type = 'search';
         search.id = 'set-search';
         search.className = 'set-search';
         search.placeholder = 'Search';
         search.setAttribute('aria-label', 'Search settings');
-        inner.appendChild(search);
+        searchWrap.appendChild(search);
+        inner.appendChild(searchWrap);
 
         // Grouped by data-nav-group, in the order each group is FIRST mentioned,
         // so the divider order is decided by the markup and not by a second list
@@ -6565,6 +6595,9 @@
         });
 
         window.ScarmIcons.hydrate(nav);
+        // Painted here as well as on open: the nav is built once, and the panel
+        // has to be right the first time it is shown.
+        paintSettingsMe();
         modal.insertBefore(nav, modal.firstChild);
 
         // The section that owns the mic meter. Leaving it has to release the
@@ -6579,6 +6612,8 @@
                 it.g.hidden = it.g !== target;
                 it.b.classList.toggle('on', it.g === target);
             });
+            const h = target.querySelector('h3');
+            $('settings-title').textContent = h ? h.textContent : 'Settings';
             body.scrollTop = 0;
         }
 
