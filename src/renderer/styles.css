@@ -13,9 +13,8 @@
   /* ---- surfaces (dark → light, outside → in) ----
      Kept within ~4 points of neutral: blue minus red is noted after each one.
      Anything wider than that and the whole app reads navy. */
-  --rail:       #0c0c0e;   /* far-left server rail, the title bar, and the
-                              background the user card floats on        (+2) */
-  --side:       #131316;   /* channel sidebar + members sidebar         (+3) */
+  --rail:       #0c0c0e;   /* the background the user card floats on    (+2) */
+  --side:       #121214;   /* server rail + channel and member sidebars (+2) */
   --chat:       #1a1a1e;   /* message column                            (+4) */
   --sunk:       #17171a;   /* a well cut INTO the chat surface: the search
                               field, and anything else that reads as an
@@ -33,9 +32,10 @@
   --elev:       #343439;   /* hover on a raised control                 (+5) */
 
   --hover:      rgba(255, 255, 255, .045);
-  /* The plate behind the channel you are reading. Flat rather than a white
-     wash, so it lands on the same shade whatever surface it is drawn on. */
-  --chan-active: #2c2c30;
+  /* The plate behind the channel you are reading. A translucent overlay, not a
+     flat shade: it is drawn on the sidebar here and on other surfaces
+     elsewhere, and the reference lets it take the colour underneath. */
+  --chan-active: rgba(150, 150, 160, .20);
   --active:     rgba(255, 255, 255, .085);
   --msg-hover:  rgba(255, 255, 255, .022);
   --line:       rgba(255, 255, 255, .06);
@@ -67,7 +67,11 @@
   /* The speaker on a voice channel row: a marker, dimmer than the name. */
   --speaker-ico: #87878e;
   /* The date dividers, a step above --dim: they are structure, not a hint. */
-  --day-sep:    #9a9aa0;
+  --day-sep:    #96979e;
+  /* Author names and channel labels — a near-white that is not pure white. */
+  --author:     #fbfbfb;
+  /* Timestamps, category labels: the quietest text that is still text. */
+  --meta:       #81828a;
   /* The audio menus sit a step above --float: a menu opened from the user card
      has to read as being in front of the card, not level with it. */
   --menu:       #28282d;
@@ -123,7 +127,7 @@
   /* That plate. A lift of the red channel only — the reference's is +16 red
      with green and blue untouched, which is what keeps it reading as a tint of
      the surface rather than as a second colour. */
-  --danger-plate: rgba(242, 63, 67, .08);
+  --danger-plate: rgba(214, 41, 58, .12);
   --danger-soft: rgba(242, 63, 67, .13);
   --danger-line: rgba(242, 63, 67, .38);
 
@@ -483,8 +487,8 @@ button { font-family: inherit; }
   flex: 1; min-width: 0;
   display: flex; align-items: center; gap: 4px;
   padding: 2px 0; background: none; border: 0; cursor: pointer;
-  color: var(--dim); text-align: left;
-  font-size: 13.5px; font-weight: 600; letter-spacing: 0;
+  color: var(--meta); text-align: left;
+  font-size: 13.5px; font-weight: 500; letter-spacing: 0;
 }
 .cat-toggle:hover { color: var(--text); }
 /* After the label, and drawn pointing DOWN — at what it opens. Collapsed it
@@ -514,7 +518,7 @@ button { font-family: inherit; }
   position: relative;
   display: flex; align-items: center; gap: 6px;
   width: 100%; height: 32px; margin-bottom: 2px; padding: 0 8px;
-  background: none; border: 0; border-radius: 4px;
+  background: none; border: 0; border-radius: 8px;
   /* Dim, so the one you are reading is the only bright row. At --muted the
      active and inactive rows were close enough to flatten the distinction. */
   color: var(--dim); text-align: left; cursor: pointer;
@@ -569,7 +573,7 @@ button { font-family: inherit; }
   position: relative;
   display: flex; align-items: center; gap: 6px;
   width: 100%; height: 34px; padding: 0 8px;
-  background: none; border: 0; border-radius: 4px;
+  background: none; border: 0; border-radius: 8px;
   color: var(--muted); text-align: left; cursor: pointer;
   font-size: 15px; font-weight: 500;
 }
@@ -656,7 +660,7 @@ button { font-family: inherit; }
 #user-dock {
   grid-area: user; position: relative;
   margin: 0 8px 8px; border-radius: 8px;
-  background: var(--panel); border: 1px solid var(--line);
+  background: var(--panel); border: 1px solid rgba(153, 153, 153, .04);
   box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
 }
 
@@ -1111,12 +1115,12 @@ button { font-family: inherit; }
    different things about the message, not one phrase. */
 .msg-head { display: flex; align-items: baseline; gap: 15px; flex-wrap: wrap; }
 .msg-author {
-  font-weight: 600; font-size: 1em; color: var(--text-strong);
+  font-weight: 500; font-size: 1em; color: var(--author);
   /* Usernames are lower-case by rule and render that way, as in the panel and
      the account popover. Display only — nothing stored changes. */
   text-transform: lowercase;
 }
-.msg-time { font-size: 0.7em; color: var(--dim); font-weight: 500; }
+.msg-time { font-size: 0.75em; color: var(--meta); font-weight: 500; }
 .msg-text { font-size: 1em; line-height: 1.375; white-space: pre-wrap; word-break: break-word; user-select: text; color: var(--msg-text); }
 .msg-text a { color: var(--accent); text-decoration: none; }
 .msg-text a:hover { text-decoration: underline; }
@@ -2726,7 +2730,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --elev:       #e6e6e8;
 
   --hover:      rgba(0, 0, 0, .045);
-  --chan-active: #dcdcde;
+  --chan-active: rgba(90, 90, 100, .16);
   --active:     rgba(0, 0, 0, .085);
   --msg-hover:  rgba(0, 0, 0, .022);
   --line:       rgba(0, 0, 0, .08);
@@ -2744,6 +2748,8 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --nav-idle:    #6f6f76;
   --speaker-ico: #7c7c83;
   --day-sep:     #6f6f76;
+  --author:      #06060a;
+  --meta:        #6f7079;
   --menu:        #ffffff;
   --track:       #d4d4d8;
   --slider:      #4b55e0;

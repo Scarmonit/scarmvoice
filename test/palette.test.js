@@ -370,7 +370,9 @@ describe('the user dock', () => {
 
     it('draws one border around both, and a hairline between them', () => {
         const dock = (css.match(/#user-dock \{[^}]*\}/g) || []).find((r) => r.includes('margin'));
-        expect(dock).toMatch(/border:\s*1px solid var\(--line\)/);
+        // A fainter edge than a general hairline — measured off the live panel
+        // at four percent, where --line is six.
+        expect(dock).toMatch(/border:\s*1px solid rgba\(153, 153, 153, \.04\)/);
         // Positioned, because the soundboard tray clears the WHOLE card.
         expect(dock).toMatch(/position:\s*relative/);
         const at = css.indexOf('#voice-panel:has');
@@ -436,9 +438,10 @@ describe('the muted and deafened controls', () => {
     it('draws them in a red that can sit on that plate', () => {
         // A full-strength alert red on a red ground vibrates.
         expect(lum(hex('danger-lo', dark))).toBeLessThan(lum(hex('danger', dark)));
-        // The plate is a lift of the red channel, not a second colour.
+        // A tint, not a second surface — measured off the live panel at .12.
         const plate = /--danger-plate:\s*rgba\((\d+), (\d+), (\d+), \.(\d+)\)/.exec(css);
-        expect(Number('0.' + plate[4])).toBeLessThanOrEqual(0.1);
+        expect(Number('0.' + plate[4])).toBeLessThanOrEqual(0.15);
+        expect(Number(plate[1])).toBeGreaterThan(Number(plate[2]));
     });
 
     it('gives the mic and the headset the same ink to fill', () => {
@@ -1114,5 +1117,35 @@ describe('sliders', () => {
         expect(css).toMatch(/--slider:\s*#5d67f6/);
         expect(css).toMatch(/::-webkit-slider-runnable-track \{[^}]*var\(--slider\), var\(--slider\)/);
         expect(css).toMatch(/--track:\s*#474851/);
+    });
+});
+
+describe('values taken from the live client', () => {
+    // These were read off discord.com in DevTools rather than scanned from a
+    // screenshot: computed styles on the real elements. Where a value here
+    // disagrees with an earlier pixel measurement, this one wins.
+    it('uses the surfaces the client actually renders', () => {
+        expect(hex('side', dark).hex).toBe('#121214');
+        expect(hex('chat', dark).hex).toBe('#1a1a1e');
+        expect(hex('panel', dark).hex).toBe('#202024');
+    });
+
+    it('draws the active channel as an overlay with an 8px radius', () => {
+        // rgba(150,150,160,.20) on the sidebar, not a flat shade: the plate is
+        // drawn on different surfaces in different places and the client lets
+        // it take the colour underneath.
+        expect(css).toMatch(/--chan-active: rgba\(150, 150, 160, \.20\)/);
+        expect(/\.chan \{[^}]*border-radius: 8px/.test(css)).toBe(true);
+        expect(/\.vchan \{[^}]*border-radius: 8px/.test(css)).toBe(true);
+    });
+
+    it('sets author names medium, not semibold', () => {
+        // 500 at 16px in #fbfbfb — semibold was reading as a heading.
+        expect(/\.msg-author \{[^}]*font-weight: 500/.test(css)).toBe(true);
+        expect(hex('author', dark).hex).toBe('#fbfbfb');
+        // Timestamps and category labels share the quietest text tone.
+        expect(hex('meta', dark).hex).toBe('#81828a');
+        expect(css).toMatch(/\.msg-time \{ font-size: 0\.75em; color: var\(--meta\)/);
+        expect(/\.cat-toggle \{[^}]*font-weight: 500/.test(css)).toBe(true);
     });
 });
