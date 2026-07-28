@@ -24,6 +24,10 @@ const DEFAULTS = {
     pttKey: 'CommandOrControl+Shift+Space',   // accelerator used only by the toggle fallback
     echoCancellation: true,
     noiseSuppression: true,
+    // RNNoise. Both of these were written by the app and read all over it while
+    // being absent from this list, so "the default" was whatever `undefined`
+    // happened to mean at each call site.
+    noiseSuppressionAI: false,
     autoGainControl: false,     // AGC self-modulates level ("wobble") — off, as on the site
     inputVolume: 1,
     outputVolume: 1,
@@ -57,6 +61,7 @@ const DEFAULTS = {
     // Shell layout
     showMembers: true,           // right-hand members sidebar
     catTextOpen: true,           // "Text Channels" category expanded
+    catDmsOpen: true,            // "Direct Messages" category expanded
     catVoiceOpen: true,          // "Voice Channels" category expanded
 
     // Appearance

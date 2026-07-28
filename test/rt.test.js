@@ -370,8 +370,9 @@ describe('messages', () => {
         rt.sendTyping('random', false);
         expect(socket().lastSent()).toEqual({ t: 'typing', channel: 'random', name: 'Scarm', stop: false });
 
-        rt.sendVoice(true, false);
-        expect(socket().lastSent()).toEqual({ t: 'voice', inVoice: true, muted: false, name: 'Scarm' });
+        rt.sendVoice(true, false, true);
+        expect(socket().lastSent())
+            .toEqual({ t: 'voice', inVoice: true, muted: false, deafened: true, name: 'Scarm' });
 
         rt.sendPresence('away');
         expect(socket().lastSent()).toEqual({ t: 'presence', name: 'Scarm', status: 'away' });

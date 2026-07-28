@@ -433,6 +433,14 @@
           <span class="ico" data-icon="external"></span><span>Log Out</span>
         </button>
       </div>
+      <!-- Only while there is a call to leave. Its own card, below the account
+           one: leaving voice is not an account action, and the panel opens over
+           the very bar whose hang-up glyph is the only other way out. -->
+      <div class="mep-menu" id="mep-menu-voice" hidden>
+        <button type="button" class="mep-item danger" id="mep-leave-voice">
+          <span class="ico" data-icon="phone-hangup"></span><span>Leave Voice</span>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1187,14 +1195,10 @@
         <div class="row">
           <span class="hint">Updates install themselves as soon as they are ready. The app never restarts during a call.</span>
         </div>
-        <div class="row between" id="update-row">
-          <span class="hint" id="update-status">You're on the latest version.</span>
-          <span class="row-actions">
-            <!-- Stays reachable after the update card has been dismissed. -->
-            <button type="button" id="btn-release-notes" class="keycap" hidden>Release notes</button>
-            <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
-          </span>
-        </div>
+        <!-- Checking for updates, and the notes that come with them, moved to
+             About — where the version and the release history already are.
+             Behaviour is for how the app behaves; an update is not a behaviour
+             you configure, it is something that happens to the app. -->
         <!-- No Server URL field. It decided which host receives the session
              cookie AND the account token, both bearer-equivalent, so it was the
              one setting in this sheet that could hand somebody's credentials
@@ -1224,6 +1228,14 @@
              it, was not answerable without going and finding the repository.
              Fetched on demand: nothing loads this until the About pane is
              actually opened. -->
+        <div class="row between" id="update-row">
+          <span class="hint" id="update-status">You're on the latest version.</span>
+          <span class="row-actions">
+            <!-- Stays reachable after the update card has been dismissed. -->
+            <button type="button" id="btn-release-notes" class="keycap" hidden>Release notes</button>
+            <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
+          </span>
+        </div>
         <div class="row stack rn-head">
           <div class="rn-head-row">
             <div class="acct-removal-text">
@@ -1234,6 +1246,14 @@
           </div>
         </div>
         <div class="row stack" id="release-history"></div>
+        <!-- The ten most recent are enough to answer "what changed lately"
+             inside the app; eighty-odd collapsed rows is a directory, not an
+             answer. Everything older is one click away, where it is already
+             published. -->
+        <div class="row" id="rn-more-row" hidden>
+          <a class="linkish" id="rn-more" href="https://github.com/Scarmonit/scarmvoice/releases"
+             data-external="1">See every release on GitHub</a>
+        </div>
       </section>
     </div>
   </div>

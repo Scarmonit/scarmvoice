@@ -184,7 +184,15 @@ function createWindow(forceShow) {
     if (DEV) win.webContents.openDevTools({ mode: 'detach' });
 
     win.on('focus', () => win.webContents.send('win:focus', true));
-    win.on('blur', () => win.webContents.send('win:focus', false));
+    win.on('blur', () => {
+        win.webContents.send('win:focus', false);
+        // Nothing about the app's lifetime is guaranteed after this point — an
+        // update, a crash, a kill — and a debounced settings write is 250ms of
+        // exposure for something the user just chose. Only writes when one is
+        // pending, so alt-tabbing costs nothing.
+        store.flush();
+    });
+    win.on('hide', () => store.flush());
 
     // Coming back from the tray / a minimize is exactly when a socket that died
     // while hidden needs to be checked and revived — verify the connection and
@@ -930,7 +938,7 @@ function registerIpc() {
         return rt.notifyPosted(arg);
     });
     handle('rt:typing', (_e, { channel, stop }) => rt.sendTyping(channel, stop));
-    handle('rt:voice', (_e, { inVoice, muted }) => rt.sendVoice(inVoice, muted));
+    handle('rt:voice', (_e, { inVoice, muted, deafened }) => rt.sendVoice(inVoice, muted, deafened));
 
     handle('settings:get', () => store.get());
     handle('settings:set', (_e, patch) => store.set(patch));
@@ -1243,10 +1251,16 @@ async function retireVoicePresence() {
     if (voiceRetired) return;
     voiceRetired = true;
     const s = store.get();
+    // BEFORE the await, always. This defers the quit, and on an update the NSIS
+    // installer is already counting down to `taskkill` — so anything still
+    // sitting in the settings debounce has to be on disk before we start
+    // waiting on a network round trip that might not finish.
+    try { store.flush(); } catch (e) { /* best effort */ }
     try {
-        // Bounded: a dead network must not hold the app open, and a quit that
-        // hangs is a worse bug than the one this fixes. The row expires on its
-        // own if this never lands.
+        // Bounded, and deliberately shorter than the ~1s of grace the installer
+        // allows before it starts killing: a lost presence row ages out on its
+        // own in twelve seconds, where a process killed mid-quit loses whatever
+        // else the quit was going to do.
         await Promise.race([
             net.board('voice/presence', {
                 method: 'POST',
@@ -1257,7 +1271,7 @@ async function retireVoicePresence() {
                     leaving: true
                 }
             }),
-            new Promise((resolve) => setTimeout(resolve, 1500))
+            new Promise((resolve) => setTimeout(resolve, 800))
         ]);
     } catch (e) { /* going away regardless */ }
     voiceState.inVoice = false;
@@ -1265,6 +1279,10 @@ async function retireVoicePresence() {
 
 app.on('before-quit', (e) => {
     quitting = true;
+    // will-quit flushes too, but it is the LAST thing to run and does not run
+    // at all if something kills the process first. This one costs a single
+    // synchronous write and only when a write is actually pending.
+    store.flush();
     if (voiceRetired || !voiceState.inVoice) return;
     // Deferred, not blocked: quit again once the row is gone. The second pass
     // returns above, so this can only ever happen once.

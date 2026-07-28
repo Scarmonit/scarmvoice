@@ -52,8 +52,10 @@ async function openConversation(username) {
 }
 
 async function backToChannel() {
-    // The rail's DM button is the way out of the DM place entirely.
-    $('rail-dms').click();
+    // The SERVER MARK is the way out of the DM place. The DM button used to
+    // double as one, which is the toggle behaviour that was removed: a
+    // destination that throws you somewhere else when pressed twice.
+    $('rail-home').click();
     await settle();
 }
 

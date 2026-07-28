@@ -22,6 +22,17 @@ const STUBS = {
     'electron-updater': path.join(here, 'stubs', 'electron-updater.cjs')
 };
 
+// jsdom implements no scrolling at all, and the renderer scrolls in ordinary
+// paths (jumpToLatest uses Element.scrollTo). Absent, those throw into vitest's
+// unhandled-error trap — tests still pass, but they pass alongside an exception,
+// which is exactly how a real one goes unnoticed. Per-environment, so the
+// main-process files that share this setup are untouched.
+if (typeof Element !== 'undefined' && Element.prototype) {
+    const noop = () => {};
+    Element.prototype.scrollTo = Element.prototype.scrollTo || noop;
+    Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || noop;
+}
+
 const originalResolve = Module._resolveFilename;
 Module._resolveFilename = function (request, ...rest) {
     if (STUBS[request]) return STUBS[request];

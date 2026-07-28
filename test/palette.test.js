@@ -302,14 +302,17 @@ describe('the account panel', () => {
         expect(/\.me-id\[aria-expanded="true"\]\s*\{/.test(css)).toBe(false);
     });
 
-    it('is laid out as two cards, in the reference is order', () => {
+    it('is laid out as cards, in the reference is order', () => {
         const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
         const pop = html.slice(html.indexOf('id="me-popover"'), html.indexOf('<main id="main">'));
         const groups = pop.split('class="mep-menu"').slice(1);
-        expect(groups.length).toBe(2);
+        // Two standing cards, plus a third that only exists during a call and
+        // holds the single row that leaves it.
+        expect(groups.length).toBe(3);
         // Two rows each, split by a divider inside the card — the gap between
-        // the CARDS is what separates the groups.
-        groups.forEach((g) => {
+        // the CARDS is what separates the groups. The voice card is the
+        // exception: one row, nothing to divide it from.
+        groups.slice(0, 2).forEach((g) => {
             expect((g.match(/class="mep-item/g) || []).length).toBeGreaterThanOrEqual(2);
             expect(g).toContain('mep-sep');
         });

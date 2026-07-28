@@ -38,6 +38,7 @@ const THEM_UID = 3;
 let rtOnMessage = null;          // the renderer's socket handler
 let winOnFocus = null;           // main's focus/blur bridge
 let voiceApi = null;             // the fake engine, so a test can drive it
+let peerMuted = false;           // what the SFU says about THEIR microphone
 
 // The member list the presence endpoint returns — the person by their REAL id.
 const MEMBERS = [{ client_id: REAL, user_id: THEM_UID, name: 'XIAIX', status: 'online', custom: '' }];
@@ -179,7 +180,7 @@ beforeAll(async () => {
             join: async () => {}, leave: vi.fn(),
             roster: () => (voiceApi.joined
                 ? [{ id: 'me', name: 'Scarmonit', isMe: true, muted: false, deafened: false },
-                    { id: REAL, name: 'XIAIX', isMe: false, muted: false }]
+                    { id: REAL, name: 'XIAIX', isMe: false, muted: peerMuted }]
                 : []),
             shares: () => [],
             state: () => ({ joined: voiceApi.joined, shareQuality: '1080p', shareMotion: 'sharp' }),
@@ -217,6 +218,19 @@ describe('the voice roster', () => {
         expect(rows.length).toBe(2);
     });
 
+    it('offers the same voice menu from your own row in the member list', () => {
+        // The identical row in the member sidebar did nothing at all, while the
+        // one under the voice channel opened mute/deafen/leave. Same person,
+        // same call, two different answers depending on which list you clicked.
+        const mine = $('members-list').querySelector('.vp.me');
+        expect(mine).toBeTruthy();
+        mine.click();
+        const labels = Array.from($('ctx-menu').querySelectorAll('.ctx-label')).map((s) => s.textContent);
+        expect(labels).toContain('Leave Voice');
+        expect(labels.some((l) => /Mute Microphone|Unmute Microphone/.test(l))).toBe(true);
+        expect(labels.some((l) => /Deafen|Undeafen/.test(l))).toBe(true);
+    });
+
     it('offers you a way out of the call from your own row', () => {
         const mine = $('voice-users').querySelector('.vp.me');
         expect(mine).toBeTruthy();
@@ -228,6 +242,41 @@ describe('the voice roster', () => {
         Array.from($('ctx-menu').querySelectorAll('.ctx-item'))
             .find((b) => b.textContent.includes('Leave Voice')).click();
         expect(voiceApi.leave.mock.calls.length).toBe(before + 1);
+    });
+});
+
+describe('what everyone can see about a microphone', () => {
+    const peerRow = () => $('voice-users').querySelector(`.vp[data-cid="${REAL}"]`);
+
+    it('shows that somebody has muted THEMSELVES', async () => {
+        // voice.js maps this from the SFU's audioEnabled. It used to report
+        // `settings.localMuted[cid]` instead — whether *I* had silenced them —
+        // so muting yourself was visible to nobody but yourself.
+        peerMuted = true;
+        rtOnMessage({ t: 'voice', list: [{ cid: RT, user_id: THEM_UID, name: 'XIAIX', muted: true }] });
+        await settle(2);
+        expect(peerRow().querySelector('[title="Muted"]')).toBeTruthy();
+    });
+
+    it('shows that somebody has deafened themselves', async () => {
+        // Deafening never touches a published track, so the SFU cannot know it
+        // at all — it rides the presence layer, and the SFU row has to inherit
+        // it from there or nobody would ever see it.
+        rtOnMessage({
+            t: 'voice',
+            list: [{ cid: RT, user_id: THEM_UID, name: 'XIAIX', muted: true, deafened: true }]
+        });
+        await settle(2);
+        expect(peerRow().querySelector('[title="Deafened"]')).toBeTruthy();
+        peerMuted = false;
+    });
+
+    it('takes a peer mute from the SFU, not from my own local mute of them', () => {
+        // Static, because the mapping lives in voice.js's closure: the two are
+        // different facts and must not share a field again.
+        const voicejs = fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');
+        expect(voicejs).toContain('muted: p.audioEnabled === false');
+        expect(voicejs).toMatch(/localMuted: !!\(settings\.localMuted/);
     });
 });
 
@@ -270,6 +319,23 @@ describe('the rail', () => {
         // The way BACK. This used to jump a message list that was not on
         // screen and leave you exactly where you were, so the only exit was
         // pressing @ a second time — a toggle pretending to be navigation.
+        $('rail-home').click();
+        await settle();
+        expect(inDmPlace()).toBe(false);
+    });
+
+    it('only ever goes TO direct messages, never back out of them', async () => {
+        $('rail-dms').click();
+        await settle();
+        expect(inDmPlace()).toBe(true);
+
+        // Pressing it again used to throw you back to the channel. A
+        // destination that means "leave" when you are already on it is the
+        // reason the way back was not findable.
+        $('rail-dms').click();
+        await settle();
+        expect(inDmPlace()).toBe(true);
+
         $('rail-home').click();
         await settle();
         expect(inDmPlace()).toBe(false);

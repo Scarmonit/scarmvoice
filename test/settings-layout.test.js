@@ -59,6 +59,57 @@ describe('the server URL', () => {
     });
 });
 
+describe('updates', () => {
+    it('are checked for from About, with the version and the notes', () => {
+        const about = section('About');
+        expect(about).toContain('id="btn-check-update"');
+        expect(about).toContain('id="release-history"');
+        expect(about).toContain('id="set-version"');
+    });
+
+    it('are not configured from Behaviour any more', () => {
+        // Behaviour is how the app behaves; an update is not a behaviour you
+        // configure, it is something that happens to the app.
+        expect(section('Behaviour')).not.toContain('btn-check-update');
+    });
+
+    it('link out to the full history, since only the recent ones are listed', () => {
+        const about = section('About');
+        expect(about).toContain('github.com/Scarmonit/scarmvoice/releases');
+        expect(appjs).toContain('const HISTORY_SHOWN = 10;');
+    });
+});
+
+describe('settings durability', () => {
+    const mainjs = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.js'), 'utf8');
+    const updaterjs = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+    const storejs = fs.readFileSync(path.join(ROOT, 'src', 'main', 'store.js'), 'utf8');
+
+    it('flushes before handing the app to the installer', () => {
+        // Writes are debounced 250ms; the NSIS updater allows about a second
+        // and then force-kills, and a force-kill runs no 'will-quit'. That is
+        // how a setting changed shortly before an update came back as its
+        // default.
+        const at = updaterjs.indexOf('function installNow');
+        expect(at).toBeGreaterThan(-1);
+        expect(updaterjs.slice(at, at + 900)).toContain('store.flush()');
+    });
+
+    it('flushes on the way out and on the way to the background', () => {
+        expect(mainjs).toMatch(/before-quit[\s\S]{0,400}store\.flush\(\)/);
+        expect(mainjs).toMatch(/win\.on\('blur'[\s\S]{0,400}store\.flush\(\)/);
+        expect(mainjs).toContain("win.on('hide', () => store.flush());");
+    });
+
+    it('declares a default for every setting the app writes', () => {
+        // A key the app writes but DEFAULTS does not name has no defined
+        // default at all — "the default" becomes whatever undefined happens to
+        // mean at each call site.
+        expect(storejs).toMatch(/^\s*catDmsOpen:/m);
+        expect(storejs).toMatch(/^\s*noiseSuppressionAI:/m);
+    });
+});
+
 describe('the profile picture limit', () => {
     it('is 5 MB on the client', () => {
         expect(appjs).toContain('const AVATAR_MAX_BYTES = 5 * 1024 * 1024;');

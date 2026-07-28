@@ -739,7 +739,19 @@
                         id: cid,
                         name: p.name || 'Anonymous',
                         isMe: false,
-                        muted: !!(settings.localMuted && settings.localMuted[cid]),
+                        // THEIR microphone, not my opinion of it. This used to
+                        // report `settings.localMuted[cid]` — whether *I* had
+                        // silenced them — so somebody muting themselves was
+                        // visible to nobody but themselves, and a person I had
+                        // locally muted was shown to me as having muted
+                        // themselves. Two different facts under one name.
+                        //
+                        // audioEnabled is the SFU's own view of their published
+                        // track, so it is both authoritative and immediate.
+                        muted: p.audioEnabled === false,
+                        // Kept separately, because the roster still wants to
+                        // show that I have silenced someone.
+                        localMuted: !!(settings.localMuted && settings.localMuted[cid]),
                         volume: settings.localVolumes && settings.localVolumes[cid] !== undefined
                             ? Number(settings.localVolumes[cid]) : 1,
                         audioEnabled: p.audioEnabled !== false

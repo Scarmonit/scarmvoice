@@ -267,8 +267,8 @@ module.exports = {
         t: 'typing', channel: channel || 'general',
         name: store.get().displayName || 'Anonymous', stop: !!stop_
     }),
-    sendVoice: (inVoice, muted) => send({
-        t: 'voice', inVoice: !!inVoice, muted: !!muted,
+    sendVoice: (inVoice, muted, deafened) => send({
+        t: 'voice', inVoice: !!inVoice, muted: !!muted, deafened: !!deafened,
         name: store.get().displayName || 'Anonymous'
     }),
     sendPresence: (status) => send({

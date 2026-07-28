@@ -274,7 +274,8 @@ describe('the same message in a channel', () => {
     beforeAll(async () => {
         $('dm-close').click();
         // Back out of the DM view entirely, so the composer is the channel's.
-        $('rail-dms').click();
+        // The server mark, not the DM button — that one only ever goes TO DMs.
+        $('rail-home').click();
         await settle();
     });
 

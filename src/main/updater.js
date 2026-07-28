@@ -346,6 +346,13 @@ function startDownload() {
 function installNow() {
     const u = load();
     if (!u) return { ok: false };
+    // Settings are written on a 250ms debounce, and the NSIS updater gives the
+    // running app about a second before `taskkill`, then force-kills it — and a
+    // force-kill runs no 'will-quit', so the pending write is simply lost. That
+    // is how a setting changed shortly before an update came back as its
+    // default. Flush at the moment we decide to replace the app, so nothing
+    // downstream has to be quick enough.
+    try { store.flush(); } catch (e) { /* the quit path flushes again */ }
     // isSilent=true (silent install), isForceRunAfter=true (relaunch app).
     setImmediate(() => { try { u.quitAndInstall(true, true); } catch (e) { console.error('[update] install failed', e.message); } });
     return { ok: true };

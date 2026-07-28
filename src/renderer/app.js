@@ -3544,6 +3544,9 @@
                 // The user panel's second line reports the call, so it has to
                 // follow joining and leaving.
                 renderMe();
+                // …and so does the panel over it, whose Leave Voice row only
+                // exists while there is a call. It self-guards on being open.
+                paintMePopover();
                 // Leaving the call with the tray open would strand it above an
                 // empty voice panel with nothing it can do.
                 if (!st.joined) closeSoundboard();
@@ -3557,7 +3560,7 @@
                 $('stage-motion').textContent = st.shareMotion === 'smooth' ? 'Smooth' : 'Sharp';
 
                 L.app.setVoiceState({ inVoice: st.joined, muted: st.muted, deafened: st.deafened });
-                L.rt.sendVoice(st.joined, st.muted);
+                L.rt.sendVoice(st.joined, st.muted, st.deafened);
 
                 if (st.joined) startPresence(); else stopPresence();
             },
@@ -4113,7 +4116,31 @@
         const uidFor = (p) => uidByCid.get(p.id) ||
             uidByName.get(String(p.name || '').trim().toLowerCase()) || null;
 
-        live.forEach((p) => byId.set(p.id, Object.assign({}, p, { uid: uidFor(p) })));
+        // Deafening is not a thing the SFU knows — it is a local decision about
+        // what you HEAR, so it never touches a published track. It travels on
+        // the presence layer instead, which means the SFU row for a peer has to
+        // pick it up from there or nobody would ever see it.
+        //
+        // `muted` is NOT taken from presence: the SFU's own view of their
+        // published track is both authoritative and immediate, where presence
+        // is a five-second heartbeat, and preferring it would leave a muted
+        // icon hanging for seconds after somebody unmutes.
+        const presByCid = new Map();
+        const presByUid = new Map();
+        presence.forEach((p) => {
+            if (p.client_id) presByCid.set(p.client_id, p);
+            if (p.user_id) presByUid.set(p.user_id, p);
+        });
+        const presFor = (p, uid) => presByCid.get(p.id) || (uid ? presByUid.get(uid) : null);
+
+        live.forEach((p) => {
+            const uid = uidFor(p);
+            const pres = p.isMe ? null : presFor(p, uid);
+            byId.set(p.id, Object.assign({}, p, {
+                uid,
+                deafened: p.isMe ? p.deafened : !!(pres && pres.deafened)
+            }));
+        });
         presence.forEach((p) => {
             if (!byId.has(p.client_id)) {
                 byId.set(p.client_id, {
@@ -4175,7 +4202,10 @@
             // "You" by account as well as by install — the merged row may carry
             // your other device's id.
             const isMe = p.id === settings.clientId || !!(account && p.uid && p.uid === account.id);
-            const localMuted = !isMe && settings.localMuted && settings.localMuted[p.id];
+            // Two different facts: they silenced themselves (p.muted, from the
+            // SFU) versus I silenced them (localMuted, mine alone).
+            const localMuted = !isMe && ((p.localMuted) ||
+                (settings.localMuted && settings.localMuted[p.id]));
             // In the room but absent from our SFU peer list: present, yet unable
             // to exchange media with us.
             const unreachable = !!(inCall && p.remoteOnly && !isMe);
@@ -4216,6 +4246,11 @@
     function openSelfVoiceMenu(anchor) {
         if (!voice || !voice.isJoined()) return;
         const r = anchor.getBoundingClientRect();
+        // The three lists that can open this sit on OPPOSITE window edges — the
+        // voice roster and the member sidebar — so the menu opens away from
+        // whichever edge it was summoned from. openCtxMenu clamps, but a menu
+        // clamped against the right edge covers the row it belongs to.
+        const x = (r.left > window.innerWidth / 2) ? (r.left - 210) : (r.right + 6);
         const muted = voice.isMuted();
         const deafened = voice.isDeafened();
         openCtxMenu([
@@ -4233,7 +4268,7 @@
                     $('voice-panel').classList.add('is-gone');
                     leaveVoice();
                 } }
-        ], r.right + 6, r.top);
+        ], x, r.top);
     }
 
     // Everyone present, grouped online / away like Discord's members sidebar.
@@ -4345,6 +4380,12 @@
             wireAvatarFallback(li);
             if (p && !isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
+            } else if (isMe && inCall) {
+                // Your own row here did nothing, while the identical row under
+                // the voice channel opened the mute/deafen/leave menu. Same
+                // person, same call, two different answers depending on which
+                // list you happened to click them in.
+                li.addEventListener('click', (e) => openSelfVoiceMenu(e.currentTarget));
             }
             return li;
         };
@@ -4694,6 +4735,9 @@
                 clientId: settings.clientId,
                 name: settings.displayName || 'Anonymous',
                 muted: voice ? voice.isMuted() : false,
+                // Published like `muted` so everyone sees it, and from the same
+                // source, so the two can never disagree.
+                deafened: voice ? voice.isDeafened() : false,
                 leaving: !!leaving
             }
         });
@@ -4899,6 +4943,7 @@
     // and go through the SAME renderNoteBlocks the update modal uses: built with
     // createElement + textContent, never markup, because this is remote text.
 
+    const HISTORY_SHOWN = 10;       // how many get a section here; see below
     let historyLoaded = false;      // only fetched once per session
     let historyLoading = false;
 
@@ -4922,16 +4967,27 @@
             sub.textContent = (res && res.error)
                 ? 'Could not load the release notes — ' + res.error + '.'
                 : 'Could not load the release notes.';
+            // The link still works when the list does not, which is exactly
+            // when somebody most wants it.
+            $('rn-more-row').hidden = false;
             return;
         }
         retry.hidden = true;
 
-        const list = res.releases || [];
-        if (!list.length) {
+        const all = res.releases || [];
+        if (!all.length) {
             sub.textContent = 'No releases have been published yet.';
+            $('rn-more-row').hidden = true;
             return;
         }
-        sub.textContent = list.length + ' release' + (list.length === 1 ? '' : 's') + ', newest first.';
+        // Ten. Enough to answer "what changed lately" without turning a
+        // settings pane into a directory of eighty collapsed rows — and the
+        // rest are one click away, already published, under the link below.
+        const list = all.slice(0, HISTORY_SHOWN);
+        sub.textContent = all.length > list.length
+            ? 'The ' + list.length + ' most recent, newest first.'
+            : list.length + ' release' + (list.length === 1 ? '' : 's') + ', newest first.';
+        $('rn-more-row').hidden = false;
 
         // The version this build IS, so the entry for it can say so — the single
         // most useful thing this list can tell you.
@@ -5008,6 +5064,12 @@
     }
 
     $('rn-refresh').addEventListener('click', () => loadReleaseHistory(true));
+    // A real <a> so it reads and copies as a link, opened through the shell —
+    // the renderer must never navigate itself (see will-navigate in main.js).
+    $('rn-more').addEventListener('click', (e) => {
+        e.preventDefault();
+        L.app.openExternal(e.currentTarget.getAttribute('href'));
+    });
 
     $('ub-notes-toggle').addEventListener('click', openNotes);
     $('notes-close').addEventListener('click', closeNotes);
@@ -5142,7 +5204,7 @@
                     // devices as one entry — keep it.
                     voicePresence = m.list.map((v) => ({
                         client_id: v.cid || v.client_id, user_id: v.user_id || null,
-                        name: v.name, muted: v.muted
+                        name: v.name, muted: v.muted, deafened: v.deafened
                     }));
                     renderVoiceRoster();
                 }
@@ -5174,7 +5236,7 @@
                 if (m.voice) {
                     voicePresence = (m.voice || []).map((v) => ({
                         client_id: v.cid || v.client_id, user_id: v.user_id || null,
-                        name: v.name, muted: v.muted
+                        name: v.name, muted: v.muted, deafened: v.deafened
                     }));
                     renderVoiceRoster();
                 }
@@ -5914,6 +5976,8 @@
         // Nothing to switch to and no id to copy without an account, which
         // leaves that whole card with nothing in it.
         $('mep-menu-account').hidden = !account;
+        // And nothing to leave when there is no call.
+        $('mep-menu-voice').hidden = !(voice && voice.isJoined());
     }
 
     function openMePopover() {
@@ -5995,6 +6059,13 @@
         await openSettings();
         $('set-status').focus();
         $('set-status').select();
+    });
+
+    $('mep-leave-voice').addEventListener('click', () => {
+        closeMePopover();
+        // Tray first, round trip second — leaving is instant on screen.
+        $('voice-panel').classList.add('is-gone');
+        leaveVoice();
     });
 
     $('mep-copy-id').addEventListener('click', () => {
@@ -10270,7 +10341,17 @@
     // conversation, because that is what a home button does.
     $('rail-dms').addEventListener('click', () => {
         if (!account) { openSettings(); return; }
-        if (dmMode) { setDmMode(false); return; }
+        // Only ever a way IN. This used to toggle — pressing it while already
+        // in direct messages threw you back to the channel — which is what a
+        // destination must not do: the server mark beside it is the way back,
+        // and a button that means two things depending on where you are is why
+        // people could not find it.
+        if (dmMode) {
+            // Already here. Land on a conversation if none is open, so the
+            // press still does something when there is something to do.
+            if (!dmOpen && dmThreads.length) openDm(dmThreads[0]);
+            return;
+        }
         setDmMode(true);
         if (dmThreads.length) openDm(dmThreads[0]);
     });
