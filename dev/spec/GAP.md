@@ -171,15 +171,28 @@ Done in v0.20.0:
 - Harness board stub is path-aware — it used to answer `dm/threads` with the
   channel list, so the DM list was permanently empty there.
 
-Still outstanding — **layout**, not behaviour:
+Done in v0.21.0 — the layout half:
 
-1. Panel → full-column view; rail home button as the entry point. Ours is still
-   `<aside id="dm-panel">` sliding over the app; the reference gives DMs the
-   whole main column.
-2. Sidebar DM list at the measured metrics (42px rows, radius 8px, padding
-   `0 0 0 8px`, avatar + status dot). Ours reuses the channel row.
-3. Group avatars — the reference stacks member faces; we mark groups with `#`.
-4. Leave / rename a group, add someone to an existing one. No endpoint yet.
+- Full-column view. The panel moved out of `#main` (as a child of it, it could
+  only ever overlay one column) and spans header, message and member areas.
+  `grid-row: 1 / 4`, **not** `1 / 3`: `#main` occupies rows 2 *and* 3, the
+  composer living in the third, so stopping at 3 left the channel composer
+  showing under the DM's own. Every measured number said the panel was placed
+  correctly; only the screenshot showed the two stacked message boxes.
+- Sidebar rows at the measured reference: 42px, radius 8px, padding left only,
+  a face instead of an `@`, two stacked faces for a group.
+- Rail DM button above the separator with its own unread count.
+- Rename / leave / add via `dm/manage`. Adding reuses the picker. A group the
+  last member leaves is deleted with its messages — nobody could ever list it
+  again.
+
+Still outstanding:
+
+- Status dot on the DM row (presence for an arbitrary account is not wired to
+  the DM list yet).
+- Hiding a one-to-one conversation from your list. The reference's "close DM"
+  is a per-person hide; we have no per-member visibility flag, so leaving a
+  pair is deliberately refused rather than deleting half of someone's history.
 
 ## Done
 
