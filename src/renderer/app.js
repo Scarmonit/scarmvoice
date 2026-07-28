@@ -1262,7 +1262,18 @@
     }
 
     async function switchChannel(name) {
-        if (name === channel) return;
+        // Leaving a DM is part of picking a channel, and it has to happen
+        // BEFORE the early return. `channel` still holds whatever was open
+        // behind the conversation, so clicking that same channel matched here
+        // and did nothing at all — the DM stayed up and the click looked
+        // broken. Picking a different one switched the column underneath and
+        // left it covered, which looked the same.
+        const leavingDm = !!dmOpen;
+        if (leavingDm) closeDm();
+        if (name === channel) {
+            if (leavingDm) { setChannelTitle(name); renderChannels(); }
+            return;
+        }
         channel = name;
         await saveSettings({ channel: name });
         setChannelTitle(name);
@@ -2231,13 +2242,20 @@
         // message into the wrong channel.
         const quoteId = replyTarget ? replyTarget.id : null;
         const forChannel = channel;
+        // Pinned for the same reason the channel is: the conversation can be
+        // closed or switched while the request is in flight, and reading
+        // dmOpen after an await would deliver the message somewhere else.
+        const forDm = dmOpen ? dmOpen.id : null;
 
         input.value = '';
         autosize();
         $('btn-send').disabled = true;
         clearStaged();
         clearReply();
-        L.rt.sendTyping(channel, true);
+        // Typing indicators belong to a channel; a DM has no channel to
+        // broadcast into, and sending one told everyone you were typing in
+        // whatever channel happened to be selected behind the conversation.
+        if (!forDm) L.rt.sendTyping(channel, true);
 
         // With attachments, the text becomes the first one's caption so a
         // "here's the thing" message stays attached to the thing.
@@ -2249,19 +2267,37 @@
             let bodyPosted = false;
             for (let i = 0; i < attachments.length; i++) {
                 const carryBody = !bodyPosted;
-                if (await uploadOne(attachments[i], carryBody ? body : '', carryBody ? quoteId : null, forChannel)) {
+                if (await uploadOne(attachments[i], carryBody ? body : '', carryBody ? quoteId : null, forChannel, forDm)) {
                     ok++;
                     if (carryBody) bodyPosted = true;
                 }
             }
             if (ok) {
-                announcePosted(forChannel, body);
-                await loadMessages(true);
+                if (forDm) {
+                    await loadDmMessages(true);
+                    loadDmThreads();
+                } else {
+                    announcePosted(forChannel, body);
+                    await loadMessages(true);
+                }
             }
             if (!bodyPosted && body) {
                 input.value = body;      // the caption never went out — give it back
                 autosize();
                 updateSendEnabled();
+            }
+            return;
+        }
+
+        // A DM is not a post. Everything above this — staging, the caption
+        // rule, the upload loop — is shared; only the endpoint differs.
+        if (forDm) {
+            const dres = await sendDm(body, forDm);
+            if (!dres || !dres.success) {
+                input.value = body;              // give the text back
+                autosize();
+                updateSendEnabled();
+                toast((dres && dres.error) || 'Could not send the DM', true);
             }
             return;
         }
@@ -2459,7 +2495,11 @@
     // attachment only, matching the website. `chan` is pinned by the caller:
     // an upload can take minutes, and reading the live channel after it would
     // post the attachment into whatever channel the user switched to.
-    async function uploadOne(item, caption, quoteId, chan) {
+    // `dmThread` routes the finished upload to a conversation instead of a
+    // channel. Everything before the post is identical — the file goes to the
+    // same storage either way — which is why voice messages work in a DM too:
+    // they are an upload like any other.
+    async function uploadOne(item, caption, quoteId, chan, dmThread) {
         const row = addUploadRow(item.name, item.size);
 
         // A file that exists on disk is sent BY PATH: main streams it straight
@@ -2498,17 +2538,20 @@
             return false;
         }
 
-        const res = await L.board('post', {
-            method: 'POST',
-            body: {
-                body: caption || '',
-                name: settings.displayName || 'Anonymous',
-                clientId: settings.clientId,
-                channel: chan || channel,
-                quoteId: quoteId || null,
-                attachment: { key: up.key, name: up.name, type: up.type, size: up.size }
-            }
-        });
+        const attachment = { key: up.key, name: up.name, type: up.type, size: up.size };
+        const res = dmThread
+            ? await L.board('dm/send', { method: 'POST', body: { thread: dmThread, body: caption || '', attachment } })
+            : await L.board('post', {
+                method: 'POST',
+                body: {
+                    body: caption || '',
+                    name: settings.displayName || 'Anonymous',
+                    clientId: settings.clientId,
+                    channel: chan || channel,
+                    quoteId: quoteId || null,
+                    attachment
+                }
+            });
 
         row.remove();
         if (authGone(res)) return false;
@@ -8982,6 +9025,7 @@
         $('dm-panel').classList.toggle('is-group', dmOpen.isGroup);
         renderDmHead();
         $('dm-panel').hidden = false;
+        moveComposer(true);
         closeThread();
         dmMsgs = [];
         loadDmMessages.lastSig = null;    // the last conversation's payload isn't this one's
@@ -9000,7 +9044,8 @@
         const t = dmThreads.find((x) => x.id === id);
         if (t && t.unread) { t.unread = 0; renderDmSection(); }
         renderDmSection();
-        $('dm-input').focus();
+        setComposerPlaceholder();
+        $('composer-input').focus();
     }
 
     // The header carries everything that is true only of a group, so it is one
@@ -9029,12 +9074,7 @@
             if (window.ScarmIcons) window.ScarmIcons.hydrate(face);
         }
 
-        // "Message @Parker", not "Message…" — the field says where it is going.
-        const input = $('dm-input');
-        if (input && dmOpen) {
-            input.placeholder = 'Message ' + (dmOpen.isGroup ? dmOpen.title : '@' + dmOpen.title);
-        }
-
+        setComposerPlaceholder();
         renderDmProfile();
     }
 
@@ -9078,14 +9118,67 @@
         value.textContent = 'Board member #' + u.id;
         meta.appendChild(label);
         meta.appendChild(value);
+
+        // The button did nothing at all — it was styled and never wired.
+        $('dm-prof-full').onclick = () => openProfileCard(u);
+    }
+
+    // The fuller profile, as a card over the conversation. Everything the panel
+    // shows plus what does not fit in 302px.
+    function openProfileCard(u) {
+        const known = dmDirectory[u.id] || {};
+        const rows = [
+            ['Username', u.username],
+            ['Account id', String(u.id)],
+            ['Role', known.role === 'admin' ? 'Admin' : 'Member']
+        ];
+        openDialog({
+            title: u.username,
+            message: rows.map((r) => r[0] + ': ' + r[1]).join('\n'),
+            ok: 'Close',
+            withInput: false
+        });
+    }
+
+    // The one composer, relocated. Moving the node keeps every listener, every
+    // sub-control and the exact appearance, because it IS the same element —
+    // which is the whole point. A marker holds its place in #main so it goes
+    // back exactly where it was rather than at the end.
+    let composerHome = null;
+    function moveComposer(intoDm) {
+        const form = $('composer');
+        if (!form) return;
+        if (!composerHome) {
+            composerHome = document.createComment('composer');
+            form.parentNode.insertBefore(composerHome, form);
+        }
+        const slot = $('dm-composer-slot');
+        if (intoDm && slot) slot.appendChild(form);
+        else if (composerHome.parentNode) composerHome.parentNode.insertBefore(form, composerHome.nextSibling);
+        // Leaving a half-typed message and a staged upload behind when the
+        // surface changes would send them to the wrong conversation.
+        clearReply();
     }
 
     function closeDm() {
+        const was = dmOpen;
         dmOpen = null;
         loadDmMessages.lastSig = null;
         $('dm-panel').hidden = true;
         $('dm-panel').classList.remove('is-group');
+        if (was) moveComposer(false);
+        if (was) setComposerPlaceholder();
         renderDmSection();
+    }
+
+    // One place decides what the field says, so the channel and DM paths cannot
+    // disagree about it.
+    function setComposerPlaceholder() {
+        const input = $('composer-input');
+        if (!input) return;
+        input.placeholder = dmOpen
+            ? 'Message ' + (dmOpen.isGroup ? dmOpen.title : '@' + dmOpen.title)
+            : 'Message #' + channel;
     }
 
     function dmPanelOpen() { return !$('dm-panel').hidden; }
@@ -9174,7 +9267,14 @@
             name: nameOf(m.from),
             body: m.body,
             created_at: m.created_at,
-            pinned: 0
+            pinned: 0,
+            // Named as the channel list names them, so the shared renderer
+            // draws a DM attachment — image, file card, voice message — with
+            // no branch of its own.
+            att_key: m.att_key || '',
+            att_name: m.att_name || '',
+            att_type: m.att_type || '',
+            att_size: m.att_size || 0
         });
 
         // The DM equivalent of the channel welcome block. It is also what pushes
@@ -9232,19 +9332,15 @@
         if (atBottom) box.scrollTop = box.scrollHeight;
     }
 
-    $('dm-composer').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        if (!dmOpen) return;
-        const input = $('dm-input');
-        const body = input.value.trim();
-        if (!body) return;
-        const thread = dmOpen.id;
-        input.value = '';
+    // Sending a DM is a branch inside the real composer's submit handler now,
+    // not a second handler on a second form. See sendDm() below.
+    $('dm-close').addEventListener('click', closeDm);
+
+    // Text-only DM send, used by the shared composer. Attachments go through
+    // uploadOne(), which posts to the same endpoint with a key.
+    async function sendDm(body, thread) {
         const res = await L.board('dm/send', { method: 'POST', body: { thread, body } });
-        if (!res || !res.success) {
-            input.value = body;   // give the text back
-            return toast((res && res.error) || 'Could not send the DM', true);
-        }
+        if (!res || !res.success) return res;
         if (dmOpen && dmOpen.id === thread) {
             dmMsgs.push({
                 id: res.id, body, created_at: res.created_at || Date.now(),
@@ -9253,14 +9349,8 @@
             renderDmMessages();
         }
         loadDmThreads();
-    });
-    $('dm-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            $('dm-composer').requestSubmit();
-        }
-    });
-    $('dm-close').addEventListener('click', closeDm);
+        return res;
+    }
 
     // ---- new conversation picker ----
     // One picker for both: one person selected makes a DM, several make a

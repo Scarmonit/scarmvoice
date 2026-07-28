@@ -2977,25 +2977,9 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 /* Matched to the channel composer rather than reinvented: it was 21px shorter,
    had a different border, and dropped the attach button, so the same app asked
    for a message two different ways depending on who it was going to. */
-#dm-composer {
-  flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
-  padding: 0 8px 8px;
-}
-#dm-composer .dm-composer-row {
-  flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 4px;
-  background: var(--input); border: 1px solid var(--line-lo); border-radius: 8px;
-  padding: 0 8px;
-}
-#dm-composer textarea {
-  flex: 1; min-width: 0; resize: none; max-height: 120px; min-height: 40px;
-  background: none; border: 0; outline: none;
-  padding: 11px 4px; color: var(--text); font: inherit;
-}
-#dm-composer button {
-  flex: 0 0 auto; background: none; border: 0; cursor: pointer;
-  color: var(--muted); padding: 8px; border-radius: 7px;
-}
-#dm-composer button:hover { color: var(--text); background: var(--elev); }
+/* The DM composer is gone. There is one composer in this app and it is moved
+   into #dm-composer-slot while a DM is open, so it cannot look different or be
+   missing a control. */
 
 /* Login step 2: the mandatory account sign-in. */
 #login-acct { display: flex; flex-direction: column; }
@@ -3840,8 +3824,6 @@ button.ap-row:hover .ap-more { color: var(--text); }
 
 /* 58px, the same as the channel composer. It was 43 — a component diverging
    from our own, not just from the reference. */
-#dm-composer .dm-composer-row { min-height: 50px; }
-#dm-composer textarea { min-height: 48px; padding: 14px 4px; }
 
 /* ---- the DM profile panel ----------------------------------------------
    302px on the right of a one-to-one conversation, measured off the reference.
@@ -3895,5 +3877,7 @@ button.ap-row:hover .ap-more { color: var(--text); }
 /* Composer: 8px short of our own channel component. */
 #dm-composer .dm-composer-row { min-height: 50px; }
 #dm-composer textarea { min-height: 48px; padding: 14px 4px; }
-/* The + read dimmer than the trailing icons (157 against 174). */
-#dm-attach { color: var(--panel-icon); }
+
+/* The slot the shared composer lives in while a DM is open. It carries no
+   styling of its own — the composer brings its own, which is the point. */
+#dm-composer-slot { flex: none; }

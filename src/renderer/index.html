@@ -627,25 +627,13 @@
     <div id="dm-body">
     <div id="dm-main">
     <div id="dm-messages"></div>
-    <!-- Same shape as the channel composer: attach on the left, the field, then
-         send. It used to be a bare textarea 21px shorter with no attach button,
-         so the app asked for a message two different ways depending on who it
-         was going to. The placeholder names the recipient, as the reference's
-         does — "Message @Parker", not "Message…". -->
-    <form id="dm-composer" autocomplete="off">
-      <div class="dm-composer-row">
-        <button type="button" id="dm-attach" title="Attach a file">
-          <span class="ico" data-icon="plus"></span>
-        </button>
-        <textarea id="dm-input" rows="1" placeholder="Message" maxlength="2000"></textarea>
-        <button type="button" id="dm-emoji" title="Emoji">
-          <span class="ico" data-icon="smile"></span>
-        </button>
-      </div>
-      <button type="submit" id="dm-send" title="Send (Enter)">
-        <span class="ico" data-icon="send"></span>
-      </button>
-    </form>
+    <!-- No composer here. There is ONE composer in this app (#composer) and it
+         is moved into this slot while a DM is open, then put back.
+         A second one was built to look like it and drifted immediately: no
+         attach, no voice recorder, no reply chip, a different height and its
+         own placeholder. A lookalike can always be missing something; the
+         same element cannot. -->
+    <div id="dm-composer-slot"></div>
     </div>
 
     <!-- Who you are talking to, beside the conversation. The reference keeps
