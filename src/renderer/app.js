@@ -265,6 +265,8 @@
     // a file:// renderer, so it goes through L.fileUrl → lounge:// exactly like
     // attachments and custom emoji do.
     let avatarMap = {};
+    // The five-minute sweep armed by enterApp(), held so teardown can stop it.
+    let avatarTimer = null;
     // `account` is assigned much later in this file; both of these are only ever
     // called from render paths, long after it is set.
     function myUserId() { return (account && account.id) || 0; }
@@ -1139,7 +1141,13 @@
             // Somebody else changing their picture is not worth a poll of its
             // own — it happens about as often as people change their haircut.
             // Your own change repaints immediately; this catches everyone else's.
-            setInterval(refreshAvatars, 5 * 60 * 1000);
+            //
+            // Held, and cleared by teardownSession, like every other timer here.
+            // Unheld it survived sign-out and a second one was armed by the next
+            // enterApp(), so each sign-in cycle left another five-minute board
+            // call running from behind the login card for the life of the app.
+            clearInterval(avatarTimer);
+            avatarTimer = setInterval(refreshAvatars, 5 * 60 * 1000);
 
             if (settings.autoJoinVoice) joinVoice();
         } catch (e) {
@@ -2170,7 +2178,14 @@
 
     // Links open in the system browser. Attachments are saved through the
     // authenticated client — the browser has no way to fetch them itself.
-    $('messages').addEventListener('click', async (e) => {
+    //
+    // Bound to EVERY list renderMessage() draws into, not just the channel one.
+    // renderMessage attaches its own listeners per row (the hover actions,
+    // reactions, the right-click menu), but these three are delegated — so in
+    // the thread panel and in a conversation, clicking an image opened nothing
+    // and the download button under an attachment did nothing at all. The
+    // right-click menu offered both, which is how it went unnoticed.
+    async function onMessageListClick(e) {
         const a = e.target.closest('a[data-external]');
         if (a) { e.preventDefault(); L.app.openExternal(a.getAttribute('href')); return; }
 
@@ -2188,6 +2203,10 @@
         await saveAttachment(save.dataset.attKey, save.dataset.attName);
         save.disabled = false;
         lab.textContent = original;
+    }
+    ['messages', 'thread-list', 'dm-messages'].forEach((id) => {
+        const box = $(id);
+        if (box) box.addEventListener('click', onMessageListClick);
     });
 
     $('messages').addEventListener('scroll', () => {
@@ -2213,7 +2232,13 @@
         autosize();
         updateSendEnabled();
         const now = Date.now();
-        if (input.value.trim() && now - typingSentAt > TYPING_MS) {
+        // Never while a conversation is open. A DM has no channel to broadcast
+        // into, so this announced you as typing in whatever channel happened to
+        // be selected behind the drawer — to everyone in it, over the socket AND
+        // the HTTP fallback. The submit handler already withholds the matching
+        // "stopped typing" signal for exactly this reason; the start of it was
+        // still going out.
+        if (!dmOpen && input.value.trim() && now - typingSentAt > TYPING_MS) {
             typingSentAt = now;
             L.rt.sendTyping(channel, false);
             // The channel matters here too: without it the server files the
@@ -4981,6 +5006,9 @@
         if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
         clearTimeout(filterTimer);
         filterTimer = null;
+        // The profile-picture sweep. Slow enough that it was easy to miss, but
+        // it is a board call on a timer like any other.
+        if (avatarTimer) { clearInterval(avatarTimer); avatarTimer = null; }
         // The DM drawer holds its own poll-independent state; leaving it open
         // means the next session starts with a stranger's conversation on screen.
         closeDm();
@@ -7596,24 +7624,36 @@
         // In a thread, "Reply" means the thread composer — quoting a reply back
         // into the same thread would just be noise.
         const inThread = !!el.closest('#thread-list');
+        // The same rule the hover action bar follows: reply, threads, reactions
+        // and pins all read and write the posts table, and a DM is not a post.
+        // The action bar dropped them; this menu — which right-clicking any
+        // message opens — kept offering all four, so they were still one click
+        // away and answered with "Not found" or, for React, with nothing at all.
+        //
+        // Block goes too: a DM row's client_id is a synthetic 'dm-user-<id>'
+        // (see renderDmMessages), so blocking one filed a key nothing else in
+        // the app ever matches.
+        const dm = !!p.isDm;
         return [
-            inThread
+            !dm && (inThread
                 ? { label: 'Reply', icon: 'reply', onClick: () => $('thread-input').focus() }
-                : { label: 'Reply', icon: 'reply', onClick: () => setReplyTarget(p) },
-            !inThread && { label: 'Reply in thread', icon: 'thread', onClick: () => openThread(p.id) },
+                : { label: 'Reply', icon: 'reply', onClick: () => setReplyTarget(p) }),
+            !dm && !inThread && { label: 'Reply in thread', icon: 'thread', onClick: () => openThread(p.id) },
             // Anchored at the cursor, since the menu itself is gone by then.
-            { label: 'React…', icon: 'smile', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p.id, em)) },
-            'sep',
+            !dm && { label: 'React…', icon: 'smile', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p.id, em)) },
+            !dm && 'sep',
             { label: 'Copy text', icon: 'copy', onClick: () => copyMessage(p) },
             p.att_key && { label: 'Save attachment…', icon: 'download', onClick: () => saveAttachment(p.att_key, p.att_name) },
-            { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p.id, !p.pinned) },
+            !dm && { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p.id, !p.pinned) },
             mine && 'sep',
             mine && { label: 'Edit message', icon: 'pencil', onClick: () => startEdit(p, el) },
             mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
-            !mine && isAdmin() && 'sep',
-            !mine && isAdmin() && { label: 'Delete (admin)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
-            !mine && p.client_id && 'sep',
-            !mine && p.client_id && {
+            // A DM's delete endpoint checks authorship as well as membership, so
+            // an admin acting on someone else's message would be refused.
+            !dm && !mine && isAdmin() && 'sep',
+            !dm && !mine && isAdmin() && { label: 'Delete (admin)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
+            !dm && !mine && p.client_id && 'sep',
+            !dm && !mine && p.client_id && {
                 label: 'Block ' + (p.name || 'this person'), icon: 'ban', danger: true,
                 onClick: () => blockPerson(p.client_id, p.name)
             }
@@ -9129,9 +9169,13 @@
         panel.hidden = !u;
         if (!u) return;
 
-        // The banner takes its colour from the same generator the avatar uses,
-        // so the card reads as one person rather than two palettes.
-        $('dm-prof-banner').style.cssText = avatarStyle(u.username);
+        // The banner takes its colour from the same hash the avatar does, so the
+        // card reads as one person — but FLAT and dark, via bannerStyle, not the
+        // avatar's gradient. A saturated two-stop sweep is not a shape a header
+        // takes, and at 105px tall it drowns the name and the rows under it.
+        // (The account panel's banner has used bannerStyle since it was written;
+        // this one was built with the wrong helper.)
+        $('dm-prof-banner').style.cssText = bannerStyle(u.username);
         $('dm-prof-face').innerHTML =
             `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
             `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`;

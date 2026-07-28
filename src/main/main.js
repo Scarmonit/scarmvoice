@@ -1042,9 +1042,18 @@ function registerIpc() {
     // for the system answer. Repainting titleBarOverlay matters: the caption
     // buttons are drawn by Windows over our title bar, so a light theme with a
     // dark overlay leaves a black notch in the corner.
+    // Both shades track --side in styles.css, and the height tracks --tb, for
+    // the same reason the window's own titleBarOverlay does.
+    //
+    // These were left behind when the title bar shrank from 38px to 31px and
+    // changed shade. The renderer calls app:setTheme during boot — before the
+    // first paint — so the corrected overlay the window is CREATED with was
+    // overwritten within milliseconds on every single launch, and the notch the
+    // constructor's values exist to prevent was there the whole time: seven
+    // pixels of caption-button plate hanging below the bar, in the wrong colour.
     const OVERLAY = {
-        dark: { color: '#08090c', symbolColor: '#e9ebf0' },
-        light: { color: '#ffffff', symbolColor: '#31343b' }
+        dark: { color: '#131316', symbolColor: '#e9ebf0' },
+        light: { color: '#eeeeef', symbolColor: '#31343b' }
     };
 
     handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
@@ -1053,7 +1062,7 @@ function registerIpc() {
         const o = OVERLAY[theme === 'light' ? 'light' : 'dark'];
         if (!win || win.isDestroyed()) return false;
         try {
-            win.setTitleBarOverlay(Object.assign({ height: 38 }, o));
+            win.setTitleBarOverlay(Object.assign({ height: 31 }, o));
             win.setBackgroundColor(theme === 'light' ? '#f4f5f7' : '#101218');
         } catch (e) { /* not supported on this platform */ }
         return true;

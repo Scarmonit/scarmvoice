@@ -894,6 +894,23 @@ describe('the window shell', () => {
         expect(/titleBarOverlay: \{ color: '#131316'/.test(main)).toBe(true);
         expect(/#titlebar \{[^}]*background: var\(--side\)/.test(css)).toBe(true);
         expect(/#titlebar \{[^}]*box-shadow: 0 1px 0 var\(--line\)/.test(css)).toBe(true);
+
+        // …AND on the theme path, which is the one that actually decides what
+        // is on screen: the renderer calls app:setTheme during boot, so a stale
+        // height or colour there overwrites the constructor's within
+        // milliseconds of every launch and the assertions above prove nothing.
+        // That is exactly what happened when the bar shrank from 38px.
+        const themed = Number(/setTitleBarOverlay\(Object\.assign\(\{ height: (\d+) \}/.exec(main)[1]);
+        expect(themed).toBe(tb);
+        // Dark is the shade the window is BUILT with, so the two cannot
+        // disagree whichever of them is edited next.
+        const built = /titleBarOverlay: \{ color: '(#[0-9a-f]{6})'/i.exec(main)[1];
+        expect(new RegExp("dark: \\{ color: '" + built + "'").test(main)).toBe(true);
+        // Light is that theme's own --side; anything paler puts a white plate on
+        // a bar that is not white.
+        const lightSide = /--side:\s*(#[0-9a-f]{6})/i
+            .exec(css.slice(css.indexOf(':root[data-theme="light"]')))[1];
+        expect(new RegExp("light: \\{ color: '" + lightSide + "'").test(main)).toBe(true);
         // Centred name, and no wordmark competing with the sidebar's.
         expect(html()).toContain('class="tb-title"');
         expect(html()).not.toContain('class="tb-name"');
