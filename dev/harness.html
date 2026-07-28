@@ -69,6 +69,7 @@ window.lounge = {
     }
     if (p === 'dm/send') return { success: true, id: 900, thread: 2, created_at: NOW };
     if (p === 'dm/create') return { success: true, thread: DM_THREADS[1] };
+    if (p === 'dm/message') return { success: true, body: 'edited' };
     if (p === 'dm/manage') return { success: true, title: 'Renamed group', members: DM_THREADS[1].members, left: true };
     if (p === 'account/users') return { success: true, users: [
       { id: 2, username: 'Parker', role: 'member' },

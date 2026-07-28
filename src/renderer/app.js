@@ -2074,10 +2074,16 @@
         // Hover actions. Edit and delete are yours-only, so they're omitted
         // entirely on other people's messages rather than shown and rejected.
         const mine = ownsPost(p);
+        // Reactions, replies and pins read and write the posts table. A DM is
+        // not a post, so in a conversation those three are dropped rather than
+        // shown and then answered with "Not found" — which is exactly how the
+        // delete button behaved before dm/message existed. Copy is local, and
+        // edit and delete now have a DM endpoint of their own.
+        const dm = !!p.isDm;
         parts.push('<div class="msg-actions">' +
-            '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>' +
-            '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>' +
-            `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>' +
+            (dm ? '' : '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>') +
+            (dm ? '' : '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>') +
+            (dm ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
             '<button class="msg-act" data-act="copy" title="Copy text">' + I('copy') + '</button>' +
             (mine ? '<button class="msg-act" data-act="edit" title="Edit message">' + I('pencil') + '</button>' : '') +
             (mine ? '<button class="msg-act danger" data-act="delete" title="Delete message">' + I('trash') + '</button>' : '') +
@@ -8118,9 +8124,13 @@
             if (body === (p.body || '')) { restore(); return; }
 
             ta.disabled = true;
-            const res = await L.board('edit', {
-                method: 'POST', body: { id: p.id, clientId: settings.clientId, body }
-            });
+            // Same split as delete: /edit reads the posts table, so a DM has to
+            // go to its own endpoint or it fails the same way.
+            const res = p.isDm
+                ? await L.board('dm/message', { method: 'POST', body: { id: p.id, action: 'edit', body } })
+                : await L.board('edit', {
+                    method: 'POST', body: { id: p.id, clientId: settings.clientId, body }
+                });
 
             // restore(), NOT a bare state reset. Clearing editingRestore first
             // is what made this unrecoverable: relogin() calls teardownSession()
@@ -8139,6 +8149,15 @@
 
             editingId = null;
             editingRestore = null;
+            if (p.isDm) {
+                // Reload the conversation, not the channel — loadMessages here
+                // would refresh whatever channel sits behind the DM view and
+                // leave the edited message on screen unchanged.
+                await loadDmMessages(true);
+                loadDmThreads();
+                return toast('Message edited');
+            }
+
             // The server stamps edited_at, so reload rather than guessing — that
             // makes the "(edited)" marker reflect real server state.
             await loadMessages(false);
@@ -8158,6 +8177,19 @@
             'Delete', true
         );
         if (!ok) return;
+
+        // A DM is not a post: /delete reads the posts table, so sending a DM's
+        // id there asked for a post that does not exist and came back "Not
+        // found". Its own endpoint checks membership AND authorship.
+        if (p.isDm) {
+            const dres = await L.board('dm/message', { method: 'POST', body: { id: p.id, action: 'delete' } });
+            if (authGone(dres)) return;
+            if (!dres || !dres.success) return toast((dres && dres.error) || 'Could not delete', true);
+            dmMsgs = dmMsgs.filter((x) => x.id !== p.id);
+            renderDmMessages();
+            loadDmThreads();          // the thread list shows the last message
+            return toast('Message deleted');
+        }
 
         // clientId lets the server enforce ownership for signed-in members.
         const res = await L.board('delete', { method: 'POST', body: { id: p.id, clientId: settings.clientId } });
@@ -9317,6 +9349,9 @@
             body: m.body,
             created_at: m.created_at,
             pinned: 0,
+            // Lets the shared renderer drop the actions a DM has no backing
+            // for. Without it every one of them pointed at the posts table.
+            isDm: true,
             // Named as the channel list names them, so the shared renderer
             // draws a DM attachment — image, file card, voice message — with
             // no branch of its own.
