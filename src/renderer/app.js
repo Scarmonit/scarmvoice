@@ -3479,6 +3479,7 @@
 
     let lastSelfMuted = null;
     let lastSelfDeafened = null;
+    let wasJoined = false;      // for the joined -> left transition
 
     function setupVoice() {
         voice = window.createVoice({
@@ -3569,6 +3570,12 @@
                 L.rt.sendVoice(st.joined, st.muted, st.deafened);
 
                 if (st.joined) startPresence(); else stopPresence();
+                // Leaving is the moment to mint the NEXT token. The pointer is
+                // usually already inside the voice area when somebody hangs up,
+                // so no fresh hover arrives to trigger it — which is how every
+                // rejoin ended up paying for a token again.
+                if (wasJoined && !st.joined && entered) setTimeout(warmVoice, 400);
+                wasJoined = !!st.joined;
                 // Nothing emits "stopped speaking" for a meter that was torn
                 // down while silent, so the ring is cleared on the way out
                 // rather than left behind.
@@ -3651,18 +3658,26 @@
     // runs in the seconds before the click instead of inside it. Costs a wasted
     // parse when the guess is wrong, against the same parse happening while
     // somebody waits to be connected.
+    // TWO different lifetimes here, and conflating them was a bug.
+    //
+    // The SDK and the noise model are built once and cached for the session, so
+    // one latch is right for them. A participant token is CONSUMED by the join
+    // that uses it — so latching it meant exactly one join per session got a
+    // warm token and every rejoin paid the full ~800ms again. Measured: join 1
+    // spent 0ms on the token, joins 2-4 spent 848/790/777ms.
+    //
+    // voice.warm() is internally idempotent (a token still fresh is reused, and
+    // it declines while joined or joining), so calling it freely is safe.
     let voiceWarmed = false;
     function warmVoice() {
-        if (voiceWarmed) return;
-        voiceWarmed = true;
         try {
+            if (voice && voice.warm) voice.warm();
+            if (voiceWarmed) return;
+            voiceWarmed = true;
             if (window.ScarmLazy) window.ScarmLazy.realtimekit().catch(() => { voiceWarmed = false; });
             // Only when it is actually switched on — off, wrap() returns the raw
             // stream and none of this is on the path at all.
             if (window.ScarmNoise && settings.noiseSuppressionAI) window.ScarmNoise.warm();
-            // The measured heavyweight: a flat ~820ms round trip, the largest
-            // single fixed cost in a join, and none of it needs the click.
-            if (voice && voice.warm) voice.warm();
         } catch (e) { voiceWarmed = false; }
     }
     // The whole voice section, not just the button: a bigger target catches the

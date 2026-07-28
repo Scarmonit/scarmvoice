@@ -1269,9 +1269,15 @@
         function prefetchToken() {
             if (joined || joining) return;
             if (tokenAhead && (now() - tokenAhead.at) < TOKEN_FRESH_MS) return;
-            const entry = { at: now(), promise: mintToken() };
+            const t = now();
+            const entry = { at: t, promise: mintToken() };
             tokenAhead = entry;
-            entry.promise.catch(() => { if (tokenAhead === entry) tokenAhead = null; });
+            // Logged so the warm-up is checkable after the fact rather than
+            // inferred from whether the join that followed happened to be fast.
+            entry.promise.then(
+                () => mark('warm token ready', t),
+                () => { if (tokenAhead === entry) tokenAhead = null; }
+            );
         }
 
         // The token to join with, and whether it was one we had lying about —

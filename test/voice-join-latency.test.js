@@ -156,6 +156,50 @@ describe('the token minted before the click', () => {
         expect(tokenCalls).toBe(1);
     });
 
+    it('is minted again for the NEXT join, not just the first', async () => {
+        // The bug this pins: takeToken() CONSUMES the held token, so a warm-up
+        // that only ever ran once meant exactly one fast join per session.
+        // Measured before the fix — join 1 spent 0ms on the token, joins 2-4
+        // spent 848/790/777ms.
+        const v = makeVoice();
+        v.warm();
+        tokenGate.resolve({ success: true, token: 'first' });
+        await settle();
+        expect(tokenCalls).toBe(1);
+
+        // Join and leave.
+        v.join();
+        await settle(2);
+        sdkGate.resolve({ init: () => Promise.resolve(meeting) });
+        await settle();
+        expect(v.isJoined()).toBe(true);
+        v.leave();
+
+        // Warming again must actually mint one, because the last is spent.
+        tokenGate = deferred();
+        tokenGate.resolve({ success: true, token: 'second' });
+        v.warm();
+        await settle();
+        expect(tokenCalls).toBe(2);
+    });
+
+    it('declines to mint while a call is up', async () => {
+        const v = makeVoice();
+        v.join();
+        await settle(2);
+        sdkGate.resolve({ init: () => Promise.resolve(meeting) });
+        tokenGate.resolve({ success: true, token: 'jwt' });
+        await settle();
+        expect(v.isJoined()).toBe(true);
+
+        const before = tokenCalls;
+        v.warm();
+        await settle(2);
+        // Nothing to warm for: there is no next join to prepare while this one
+        // is still running.
+        expect(tokenCalls).toBe(before);
+    });
+
     it('falls back to a fresh one if the held token is rejected', async () => {
         // The one risk of minting early: a token can go stale between minting
         // and use. Left unhandled that turns a speed-up into people not being

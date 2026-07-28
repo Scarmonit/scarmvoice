@@ -195,7 +195,8 @@ beforeAll(async () => {
             isJoined: () => voiceApi.joined,
             isMuted: () => voiceApi.muted,
             isDeafened: () => voiceApi.deafened,
-            toggleMuted: vi.fn(), toggleDeafened: vi.fn()
+            toggleMuted: vi.fn(), toggleDeafened: vi.fn(),
+            warm: vi.fn()
         };
         return voiceApi;
     };
@@ -279,6 +280,23 @@ describe('what everyone can see about a microphone', () => {
         const voicejs = fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');
         expect(voicejs).toContain('muted: p.audioEnabled === false');
         expect(voicejs).toMatch(/localMuted: !!\(settings\.localMuted/);
+    });
+});
+
+describe('warming the next call', () => {
+    it('mints a fresh token when a call ends', async () => {
+        // A participant token is CONSUMED by the join that spends it, so the
+        // warm-up has to run again for the next one. Latched with the SDK — which
+        // genuinely is once per session — exactly one join per session got a warm
+        // token and every rejoin paid the full ~800ms round trip again.
+        //
+        // Leaving is also the moment no hover arrives to trigger it: the pointer
+        // is usually already sitting inside the voice area when somebody hangs up.
+        voiceApi.warm.mockClear();
+        voiceOpts.onState(Object.assign(voiceApi.state(), { joined: true }));
+        voiceOpts.onState(Object.assign(voiceApi.state(), { joined: false }));
+        await new Promise((r) => setTimeout(r, 700));
+        expect(voiceApi.warm).toHaveBeenCalled();
     });
 });
 

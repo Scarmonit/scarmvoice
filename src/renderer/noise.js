@@ -76,8 +76,18 @@
     // rather than inside it — see the warm-up in app.js.
     function warm() {
         if (!enabled) return Promise.resolve(false);
+        const t = Date.now();
         try {
-            return ensureWorklet().then(() => true, () => false);
+            return ensureWorklet().then(() => {
+                const ms = Date.now() - t;
+                const line = '[noise] model ready in ' + ms + 'ms';
+                console.info(line);
+                // Into the log file too: whether this finished BEFORE the first
+                // join is the whole question, and it is not answerable from the
+                // join timings alone.
+                try { window.lounge.app.log(line); } catch (e) {}
+                return true;
+            }, () => false);
         } catch (e) {
             return Promise.resolve(false);
         }
