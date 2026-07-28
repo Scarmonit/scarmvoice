@@ -80,8 +80,11 @@
 
   --radius: 10px;
   --tb: 38px;
+  /* A barely-there vertical lift, layered over a surface colour rather than
+     replacing it. Light in dark mode, dark in light mode — see the light block. */
+  --sheen: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0) 60%);
   --w-rail: 72px;
-  --w-side: 260px;
+  --w-side: 300px;
   --w-members: 232px;
 
   /* Chat text scale. Everything inside #messages sizes in em against this, so
@@ -537,7 +540,7 @@ button { font-family: inherit; }
 #me-bar {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 4px;
-  padding: 8px; background: var(--panel);
+  padding: 10px 8px; background: var(--sheen), var(--panel);
   box-shadow: 0 -1px 0 var(--divider);
 }
 #voice-panel:has(#voice-live:not([hidden])) + #me-bar { box-shadow: none; }
@@ -577,16 +580,16 @@ button { font-family: inherit; }
 .sb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sb-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--dim); text-align: center; }
 .me-id {
-  display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
-  padding: 3px 5px; border-radius: 5px;
+  display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1;
+  padding: 4px 6px; border-radius: 5px;
   background: none; border: 0; cursor: pointer; text-align: left;
 }
 .me-id:hover { background: var(--hover); }
-.me-av-wrap { position: relative; flex: 0 0 32px; width: 32px; height: 32px; }
+.me-av-wrap { position: relative; flex: 0 0 34px; width: 34px; height: 34px; }
 .me-avatar {
-  width: 32px; height: 32px; border-radius: 50%;
+  width: 34px; height: 34px; border-radius: 50%;
   display: grid; place-items: center;
-  font-size: 12px; font-weight: 800; color: var(--on-accent);
+  font-size: 13px; font-weight: 800; color: var(--on-accent);
 }
 .me-presence {
   position: absolute; right: -2px; bottom: -2px;
@@ -595,11 +598,11 @@ button { font-family: inherit; }
 }
 .me-text { min-width: 0; display: flex; flex-direction: column; }
 .me-name {
-  font-size: 14px; font-weight: 600; color: var(--text);
+  font-size: 15px; font-weight: 600; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .me-status {
-  display: block; max-width: 132px;
+  display: block; max-width: 150px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12px; color: var(--dim); font-weight: 500;
 }
@@ -610,12 +613,12 @@ button { font-family: inherit; }
    and sits tight against the icon, so the pair still scans as a single mic or
    headset button rather than two unrelated squares. */
 .me-ctl { display: flex; align-items: center; }
-.me-ctl .me-ctl-main { width: 28px; border-radius: 5px 2px 2px 5px; }
+.me-ctl .me-ctl-main { width: 32px; border-radius: 5px 2px 2px 5px; }
 .me-ctl .me-ctl-caret {
-  width: 14px; border-radius: 2px 5px 5px 2px;
+  width: 16px; border-radius: 2px 5px 5px 2px;
   color: var(--dim);
 }
-.me-ctl .me-ctl-caret .ico { width: 12px; height: 12px; }
+.me-ctl .me-ctl-caret .ico { width: 13px; height: 13px; }
 .me-ctl:hover .me-ctl-caret { color: var(--muted); }
 .me-ctl-caret[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 
@@ -1088,27 +1091,27 @@ button { font-family: inherit; }
 
 .composer-row {
   display: flex; align-items: flex-end; gap: 0;
-  background: var(--input); border: 0; border-radius: 8px;
-  min-height: 44px;
+  background: var(--sheen), var(--input); border: 0; border-radius: 8px;
+  min-height: 50px;
 }
 .composer-row:focus-within { box-shadow: 0 0 0 1px var(--accent-line); }
 #composer-input {
   flex: 1; min-width: 0;
   background: none; border: 0; outline: none; resize: none;
-  max-height: 45vh; line-height: 1.375; padding: 11px 0; font-size: 15px;
+  max-height: 45vh; line-height: 1.375; padding: 14px 0; font-size: 15px;
 }
 #composer-input::placeholder { color: var(--dim); }
 #btn-attach {
-  width: 44px; height: 44px; flex: 0 0 44px;
+  width: 50px; height: 50px; flex: 0 0 50px;
   display: grid; place-items: center; align-self: flex-end;
   background: none; border: 0; cursor: pointer; color: var(--muted);
 }
 #btn-attach:hover { color: var(--text); }
-#btn-attach .ico { width: 22px; height: 22px; }
+#btn-attach .ico { width: 24px; height: 24px; }
 .composer-tools {
   flex: 0 0 auto; align-self: flex-end;
   display: flex; align-items: center; gap: 2px;
-  height: 44px; padding: 0 8px 0 4px;
+  height: 50px; padding: 0 8px 0 4px;
 }
 #btn-emoji, #btn-mic {
   position: relative;
@@ -2218,6 +2221,9 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --muted:       #4e5058;
   --dim:         #767980;
 
+  /* Inverted: a white lift on a white surface is invisible, and the reference
+     darkens rather than lightens in its light theme. */
+  --sheen: linear-gradient(180deg, rgba(0, 0, 0, .028), rgba(0, 0, 0, 0) 60%);
   --field:      #ffffff;
   --field-line: rgba(0, 0, 0, .14);
   --code-bg:    #f0f1f4;
@@ -2450,10 +2456,10 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    The transform lives on the .ico, never on the button, so the hover pill
    itself stays perfectly still while the glyph inside it moves — animating the
    button would make the background jitter against its neighbours. */
-#btn-settings { width: 30px; }
+#btn-settings { width: 32px; }
 /* Full-size glyphs in the user panel: the reference sits at 20px, and the
    smaller ones were only ever a way to claw back room for the name. */
-#me-bar .icon-btn .ico { width: 20px; height: 20px; }
+#me-bar .icon-btn .ico { width: 22px; height: 22px; }
 #me-bar .icon-btn .ico {
   transition: transform .22s cubic-bezier(.2, .9, .3, 1.35);
   transform-origin: 50% 50%;
