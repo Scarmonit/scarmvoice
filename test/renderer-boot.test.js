@@ -412,8 +412,12 @@ describe('the audio panels behind the me-bar carets', () => {
         expect($('mic-pop').hidden).toBe(false);
         const titles = [...$('mic-pop').querySelectorAll('.ap-title')].map((t) => t.textContent.trim());
         expect(titles).toEqual([
-            'Input Device', 'Input Profile', 'Input Volume', 'Push to Talk', 'Voice Settings'
+            'Input Device', 'Input Profile', 'Input Volume', 'Input Level',
+            'Push to Talk', 'Voice Settings'
         ]);
+        // Three groups, two rules: the device pair, the level pair, and the two
+        // that leave the menu.
+        expect($('mic-pop').querySelectorAll('.ap-sep').length).toBe(2);
         expect(errors).toEqual([]);
     });
 

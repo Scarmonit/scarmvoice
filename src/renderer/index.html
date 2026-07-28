@@ -251,8 +251,8 @@
            pair: the toggle mutes/deafens, the caret picks the device. -->
       <div class="me-ctl">
         <button class="icon-btn me-ctl-main" id="btn-mute" data-tip="Mute" aria-label="Mute" aria-pressed="false">
-          <span class="ico" data-icon="mic"></span>
-          <span class="ico ico-off" data-icon="mic-off" hidden></span>
+          <span class="ico" data-icon="mic-solid"></span>
+          <span class="ico ico-off" data-icon="mic-solid-off" hidden></span>
         </button>
         <button class="icon-btn me-ctl-caret" id="btn-mic-menu" data-tip="Input Options" aria-label="Input Options" aria-haspopup="menu">
           <span class="ico" data-icon="chevron-down"></span>
@@ -260,8 +260,8 @@
       </div>
       <div class="me-ctl">
         <button class="icon-btn me-ctl-main" id="btn-deafen" data-tip="Deafen" aria-label="Deafen" aria-pressed="false">
-          <span class="ico" data-icon="headset"></span>
-          <span class="ico ico-off" data-icon="headset-off" hidden></span>
+          <span class="ico" data-icon="headset-solid"></span>
+          <span class="ico ico-off" data-icon="headset-solid-off" hidden></span>
         </button>
         <button class="icon-btn me-ctl-caret" id="btn-spk-menu" data-tip="Output Options" aria-label="Output Options" aria-haspopup="menu">
           <span class="ico" data-icon="chevron-down"></span>
@@ -323,10 +323,19 @@
       </span>
       <span class="ico ap-more" data-icon="chevron"></span>
     </button>
+    <div class="ap-sep"></div>
     <div class="ap-row ap-slider">
       <span class="ap-title">Input Volume</span>
       <input type="range" id="ap-input-volume" min="0" max="200" step="1" aria-label="Input volume">
     </div>
+    <!-- A live meter, so "is my microphone working" can be answered without
+         leaving the menu. Fed by the shared AudioContext, and only while the
+         panel is open — an open capture is not something to leave running. -->
+    <div class="ap-row ap-level">
+      <span class="ap-title">Input Level</span>
+      <div class="ap-meter" id="ap-meter" role="img" aria-label="Microphone level"></div>
+    </div>
+    <div class="ap-sep"></div>
     <label class="ap-row ap-check">
       <span class="ap-title">Push to Talk</span>
       <input type="checkbox" id="ap-ptt">
@@ -345,6 +354,7 @@
       </span>
       <span class="ico ap-more" data-icon="chevron"></span>
     </button>
+    <div class="ap-sep"></div>
     <div class="ap-row ap-slider">
       <span class="ap-title">Output Volume</span>
       <input type="range" id="ap-output-volume" min="0" max="200" step="1" aria-label="Output volume">

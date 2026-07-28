@@ -86,6 +86,32 @@
             '<path d="M5 11.2a6.4 6.4 0 0 0 12.8 0"/><path d="M11.4 17.6v3.6"/>' +
             '<circle class="rec-dot" cx="19.4" cy="4.9" r="2.7" fill="currentColor" stroke="none"/>',
 
+        // Solid versions for the user panel. A destination-or-state control is
+        // drawn filled there; the outline pair reads as two more toggles in a
+        // row of toggles.
+        'mic-solid': '<g fill="currentColor" stroke="none">' +
+            '<rect x="9.4" y="4" width="5.2" height="9.6" rx="2.6"/>' +
+            '<path d="M4 10.1a1.1 1.1 0 0 1 2.2 0 5.8 5.8 0 0 0 11.6 0 1.1 1.1 0 0 1 2.2 0' +
+            'A8 8 0 0 1 13.1 18v2.8h2.3a1.1 1.1 0 0 1 0 2.2H8.6a1.1 1.1 0 0 1 0-2.2h2.3V18' +
+            'A8 8 0 0 1 4 10.1Z"/></g>',
+        'mic-solid-off': '<g fill="currentColor" stroke="none">' +
+            '<rect x="9.4" y="4" width="5.2" height="9.6" rx="2.6"/>' +
+            '<path d="M4 10.1a1.1 1.1 0 0 1 2.2 0 5.8 5.8 0 0 0 11.6 0 1.1 1.1 0 0 1 2.2 0' +
+            'A8 8 0 0 1 13.1 18v2.8h2.3a1.1 1.1 0 0 1 0 2.2H8.6a1.1 1.1 0 0 1 0-2.2h2.3V18' +
+            'A8 8 0 0 1 4 10.1Z"/></g>' +
+            '<path class="ico-cut" fill="none" stroke="currentColor" d="M3.6 20.4L20.4 3.6"/>' +
+            '<path fill="none" stroke="currentColor" d="M3.6 20.4L20.4 3.6"/>',
+        'headset-solid': '<g fill="currentColor" stroke="none">' +
+            '<path d="M12 2.6a9.4 9.4 0 0 0-9.4 9.4v4.7a3.3 3.3 0 0 0 3.3 3.3h1.4a1.3 1.3 0 0 0 1.3-1.3' +
+            'v-5.6a1.3 1.3 0 0 0-1.3-1.3H4.9V12a7.1 7.1 0 0 1 14.2 0v-.2h-2.4a1.3 1.3 0 0 0-1.3 1.3' +
+            'v5.6a1.3 1.3 0 0 0 1.3 1.3h1.4a3.3 3.3 0 0 0 3.3-3.3V12A9.4 9.4 0 0 0 12 2.6Z"/></g>',
+        'headset-solid-off': '<g fill="currentColor" stroke="none">' +
+            '<path d="M12 2.6a9.4 9.4 0 0 0-9.4 9.4v4.7a3.3 3.3 0 0 0 3.3 3.3h1.4a1.3 1.3 0 0 0 1.3-1.3' +
+            'v-5.6a1.3 1.3 0 0 0-1.3-1.3H4.9V12a7.1 7.1 0 0 1 14.2 0v-.2h-2.4a1.3 1.3 0 0 0-1.3 1.3' +
+            'v5.6a1.3 1.3 0 0 0 1.3 1.3h1.4a3.3 3.3 0 0 0 3.3-3.3V12A9.4 9.4 0 0 0 12 2.6Z"/></g>' +
+            '<path class="ico-cut" fill="none" stroke="currentColor" d="M3.6 20.4L20.4 3.6"/>' +
+            '<path fill="none" stroke="currentColor" d="M3.6 20.4L20.4 3.6"/>',
+
         headset: '<path d="M4 14v-2.4a8 8 0 0 1 16 0V14"/>' +
             '<path d="M4 13.4a1.9 1.9 0 0 1 1.9-1.9h1.3v6.6H5.9A1.9 1.9 0 0 1 4 16.2z"/>' +
             '<path d="M20 13.4a1.9 1.9 0 0 0-1.9-1.9h-1.3v6.6h1.3a1.9 1.9 0 0 0 1.9-1.9z"/>',

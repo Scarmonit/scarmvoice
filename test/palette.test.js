@@ -1040,3 +1040,66 @@ describe('the message list', () => {
         expect(/\.msg-author \{[^}]*text-transform: lowercase/.test(css)).toBe(true);
     });
 });
+
+describe('the audio menus', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('groups six items into three, and sits above the card that opened it', () => {
+        const pop = /\.audio-pop \{[^}]*\}/.exec(css)[0];
+        expect(pop).toMatch(/width: 222px/);
+        expect(pop).toMatch(/background: var\(--menu\)/);
+        // A menu opened from the user card has to read as being in FRONT of it.
+        expect(lum(hex('menu', dark))).toBeGreaterThan(lum(hex('float', dark)));
+        const mic = html().slice(html().indexOf('id="mic-pop"'), html().indexOf('id="spk-pop"'));
+        expect((mic.match(/class="ap-sep"/g) || []).length).toBe(2);
+    });
+
+    it('has a live level meter, open only while the panel is', () => {
+        // The only way to answer "is my microphone working" without leaving the
+        // menu — and an open capture is not something to leave running behind a
+        // closed one.
+        expect(html()).toContain('id="ap-meter"');
+        expect(src()).toMatch(/function startApMeter\(\)/);
+        expect(src()).toMatch(/if \(popId === 'mic-pop'\) startApMeter\(\)/);
+        expect(src()).toMatch(/function closeAudioPops\(\) \{[\s\S]{0,160}stopApMeter\(\)/);
+        // Metered on the shared context, like the Settings one: Chromium allows
+        // six, and a call already holds several.
+        expect(src()).toMatch(/window\.ScarmAudio\.createMeter\(stream\)/);
+    });
+
+    it('draws the slider rather than leaving it to accent-color', () => {
+        // A thumb in the fill colour has almost no contrast against the fill it
+        // is sitting on; white is what makes the position readable.
+        expect(css).toMatch(/::-webkit-slider-runnable-track \{[^}]*height: 4px/);
+        expect(css).toMatch(/::-webkit-slider-thumb \{[^}]*background: #fff/);
+        // The track is painted from --fill, so the value has to be written there.
+        expect(src()).toMatch(/function paintRangeFill\(el\)/);
+        expect(src()).toMatch(/setProperty\('--fill'/);
+    });
+
+    it('draws an unchecked box dark', () => {
+        // Native, unchecked, on Windows it is a solid white block — which reads
+        // as ON.
+        const box = /\.ap-check input\[type="checkbox"\] \{[^}]*\}/.exec(css)[0];
+        expect(box).toMatch(/appearance: none/);
+        expect(box).toMatch(/background: var\(--sunk\)/);
+        expect(box).toMatch(/width: 20px/);
+    });
+
+    it('sends Voice Settings to the pane it names', () => {
+        expect(src()).toMatch(/showSettingsPane\(settingsPaneByTitle\('Voice & Audio'\)\)/);
+    });
+
+    it('draws the panel mic and headset filled', () => {
+        const icons = fs.readFileSync(path.join(RENDERER, 'icons.js'), 'utf8');
+        ['mic-solid', 'headset-solid'].forEach((n) => {
+            expect(icons).toContain("'" + n + "':");
+            const at = icons.indexOf("'" + n + "':");
+            expect(icons.slice(at, at + 120)).toContain('fill="currentColor"');
+        });
+        const bar = html().slice(html().indexOf('id="me-bar"'), html().indexOf('id="mic-pop"'));
+        expect(bar).toContain('data-icon="mic-solid"');
+        expect(bar).toContain('data-icon="headset-solid"');
+    });
+});

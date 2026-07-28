@@ -65,6 +65,11 @@
   --speaker-ico: #87878e;
   /* The date dividers, a step above --dim: they are structure, not a hint. */
   --day-sep:    #9a9aa0;
+  /* The audio menus sit a step above --float: a menu opened from the user card
+     has to read as being in front of the card, not level with it. */
+  --menu:       #28282d;
+  /* The unfilled half of a slider track, and the meter's ground. */
+  --track:      #3b3b40;
   /* Message prose sits brighter than --text-body, which is tuned for labels. */
   --msg-text:   #eff0f2;
   /* The user panel's own type ramp. Both lines were brighter than the
@@ -2721,6 +2726,8 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --nav-idle:    #6f6f76;
   --speaker-ico: #7c7c83;
   --day-sep:     #6f6f76;
+  --menu:        #ffffff;
+  --track:       #d4d4d8;
   --msg-text:    #16161a;
   --placeholder: #8e8e96;
 
@@ -3179,12 +3186,15 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    push-to-talk controls are not items and cannot be expressed as a list. */
 .audio-pop {
   position: fixed; z-index: 300;
-  width: 260px; padding: 8px;
-  background: var(--float); border: 1px solid var(--line);
+  width: 222px; padding: 8px;
+  background: var(--menu); border: 1px solid var(--line-2);
   border-radius: 8px; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; gap: 2px;
   animation: mep-in .12s cubic-bezier(.2, .9, .3, 1);
 }
+/* Three groups, not six items in one stack: the device pair, the level pair,
+   and the two that leave the menu. */
+.ap-sep { height: 1px; margin: 6px 2px; background: var(--line-2); }
 @media (prefers-reduced-motion: reduce) { .audio-pop { animation: none; } }
 
 .ap-row {
@@ -3195,20 +3205,63 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 button.ap-row, label.ap-row { cursor: pointer; }
 button.ap-row:hover, label.ap-row:hover { background: var(--hover); }
 .ap-rowtext { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
-.ap-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.ap-title { font-size: 13.5px; font-weight: 600; color: var(--text-strong); }
 /* The device name wraps rather than ellipsising: these run long ("Windows
    Default (SteelSeries Sonar - Microphone …)") and the useful part is at the
    end, so a single clipped line would say nothing. */
-.ap-value { font-size: 12px; color: var(--dim); font-weight: 500; line-height: 1.35; }
-.ap-more { width: 15px; height: 15px; flex: 0 0 15px; color: var(--dim); }
+.ap-value { font-size: 12px; color: var(--nav-idle); font-weight: 500; line-height: 1.35; }
+.ap-more { width: 18px; height: 18px; flex: 0 0 18px; color: var(--nav-idle); }
 button.ap-row:hover .ap-more { color: var(--text); }
 
 .ap-slider { flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 10px; }
-.ap-slider input[type="range"] { width: 100%; accent-color: var(--accent); }
+/* Drawn rather than left to accent-color: a thin track with a WHITE thumb is
+   what makes the position readable — a thumb in the fill colour has almost no
+   contrast against the fill it is sitting on. */
+.ap-slider input[type="range"] {
+  width: 100%; height: 16px; margin: 0;
+  -webkit-appearance: none; appearance: none; background: none; outline: none;
+}
+.ap-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(var(--accent), var(--accent)) 0 / var(--fill, 50%) 100% no-repeat,
+              var(--track);
+}
+.ap-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; margin-top: -6px;
+  border-radius: 50%; background: #fff; border: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+}
+
+/* The live input meter. Bars rather than one bar, so a quiet signal still shows
+   movement at the left instead of a sliver that reads as nothing. */
+.ap-level { flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 10px; }
+.ap-meter {
+  height: 14px; border-radius: 3px; overflow: hidden;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 3px, var(--menu) 3px 5px),
+    linear-gradient(var(--accent), var(--accent)) 0 / var(--level, 0%) 100% no-repeat,
+    var(--track);
+}
+
 .ap-check { justify-content: space-between; }
-.ap-check input[type="checkbox"] { accent-color: var(--accent); width: 17px; height: 17px; flex: 0 0 17px; }
+/* Drawn, not native: an unchecked checkbox on Windows is a solid white block,
+   which reads as ON. The unchecked state has to be the dark one. */
+.ap-check input[type="checkbox"] {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; flex: 0 0 20px; margin: 0;
+  border-radius: 4px; border: 1px solid var(--line-2);
+  background: var(--sunk); cursor: pointer;
+  display: grid; place-items: center;
+}
+.ap-check input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.ap-check input[type="checkbox"]:checked::after {
+  content: ""; width: 10px; height: 6px;
+  border: 2px solid var(--on-accent); border-top: 0; border-right: 0;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
 .ap-foot { justify-content: space-between; }
-.ap-foot .ico { width: 17px; height: 17px; flex: 0 0 17px; color: var(--muted); }
+.ap-foot .ico { width: 20px; height: 20px; flex: 0 0 20px; color: var(--nav-idle); }
 .ap-foot:hover .ico { color: var(--text); }
 
 

@@ -5521,7 +5521,58 @@
     }
 
     function audioPopOpen(id) { return !$(id).hidden; }
-    function closeAudioPops() { $('mic-pop').hidden = true; $('spk-pop').hidden = true; }
+    function closeAudioPops() {
+        $('mic-pop').hidden = true;
+        $('spk-pop').hidden = true;
+        stopApMeter();
+    }
+
+    // The track is painted by CSS from --fill, so the value has to be written
+    // there as well as to the input.
+    function paintRangeFill(el) {
+        if (!el) return;
+        const min = Number(el.min || 0);
+        const max = Number(el.max || 100);
+        const pct = max > min ? ((Number(el.value) - min) / (max - min)) * 100 : 0;
+        el.style.setProperty('--fill', pct.toFixed(1) + '%');
+    }
+
+    // A live microphone level, open only while the input panel is. An open
+    // capture is not something to leave running behind a closed menu.
+    let apMeter = null;
+
+    function stopApMeter() {
+        if (!apMeter) return;
+        apMeter.off();
+        apMeter.meter.stop();
+        try { apMeter.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+        apMeter = null;
+        const bar = $('ap-meter');
+        if (bar) bar.style.setProperty('--level', '0%');
+    }
+
+    async function startApMeter() {
+        if (apMeter) return;
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: settings.micDeviceId ? { deviceId: { exact: settings.micDeviceId } } : true
+            });
+        } catch (e) { return; }          // no permission, no meter — and no error either
+        // Metered on the renderer's shared AudioContext, like the Settings one:
+        // Chromium allows six contexts, and a call already holds several.
+        const meter = window.ScarmAudio.createMeter(stream);
+        if (!meter) {
+            try { stream.getTracks().forEach((t) => t.stop()); } catch (e2) {}
+            return;
+        }
+        const off = window.ScarmAudio.onTick(() => {
+            if (!apMeter) return;
+            const pct = Math.min(100, (meter.rms() / METER_MAX) * 100);
+            $('ap-meter').style.setProperty('--level', pct.toFixed(1) + '%');
+        });
+        apMeter = { stream, meter, off };
+    }
 
     function paintAudioPanels() {
         $('ap-input-device-value').textContent = deviceLabel('audioinput', settings.micDeviceId);
@@ -5532,6 +5583,8 @@
         $('ap-input-volume').value = String(Math.round(mic * 100));
         $('ap-output-volume').value = String(Math.round(out * 100));
         $('ap-ptt').checked = settings.voiceMode === 'ptt';
+        paintRangeFill($('ap-input-volume'));
+        paintRangeFill($('ap-output-volume'));
     }
 
     // Opened UPWARD: these buttons sit at the very bottom of the window, so a
@@ -5541,6 +5594,8 @@
         const pop = $(popId);
         pop.hidden = false;
         paintAudioPanels();
+        // Only the input panel has a meter, and only while it is open.
+        if (popId === 'mic-pop') startApMeter();
         const r = $(anchorId).getBoundingClientRect();
         const h = pop.offsetHeight;
         const w = pop.offsetWidth;
@@ -5625,9 +5680,11 @@
     // Live while dragging: the gain node is updated in place, so this is
     // audible to the room immediately without republishing the track.
     $('ap-input-volume').addEventListener('input', async (e) => {
+        paintRangeFill(e.target);
         await saveSettings({ micVolume: Number(e.target.value) / 100 });
     });
     $('ap-output-volume').addEventListener('input', async (e) => {
+        paintRangeFill(e.target);
         const v = Number(e.target.value) / 100;
         await saveSettings({ outputVolume: v });
         $('set-outvol').value = String(Math.round(v * 100));
@@ -5642,8 +5699,14 @@
         await L.ptt.apply();
     });
 
-    $('ap-input-settings').addEventListener('click', () => { closeAudioPops(); openSettings(); });
-    $('ap-output-settings').addEventListener('click', () => { closeAudioPops(); openSettings(); });
+    // To the pane the row names, not to whatever pane opens first.
+    const toVoiceSettings = async () => {
+        closeAudioPops();
+        await openSettings();
+        if (showSettingsPane) showSettingsPane(settingsPaneByTitle('Voice & Audio'));
+    };
+    $('ap-input-settings').addEventListener('click', toVoiceSettings);
+    $('ap-output-settings').addEventListener('click', toVoiceSettings);
 
 
     // ---------- layout chrome: rail, categories, members sidebar ----------
