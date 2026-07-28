@@ -154,16 +154,32 @@ permission model, unread as a per-member high-water mark, group notify fan-out,
 `dm/create` for groups. Old 1:1 request shapes still work, so the shipped app
 kept running while this landed.
 
-**Frontend: not started.** In order:
+**Frontend: function done, layout outstanding.**
 
-1. Panel → full-column view; rail home button as the entry point.
-2. Sidebar DM list at the measured metrics above; unread badge; group avatars.
-3. New Group DM picker (`dm/create`, cap 10).
-4. Group message rendering — a group has to say who spoke; 1:1 never did.
-   `dm/list` returns `from` per message for exactly this.
-5. `renderDmSection`/`openDm`/`onDmEvent` in app.js key off `t.user.id`, which
-   is **null for a group**. They must move to `t.id` before any group can be
-   opened, or the first group DM crashes the list.
+Done in v0.20.0:
+
+- Everything keys off the thread id. The whole DM path was keyed on the other
+  person — `dmOpen.id` was a user id, threads were found by `t.user.id`, events
+  routed by `m.from.id` — which holds exactly as long as a conversation has two
+  people in it. The one surviving `t.user.id` is the guarded fallback for an
+  event that arrives without a thread.
+- Group message rendering: the speaker once per run, reintroduced after a day
+  separator.
+- One picker for both sizes; picking a single person reopens the existing
+  conversation rather than starting a second beside it.
+- Group notifications name the sender *and* the group.
+- Harness board stub is path-aware — it used to answer `dm/threads` with the
+  channel list, so the DM list was permanently empty there.
+
+Still outstanding — **layout**, not behaviour:
+
+1. Panel → full-column view; rail home button as the entry point. Ours is still
+   `<aside id="dm-panel">` sliding over the app; the reference gives DMs the
+   whole main column.
+2. Sidebar DM list at the measured metrics (42px rows, radius 8px, padding
+   `0 0 0 8px`, avatar + status dot). Ours reuses the channel row.
+3. Group avatars — the reference stacks member faces; we mark groups with `#`.
+4. Leave / rename a group, add someone to an existing one. No endpoint yet.
 
 ## Done
 
