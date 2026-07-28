@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.18.9",
+  "version": "0.19.0",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
@@ -24,8 +24,12 @@
     "release": "node scripts/preflight-release.js && electron-builder --win --publish always",
     "test:e2e": "playwright test",
     "spec:app": "node dev/spec/capture-app.cjs",
+    "spec:ref": "node dev/spec/capture-ref.cjs",
+    "spec:relay": "node dev/spec/relay.cjs",
     "spec:pack": "node dev/spec/pack.cjs",
-    "spec:diff": "node dev/spec/diff.cjs"
+    "spec:diff": "node dev/spec/diff.cjs",
+    "spec:pix": "node dev/spec/pixdiff.cjs",
+    "spec:tokens": "node dev/spec/tokens.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",

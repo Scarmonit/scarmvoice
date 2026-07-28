@@ -13,7 +13,7 @@ const strip = (s) => s
     .trim();
 const out = strip(fs.readFileSync(path.join(__dirname, 'probe.js'), 'utf8'))
     + '\n' + strip(fs.readFileSync(path.join(__dirname, 'targets.js'), 'utf8'))
-    + '\nJSON.stringify(window.__spec(window.__targets.discord));';
+    + '\nJSON.stringify(window.__spec(window.__targets.for("discord", null)));';
 fs.mkdirSync(path.join(__dirname, 'out'), { recursive: true });
 fs.writeFileSync(path.join(__dirname, 'out', '_payload.js'), out);
 console.log(out.length + ' chars');

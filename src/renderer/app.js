@@ -629,7 +629,8 @@
         }
     }
 
-    function openDialog({ title, message, value, ok, danger, withInput, label2, value2, placeholder }) {
+    function openDialog({ title, message, value, ok, danger, withInput, label2, value2, placeholder,
+                          inputType, maxLength, placeholder2, maxLength2 }) {
         return new Promise((resolve) => {
             // A second dialog opening over the first used to overwrite
             // dialogDone, so the first promise never settled and whatever was
@@ -650,12 +651,19 @@
             inp.hidden = !withInput;
             inp.value = value || '';
             inp.placeholder = placeholder || '';
+            // Reset every time rather than only when asked: this field is
+            // shared by every dialog, so a password type left behind by the
+            // last caller would silently turn the next rename into dots.
+            inp.type = inputType || 'text';
+            inp.maxLength = maxLength || 60;
             // Optional second field (the name editor uses it for the status).
             const lab2 = $('dialog-label2'), inp2 = $('dialog-input2');
             lab2.textContent = label2 || '';
             lab2.hidden = !label2;
             inp2.hidden = !label2;
             inp2.value = value2 || '';
+            inp2.placeholder = placeholder2 || '';
+            inp2.maxLength = maxLength2 || 80;
             $('dialog-ok').textContent = ok || 'OK';
             $('dialog-ok').classList.toggle('danger', !!danger);
             $('dialog').hidden = false;
@@ -6060,6 +6068,8 @@
         syncAvatarButtons();
         $('acct-signed').hidden = !account;
         $('acct-forms').hidden = !!account;
+        // Nothing to disable or delete when nobody is signed in.
+        $('acct-removal').hidden = !account;
         // Both sub-panels belong to a state that has just ended: a stray verify
         // form under a signed-in account, or — worse — the PREVIOUS account's
         // TOTP secret still on screen for the next person who signs in.
@@ -6452,6 +6462,73 @@
         showAccountStep();
         toast('Signed out of your board account');
     });
+
+    // ---- account removal ----
+    // Two steps, in this order: say plainly what is about to happen, and only
+    // then ask for the password. Asking first trains people to type it before
+    // they have read anything, which is the opposite of what a confirmation is
+    // for. The server re-checks the password regardless — this is the half a
+    // client is allowed to enforce, not the half that matters.
+    async function runAccountRemoval(action) {
+        const deleting = action === 'delete';
+        const ok = await askConfirm(
+            deleting ? 'Delete your account?' : 'Disable your account?',
+            deleting
+                ? 'Your account, your direct messages and your devices are removed for good. '
+                  + 'Messages you posted stay on the board without a name attached. This cannot be undone.'
+                : 'You will be signed out everywhere and your account goes quiet. '
+                  + 'Signing back in at any time restores it, with everything still there.',
+            deleting ? 'Delete Account' : 'Disable Account',
+            true
+        );
+        if (!ok) return;
+
+        // 2FA is asked for up front when we already know it is on, so the
+        // common case is one dialog rather than a rejection and a second.
+        const needs2fa = !!(account && account.totp);
+        const pass = await openDialog({
+            title: deleting ? 'Confirm with your password' : 'Confirm with your password',
+            message: deleting
+                ? 'This is the last step. Deleting cannot be undone.'
+                : 'Enter your password to disable the account.',
+            ok: deleting ? 'Delete Account' : 'Disable Account',
+            danger: true,
+            withInput: true,
+            inputType: 'password',
+            maxLength: 72,
+            placeholder: 'Password',
+            label2: needs2fa ? 'Authenticator code' : '',
+            placeholder2: needs2fa ? '6-digit code' : '',
+            maxLength2: 6
+        });
+        if (pass === null || pass === false || !String(pass).length) return;
+        const code = needs2fa ? ($('dialog-input2').value || '').trim() : '';
+
+        const res = await L.account.removal(action, String(pass), code);
+        if (!res || !res.success) {
+            // need2fa comes back when the server knows about an authenticator
+            // this client did not — an account that turned 2FA on elsewhere.
+            toast((res && res.error) || 'Could not complete that just now.', 'err');
+            return;
+        }
+
+        // Whichever action ran, this session is over on the server. Tear down
+        // the same way sign-out does rather than leaving a shell of an app
+        // pointed at an account that is gone.
+        await teardownSession();
+        account = null;
+        dmThreads = [];
+        closeDm();
+        renderAccountCard();
+        renderDmSection();
+        closeSettings();
+        $('app').hidden = true;
+        showAccountStep();
+        toast(deleting ? 'Your account has been deleted' : 'Your account is disabled — sign in to restore it');
+    }
+
+    $('btn-acct-disable').addEventListener('click', () => runAccountRemoval('disable'));
+    $('btn-acct-delete').addEventListener('click', () => runAccountRemoval('delete'));
 
     // ---- muted channels ----
     function renderMutedChannels() {

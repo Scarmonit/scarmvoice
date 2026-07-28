@@ -39,21 +39,128 @@
     // What the eye measures is the ink, never the box the glyph is drawn in —
     // a mic in a 24-unit viewBox may only fill twelve of them.
     function ink(el) {
+        const box = el.getBoundingClientRect();
         const svgs = [...el.querySelectorAll('svg')].filter((s) => {
             const r = s.getBoundingClientRect();
             return r.width > 0 && !s.closest('[hidden]');
         });
+
+        // Ink is a question about a GLYPH — "the mic fills twelve of its
+        // twenty-four units" — and it stops meaning anything once the element
+        // is a column full of them. Measured across a scrolling message list it
+        // reported a glyph 4554px tall, being the bounding box of every icon in
+        // the scroll buffer including the ones nobody can see, and the diff
+        // dutifully compared that to our 304.
+        //
+        // So: containers only get an ink figure when they hold a single glyph.
+        const CONTROL = 240;
+        if ((box.width > CONTROL || box.height > CONTROL) && svgs.length !== 1) return null;
+
         const shapes = svgs.flatMap((s) => [...s.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse')]);
         let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
         shapes.forEach((sh) => {
             const q = sh.getBoundingClientRect();
             if (!q.width && !q.height) return;
-            l = Math.min(l, q.left); r = Math.max(r, q.right);
-            t = Math.min(t, q.top); b = Math.max(b, q.bottom);
+            // Clipped to the element itself: a glyph that overflows its own box
+            // is not describing that box.
+            const ql = Math.max(q.left, box.left), qr = Math.min(q.right, box.right);
+            const qt = Math.max(q.top, box.top), qb = Math.min(q.bottom, box.bottom);
+            if (qr <= ql || qb <= qt) return;
+            l = Math.min(l, ql); r = Math.max(r, qr);
+            t = Math.min(t, qt); b = Math.max(b, qb);
         });
         if (l === Infinity) return null;
         return { w: +(r - l).toFixed(1), h: +(b - t).toFixed(1), l, r };
     }
+
+    // ---- design tokens -----------------------------------------------------
+    // The recovered hover rules turned out to be written entirely against named
+    // variables:
+    //
+    //   .wrapper:hover .link { background: var(--interactive-background-hover) }
+    //
+    // which means the reference is not really a set of hex codes at all. It is
+    // a token system, and every hex we have ever copied by eye was one
+    // resolved value of one token in one theme. There are 4691 of them
+    // resolving on :root, and they are declared as color-mix(in oklab, ...) —
+    // unreadable as text, exact once painted.
+    //
+    // Collecting them costs one pass and replaces the entire practice of
+    // reading colours off a screenshot.
+    function tokens() {
+        const names = new Set();
+        for (const sheet of document.styleSheets) {
+            let rules;
+            try { rules = sheet.cssRules; } catch (e) { continue; }
+            const walk = (list) => {
+                for (const r of list) {
+                    if (r.cssRules && r.cssRules.length) walk(r.cssRules);
+                    if (!r.style) continue;
+                    for (let i = 0; i < r.style.length; i++) {
+                        const p = r.style[i];
+                        if (p.charCodeAt(0) === 45 && p.charCodeAt(1) === 45) names.add(p);
+                    }
+                }
+            };
+            walk(rules);
+        }
+        const cs = getComputedStyle(document.documentElement);
+        const out = {};
+        names.forEach((n) => {
+            const raw = cs.getPropertyValue(n).trim();
+            if (!raw) return;                  // declared for another theme
+            const rec = { raw };
+            // Anything that paints gets a hex as well, so it can be compared
+            // and so it can be reversed back to a name further down.
+            if (/^(#|rgb|hsl|oklab|oklch|color|color-mix|var)/.test(raw)) {
+                const hex = rgb(raw);
+                if (hex && hex[0] === '#') { rec.hex = hex; rec.lum = lum(raw); }
+            }
+            out[n] = rec;
+        });
+        return out;
+    }
+
+    // hex -> the token names that resolve to it. Turns "#121214" back into
+    // "--background-secondary", which is the difference between copying a
+    // number and understanding the system it came from. Several names share a
+    // value, so this keeps all of them and prefers the least decorated.
+    let tokenIndex = null;
+
+    function nameForColour(hex) {
+        if (!hex || hex[0] !== '#') return undefined;
+        if (!tokenIndex) {
+            tokenIndex = {};
+            const all = tokens();
+            Object.keys(all).forEach((n) => {
+                const h = all[n].hex;
+                if (!h) return;
+                (tokenIndex[h] = tokenIndex[h] || []).push(n);
+            });
+            // Ranked, because a value usually has several names and they are
+            // not equally useful. #121214 answers to six, and the shortest of
+            // them — "--neutral-92" — is the least informative: it is a rung
+            // on a colour ramp, true of the paint and silent about the role.
+            // "--background-base-lowest" is the one worth copying, because it
+            // says what the surface IS, and it keeps saying it after the ramp
+            // is retuned.
+            //
+            // So: ramp primitives last, names built on a known semantic root
+            // first, and the more general of two survivors ahead of the
+            // feature-specific one (--background-base-lowest over
+            // --guild-profile-banner-background-default).
+            const RAMP = /-\d+$/;
+            const ROOT = /^--(background|bg|text|border|interactive|button|channel|panel|card|surface|content|elevation|radius|spacing|space|shadow|status|input|header|link|icon)\b/;
+            const rank = (n) => (RAMP.test(n) ? 100 : 0) + (ROOT.test(n) ? 0 : 10) + n.split('-').length;
+            Object.keys(tokenIndex).forEach((h) => {
+                tokenIndex[h].sort((a, b) => rank(a) - rank(b) || a.length - b.length);
+            });
+        }
+        const hit = tokenIndex[hex];
+        return hit ? hit.slice(0, 3) : undefined;
+    }
+
+    window.__tokens = tokens;
 
     const STYLE_KEYS = [
         'backgroundColor', 'color', 'borderTopWidth', 'borderTopColor', 'borderRadius',
@@ -68,7 +175,9 @@
         const s = getComputedStyle(el);
         const r = el.getBoundingClientRect();
         const out = {
-            box: { w: Math.round(r.width), h: Math.round(r.height) },
+            // x/y ride along for the cropper in pixdiff.cjs. diff.cjs only ever
+            // reads w and h, so they are invisible to the comparison.
+            box: { w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) },
             text: (el.textContent || '').trim().slice(0, 60) || null,
             ink: ink(el)
         };
@@ -76,11 +185,39 @@
         // few — text-transform: none IS the finding when the other side is
         // uppercase, and its absence read as "unset" in the first diff.
         const MEANINGFUL_DEFAULT = new Set(['textTransform', 'lineHeight', 'letterSpacing', 'animationName']);
+
+        // Two properties that every element HAS and most elements do not USE,
+        // and both of them reported on every container in the sweep:
+        //
+        //   color            inherited and never painted, because the element
+        //                    has no text of its own. The reference's columns
+        //                    all carry a dark inherited colour; ours carry a
+        //                    light one; neither is visible anywhere, and it
+        //                    was the single most repeated row in the report.
+        //   borderTopColor   the colour of a border that is not drawn.
+        //
+        // Reporting either is worse than saying nothing: it fills the diff with
+        // rows that cannot be acted on and buries the ones that can.
+        const paintsText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        const hasTopBorder = parseFloat(s.borderTopWidth) > 0;
+
         STYLE_KEYS.forEach((k) => {
             const v = s[k];
             if (v === undefined || v === '') return;
+            if (k === 'color' && !paintsText) return;
+            if (/^borderTop/.test(k) && !hasTopBorder) return;
             if (!MEANINGFUL_DEFAULT.has(k) && (v === 'normal' || v === 'none' || v === '0px')) return;
-            if (/[Cc]olor$/.test(k)) { out[k] = rgb(v); out[k + 'Lum'] = lum(v); return; }
+            if (/[Cc]olor$/.test(k)) {
+                const hex = rgb(v);
+                out[k] = hex;
+                out[k + 'Lum'] = lum(v);
+                // Which named token this value IS. A hex tells you what to
+                // type; the name tells you what it MEANS, and whether the two
+                // sides disagree about the colour or about the role.
+                const named = nameForColour(hex);
+                if (named) out[k + 'Token'] = named;
+                return;
+            }
             out[k] = v;
         });
         // A tooltip is a thing the user reads, so it belongs in the spec even
@@ -97,8 +234,11 @@
         const before = snap(el);
         el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
         el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        // :hover cannot be forced from script, so this catches JS-driven state
-        // only. The CSS half is read out of the stylesheet instead, below.
+        // :hover cannot be forced from inside the page, so this catches
+        // JS-driven state only. Two things cover the CSS half: the stylesheet
+        // read below, and — when a driver is present — force-states.cjs, which
+        // forces the real pseudo-class over CDP and records `onHoverReal`.
+        // Prefer that one; this stays for the paste-into-the-console path.
         const after = snap(el);
         el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
         const delta = {};
@@ -125,7 +265,19 @@
             try { rules = sheet.cssRules; } catch (e) { continue; }
             const walk = (list) => {
                 for (const r of list) {
-                    if (r.cssRules) { walk(r.cssRules); continue; }
+                    // Chrome gives EVERY CSSStyleRule a .cssRules list — empty
+                    // unless the rule genuinely nests — and an empty list is
+                    // still an object, so `if (r.cssRules)` is true for all of
+                    // them. Recursing and continuing on that test walked past
+                    // every style rule without ever reading its selector, and
+                    // the index came out empty: 0 hover rules against a page
+                    // that has 1209. Both sides reported "no hover rules",
+                    // which looked like agreement and was silence.
+                    //
+                    // Recurse only when there is something to recurse INTO,
+                    // then read this rule's own selector regardless — a nested
+                    // rule has both.
+                    if (r.cssRules && r.cssRules.length) walk(r.cssRules);
                     if (!r.selectorText || !r.style) continue;
                     if (!/:hover|:active|:focus-visible/.test(r.selectorText)) continue;
                     // Only rules that actually change something visual.
@@ -190,12 +342,22 @@
         return null;
     }
 
+    // The elements the last sweep resolved, by name. A driver that can reach
+    // into the page — Playwright, or anything else speaking CDP — needs a
+    // handle on the very same element the sweep measured in order to force a
+    // pseudo-class on it and measure again. Re-running the finder would risk
+    // resolving something else.
+    window.__specEls = {};
+    window.__snapEl = function (name) { return snap(window.__specEls[name]); };
+
     window.__spec = function (targets, opts) {
         opts = opts || {};
         const out = { at: new Date().toISOString(), viewport: { w: innerWidth, h: innerHeight }, components: {} };
+        window.__specEls = {};
         Object.keys(targets).forEach((name) => {
             const el = resolve(targets[name]);
             if (!el) { out.components[name] = { missing: true }; return; }
+            window.__specEls[name] = el;
             const rec = snap(el);
             if (opts.hover !== false) {
                 const d = hoverDelta(el);
@@ -207,6 +369,9 @@
             if (g) rec.glyphs = g;
             out.components[name] = rec;
         });
+        // Thousands of entries, so it is opt-in and the capture scripts write
+        // it to its own file rather than swelling every component sweep.
+        if (opts.tokens) out.tokens = tokens();
         return out;
     };
 

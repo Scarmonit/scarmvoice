@@ -789,6 +789,26 @@
           <span class="hint">Until you upload one, your avatar is generated from your display name —
             either way it looks the same here, on the website and in the phone app.</span>
         </div>
+        <!-- Account removal. Two separate actions rather than one with a
+             checkbox, because they are not degrees of the same thing: one is
+             reversible by signing back in and the other cannot be undone at
+             all. Hidden until signed in — there is nothing to remove otherwise. -->
+        <div class="row stack acct-removal" id="acct-removal" hidden>
+          <div class="acct-removal-row">
+            <div class="acct-removal-text">
+              <b>Disable your account</b>
+              <span class="hint">Temporarily disable your account. Sign back in any time to restore it.</span>
+            </div>
+            <button type="button" class="btn-danger-soft" id="btn-acct-disable">Disable Account</button>
+          </div>
+          <div class="acct-removal-row">
+            <div class="acct-removal-text">
+              <b>Close your account</b>
+              <span class="hint">Permanently close your account. This cannot be undone.</span>
+            </div>
+            <button type="button" class="btn-danger-solid" id="btn-acct-delete">Delete Account</button>
+          </div>
+        </div>
       </section>
 
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="mic">

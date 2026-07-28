@@ -9,3 +9,5 @@ playwright-report/
 
 # Spec captures are regenerated on demand.
 dev/spec/out/
+# A signed-in browser profile. Never commit this — it holds a Discord session.
+dev/spec/.profile/

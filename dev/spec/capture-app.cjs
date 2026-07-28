@@ -13,6 +13,7 @@ const { chromium } = require('playwright');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { forceStates } = require('./force-states.cjs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const OUT = path.join(__dirname, 'out');
@@ -64,7 +65,20 @@ function serve() {
 
     await page.addScriptTag({ path: path.join(__dirname, 'probe.js') });
     await page.addScriptTag({ path: path.join(__dirname, 'targets.js') });
-    const spec = await page.evaluate(() => window.__spec(window.__targets.app));
+    // The scene name selects the extra targets too, so both sides sweep the
+    // same set of names — a scene that adds contextMenu on one side and not
+    // the other produces a diff full of "MISSING" that means nothing.
+    const spec = await page.evaluate((s) => window.__spec(window.__targets.for('app', s)), scene ? scene.split(':')[0] : null);
+
+    // Real :hover and :active, forced over CDP rather than inferred. Same
+    // module the reference runner uses, so the two are measured identically.
+    const present = Object.entries(spec.components).filter(([, v]) => !v.missing).map(([k]) => k);
+    const forced = await forceStates(page, present);
+    Object.entries(forced).forEach(([name, states]) => {
+        if (states.hover) spec.components[name].onHoverReal = states.hover;
+        if (states.active) spec.components[name].onActiveReal = states.active;
+    });
+    spec.meta = { source: 'app', scene: scene || null };
 
     fs.mkdirSync(OUT, { recursive: true });
     const file = path.join(OUT, 'app' + (scene ? '-' + scene.replace(':', '-') : '') + '.json');
@@ -74,6 +88,11 @@ function serve() {
         + (missing.length ? ', missing: ' + missing.join(', ') : ''));
 
     await page.screenshot({ path: path.join(OUT, 'app' + (scene ? '-' + scene.replace(':', '-') : '') + '.png') });
+
+    const tokenSet = await page.evaluate(() => window.__tokens());
+    fs.writeFileSync(path.join(OUT, 'app' + (scene ? '-' + scene.replace(':', '-') : '') + '-tokens.json'),
+        JSON.stringify(tokenSet, null, 1));
+    console.log('wrote ' + Object.keys(tokenSet).length + ' of our own tokens beside it');
     await browser.close();
     server.close();
 })();

@@ -611,6 +611,7 @@ function registerIpc() {
     });
     handle('account:logout', async () => net.accountLogout());
     handle('account:me', async () => net.accountMe());
+    handle('account:removal', async (_e, { action, password, code }) => net.accountRemoval(action, password, code));
 
     handle('voice:token', async (_e, payload) => {
         const s = store.get();

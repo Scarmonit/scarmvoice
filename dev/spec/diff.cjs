@@ -51,15 +51,43 @@ function compare(name, ref, ours, out) {
             }
         });
     }
+    // A colour and its token name are one fact, so they go on one line. Left
+    // as separate rows they doubled the length of the report and put the
+    // interesting half — the NAME the reference gives that colour — on a line
+    // of its own where it read as a second, unrelated difference.
+    const tokenOf = (side, key) => {
+        const t = side[key + 'Token'];
+        return t && t.length ? '  ' + t[0] : '';
+    };
+
     Object.keys(ref).forEach((k) => {
         if (IGNORE.has(k) || k === 'box' || k === 'ink' || k === 'glyphs' || k === 'onHover') return;
         if (/Lum$/.test(k)) return;                   // covered by its colour
+        if (/Token$/.test(k)) return;                 // folded into its colour
+        if (/^onHoverReal$|^onActiveReal$/.test(k)) return;   // behaviour, reported below
         const a = ref[k], b = ours[k];
         if (b === undefined) { out.push([name, k, String(a), '(unset)']); return; }
-        if (!near(a, b)) out.push([name, k, String(a), String(b)]);
+        if (near(a, b)) return;
+        const isColour = /[Cc]olor$/.test(k);
+        out.push([name, k,
+            String(a) + (isColour ? tokenOf(ref, k) : ''),
+            String(b) + (isColour ? tokenOf(ours, k) : '')]);
     });
+
     // Hover is a behaviour, so report only whether one side has it at all.
     if (ref.onHover && !ours.onHover) out.push([name, 'onHover', 'changes', 'no change']);
+    // The forced-pseudo-class measurement, when both captures have one. This is
+    // the reliable half — onHover above only ever sees JS-driven state.
+    [['onHoverReal', ':hover'], ['onActiveReal', ':active']].forEach(([key, label]) => {
+        const a = ref[key], b = ours[key];
+        if (!a && !b) return;
+        if (a && !b) { out.push([name, label, Object.keys(a).join(','), 'no change']); return; }
+        if (!a && b) { out.push([name, label, 'no change', Object.keys(b).join(',')]); return; }
+        Object.keys(a).forEach((p) => {
+            if (b[p] === undefined) { out.push([name, label + ' ' + p, String(a[p]), '(unchanged)']); return; }
+            if (!near(a[p], b[p])) out.push([name, label + ' ' + p, String(a[p]), String(b[p])]);
+        });
+    });
 }
 
 const [refPath, oursPath] = process.argv.slice(2);

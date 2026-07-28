@@ -531,6 +531,21 @@ async function accountLogout() {
     return { success: true };
 }
 
+// Disable or close the signed-in account. Both end the session on the server,
+// so the local token is dropped either way — including when the call fails
+// mid-flight, because a token we are no longer sure about is worse than none.
+async function accountRemoval(action, password, code) {
+    const res = await board('account/removal', {
+        method: 'POST',
+        body: { action, password, code: code || '' }
+    });
+    if (res && res.success) {
+        accountToken = '';
+        store.clearAccountToken();
+    }
+    return res;
+}
+
 async function accountMe() {
     if (!accountToken) return { success: true, user: null };
     // clientId registers this install against the account (device merging).
@@ -798,7 +813,7 @@ async function uploadAttachment(item, onProgress) {
 
 module.exports = {
     init, login, logout, status, board, request, fileStream, upload, uploadAttachment,
-    accountRegister, accountLogin, accountLogout, accountMe, hasAccount,
+    accountRegister, accountLogin, accountLogout, accountMe, accountRemoval, hasAccount,
     accountVerify, accountResend,
     hasSession, cookieHeader, socketHeaders, baseUrl, MAX_UPLOAD
 };

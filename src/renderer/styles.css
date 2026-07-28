@@ -130,6 +130,19 @@
   --danger-plate: rgba(214, 41, 58, .12);
   --danger-soft: rgba(242, 63, 67, .13);
   --danger-line: rgba(242, 63, 67, .38);
+  /* Measured off the reference's account-removal pair, which is the only place
+     it draws a destructive button two ways at once — so it is also the clearest
+     statement of what it means by "reversible" versus "not".
+       secondary  a neutral plate with red LABEL: the action is serious, the
+                  button is not shouting  (its --border-subtle, #94949c@.12)
+       solid      filled red: no second reading available
+     Kept apart from --danger, which is our own slightly hotter red and is
+     already carrying mentions and muted state. */
+  --btn-secondary:      rgba(148, 148, 156, .12);
+  --btn-secondary-hover:rgba(148, 148, 156, .20);
+  --danger-label:       #f87e7a;
+  --danger-solid:       #d22d39;
+  --danger-solid-hover: #b52d38;
 
   /* Legacy names, aliased so every rule that still asks for them lands on the
      new palette instead of the old gold/red. */
@@ -3622,3 +3635,46 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-advanced { padding-top: 8px; }
 .set-advanced[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .set-more-caret { transition: none; } }
+
+/* ---- account removal ---------------------------------------------------
+   The reference lays these out as a full-width row per action: label and
+   explanation on the left, the button hard right, a rule between them. Both
+   buttons are 40px tall with an 8px radius and a 0.05s transition — quick
+   enough to feel like a press rather than an animation. */
+.acct-removal { gap: 0; }
+.acct-removal-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 14px 0;
+}
+.acct-removal-row + .acct-removal-row { border-top: 1px solid var(--line); }
+.acct-removal-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.acct-removal-text b { font-size: 15px; font-weight: 600; color: var(--text); }
+.acct-removal-text .hint { font-size: 13px; }
+
+.btn-danger-soft, .btn-danger-solid {
+  flex: none; min-width: 138px; height: 40px; padding: 0 16px;
+  /* 16/500 on a 20px line, measured off the reference's own label span — the
+     BUTTON there computes 16/400, but it never paints the text; the span
+     inside does, and that is the one the eye reads. */
+  border-radius: 8px; font-size: 16px; font-weight: 500; line-height: 20px; cursor: pointer;
+  transition: background-color .05s ease, color .05s ease, border-color .05s ease;
+}
+/* Reversible: a neutral plate, and only the LABEL is red. */
+.btn-danger-soft {
+  background: var(--btn-secondary); color: var(--danger-label);
+  border: 1px solid rgba(153, 153, 153, .04);
+}
+.btn-danger-soft:hover  { background: var(--btn-secondary-hover); }
+.btn-danger-soft:active { background: var(--btn-secondary); }
+/* Not reversible: filled, so it cannot be mistaken for the one above it. */
+.btn-danger-solid {
+  background: var(--danger-solid); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .08);
+}
+.btn-danger-solid:hover  { background: var(--danger-solid-hover); }
+.btn-danger-solid:active { background: var(--danger-solid-hover); }
+.btn-danger-soft:disabled, .btn-danger-solid:disabled { opacity: .5; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-danger-soft, .btn-danger-solid { transition: none; }
+}

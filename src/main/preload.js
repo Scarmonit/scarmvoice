@@ -28,7 +28,8 @@ contextBridge.exposeInMainWorld('lounge', {
         verify: (username, code) => ipcRenderer.invoke('account:verify', { username, code }),
         resend: (username) => ipcRenderer.invoke('account:resend', { username }),
         logout: () => ipcRenderer.invoke('account:logout'),
-        me: () => ipcRenderer.invoke('account:me')
+        me: () => ipcRenderer.invoke('account:me'),
+        removal: (action, password, code) => ipcRenderer.invoke('account:removal', { action, password, code })
     },
 
     // Attachments. `data` is an ArrayBuffer of the raw file bytes. Pass an `id`
