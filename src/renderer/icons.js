@@ -39,6 +39,21 @@
             'L4.21 6.74L6.74 4.21L8.73 5.58Z' +
             'M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Z"/>',
 
+        // Connection strength, not a dot. A dot can only say connected or not;
+        // four rising bars have somewhere to put "how well" when there is
+        // something to report. Filled, because at 16px an outlined bar is
+        // mostly outline.
+        signal: '<g fill="currentColor" stroke="none">' +
+            '<rect x="2.6" y="15.4" width="3.4" height="5.6" rx="1.2"/>' +
+            '<rect x="8.1" y="11.6" width="3.4" height="9.4" rx="1.2"/>' +
+            '<rect x="13.6" y="7.8" width="3.4" height="13.2" rx="1.2"/>' +
+            '<rect x="19.1" y="4" width="3.4" height="17" rx="1.2"/></g>',
+        // A soundboard is clips, not notes — a waveform says "these are sounds
+        // you fire", where a quaver says "music is playing".
+        waveform: '<g stroke-linecap="round">' +
+            '<path d="M3 10.5v3"/><path d="M7 6.5v11"/><path d="M11 3.5v17"/>' +
+            '<path d="M15 6.5v11"/><path d="M19 9v6"/><path d="M22.5 11v2"/></g>',
+
         // ---- microphone family -----------------------------------------
         // Plain mic = the mute toggle. Mic + solid dot = "record a voice
         // message", which is the one thing a bare mic could be confused with.
@@ -65,8 +80,17 @@
             '<path d="M3.6 3.2l16.8 17.6"/>',
 
         // Handset tipped over, the universal "hang up".
+        // The handset turned down, on its own. Slashing it as well is what made
+        // it read as an eye with a line through it rather than as a phone —
+        // this shape IS the hang-up, and it is wide and flat the way the
+        // reference draws it.
+        'phone-hangup': '<path d="M3.4 9.2a13.6 13.6 0 0 1 17.2 0v3a1.6 1.6 0 0 1-1.6 1.6h-2a1.6 1.6 0 0 1-1.6-1.4' +
+            'l-.2-1.5a10.6 10.6 0 0 0-6 0l-.2 1.5a1.6 1.6 0 0 1-1.6 1.4H5a1.6 1.6 0 0 1-1.6-1.6z"/>',
+        // The slashed variant stays for "remove somebody FROM voice", where the
+        // mark has to say denial rather than hang up.
         'phone-off': '<path d="M3.4 9.2a13.6 13.6 0 0 1 17.2 0v3a1.6 1.6 0 0 1-1.6 1.6h-2a1.6 1.6 0 0 1-1.6-1.4' +
             'l-.2-1.5a10.6 10.6 0 0 0-6 0l-.2 1.5a1.6 1.6 0 0 1-1.6 1.4H5a1.6 1.6 0 0 1-1.6-1.6z"/>' +
+            '<path class="ico-cut" d="M3.6 20.4L20.4 3.6"/>' +
             '<path d="M3.6 20.4L20.4 3.6"/>',
 
         speaker: '<path d="M11 4.6L6.2 8.7H3.4v6.6h2.8L11 19.4z"/>' +

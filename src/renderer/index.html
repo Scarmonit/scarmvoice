@@ -133,16 +133,33 @@
       </section>
     </div>
 
-    <!-- Voice state panel, shown only while connected — sits directly above the
-         user panel, as in Discord. -->
+  </aside>
+
+  <!-- One card, not two. A voice section that floats above the user panel on a
+       different left edge reads as an unrelated widget; the reference has the
+       voice state EXPAND the panel, which is why the border runs unbroken down
+       both sides and a hairline is all there is between them. -->
+  <div id="user-dock">
     <div id="voice-panel">
       <div id="voice-live" class="voice-live" hidden>
-        <div class="vl-status">
-          <span class="vl-dot"></span>
-          <span id="vl-label">Voice connected</span>
+        <div class="vl-status" id="vl-status">
+          <!-- Signal strength rather than a dot: it says the same thing and has
+               room to say how WELL, which a dot never has. -->
+          <span class="ico vl-signal" data-icon="signal"></span>
+          <span class="vl-text">
+            <span id="vl-label">Voice Connected</span>
+            <!-- Where you are, read from the same two labels the sidebar shows,
+                 so the two can never disagree. -->
+            <span id="vl-where"></span>
+          </span>
         </div>
-        <button id="btn-leave-voice" class="btn-leave" title="Disconnect">
-          <span class="ico" data-icon="phone-off"></span>
+        <!-- Only while connected: a clip is mixed into the outgoing mic, so
+             outside a call there is nowhere for it to go. -->
+        <button id="btn-soundboard" class="btn-vl" title="Soundboard">
+          <span class="ico" data-icon="waveform"></span>
+        </button>
+        <button id="btn-leave-voice" class="btn-vl btn-leave" title="Disconnect">
+          <span class="ico" data-icon="phone-hangup"></span>
         </button>
       </div>
       <div class="vp-actions">
@@ -154,16 +171,10 @@
           <span class="ico" data-icon="screen"></span>
           <span id="btn-share-label">Share screen</span>
         </button>
-        <!-- Only while connected: a clip is mixed into the outgoing mic, so
-             outside a call there is nowhere for it to go. -->
-        <button id="btn-soundboard" class="btn-share" hidden>
-          <span class="ico" data-icon="music"></span>
-          <span>Soundboard</span>
-        </button>
       </div>
     </div>
-
-    <!-- Soundboard tray, anchored above the voice panel. -->
+    <!-- Anchored to the dock, not to the voice panel: it has to sit above
+         the whole card, and the card is what it is measured against. -->
     <div id="soundboard" class="soundboard" hidden>
       <header class="sb-head">
         <span class="sb-title">Soundboard</span>
@@ -179,12 +190,9 @@
       <div class="sb-grid" id="sb-grid"></div>
       <p class="sb-hint">Everyone in the call hears these.</p>
     </div>
-
-  </aside>
-
-  <!-- The user panel is a child of #app, not of the sidebar: it spans the
-       rail as well, so it cannot live inside a column that is only as wide
-       as the channel list. See the grid in styles.css. -->
+  <!-- Both sections span the rail as well as the channel list, so neither can
+       live inside a column that is only as wide as the list. See the grid in
+       styles.css. -->
   <div id="me-bar">
     <!-- The identity block is a single target that opens the account panel,
          the way clicking your name in Discord does. The second line is never
@@ -226,7 +234,7 @@
       </button>
     </div>
   </div>
-
+  </div>
 
   <!-- The two audio panels the carets open. Not context menus: they carry
        sliders and a checkbox, which a list of items cannot express. -->

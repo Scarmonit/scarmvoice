@@ -3163,11 +3163,23 @@
                 $('btn-deafen').setAttribute('aria-pressed', String(st.deafened));
                 toggleIcons('btn-deafen', st.deafened);
 
-                let label = 'Voice connected';
+                let label = 'Voice Connected';
                 if (st.deafened) label = 'Deafened';
                 else if (st.muted) label = 'Muted';
                 else if (settings.voiceMode === 'ptt') label = st.transmitting ? 'Transmitting' : 'Push to talk';
                 $('vl-label').textContent = label;
+                // Green means the connection is healthy. Muted and deafened are
+                // not that — they are states you chose that stop you being
+                // heard or hearing, and painting them the same green as a good
+                // connection says the opposite of what they mean.
+                $('vl-status').classList.toggle('warn', !!(st.muted || st.deafened));
+                // Read off the sidebar's own labels, so the panel and the list
+                // can never disagree about where you are.
+                const chanName = document.querySelector('#btn-join-voice .vchan-name');
+                const serverName = document.querySelector('#server-head .sh-name');
+                $('vl-where').textContent =
+                    (chanName ? chanName.textContent : 'Voice') + ' / '
+                    + (serverName ? serverName.textContent : 'ScarmVoice');
 
                 // Share and camera controls only make sense while connected.
                 $('btn-share').hidden = !st.joined;

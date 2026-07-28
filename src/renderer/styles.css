@@ -21,12 +21,12 @@
                               column behind it, so the box barely separates
                               from it instead of hovering over it       (+4) */
   --chat-2:     #1c1c20;   /* panels layered on the message column      (+4) */
-  --panel:      #1c1c20;   /* the user card + the voice card: RAISED out of
-                              the sidebar, not sunk into it             (+4) */
+  --panel:      #202024;   /* the user dock: RAISED out of the sidebar rather
+                              than sunk into it                        (+4) */
   --float:      #242429;   /* modals, menus, popovers, tooltips         (+5) */
   --float-2:    #2c2c31;   /* a card RAISED on a floating surface — the
                               action groups inside the account panel    (+5) */
-  --elev:       #2e2e33;   /* hover on a floating surface               (+5) */
+  --elev:       #343439;   /* hover on a raised control                 (+5) */
 
   --hover:      rgba(255, 255, 255, .045);
   --active:     rgba(255, 255, 255, .085);
@@ -47,7 +47,7 @@
      brightness, because the reference's hierarchy is gentler than ours was:
      the user panel's glyphs at .67, and placeholder text at .42 — ours was
      .75 and .55, which made the icons hot and the placeholder loud. */
-  --panel-icon: #9b9ba1;
+  --panel-icon: #abacb2;
   --placeholder: #62626a;
   --field: var(--rail);        /* text inputs + selects */
   --field-line: transparent;
@@ -73,6 +73,9 @@
 
   --online-rgb:  35, 165, 90;
   --online:      #23a55a;
+  /* Lighter and warmer than the presence green: this is text, on a surface,
+     reporting that a connection is healthy — not a 10px dot on a photograph. */
+  --voice-ok:    #67af74;
   --idle:        #dfa32c;
   /* Was #f2455e, which leans magenta — the same tint correction the rest of
      the ramp got. This is the colour muted and deafened are drawn in. */
@@ -309,7 +312,7 @@ button { font-family: inherit; }
 }
 #rail { grid-area: rail; }
 #sidebar { grid-area: side; }
-#me-bar { grid-area: user; }
+#user-dock { grid-area: user; }
 #main { grid-area: main; }
 #members-panel { grid-area: members; }
 #app[hidden] { display: none; }
@@ -518,56 +521,79 @@ button { font-family: inherit; }
 
 /* ---------- voice panel (only while connected) -------------------------- */
 
+/* ---------- the user dock ----------------------------------------------- */
+/* One card holding the voice section and the user panel, on ONE left edge. The
+   voice panel used to live in the sidebar, which starts 72px further right than
+   the panel directly beneath it — so a call turned the bottom-left corner into
+   two unrelated widgets on two different margins. The border runs unbroken
+   around both, and the only thing between them is a hairline.
+   Positioned, because the soundboard tray is measured against the whole card. */
+#user-dock {
+  grid-area: user; position: relative;
+  margin: 0 8px 8px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+}
+
 /* No JS toggles this container: it follows #voice-live, which the voice state
    handler already shows and hides. */
 #voice-panel { display: none; }
 #voice-panel:has(#voice-live:not([hidden])) {
   display: block;
-  flex: 0 0 auto;
-  margin: 0 8px 6px; border-radius: 8px;
-  padding: 8px;
-  background: var(--panel);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  padding: 12px 11px 12px 12px;
+  box-shadow: 0 1px 0 var(--line);      /* the divider, inside the one card */
 }
-.voice-live { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px 6px; }
+.voice-live { display: flex; align-items: center; gap: 8px; }
 .voice-live[hidden] { display: none; }
-.vl-status { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.vl-status { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+/* Sized at id specificity: the base .ico rule is later in the sheet and would
+   otherwise win the tie and hand it 18px. */
+#voice-live .vl-signal { width: 16px; height: 16px; flex: 0 0 16px; color: var(--voice-ok); }
+.vl-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 #vl-label {
-  font-size: 12.5px; color: var(--online); font-weight: 700;
+  font-size: 14px; color: var(--voice-ok); font-weight: 700; line-height: 1.15;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.vl-dot {
-  width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%;
-  background: var(--online); box-shadow: 0 0 8px rgba(var(--online-rgb), .7);
+/* Where you are. Without it the panel reports a state and nothing else, which
+   is decoration — this is the line that makes it information. */
+#vl-where {
+  font-size: 12px; color: var(--muted); font-weight: 500; line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.btn-leave {
+/* Green is "the connection is healthy". Muted and deafened are not that, and
+   painting them the same green says the opposite of what they mean. */
+#voice-live .vl-status.warn .vl-signal, .vl-status.warn #vl-label { color: var(--idle); }
+
+.btn-vl {
   width: 30px; height: 30px; flex: 0 0 30px;
   display: grid; place-items: center;
-  background: none; border: 0; border-radius: 6px; cursor: pointer;
+  padding: 0; background: none; border: 0; border-radius: 6px; cursor: pointer;
   color: var(--muted);
 }
+.btn-vl:hover { background: var(--hover); color: var(--text); }
+.btn-vl .ico { width: 20px; height: 20px; }
 .btn-leave:hover { background: var(--danger-soft); color: var(--danger-hi); }
-.btn-leave .ico { width: 18px; height: 18px; }
 
-.vp-actions { display: flex; gap: 6px; margin-top: 6px; }
+.vp-actions { display: flex; gap: 9px; margin-top: 13px; }
 .vp-actions:empty { display: none; }
-/* Icon-only, like Discord's voice tray: the state reads from the accent tint and
-   the label rides along as the tooltip and the accessible name. */
+/* Filled pills, not bare glyphs. These used to be --input on a --panel card,
+   one point apart — which is to say invisible: the row read as loose icons
+   floating on the card rather than as anything you could press. */
 .btn-share {
   position: relative;
   flex: 1 1 0; min-width: 0; height: 32px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 6px; cursor: pointer;
-  background: var(--input); border: 0; color: var(--muted);
+  background: var(--float-2); border: 0; color: var(--text-strong);
   font-size: 12px; font-weight: 600;
 }
 .btn-share span {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
-.btn-share:hover { background: var(--elev); color: var(--text); }
+.btn-share:hover { background: var(--elev); }
 .btn-share.on { background: var(--accent-soft); color: var(--accent); }
-.btn-share .ico { width: 19px; height: 19px; flex: 0 0 19px; }
+.btn-share .ico { width: 20px; height: 20px; flex: 0 0 20px; }
 
 /* ---------- user panel -------------------------------------------------- */
 
@@ -578,9 +604,10 @@ button { font-family: inherit; }
      headset-and-its-caret — the grouping only reads if the two distances are
      clearly different. */
   gap: 10px;
-  margin: 0 8px 8px; border-radius: 8px;
-  padding: 7px; background: var(--sheen), var(--panel);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  /* No fill and no sheen of its own: the dock is the card, and a gradient over
+     half of it made the seam between the two sections visible as a shade
+     change rather than as the hairline it should be. */
+  padding: 7px; background: none;
 }
 /* Only the bottom row shows through, and only in the card's margin — every
    other grid cell paints its own surface over this. */
@@ -591,14 +618,13 @@ button { font-family: inherit; }
    run off the screen. Sitting above it inside the same column keeps it on
    screen at every window height. */
 .soundboard {
-  position: absolute; left: 8px; right: 8px; bottom: 100%;
+  position: absolute; left: 0; right: 0; bottom: 100%;
   margin-bottom: 8px; z-index: 40;
   background: var(--float); border: 1px solid var(--line);
   border-radius: 10px; padding: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
 }
 .soundboard[hidden] { display: none; }
-#voice-panel { position: relative; }
 .sb-head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
 .sb-title { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
 .sb-vol { display: flex; align-items: center; gap: 6px; margin-left: auto; }
@@ -2404,6 +2430,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 
   --online-rgb:  27, 142, 76;
   --online:      #1b8e4c;
+  --voice-ok:    #2f7a3d;
   --idle:        #a9761a;
   --danger:      #d32a2e;
   --danger-hi:   #ad2124;

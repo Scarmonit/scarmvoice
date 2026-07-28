@@ -81,13 +81,20 @@ describe('the dark surface ramp', () => {
 
 describe('the user panel', () => {
     it('is an inset card, not a full-bleed strip', () => {
+        // The card is the DOCK: it holds the voice section and the user panel
+        // on one left edge, with one border around both.
         // Two rules carry this selector; the grid-area one comes first.
-        const rule = (css.match(/#me-bar \{[^}]*\}/g) || []).find((r) => r.includes('padding'));
-        expect(rule).toMatch(/margin:\s*0 8px 8px/);
-        expect(rule).toMatch(/border-radius:\s*8px/);
-        // 8 of margin + 7 of padding + the identity block's own 6 puts the
-        // avatar 21px from the window edge and 13px inside the card.
-        expect(rule).toMatch(/padding:\s*7px/);
+        const dock = (css.match(/#user-dock \{[^}]*\}/g) || []).find((r) => r.includes('margin'));
+        expect(dock).toMatch(/margin:\s*0 8px 8px/);
+        expect(dock).toMatch(/border-radius:\s*8px/);
+        expect(dock).toMatch(/background:\s*var\(--panel\)/);
+        // 8 of margin + 1 of border + 7 of padding + the identity block's own 6
+        // puts the avatar 22px from the window edge, 14px inside the card.
+        const bar = (css.match(/#me-bar \{[^}]*\}/g) || []).find((r) => r.includes('padding'));
+        expect(bar).toMatch(/padding:\s*7px/);
+        // Flat: no fill and no gradient of its own, or the seam between the two
+        // sections reads as a shade change instead of a hairline.
+        expect(bar).toMatch(/background:\s*none/);
     });
 
     it('separates the two control groups by more than it separates a caret', () => {
@@ -253,5 +260,73 @@ describe('the account panel', () => {
         expect(fn.slice(0, fn.indexOf('\n    }'))).not.toMatch(/gradient/);
         const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
         expect(src).toMatch(/mep-banner'\)\.setAttribute\('style', bannerStyle\(name\)\)/);
+    });
+});
+
+describe('the user dock', () => {
+    it('holds the voice section and the user panel in one container', () => {
+        const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+        const dock = html.slice(html.indexOf('id="user-dock"'), html.indexOf('id="mic-pop"'));
+        // Both inside it, and neither inside the sidebar — which is what puts
+        // them on the same left edge. The sidebar starts 72px further right
+        // than the dock does, so a voice panel living there floated on its own
+        // margin above the panel it belongs to.
+        expect(dock).toContain('id="voice-panel"');
+        expect(dock).toContain('id="me-bar"');
+        const aside = html.slice(html.indexOf('<aside id="sidebar">'), html.indexOf('id="user-dock"'));
+        expect(aside).not.toContain('id="voice-panel"');
+        expect(aside).not.toContain('id="me-bar"');
+    });
+
+    it('draws one border around both, and a hairline between them', () => {
+        const dock = (css.match(/#user-dock \{[^}]*\}/g) || []).find((r) => r.includes('margin'));
+        expect(dock).toMatch(/border:\s*1px solid var\(--line\)/);
+        // Positioned, because the soundboard tray clears the WHOLE card.
+        expect(dock).toMatch(/position:\s*relative/);
+        const at = css.indexOf('#voice-panel:has');
+        const voice = css.slice(at, css.indexOf('}', at) + 1);
+        expect(voice).toMatch(/box-shadow:\s*0 1px 0 var\(--line\)/);
+        // No card of its own any more: no margin, no radius, no fill.
+        expect(voice).not.toMatch(/margin:/);
+        expect(voice).not.toMatch(/border-radius:/);
+        expect(voice).not.toMatch(/background:/);
+        expect(/\.soundboard \{[^}]*left:\s*0;\s*right:\s*0/.test(css)).toBe(true);
+    });
+
+    it('gives the action row buttons a surface to be', () => {
+        // They were --input on a --panel card: one point apart, which is to say
+        // invisible. The row read as loose glyphs floating on the card.
+        const rule = /\.btn-share \{[^}]*\}/.exec(css)[0];
+        expect(rule).toMatch(/background:\s*var\(--float-2\)/);
+        expect(rule).toMatch(/color:\s*var\(--text-strong\)/);
+        expect(lum(hex('float-2', dark))).toBeGreaterThan(lum(hex('panel', dark)));
+    });
+
+    it('says where you are, not just that you are somewhere', () => {
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        // Read off the sidebar's own labels, so the two cannot disagree.
+        expect(src).toMatch(/vl-where'\)\.textContent =/);
+        expect(src).toMatch(/#btn-join-voice \.vchan-name/);
+        expect(src).toMatch(/#server-head \.sh-name/);
+    });
+
+    it('does not paint a chosen mute the colour of a healthy connection', () => {
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        expect(src).toMatch(/vl-status'\)\.classList\.toggle\('warn', !!\(st\.muted \|\| st\.deafened\)\)/);
+        expect(css).toMatch(/\.vl-status\.warn[^}]*color:\s*var\(--idle\)/);
+        expect(/#vl-label \{[^}]*color:\s*var\(--voice-ok\)/.test(css)).toBe(true);
+    });
+
+    it('offers both header controls, including the way out', () => {
+        const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+        const live = html.slice(html.indexOf('id="voice-live"'), html.indexOf('class="vp-actions"'));
+        expect((live.match(/class="btn-vl/g) || []).length).toBe(2);
+        expect(live).toContain('id="btn-leave-voice"');
+        // The hang-up is the handset turned down, NOT the slashed one — slashing
+        // it as well made it read as an eye with a line through it.
+        expect(live).toContain('data-icon="phone-hangup"');
+        const icons = fs.readFileSync(path.join(RENDERER, 'icons.js'), 'utf8');
+        const g = icons.slice(icons.indexOf("'phone-hangup':"));
+        expect(g.slice(0, g.indexOf("',\n"))).not.toMatch(/M3\.6 20\.4/);
     });
 });
