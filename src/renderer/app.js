@@ -3155,12 +3155,12 @@
                 vchan.title = st.joining ? 'Connecting…' : (st.joined ? 'You are in VoiceChat' : 'Join VoiceChat');
                 $('voice-live').hidden = !st.joined;
 
+                setTip($('btn-mute'), st.muted ? 'Unmute' : 'Mute');
                 $('btn-mute').setAttribute('aria-pressed', String(st.muted));
-                $('btn-mute').title = st.muted ? 'Unmute microphone' : 'Mute microphone';
                 toggleIcons('btn-mute', st.muted);
 
+                setTip($('btn-deafen'), st.deafened ? 'Undeafen' : 'Deafen');
                 $('btn-deafen').setAttribute('aria-pressed', String(st.deafened));
-                $('btn-deafen').title = st.deafened ? 'Undeafen' : 'Deafen';
                 toggleIcons('btn-deafen', st.deafened);
 
                 let label = 'Voice connected';
@@ -3214,6 +3214,15 @@
             onError: (msg) => toast('Voice: ' + msg, true)
         });
         voice.setSettings(settings);
+    }
+
+    // One place to change a label, so the accessible name and the visible tip
+    // can never say different things — and the tip repaints if it is on screen.
+    function setTip(el, text) {
+        if (!el) return;
+        el.setAttribute('data-tip', text);
+        el.setAttribute('aria-label', text);
+        refreshTip(el);
     }
 
     function toggleIcons(id, off) {
@@ -4870,6 +4879,88 @@
         sendTextPresence(false);      // publish it now rather than up to 20s later
     }
 
+    // ---------- tooltips -----------------------------------------------------
+    // `title` is the browser's, which means a delay measured in seconds, no
+    // styling, and an OS bubble that ignores the theme. Anything carrying
+    // data-tip gets this instead: one floating node, positioned above the
+    // element with a little arrow, reused for every target.
+    //
+    // Delegated rather than bound per element, so a tip works on markup that is
+    // rebuilt later without anything having to re-attach.
+
+    let tipEl = null;
+    let tipFor = null;
+
+    function tipNode() {
+        if (tipEl) return tipEl;
+        tipEl = document.createElement('div');
+        tipEl.className = 'tip';
+        tipEl.hidden = true;
+        tipEl.setAttribute('role', 'tooltip');
+        document.body.appendChild(tipEl);
+        return tipEl;
+    }
+
+    function showTip(target) {
+        const text = target.getAttribute('data-tip');
+        if (!text) return;
+        const el = tipNode();
+        tipFor = target;
+        el.textContent = text;
+        el.hidden = false;
+        // Measured after it has text, then clamped into the window.
+        const t = target.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        let left = t.left + (t.width - r.width) / 2;
+        left = Math.max(6, Math.min(left, window.innerWidth - r.width - 6));
+        let top = t.top - r.height - 9;
+        // No room above (the target is up against the title bar) — go below.
+        const below = top < POP_TITLEBAR + 4;
+        if (below) top = t.bottom + 9;
+        el.classList.toggle('below', below);
+        el.style.left = Math.round(left) + 'px';
+        el.style.top = Math.round(top) + 'px';
+        // The arrow tracks the TARGET's centre, not the tip's, so a tip that had
+        // to be clamped sideways still points at the thing it describes.
+        el.style.setProperty('--tip-arrow', Math.round(t.left + t.width / 2 - left) + 'px');
+    }
+
+    function hideTip() {
+        if (!tipEl) return;
+        tipEl.hidden = true;
+        tipFor = null;
+    }
+
+    // Kept live: the mic button's label is "Mute" or "Unmute" depending on
+    // state, and the state can change while the pointer is still on it.
+    function refreshTip(target) {
+        if (tipFor && tipFor === target && tipEl && !tipEl.hidden) showTip(target);
+    }
+
+    document.addEventListener('pointerover', (e) => {
+        const t = e.target.closest && e.target.closest('[data-tip]');
+        if (!t) { if (tipFor && !tipFor.contains(e.target)) hideTip(); return; }
+        // Re-shown when the LABEL changed as well as when the target did: mute
+        // and deafen rewrite theirs, and a stale word under the cursor is worse
+        // than no word at all.
+        if (t !== tipFor || (tipEl && tipEl.textContent !== t.getAttribute('data-tip'))) showTip(t);
+    });
+    document.addEventListener('pointerout', (e) => {
+        const t = e.target.closest && e.target.closest('[data-tip]');
+        if (t && t === tipFor && !t.contains(e.relatedTarget)) hideTip();
+    });
+    // A tip left hanging over a menu that has just opened is worse than none.
+    document.addEventListener('mousedown', hideTip);
+    document.addEventListener('scroll', hideTip, true);
+    window.addEventListener('blur', hideTip);
+    // Keyboard users get it on focus, which is the whole point of it not being
+    // a `title`.
+    document.addEventListener('focusin', (e) => {
+        const t = e.target.closest && e.target.closest('[data-tip]');
+        if (t) showTip(t);
+    });
+    document.addEventListener('focusout', hideTip);
+
     // ---------- account panel (the me-bar identity block) -------------------
     // Everything about you that isn't a setting: who you are, what you are
     // showing as, and the two account-level actions. Opened by clicking your
@@ -5455,6 +5546,11 @@
 
         await populateDevices();
         refreshPttHint();
+        if ($('set-search').value) {
+            $('set-search').value = '';
+            $('set-search').dispatchEvent(new Event('input'));
+        }
+        if (showSettingsPane) showSettingsPane(null);
         $('settings').hidden = false;
         trapFocus($('settings'), { label: 'Settings', initial: $('settings-close') });
     }
@@ -6179,46 +6275,124 @@
         if (micTest) stopMicTest(); else startMicTest();
     });
 
-    // Section nav down the left of the settings sheet, built from the sheet's own
-    // headings so adding a section needs no extra wiring.
+    // Section nav down the left of the settings screen, built from the sections'
+    // own markup so adding one needs no wiring here. One section is shown at a
+    // time rather than all of them in a single scroll: the whole point of the
+    // nav is that you can see where you are, which a scroll position cannot
+    // tell you once a section is longer than the window.
+    let showSettingsPane = null;
+
     (function buildSettingsNav() {
         const modal = document.querySelector('#settings .modal');
         const body = $('settings-body');
         const nav = document.createElement('nav');
         nav.className = 'set-nav';
-        const items = [];
+        const inner = document.createElement('div');
+        inner.className = 'set-nav-in';
+        nav.appendChild(inner);
 
+        const search = document.createElement('input');
+        search.type = 'search';
+        search.id = 'set-search';
+        search.className = 'set-search';
+        search.placeholder = 'Search';
+        search.setAttribute('aria-label', 'Search settings');
+        inner.appendChild(search);
+
+        // Grouped by data-nav-group, in the order each group is FIRST mentioned,
+        // so the divider order is decided by the markup and not by a second list
+        // here that could drift away from it.
+        const order = [];
+        const byGroup = new Map();
         body.querySelectorAll('.set-group').forEach((g) => {
             const h = g.querySelector('h3');
-            if (!h) return;                      // the sign-out row has no heading
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.className = 'set-nav-item';
-            b.textContent = h.textContent;
-            // Rects, not offsetTop: the modal is a centred grid item, so offset
-            // parents here are not the scroll container.
-            b.addEventListener('click', () => {
-                body.scrollTop += g.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
-            });
-            nav.appendChild(b);
-            items.push({ g, b });
+            if (!h) return;                      // a section with no heading is not a destination
+            const key = g.dataset.navGroup || '';
+            if (!byGroup.has(key)) { byGroup.set(key, []); order.push(key); }
+            byGroup.get(key).push({ g, h });
         });
 
+        const items = [];
+        const heads = [];
+
+        order.forEach((key) => {
+            let head = null;
+            if (key) {
+                head = document.createElement('div');
+                head.className = 'set-nav-head';
+                head.textContent = key;
+                inner.appendChild(head);
+            }
+            const mine = [];
+            byGroup.get(key).forEach(({ g, h }) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'set-nav-item';
+                if (g.dataset.navIcon) {
+                    const ic = document.createElement('span');
+                    ic.className = 'ico';
+                    ic.dataset.icon = g.dataset.navIcon;
+                    b.appendChild(ic);
+                }
+                const label = document.createElement('span');
+                label.className = 'set-nav-label';
+                label.textContent = h.textContent;
+                b.appendChild(label);
+                b.addEventListener('click', () => showPane(g));
+                inner.appendChild(b);
+                const it = { g, b, key: (h.textContent + ' ' + g.textContent).toLowerCase() };
+                items.push(it);
+                mine.push(it);
+            });
+            if (head) heads.push({ head, mine });
+        });
+
+        window.ScarmIcons.hydrate(nav);
         modal.insertBefore(nav, modal.firstChild);
-        if (items.length) items[0].b.classList.add('on');
 
-        body.addEventListener('scroll', () => {
-            const top = body.getBoundingClientRect().top;
-            let active = items[0];
+        // The section that owns the mic meter. Leaving it has to release the
+        // capture, or the mic light stays on while you read About.
+        const voiceGroup = $('btn-mic-test') && $('btn-mic-test').closest('.set-group');
+
+        function showPane(g) {
+            const target = g || (items[0] && items[0].g);
+            if (!target) return;
+            if (micTest && target !== voiceGroup) stopMicTest();
             items.forEach((it) => {
-                if (it.g.getBoundingClientRect().top - top <= 24) active = it;
+                it.g.hidden = it.g !== target;
+                it.b.classList.toggle('on', it.g === target);
             });
-            items.forEach((it) => it.b.classList.toggle('on', it === active));
+            body.scrollTop = 0;
+        }
+
+        search.addEventListener('input', () => {
+            const q = search.value.trim().toLowerCase();
+            let first = null;
+            items.forEach((it) => {
+                // Matched against the section's whole text, not just its title:
+                // "tray" should find Behaviour without anyone having to know
+                // which section the tray toggle lives in.
+                const hit = !q || it.key.indexOf(q) >= 0;
+                it.b.hidden = !hit;
+                if (hit && !first) first = it;
+            });
+            // A divider with nothing under it is worse than no divider.
+            heads.forEach((h) => { h.head.hidden = !h.mine.some((it) => !it.b.hidden); });
+            if (q && first) showPane(first.g);
         });
+        // Esc inside the box clears the filter; only an empty box closes the
+        // screen, which is the same bargain every other search field makes.
+        search.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && search.value) {
+                e.stopPropagation();
+                search.value = '';
+                search.dispatchEvent(new Event('input'));
+            }
+        });
+
+        showSettingsPane = showPane;
+        showPane(null);
     })();
-    $('settings').addEventListener('mousedown', (e) => {
-        if (e.target === $('settings')) closeSettings();
-    });
 
     // ---- new settings controls ----
     $('set-status').addEventListener('change', async (e) => {

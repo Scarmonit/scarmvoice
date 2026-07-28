@@ -204,25 +204,25 @@
       <!-- Each of the two audio controls is a toggle plus its own caret, as a
            pair: the toggle mutes/deafens, the caret picks the device. -->
       <div class="me-ctl">
-        <button class="icon-btn me-ctl-main" id="btn-mute" title="Mute microphone" aria-pressed="false">
+        <button class="icon-btn me-ctl-main" id="btn-mute" data-tip="Mute" aria-label="Mute" aria-pressed="false">
           <span class="ico" data-icon="mic"></span>
           <span class="ico ico-off" data-icon="mic-off" hidden></span>
         </button>
-        <button class="icon-btn me-ctl-caret" id="btn-mic-menu" title="Select microphone" aria-label="Select microphone" aria-haspopup="menu">
+        <button class="icon-btn me-ctl-caret" id="btn-mic-menu" data-tip="Input Options" aria-label="Input Options" aria-haspopup="menu">
           <span class="ico" data-icon="chevron"></span>
         </button>
       </div>
       <div class="me-ctl">
-        <button class="icon-btn me-ctl-main" id="btn-deafen" title="Deafen" aria-pressed="false">
+        <button class="icon-btn me-ctl-main" id="btn-deafen" data-tip="Deafen" aria-label="Deafen" aria-pressed="false">
           <span class="ico" data-icon="headset"></span>
           <span class="ico ico-off" data-icon="headset-off" hidden></span>
         </button>
-        <button class="icon-btn me-ctl-caret" id="btn-spk-menu" title="Select speaker" aria-label="Select speaker" aria-haspopup="menu">
+        <button class="icon-btn me-ctl-caret" id="btn-spk-menu" data-tip="Output Options" aria-label="Output Options" aria-haspopup="menu">
           <span class="ico" data-icon="chevron"></span>
         </button>
       </div>
-      <button class="icon-btn" id="btn-settings" title="Settings">
-        <span class="ico" data-icon="gear"></span>
+      <button class="icon-btn" id="btn-settings" data-tip="User Settings" aria-label="User Settings">
+        <span class="ico" data-icon="gear-solid"></span>
       </button>
     </div>
   </div>
@@ -584,18 +584,25 @@
 </div>
 
 <!-- ---------- settings ----------
-     Grouped into sections; the left-hand nav is built from these headings, so
-     adding a <section class="set-group"><h3> is all a new group needs. -->
+     One section is shown at a time; the left-hand nav is built from these
+     sections, so a new one needs no wiring beyond its own markup:
+
+       <section class="set-group" data-nav-group="App Settings" data-nav-icon="bell">
+         <h3>Whatever</h3>
+
+     data-nav-group is the divider it files under (groups appear in the order
+     they are first mentioned); data-nav-icon is any name from icons.js. -->
 <div id="settings" class="overlay" hidden>
   <div class="modal settings-modal">
-    <header class="modal-head">
-      <h2>Settings</h2>
-      <button class="icon-btn" id="settings-close" title="Close"><span class="ico" data-icon="x"></span></button>
-    </header>
+    <!-- Out of flow, so it does not scroll away with the section body. -->
+    <button type="button" class="set-esc" id="settings-close" aria-label="Close settings">
+      <span class="set-esc-ring"><span class="ico" data-icon="x"></span></span>
+      <span class="set-esc-cap">ESC</span>
+    </button>
 
     <div class="modal-body" id="settings-body">
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="User Settings" data-nav-icon="users">
         <h3>Account</h3>
         <div class="acct-card">
           <span class="acct-avatar" id="set-avatar"></span>
@@ -677,7 +684,7 @@
         </div>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="mic">
         <h3>Voice &amp; Audio</h3>
         <label class="row">
           <span>Microphone</span>
@@ -747,7 +754,7 @@
         </label>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="bell">
         <h3>Notifications</h3>
         <label class="row check">
           <input type="checkbox" id="set-dnd">
@@ -770,7 +777,7 @@
         </div>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="User Settings" data-nav-icon="smile">
         <h3>Custom emoji</h3>
         <p class="hint set-hint">
           Shared with everyone on the board — the website and the phone app see
@@ -790,7 +797,7 @@
         </div>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="moon">
         <h3>Appearance</h3>
         <label class="row">
           <span>Theme</span>
@@ -819,7 +826,7 @@
         </label>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="screen">
         <h3>Screen share</h3>
         <label class="row">
           <span>Resolution</span>
@@ -841,7 +848,7 @@
         </label>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="User Settings" data-nav-icon="ban">
         <h3>Privacy</h3>
         <div class="row stack">
           <span>Blocked people</span>
@@ -854,7 +861,7 @@
         </div>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="sliders">
         <h3>Behaviour</h3>
         <label class="row check">
           <input type="checkbox" id="set-launch"><span>Launch on system startup</span>
@@ -888,7 +895,7 @@
         </label>
       </section>
 
-      <section class="set-group">
+      <section class="set-group" data-nav-icon="app">
         <h3>About</h3>
         <div class="row between">
           <span class="hint" id="set-version"></span>

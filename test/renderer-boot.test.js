@@ -483,3 +483,129 @@ describe('microphone gain', () => {
         window.ScarmMic.setGain(1);
     });
 });
+
+describe('me-bar tooltips', () => {
+    const $ = (id) => document.getElementById(id);
+    const over = (el) => el.dispatchEvent(new window.MouseEvent('pointerover', { bubbles: true }));
+    const out = (el) => el.dispatchEvent(new window.MouseEvent('pointerout', { bubbles: true }));
+
+    // The `title` attribute draws an OS bubble after a multi-second delay that
+    // ignores the theme entirely. These five are the ones you point at most, so
+    // they are the ones that had to stop using it.
+    const EXPECT = {
+        'btn-mute': 'Mute',
+        'btn-mic-menu': 'Input Options',
+        'btn-deafen': 'Deafen',
+        'btn-spk-menu': 'Output Options',
+        'btn-settings': 'User Settings'
+    };
+
+    it('labels every me-bar control, and none of them by title', () => {
+        Object.entries(EXPECT).forEach(([id, label]) => {
+            expect($(id).getAttribute('data-tip')).toBe(label);
+            // Same string in both places: the tip is the accessible name too,
+            // since the glyph inside is aria-hidden and announces nothing.
+            expect($(id).getAttribute('aria-label')).toBe(label);
+            expect($(id).hasAttribute('title')).toBe(false);
+        });
+    });
+
+    it('shows the label on hover and takes it away again', () => {
+        Object.entries(EXPECT).forEach(([id, label]) => {
+            over($(id));
+            const tip = document.querySelector('.tip');
+            expect(tip).toBeTruthy();
+            expect(tip.hidden).toBe(false);
+            expect(tip.textContent).toBe(label);
+            out($(id));
+            expect(tip.hidden).toBe(true);
+        });
+        expect(errors).toEqual([]);
+    });
+
+    it('reuses one node rather than leaving a trail of them', () => {
+        over($('btn-mute'));
+        over($('btn-deafen'));
+        expect(document.querySelectorAll('.tip').length).toBe(1);
+        out($('btn-deafen'));
+    });
+
+    it('repaints when the label changes rather than the target', () => {
+        // Mute and deafen rewrite their own label, so the same element can be
+        // hovered twice and have to say two different things. Skipping the
+        // repaint because the target is unchanged is what leaves "Mute" sitting
+        // over a button that now unmutes.
+        const b = $('btn-mute');
+        over(b);
+        expect(document.querySelector('.tip').textContent).toBe('Mute');
+        b.setAttribute('data-tip', 'Unmute');
+        over(b);
+        expect(document.querySelector('.tip').textContent).toBe('Unmute');
+        b.setAttribute('data-tip', 'Mute');
+        out(b);
+    });
+
+    it('draws the user-settings cog filled, not as one more outline toggle', () => {
+        const svg = $('btn-settings').querySelector('svg');
+        const path = svg.querySelector('path');
+        expect(path.getAttribute('fill')).toBe('currentColor');
+        expect(path.getAttribute('fill-rule')).toBe('evenodd');
+        // The hole in the middle is a second subpath, not a separate <circle>:
+        // evenodd is what punches it, and a circle would fill in solid.
+        expect(svg.querySelectorAll('circle').length).toBe(0);
+    });
+});
+
+describe('the settings screen', () => {
+    const $ = (id) => document.getElementById(id);
+    const nav = () => [...document.querySelectorAll('.set-nav-item')];
+    const shown = () => [...document.querySelectorAll('.set-group')]
+        .filter((g) => !g.hidden).map((g) => g.querySelector('h3').textContent);
+    const type = (q) => {
+        $('set-search').value = q;
+        $('set-search').dispatchEvent(new window.Event('input', { bubbles: true }));
+    };
+
+    it('files every section under a divider, in the markup s own order', () => {
+        expect(nav().map((b) => b.textContent.trim())).toEqual([
+            'Account', 'Custom emoji', 'Privacy',
+            'Voice & Audio', 'Notifications', 'Appearance', 'Screen share', 'Behaviour',
+            'About'
+        ]);
+        expect([...document.querySelectorAll('.set-nav-head')].map((h) => h.textContent))
+            .toEqual(['User Settings', 'App Settings']);
+        // Every destination has a glyph; a nav of bare words is what it used to be.
+        expect(nav().every((b) => b.querySelector('svg'))).toBe(true);
+    });
+
+    it('shows exactly one section at a time', () => {
+        expect(shown()).toEqual(['Account']);
+        nav().find((b) => b.textContent.includes('Behaviour')).click();
+        expect(shown()).toEqual(['Behaviour']);
+        expect(nav().filter((b) => b.classList.contains('on')).map((b) => b.textContent.trim()))
+            .toEqual(['Behaviour']);
+    });
+
+    it('searches the sections contents, not just their titles', () => {
+        // Nobody knows that the tray toggle lives under "Behaviour" — which is
+        // the whole reason the box is there.
+        type('tray');
+        expect(nav().filter((b) => !b.hidden).map((b) => b.textContent.trim())).toEqual(['Behaviour']);
+        expect(shown()).toEqual(['Behaviour']);
+        // A divider with nothing under it is worse than no divider.
+        expect([...document.querySelectorAll('.set-nav-head')].filter((h) => !h.hidden)
+            .map((h) => h.textContent)).toEqual(['App Settings']);
+    });
+
+    it('puts everything back when the box is cleared', () => {
+        type('');
+        expect(nav().every((b) => !b.hidden)).toBe(true);
+        expect([...document.querySelectorAll('.set-nav-head')].every((h) => !h.hidden)).toBe(true);
+        expect(errors).toEqual([]);
+    });
+
+    it('leaves nothing stranded: every section is reachable from the nav', () => {
+        const titles = [...document.querySelectorAll('.set-group h3')].map((h) => h.textContent);
+        expect(nav().map((b) => b.textContent.trim()).sort()).toEqual(titles.sort());
+    });
+});

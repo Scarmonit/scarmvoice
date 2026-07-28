@@ -27,6 +27,18 @@
             'L6.74 19.79L4.21 17.26L5.58 15.27L5.15 14.22L2.77 13.79L2.77 10.21L5.15 9.78L5.58 8.73' +
             'L4.21 6.74L6.74 4.21L8.73 5.58Z"/><circle cx="12" cy="12" r="3"/>',
 
+        // The same cog as a solid mark. The user-panel button is a
+        // destination rather than an action, and the reference draws it filled
+        // — an outline there reads as one more toggle in a row of toggles.
+        // evenodd is what punches the centre hole out of the single path.
+        'gear-solid': '<path fill="currentColor" stroke="none" fill-rule="evenodd" clip-rule="evenodd" ' +
+            'd="M9.78 5.15L10.21 2.77L13.79 2.77L14.22 5.15L15.27 5.58L17.26 4.21L19.79 6.74' +
+            'L18.42 8.73L18.85 9.78L21.23 10.21L21.23 13.79L18.85 14.22L18.42 15.27L19.79 17.26' +
+            'L17.26 19.79L15.27 18.42L14.22 18.85L13.79 21.23L10.21 21.23L9.78 18.85L8.73 18.42' +
+            'L6.74 19.79L4.21 17.26L5.58 15.27L5.15 14.22L2.77 13.79L2.77 10.21L5.15 9.78L5.58 8.73' +
+            'L4.21 6.74L6.74 4.21L8.73 5.58Z' +
+            'M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Z"/>',
+
         // ---- microphone family -----------------------------------------
         // Plain mic = the mute toggle. Mic + solid dot = "record a voice
         // message", which is the one thing a bare mic could be confused with.
