@@ -10,6 +10,8 @@
 // "starts with account/" and then resolved to exactly that endpoint. These
 // cases are the regression test for that.
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import boardpath from '../src/main/boardpath.js';
 
 const { resolveBoardPath, needsAccountBridge } = boardpath;
@@ -101,5 +103,46 @@ describe('a base url is the other half of this guard', () => {
             expect(new URL(SPLICE + suffix + '/api/board/' + r.path).pathname, suffix)
                 .toBe('/api/board/account/login');
         }
+    });
+});
+
+// Every path the renderer actually asks for must be reachable.
+//
+// This exists because of a real, shipped bug: profile pictures were added with
+// `L.board('account/avatar', …)`, which the generic proxy denies by default —
+// the whole account/* namespace is closed unless a path is explicitly listed as
+// token-free. Nothing failed at build time, nothing failed in the tests, and the
+// feature simply answered "use the account bridge" the first time anyone used
+// it. The renderer and the allowlist are two files that have to agree, and
+// nothing was checking that they did.
+//
+// Scanning the source for the literal is deliberately crude and deliberately
+// cheap: it needs no runtime, no Electron, and no knowledge of what any of these
+// endpoints do — it only asserts that every path the UI names is one the bridge
+// will actually pass through.
+describe('every board path the renderer names is reachable', () => {
+    const rendererSrc = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'renderer', 'app.js'), 'utf8'
+    );
+
+    const paths = [...new Set(
+        [...rendererSrc.matchAll(/\bL\.board\(\s*'([^']+)'/g)].map((m) => m[1])
+    )].sort();
+
+    it('finds the call sites at all (guards against the regex rotting)', () => {
+        // If a refactor changes how the renderer calls the board, this test
+        // would otherwise start passing vacuously.
+        expect(paths.length).toBeGreaterThan(15);
+        expect(paths).toContain('list');
+        expect(paths).toContain('account/avatar');
+    });
+
+    it.each(paths)('%s resolves and is not blocked by the account bridge', (p) => {
+        const resolved = boardpath.resolveBoardPath(p, BASE);
+        expect(resolved, `${p} does not resolve to a safe board path`).not.toBeNull();
+        expect(
+            boardpath.needsAccountBridge(resolved.key),
+            `${p} is denied by the generic proxy — it needs a dedicated handler in main.js, or to be added to ACCOUNT_PROXYABLE if it is token-free`
+        ).toBe(false);
     });
 });

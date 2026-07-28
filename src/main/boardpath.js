@@ -22,10 +22,22 @@ const BOARD_PREFIX = '/api/board/';
 // outright rather than reasoned about.
 const SAFE_BOARD_PATH = /^[a-z0-9][a-z0-9/_-]*$/;
 
-// The read-only corner of the account namespace the UI genuinely needs.
+// The corner of the account namespace the UI genuinely needs.
+//
+// The rule for this list is narrow and worth stating: an endpoint belongs here
+// only if it never MINTS OR RETURNS the account token. register/login/verify do,
+// which is why they have dedicated handlers in main.js that strip it — and why
+// the default for the whole namespace is denial.
+//
+// account/avatar sets and clears a profile picture and answers with
+// { success, avatar }. Same category as manage/users/twofactor: account-scoped,
+// token-free. It was missed when profile pictures shipped, so every attempt to
+// set one from the desktop app came back with the internal invariant message
+// "use the account bridge" printed under the account card.
 const ACCOUNT_PROXYABLE = new Set([
     'account/me', 'account/users', 'account/manage',
-    'account/twofactor', 'account/logout', 'account/resend'
+    'account/twofactor', 'account/logout', 'account/resend',
+    'account/avatar'
 ]);
 
 // -> { key, path } for a path that is safe to request, or null.

@@ -304,3 +304,42 @@ test('fetches a lazy bundle on demand and caches it', async () => {
     expect(result.cached).toBe(true);
     expect(result.tags).toBe(1);
 });
+
+// The bug this guards: profile pictures shipped calling
+// `L.board('account/avatar', …)`, and the generic board proxy denies the whole
+// account/* namespace unless a path is explicitly listed as token-free. The
+// feature therefore answered "use the account bridge" the first time anyone
+// pressed the button — a string meant for a developer, printed under the
+// account card.
+//
+// The unit test in test/boardpath.test.js checks the allowlist. This checks the
+// wiring END TO END, through the real preload, the real IPC channel and the real
+// main-process handler, which is where the denial actually happened.
+//
+// There is no session on a fresh profile, so the expected answer is "you are not
+// signed in" — reaching THAT is the proof, because it means the request got past
+// the bridge guard and into net.board.
+test('the renderer can reach every board path it names', async () => {
+    const paths = [
+        'account/avatar',   // the one that broke
+        'account/users', 'account/manage', 'account/twofactor', 'account/me',
+        'avatars', 'emoji', 'list', 'pins', 'upload-url'
+    ];
+
+    const results = await page.evaluate(async (list) => {
+        const out = {};
+        for (const p of list) out[p] = await window.lounge.board(p);
+        return out;
+    }, paths);
+
+    for (const p of paths) {
+        expect(results[p], `${p} returned nothing`).toBeTruthy();
+        expect(results[p].error, `${p} was refused by the board proxy`).not.toBe('use the account bridge');
+        expect(results[p].error, `${p} did not resolve to a safe board path`).not.toBe('bad path');
+    }
+
+    // And prove the assertion above can actually fail: a path that genuinely
+    // must go through a dedicated handler still does.
+    const denied = await page.evaluate(() => window.lounge.board('account/login', { method: 'POST' }));
+    expect(denied.error).toBe('use the account bridge');
+});
