@@ -4821,6 +4821,127 @@
         $('notes').hidden = true;
     }
 
+    // ---- the full release history (Settings > About) ------------------------
+    //
+    // One <details> per version, so collapsing is the browser's job rather than
+    // a class this file has to keep in step — and so keyboard and screen-reader
+    // behaviour comes for free. The newest is open, because that is the one
+    // somebody opening this pane after an update came to read.
+    //
+    // Bodies arrive already parsed into the block model (see updater.history),
+    // and go through the SAME renderNoteBlocks the update modal uses: built with
+    // createElement + textContent, never markup, because this is remote text.
+
+    let historyLoaded = false;      // only fetched once per session
+    let historyLoading = false;
+
+    function releaseDate(iso) {
+        if (!iso) return '';
+        const t = Date.parse(iso);
+        if (!Number.isFinite(t)) return '';
+        try {
+            return new Intl.DateTimeFormat([], { year: 'numeric', month: 'short', day: 'numeric' }).format(t);
+        } catch (e) { return ''; }
+    }
+
+    function renderReleaseHistory(res) {
+        const box = $('release-history');
+        const sub = $('rn-sub');
+        const retry = $('rn-refresh');
+        box.innerHTML = '';
+
+        if (!res || !res.ok) {
+            retry.hidden = false;
+            sub.textContent = (res && res.error)
+                ? 'Could not load the release notes — ' + res.error + '.'
+                : 'Could not load the release notes.';
+            return;
+        }
+        retry.hidden = true;
+
+        const list = res.releases || [];
+        if (!list.length) {
+            sub.textContent = 'No releases have been published yet.';
+            return;
+        }
+        sub.textContent = list.length + ' release' + (list.length === 1 ? '' : 's') + ', newest first.';
+
+        // The version this build IS, so the entry for it can say so — the single
+        // most useful thing this list can tell you.
+        const mine = String($('set-version').textContent || '').replace(/^\D+/, '').trim();
+
+        list.forEach((r, i) => {
+            const item = document.createElement('details');
+            item.className = 'rn-item';
+            if (i === 0) item.open = true;
+
+            const head = document.createElement('summary');
+            head.className = 'rn-sum';
+
+            const ver = document.createElement('span');
+            ver.className = 'rn-ver';
+            ver.textContent = 'v' + r.version;
+            head.appendChild(ver);
+
+            // The title only earns its place when it says something the version
+            // number does not — early releases were published with the version
+            // as their name.
+            const title = String(r.title || '').replace(/^v?\d+\.\d+\.\d+\s*[—–-]?\s*/, '').trim();
+            if (title) {
+                const t = document.createElement('span');
+                t.className = 'rn-title';
+                t.textContent = title;
+                head.appendChild(t);
+            }
+
+            if (mine && r.version === mine) {
+                const badge = document.createElement('span');
+                badge.className = 'rn-badge';
+                badge.textContent = 'installed';
+                head.appendChild(badge);
+            }
+            if (r.prerelease) {
+                const pre = document.createElement('span');
+                pre.className = 'rn-badge rn-pre';
+                pre.textContent = 'pre-release';
+                head.appendChild(pre);
+            }
+
+            const when = document.createElement('span');
+            when.className = 'rn-date';
+            when.textContent = releaseDate(r.date);
+            head.appendChild(when);
+
+            item.appendChild(head);
+
+            const body = document.createElement('div');
+            body.className = 'rn-body';
+            renderNoteBlocks(body, r.blocks);
+            item.appendChild(body);
+
+            box.appendChild(item);
+        });
+    }
+
+    async function loadReleaseHistory(force) {
+        if (historyLoading) return;
+        if (historyLoaded && !force) return;
+        historyLoading = true;
+        $('rn-refresh').hidden = true;
+        $('rn-sub').textContent = 'Loading…';
+        try {
+            const res = await L.update.history(!!force);
+            historyLoaded = !!(res && res.ok);
+            renderReleaseHistory(res);
+        } catch (e) {
+            renderReleaseHistory({ ok: false, error: (e && e.message) || 'unknown error' });
+        } finally {
+            historyLoading = false;
+        }
+    }
+
+    $('rn-refresh').addEventListener('click', () => loadReleaseHistory(true));
+
     $('ub-notes-toggle').addEventListener('click', openNotes);
     $('notes-close').addEventListener('click', closeNotes);
     $('notes-later').addEventListener('click', closeNotes);
@@ -7246,6 +7367,10 @@
             const h = target.querySelector('h3');
             $('settings-title').textContent = h ? h.textContent : 'Settings';
             body.scrollTop = 0;
+            // The release history is a network round trip to GitHub, which is
+            // rate limited per address — so it is fetched when somebody actually
+            // looks at About, not every time Settings opens.
+            if (target === settingsPaneByTitle('About')) loadReleaseHistory(false);
         }
 
         search.addEventListener('input', () => {

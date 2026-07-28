@@ -16,7 +16,9 @@ const state = (globalThis.__ELECTRON_STUB__ ||= {
 module.exports = {
     app: {
         getPath: () => state.userDataDir,
-        getName: () => 'ScarmVoice'
+        getName: () => 'ScarmVoice',
+        // updater.js puts this in the User-Agent GitHub's REST API requires.
+        getVersion: () => state.version || '0.0.0-test'
     },
     safeStorage: {
         isEncryptionAvailable: () => state.encryptionAvailable,

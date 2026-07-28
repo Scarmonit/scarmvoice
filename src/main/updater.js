@@ -363,7 +363,100 @@ function setAuto() {
 
 function getState() { return state; }
 
+// ---- the whole release history ------------------------------------------
+//
+// The update feed only ever describes ONE release: the one being offered. So
+// "what changed in the version I am running", let alone in the five before it,
+// was not answerable inside the app at all — you had to go and find the repo.
+//
+// This asks GitHub for the published releases and runs each body through the
+// same parseNotes() the update banner uses, so the history renders through the
+// same block model and the same createElement/textContent path. Nothing from a
+// remote feed is ever handed to the DOM as markup, here or there.
+//
+// It lives in the MAIN process for the reason every other remote fetch in this
+// app does: the renderer is a file:// page, so its origin is null and it is at
+// the mercy of whatever CORS headers the far end sends.
+
+// Read from the same place electron-updater takes the feed from, so the history
+// and the updates can never point at two different repositories.
+function releasesUrl() {
+    let owner = 'Scarmonit';
+    let repo = 'scarmvoice';
+    try {
+        const pub = require('../../package.json').build.publish;
+        if (pub && pub.owner && pub.repo) { owner = pub.owner; repo = pub.repo; }
+    } catch (e) { /* the constants above are the same values */ }
+    return `https://api.github.com/repos/${owner}/${repo}/releases?per_page=100`;
+}
+
+// Kept for the life of the process. The list changes when we ship, which is
+// also when the app restarts itself, so a session-long cache cannot go stale in
+// any way the user would see — and unauthenticated api.github.com allows 60
+// requests an hour per address, which a settings panel should not be spending.
+let historyCache = null;
+
+function versionKey(v) {
+    // Sortable, so 0.9.0 cannot outrank 0.10.0 the way a string compare does.
+    const p = String(v || '').split('.').map((n) => parseInt(n, 10) || 0);
+    return (p[0] || 0) * 1e6 + (p[1] || 0) * 1e3 + (p[2] || 0);
+}
+
+async function history(force) {
+    if (historyCache && !force) return historyCache;
+
+    let res;
+    try {
+        res = await fetch(releasesUrl(), {
+            signal: AbortSignal.timeout(15000),
+            headers: {
+                Accept: 'application/vnd.github+json',
+                // GitHub's REST API refuses a request without one.
+                'User-Agent': 'ScarmVoice/' + app.getVersion()
+            }
+        });
+    } catch (e) {
+        return { ok: false, error: e.name === 'TimeoutError' ? 'timed out' : 'could not reach GitHub', releases: [] };
+    }
+    if (!res.ok) {
+        // 403 here is almost always the hourly rate limit rather than anything
+        // being wrong, and it says so rather than blaming the network.
+        const why = res.status === 403 || res.status === 429
+            ? 'GitHub is rate limiting this connection — try again later'
+            : `GitHub returned ${res.status}`;
+        try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+        return { ok: false, error: why, releases: [] };
+    }
+
+    let raw;
+    try { raw = await res.json(); } catch (e) { return { ok: false, error: 'unreadable response', releases: [] }; }
+    if (!Array.isArray(raw)) return { ok: false, error: 'unexpected response', releases: [] };
+
+    const releases = raw
+        // A draft is not published, and nobody running this build can have it.
+        .filter((r) => r && !r.draft && r.tag_name)
+        .map((r) => {
+            const version = String(r.tag_name).replace(/^v/i, '');
+            const n = parseNotes(r.body);
+            return {
+                version,
+                // The title is the version again on releases published before
+                // the notes were written by hand; the UI drops it when so.
+                title: String(r.name || '').trim(),
+                date: r.published_at || r.created_at || null,
+                prerelease: !!r.prerelease,
+                blocks: n.blocks
+            };
+        })
+        .sort((a, b) => versionKey(b.version) - versionKey(a.version));
+
+    historyCache = { ok: true, releases, error: null };
+    return historyCache;
+}
+
+// ---- exports -------------------------------------------------------------
+
 module.exports = {
     init, checkOnLaunch, checkNow, startDownload, installNow, setAuto,
-    postpone, setBusy, getState, available, parseNotes
+    postpone, setBusy, getState, available, parseNotes, history
 };

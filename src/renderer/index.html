@@ -1211,6 +1211,23 @@
           <span class="hint">Diagnostic log for this and the previous session</span>
           <button type="button" id="btn-open-logs" class="keycap">Open logs folder</button>
         </div>
+
+        <!-- Every release, newest first. Until now the app could only ever show
+             the notes for ONE version — the update it was about to install — so
+             "what changed in the one I am running", let alone the five before
+             it, was not answerable without going and finding the repository.
+             Fetched on demand: nothing loads this until the About pane is
+             actually opened. -->
+        <div class="row stack rn-head">
+          <div class="rn-head-row">
+            <div class="acct-removal-text">
+              <b>Release notes</b>
+              <span class="hint" id="rn-sub">Everything that has changed, newest first.</span>
+            </div>
+            <button type="button" class="keycap" id="rn-refresh" hidden>Retry</button>
+          </div>
+        </div>
+        <div class="row stack" id="release-history"></div>
       </section>
     </div>
   </div>

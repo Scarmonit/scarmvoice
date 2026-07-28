@@ -150,6 +150,9 @@ contextBridge.exposeInMainWorld('lounge', {
         install: () => ipcRenderer.invoke('update:install'),
         setAuto: (on) => ipcRenderer.invoke('update:setAuto', on),
         postpone: () => ipcRenderer.invoke('update:postpone'),
+        // The whole published history, parsed main-side into the same block
+        // model the update banner renders.
+        history: (force) => ipcRenderer.invoke('update:history', force),
         onState: (cb) => sub('update:state', cb)
     },
 

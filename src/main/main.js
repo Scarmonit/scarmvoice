@@ -972,6 +972,9 @@ function registerIpc() {
     handle('update:install', () => updater.installNow());
     handle('update:setAuto', (_e, on) => { updater.setAuto(on); return { ok: true }; });
     handle('update:postpone', () => updater.postpone());
+    // Every published release, for the history in Settings > About. `force`
+    // re-fetches past the session cache, which is what the Retry there does.
+    handle('update:history', (_e, force) => updater.history(!!force));
 
     handle('app:notify', (_e, payload) => {
         if (!store.get().notifications) return false;

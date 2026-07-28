@@ -113,7 +113,7 @@ test('exposes the whole preload bridge to the renderer', async () => {
         'notifyPosted', 'onMessage', 'onStatus', 'send', 'sendTyping', 'sendVoice',
         'start', 'stop', 'wake'
     ]);
-    expect(shape.update).toEqual(['check', 'download', 'getState', 'install', 'onState', 'setAuto']);
+    expect(shape.update).toEqual(['check', 'download', 'getState', 'history', 'install', 'onState', 'postpone', 'setAuto']);
 });
 
 test('round-trips a real IPC call', async () => {
