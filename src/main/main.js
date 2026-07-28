@@ -961,6 +961,23 @@ function registerIpc() {
     // reporting a bug gets at it without knowing where userData lives.
     handle('app:openLogs', () => log.openFolder());
 
+    // A line from the RENDERER, into that same file.
+    //
+    // log.js wraps the console of the MAIN process only, so everything the
+    // renderer logs — which is most of what there is to know about voice, the
+    // roster and the message list — vanished the moment it was written. Asking
+    // somebody to reproduce a bug under `npm run dev` with devtools open is not
+    // a diagnostic route for an installed app, and the packaged build has no
+    // devtools at all (the fuses turn them off).
+    //
+    // Deliberately NOT a general console bridge: the renderer logs plenty that
+    // is only interesting live, and piping all of it would bury the file. Call
+    // sites opt in, one line at a time.
+    handle('app:log', (_e, line) => {
+        console.info('[renderer] ' + String(line == null ? '' : line).slice(0, 500));
+        return true;
+    });
+
     // Windows blocks drag-and-drop from a medium-integrity process (Explorer)
     // into a high-integrity one (an elevated app) — UIPI drops the messages
     // before they ever reach us, so no amount of renderer code can fix it.

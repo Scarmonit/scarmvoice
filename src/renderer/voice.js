@@ -1247,7 +1247,11 @@
         // than guesses. Visible in devtools (npm run dev).
         const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
         function mark(what, from) {
-            try { console.info('[voice] ' + what + ': ' + Math.round(now() - from) + 'ms'); } catch (e) {}
+            const line = '[voice] ' + what + ': ' + Math.round(now() - from) + 'ms';
+            try { console.info(line); } catch (e) {}
+            // …and into the log file, so "joining feels slow" can be answered
+            // from an installed build rather than only under `npm run dev`.
+            try { window.lounge.app.log(line); } catch (e) {}
         }
 
         async function join() {

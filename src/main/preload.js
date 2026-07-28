@@ -122,6 +122,10 @@ contextBridge.exposeInMainWorld('lounge', {
         isElevated: () => ipcRenderer.invoke('app:isElevated'),
         // Opens the folder holding the rotating log file (see main/log.js).
         openLogs: () => ipcRenderer.invoke('app:openLogs'),
+        // Put one line in that file from here. For the handful of things worth
+        // knowing after the fact — see the app:log handler for why this is
+        // opt-in rather than a console bridge.
+        log: (line) => ipcRenderer.invoke('app:log', line),
         notify: (payload) => ipcRenderer.invoke('app:notify', payload),
         setVoiceState: (state) => ipcRenderer.invoke('app:voiceState', state),
         setBadge: (count) => ipcRenderer.invoke('app:badge', count),
