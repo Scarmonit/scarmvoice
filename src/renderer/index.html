@@ -180,132 +180,136 @@
       <p class="sb-hint">Everyone in the call hears these.</p>
     </div>
 
-    <div id="me-bar">
-      <!-- The identity block is a single target that opens the account panel,
-           the way clicking your name in Discord does. The second line is never
-           blank: it carries the custom status if you set one, and the presence
-           label otherwise. -->
-      <button class="me-id" id="btn-name" title="Set status" aria-haspopup="dialog" aria-expanded="false">
-        <span class="me-av-wrap">
-          <span class="me-avatar" id="me-avatar"></span>
-          <i class="me-presence" id="me-presence" aria-hidden="true"></i>
-        </span>
-        <span class="me-text">
-          <span class="me-name" id="me-name-text">Anonymous</span>
-          <span id="me-status" class="me-status">Online</span>
-        </span>
+  </aside>
+
+  <!-- The user panel is a child of #app, not of the sidebar: it spans the
+       rail as well, so it cannot live inside a column that is only as wide
+       as the channel list. See the grid in styles.css. -->
+  <div id="me-bar">
+    <!-- The identity block is a single target that opens the account panel,
+         the way clicking your name in Discord does. The second line is never
+         blank: it carries the custom status if you set one, and the presence
+         label otherwise. -->
+    <button class="me-id" id="btn-name" title="Set status" aria-haspopup="dialog" aria-expanded="false">
+      <span class="me-av-wrap">
+        <span class="me-avatar" id="me-avatar"></span>
+        <i class="me-presence" id="me-presence" aria-hidden="true"></i>
+      </span>
+      <span class="me-text">
+        <span class="me-name" id="me-name-text">Anonymous</span>
+        <span id="me-status" class="me-status">Online</span>
+      </span>
+    </button>
+    <div class="me-actions">
+      <!-- Each of the two audio controls is a toggle plus its own caret, as a
+           pair: the toggle mutes/deafens, the caret picks the device. -->
+      <div class="me-ctl">
+        <button class="icon-btn me-ctl-main" id="btn-mute" title="Mute microphone" aria-pressed="false">
+          <span class="ico" data-icon="mic"></span>
+          <span class="ico ico-off" data-icon="mic-off" hidden></span>
+        </button>
+        <button class="icon-btn me-ctl-caret" id="btn-mic-menu" title="Select microphone" aria-label="Select microphone" aria-haspopup="menu">
+          <span class="ico" data-icon="chevron"></span>
+        </button>
+      </div>
+      <div class="me-ctl">
+        <button class="icon-btn me-ctl-main" id="btn-deafen" title="Deafen" aria-pressed="false">
+          <span class="ico" data-icon="headset"></span>
+          <span class="ico ico-off" data-icon="headset-off" hidden></span>
+        </button>
+        <button class="icon-btn me-ctl-caret" id="btn-spk-menu" title="Select speaker" aria-label="Select speaker" aria-haspopup="menu">
+          <span class="ico" data-icon="chevron"></span>
+        </button>
+      </div>
+      <button class="icon-btn" id="btn-settings" title="Settings">
+        <span class="ico" data-icon="gear"></span>
       </button>
-      <div class="me-actions">
-        <!-- Each of the two audio controls is a toggle plus its own caret, as a
-             pair: the toggle mutes/deafens, the caret picks the device. -->
-        <div class="me-ctl">
-          <button class="icon-btn me-ctl-main" id="btn-mute" title="Mute microphone" aria-pressed="false">
-            <span class="ico" data-icon="mic"></span>
-            <span class="ico ico-off" data-icon="mic-off" hidden></span>
-          </button>
-          <button class="icon-btn me-ctl-caret" id="btn-mic-menu" title="Select microphone" aria-label="Select microphone" aria-haspopup="menu">
-            <span class="ico" data-icon="chevron"></span>
-          </button>
-        </div>
-        <div class="me-ctl">
-          <button class="icon-btn me-ctl-main" id="btn-deafen" title="Deafen" aria-pressed="false">
-            <span class="ico" data-icon="headset"></span>
-            <span class="ico ico-off" data-icon="headset-off" hidden></span>
-          </button>
-          <button class="icon-btn me-ctl-caret" id="btn-spk-menu" title="Select speaker" aria-label="Select speaker" aria-haspopup="menu">
-            <span class="ico" data-icon="chevron"></span>
-          </button>
-        </div>
-        <button class="icon-btn" id="btn-settings" title="Settings">
-          <span class="ico" data-icon="gear"></span>
+    </div>
+  </div>
+
+
+  <!-- The two audio panels the carets open. Not context menus: they carry
+       sliders and a checkbox, which a list of items cannot express. -->
+  <div id="mic-pop" class="audio-pop" hidden role="dialog" aria-label="Input settings">
+    <button type="button" class="ap-row ap-pick" id="ap-input-device">
+      <span class="ap-rowtext">
+        <span class="ap-title">Input Device</span>
+        <span class="ap-value" id="ap-input-device-value">Windows Default</span>
+      </span>
+      <span class="ico ap-more" data-icon="chevron"></span>
+    </button>
+    <button type="button" class="ap-row ap-pick" id="ap-input-profile">
+      <span class="ap-rowtext">
+        <span class="ap-title">Input Profile</span>
+        <span class="ap-value" id="ap-input-profile-value">Standard</span>
+      </span>
+      <span class="ico ap-more" data-icon="chevron"></span>
+    </button>
+    <div class="ap-row ap-slider">
+      <span class="ap-title">Input Volume</span>
+      <input type="range" id="ap-input-volume" min="0" max="200" step="1" aria-label="Input volume">
+    </div>
+    <label class="ap-row ap-check">
+      <span class="ap-title">Push to Talk</span>
+      <input type="checkbox" id="ap-ptt">
+    </label>
+    <button type="button" class="ap-row ap-foot" id="ap-input-settings">
+      <span class="ap-title">Voice Settings</span>
+      <span class="ico" data-icon="gear"></span>
+    </button>
+  </div>
+
+  <div id="spk-pop" class="audio-pop" hidden role="dialog" aria-label="Output settings">
+    <button type="button" class="ap-row ap-pick" id="ap-output-device">
+      <span class="ap-rowtext">
+        <span class="ap-title">Output Device</span>
+        <span class="ap-value" id="ap-output-device-value">Windows Default</span>
+      </span>
+      <span class="ico ap-more" data-icon="chevron"></span>
+    </button>
+    <div class="ap-row ap-slider">
+      <span class="ap-title">Output Volume</span>
+      <input type="range" id="ap-output-volume" min="0" max="200" step="1" aria-label="Output volume">
+    </div>
+    <button type="button" class="ap-row ap-foot" id="ap-output-settings">
+      <span class="ap-title">Voice Settings</span>
+      <span class="ico" data-icon="gear"></span>
+    </button>
+  </div>
+
+  <!-- Account panel, anchored above the me-bar. Positioned by JS so it can
+       never be clipped by the sidebar's own overflow. -->
+  <div id="me-popover" class="me-pop" hidden role="dialog" aria-label="Account">
+    <div class="mep-banner" id="mep-banner"></div>
+    <span class="mep-av-wrap">
+      <span class="mep-avatar" id="mep-avatar"></span>
+      <i class="mep-presence" id="mep-presence" aria-hidden="true"></i>
+    </span>
+    <div class="mep-card">
+      <div class="mep-names">
+        <div class="mep-name" id="mep-name">Anonymous</div>
+        <div class="mep-handle" id="mep-handle"></div>
+      </div>
+      <div class="mep-custom" id="mep-custom" hidden></div>
+      <div class="mep-menu">
+        <button type="button" class="mep-item" id="mep-edit">
+          <span class="ico" data-icon="pencil"></span><span>Edit Profile</span>
+        </button>
+        <button type="button" class="mep-item mep-status-row" id="mep-status" aria-haspopup="menu">
+          <i class="presence" id="mep-status-dot" aria-hidden="true"></i>
+          <span id="mep-status-label">Online</span>
+          <span class="ico mep-more" data-icon="chevron"></span>
+        </button>
+        <button type="button" class="mep-item" id="mep-copy-id">
+          <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
+        </button>
+        <div class="mep-sep"></div>
+        <button type="button" class="mep-item" id="mep-switch">
+          <span class="ico" data-icon="users"></span><span>Switch account</span>
         </button>
       </div>
     </div>
-
-
-    <!-- The two audio panels the carets open. Not context menus: they carry
-         sliders and a checkbox, which a list of items cannot express. -->
-    <div id="mic-pop" class="audio-pop" hidden role="dialog" aria-label="Input settings">
-      <button type="button" class="ap-row ap-pick" id="ap-input-device">
-        <span class="ap-rowtext">
-          <span class="ap-title">Input Device</span>
-          <span class="ap-value" id="ap-input-device-value">Windows Default</span>
-        </span>
-        <span class="ico ap-more" data-icon="chevron"></span>
-      </button>
-      <button type="button" class="ap-row ap-pick" id="ap-input-profile">
-        <span class="ap-rowtext">
-          <span class="ap-title">Input Profile</span>
-          <span class="ap-value" id="ap-input-profile-value">Standard</span>
-        </span>
-        <span class="ico ap-more" data-icon="chevron"></span>
-      </button>
-      <div class="ap-row ap-slider">
-        <span class="ap-title">Input Volume</span>
-        <input type="range" id="ap-input-volume" min="0" max="200" step="1" aria-label="Input volume">
-      </div>
-      <label class="ap-row ap-check">
-        <span class="ap-title">Push to Talk</span>
-        <input type="checkbox" id="ap-ptt">
-      </label>
-      <button type="button" class="ap-row ap-foot" id="ap-input-settings">
-        <span class="ap-title">Voice Settings</span>
-        <span class="ico" data-icon="gear"></span>
-      </button>
-    </div>
-
-    <div id="spk-pop" class="audio-pop" hidden role="dialog" aria-label="Output settings">
-      <button type="button" class="ap-row ap-pick" id="ap-output-device">
-        <span class="ap-rowtext">
-          <span class="ap-title">Output Device</span>
-          <span class="ap-value" id="ap-output-device-value">Windows Default</span>
-        </span>
-        <span class="ico ap-more" data-icon="chevron"></span>
-      </button>
-      <div class="ap-row ap-slider">
-        <span class="ap-title">Output Volume</span>
-        <input type="range" id="ap-output-volume" min="0" max="200" step="1" aria-label="Output volume">
-      </div>
-      <button type="button" class="ap-row ap-foot" id="ap-output-settings">
-        <span class="ap-title">Voice Settings</span>
-        <span class="ico" data-icon="gear"></span>
-      </button>
-    </div>
-
-    <!-- Account panel, anchored above the me-bar. Positioned by JS so it can
-         never be clipped by the sidebar's own overflow. -->
-    <div id="me-popover" class="me-pop" hidden role="dialog" aria-label="Account">
-      <div class="mep-banner" id="mep-banner"></div>
-      <span class="mep-av-wrap">
-        <span class="mep-avatar" id="mep-avatar"></span>
-        <i class="mep-presence" id="mep-presence" aria-hidden="true"></i>
-      </span>
-      <div class="mep-card">
-        <div class="mep-names">
-          <div class="mep-name" id="mep-name">Anonymous</div>
-          <div class="mep-handle" id="mep-handle"></div>
-        </div>
-        <div class="mep-custom" id="mep-custom" hidden></div>
-        <div class="mep-menu">
-          <button type="button" class="mep-item" id="mep-edit">
-            <span class="ico" data-icon="pencil"></span><span>Edit Profile</span>
-          </button>
-          <button type="button" class="mep-item mep-status-row" id="mep-status" aria-haspopup="menu">
-            <i class="presence" id="mep-status-dot" aria-hidden="true"></i>
-            <span id="mep-status-label">Online</span>
-            <span class="ico mep-more" data-icon="chevron"></span>
-          </button>
-          <button type="button" class="mep-item" id="mep-copy-id">
-            <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
-          </button>
-          <div class="mep-sep"></div>
-          <button type="button" class="mep-item" id="mep-switch">
-            <span class="ico" data-icon="users"></span><span>Switch account</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  </aside>
+  </div>
 
   <main id="main">
     <header id="chan-head">

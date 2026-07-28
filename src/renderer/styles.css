@@ -269,20 +269,38 @@ button { font-family: inherit; }
 
 /* ---------- app shell --------------------------------------------------- */
 
+/* A grid rather than a row of columns, for one reason: the user panel spans
+   BOTH the rail and the channel list, which no flex child can do. The chat and
+   member columns run the full height beside it.
+
+     rail  side  main  members
+     user  user  main  members
+
+   The members column is `auto` so that hiding the panel (display:none) collapses
+   its track to nothing rather than leaving a gap. */
 #app {
   flex: 1 1 auto;
   min-height: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--w-rail) var(--w-side) minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rail side main members"
+    "user user main members";
   /* Draggable regions swallow pointer events, which would silently kill file
      drops over any area that inherited it. Keep the app body explicitly out. */
   -webkit-app-region: no-drag;
 }
+#rail { grid-area: rail; }
+#sidebar { grid-area: side; }
+#me-bar { grid-area: user; }
+#main { grid-area: main; }
+#members-panel { grid-area: members; }
 #app[hidden] { display: none; }
 
 /* ---------- rail -------------------------------------------------------- */
 
 #rail {
-  flex: 0 0 var(--w-rail); width: var(--w-rail);
   background: var(--rail);
   display: flex; flex-direction: column; align-items: center;
   padding: 10px 0 12px; gap: 8px;
@@ -329,7 +347,6 @@ button { font-family: inherit; }
 /* ---------- sidebar ----------------------------------------------------- */
 
 #sidebar {
-  flex: 0 0 var(--w-side); width: var(--w-side);
   background: var(--side);
   display: flex; flex-direction: column;
   min-height: 0;
@@ -538,13 +555,10 @@ button { font-family: inherit; }
 /* ---------- user panel -------------------------------------------------- */
 
 #me-bar {
-  flex: 0 0 auto;
   display: flex; align-items: center; gap: 4px;
-  padding: 10px 8px; background: var(--sheen), var(--panel);
+  padding: 10px 12px; background: var(--sheen), var(--panel);
   box-shadow: 0 -1px 0 var(--divider);
 }
-#voice-panel:has(#voice-live:not([hidden])) + #me-bar { box-shadow: none; }
-
 /* ---------- soundboard tray -------------------------------------------- */
 /* Anchored to the sidebar rather than to the button: the voice panel is short
    and near the bottom of the window, so a tray hanging off the button would
@@ -646,7 +660,7 @@ button { font-family: inherit; }
 /* ---------- members sidebar --------------------------------------------- */
 
 #members-panel {
-  flex: 0 0 var(--w-members); width: var(--w-members);
+  width: var(--w-members);
   background: var(--side);
   display: flex; flex-direction: column;
   min-height: 0;
@@ -693,7 +707,7 @@ button { font-family: inherit; }
 /* ---------- message column --------------------------------------------- */
 
 #main {
-  flex: 1; min-width: 0; min-height: 0;
+  min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   background: var(--chat);
   position: relative;
