@@ -502,6 +502,17 @@ next background poll. Four things keep the view still:
   discard every node on screen, which restarted every image and video load and
   threw away link previews that had already been fetched — `renderPreviews` then
   had to fetch and re-graft them all over again.
+
+  The diff walks a cursor along the existing children and advances it only when
+  it lands on the node it wanted, so **rows that are going away have to be
+  removed *before* that walk, not after it**. Left in place, one doomed node —
+  a deleted message, a row that dropped out of the retained window — blocks the
+  cursor permanently, and every row after it gets `insertBefore`d past the
+  obstruction. The list still comes out correct, which is why this went
+  unnoticed: it just cost 400 node moves and 26 ms of forced layout (measured in
+  Chromium) to express a single removal. `test/render-diff-cost.test.js` asserts
+  the mutation count rather than a duration, because the count is the thing that
+  causes the dropped frame and a millisecond threshold is a flake.
 - **A rebuilt row restores an anchor** — the topmost still-visible message and
   its offset from the top of the viewport — instead of a raw `scrollTop`, so
   changes in the content above it don't matter.
