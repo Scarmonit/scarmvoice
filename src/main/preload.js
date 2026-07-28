@@ -149,6 +149,7 @@ contextBridge.exposeInMainWorld('lounge', {
         download: () => ipcRenderer.invoke('update:download'),
         install: () => ipcRenderer.invoke('update:install'),
         setAuto: (on) => ipcRenderer.invoke('update:setAuto', on),
+        postpone: () => ipcRenderer.invoke('update:postpone'),
         onState: (cb) => sub('update:state', cb)
     },
 

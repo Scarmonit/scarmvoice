@@ -2,14 +2,29 @@
 // in package.json's build.publish. electron-updater reads latest.yml from the
 // newest release and compares versions; we drive the UI and the download.
 //
-// Two modes, chosen by the `autoUpdateOnLaunch` setting:
-//   • ON  — check on launch, download in the BACKGROUND, install on next quit
-//           (autoInstallOnAppQuit) rather than interrupting the session.
-//   • OFF — check on launch and surface an "update available" prompt, but do
-//           nothing until the user clicks Download.
+// Updates apply themselves. There is nothing to click.
 //
-// Either way the renderer gets events so it can show a non-blocking banner with
-// version, notes, progress, and a Restart action.
+// It used to take four deliberate actions to get an update that had already
+// downloaded: open Settings, check for updates, close Settings, then click
+// Restart. Every one of those was a place to stop, and an update nobody
+// finished installing is an update that was never shipped.
+//
+// Now: check on launch and every few hours, download as soon as one exists,
+// and install it. Two things decide WHEN the install happens, because
+// "immediately" is wrong for a voice app:
+//
+//   • Never during a call. Restarting mid-conversation drops you out of it,
+//     which is a worse interruption than any update is worth. main.js tells us
+//     when voice state changes and the restart waits for the call to end.
+//   • A short countdown, cancellable. Anyone typing gets a moment to say not
+//     yet; ignoring it — the normal case — installs.
+//
+// Postponing only defers the restart, never the update: it is already
+// downloaded and armed with autoInstallOnAppQuit, so closing the app applies
+// it regardless. The escape hatch cannot leave anyone stranded on an old build.
+//
+// The renderer still gets every state change so it can show a non-blocking
+// banner with version, notes, progress and the countdown.
 const { app } = require('electron');
 const store = require('./store');
 
@@ -22,7 +37,10 @@ let state = {             // last-known state, replayed to a late-subscribing UI
     noteBlocks: [],       // structured changelog, for the release-notes modal
     progress: 0,
     error: null,
-    auto: false
+    auto: true,
+    restartIn: null,      // seconds left on the countdown, null when not running
+    waitingFor: null,     // 'call' when a restart is held back by voice
+    postponed: false      // "not now" — until the next launch, or the next quit
 };
 
 function emit(patch) {
@@ -44,15 +62,19 @@ function load() {
         return null;
     }
 
-    updater.autoDownload = false;            // we decide when to download
-    updater.autoInstallOnAppQuit = false;    // toggled on for background mode
+    // Both on, unconditionally. Downloading is free and silent, and arming the
+    // quit-install means that even if every countdown below is dismissed, the
+    // update lands the next time the app closes.
+    updater.autoDownload = true;
+    updater.autoInstallOnAppQuit = true;
     updater.allowDowngrade = false;
     updater.on('checking-for-update', () => emit({ status: 'checking', error: null }));
     updater.on('update-available', (info) => {
         const n = parseNotes(info.releaseNotes);
         emit({ status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks });
-        // Background mode: fetch it quietly and install on quit.
-        if (state.auto) startDownload();
+        // autoDownload already started it; this only keeps the UI honest if the
+        // event order surprises us.
+        startDownload();
     });
     updater.on('update-not-available', () => emit({ status: 'none' }));
     updater.on('download-progress', (p) => emit({ status: 'downloading', progress: Math.round(p.percent || 0) }));
@@ -65,10 +87,9 @@ function load() {
             notes: n.text || state.notes,
             noteBlocks: (n.blocks && n.blocks.length) ? n.blocks : state.noteBlocks
         });
-        if (state.auto) {
-            // Don't yank the session away; install silently on the next quit.
-            try { updater.autoInstallOnAppQuit = true; } catch (e) {}
-        }
+        // Armed at load(), so quitting applies it no matter what happens next.
+        try { updater.autoInstallOnAppQuit = true; } catch (e) {}
+        scheduleAutoRestart();
     });
     updater.on('error', (err) => {
         console.error('[update] error:', err && err.message);
@@ -229,9 +250,66 @@ function parseNotes(raw) {
     return { text: text || null, blocks: text ? trimmed : [] };
 }
 
+// ---- applying it --------------------------------------------------------
+
+const COUNTDOWN_S = 10;          // long enough to say no, short enough to ignore
+const RECHECK_MS = 3 * 60 * 60 * 1000;   // a long session should still see updates
+
+let busy = false;                // in a call — never restart through one
+let tick = null;                 // countdown interval
+let recheck = null;              // periodic check timer
+
+function clearCountdown() {
+    if (tick) { clearInterval(tick); tick = null; }
+}
+
+// Start (or restart) the countdown to installing. Called when the download
+// finishes, and again whenever the thing that was blocking it goes away.
+function scheduleAutoRestart() {
+    if (state.status !== 'ready') return;
+    if (state.postponed) return;             // asked not to, until next launch
+    clearCountdown();
+
+    if (busy) {
+        // Not an error and not a failure — just later. Saying so is better than
+        // a silent non-event that looks like the update stalled.
+        emit({ restartIn: null, waitingFor: 'call' });
+        return;
+    }
+
+    let left = COUNTDOWN_S;
+    emit({ restartIn: left, waitingFor: null });
+    tick = setInterval(() => {
+        // A call can start DURING the countdown; that has to stop it, or the
+        // guard only works for calls that were already running.
+        if (busy) { clearCountdown(); emit({ restartIn: null, waitingFor: 'call' }); return; }
+        left -= 1;
+        if (left > 0) { emit({ restartIn: left }); return; }
+        clearCountdown();
+        emit({ restartIn: 0 });
+        installNow();
+    }, 1000);
+}
+
+// "Not now". Only defers the RESTART — autoInstallOnAppQuit is already armed,
+// so the update still applies when the app closes.
+function postpone() {
+    clearCountdown();
+    emit({ postponed: true, restartIn: null, waitingFor: null });
+    return { ok: true };
+}
+
+// main.js calls this when voice state changes.
+function setBusy(inVoice) {
+    const was = busy;
+    busy = !!inVoice;
+    if (was && !busy) scheduleAutoRestart();   // call ended — resume
+    else if (!was && busy) { clearCountdown(); if (state.status === 'ready') emit({ restartIn: null, waitingFor: 'call' }); }
+}
+
 function init(bridge) {
     if (bridge) send = bridge;
-    state.auto = store.get().autoUpdateOnLaunch === true;
+    state.auto = true;
 }
 
 // Called shortly after the window is ready.
@@ -239,8 +317,15 @@ function checkOnLaunch() {
     if (!available()) { emit({ status: 'idle' }); return; }
     const u = load();
     if (!u) { emit({ status: 'idle' }); return; }
-    state.auto = store.get().autoUpdateOnLaunch === true;
     u.checkForUpdates().catch((e) => emit({ status: 'error', error: e.message }));
+    // An app left open for days used to check exactly once, at launch, and
+    // then never again — so the longer it ran the more out of date it got.
+    if (!recheck) {
+        recheck = setInterval(() => {
+            if (state.status === 'ready' || state.status === 'downloading') return;
+            u.checkForUpdates().catch(() => {});
+        }, RECHECK_MS);
+    }
 }
 
 // Manual check (from the settings panel / a menu).
@@ -270,21 +355,21 @@ function installNow() {
     return { ok: true };
 }
 
+// Kept so the existing IPC and the settings toggle keep resolving, but it no
+// longer gates anything: downloading and installing are not opt-in any more.
+// Turning it "off" postpones the restart of an update already in hand, which
+// is the only part a preference can honestly control — the alternative is a
+// switch that leaves someone on a build with a bug we have already fixed.
 function setAuto(on) {
-    state.auto = !!on;
-    // If we already know an update is waiting, honour the new mode immediately.
-    if (on && state.status === 'available') startDownload();
-    if (on && state.status === 'ready' && updater) {
-        try { updater.autoInstallOnAppQuit = true; } catch (e) {}
-    }
-    // Turning auto OFF must also cancel a silent install that a background
-    // download already armed — otherwise the update installs on quit anyway,
-    // contradicting the toggle the user just set.
-    if (!on && updater) {
-        try { updater.autoInstallOnAppQuit = false; } catch (e) {}
-    }
+    state.auto = true;
+    if (!on && state.status === 'ready') return postpone();
+    if (on) { emit({ postponed: false }); scheduleAutoRestart(); }
+    return { ok: true };
 }
 
 function getState() { return state; }
 
-module.exports = { init, checkOnLaunch, checkNow, startDownload, installNow, setAuto, getState, available, parseNotes };
+module.exports = {
+    init, checkOnLaunch, checkNow, startDownload, installNow, setAuto,
+    postpone, setBusy, getState, available, parseNotes
+};

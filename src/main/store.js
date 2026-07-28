@@ -42,7 +42,11 @@ const DEFAULTS = {
     minimizeToTray: true,
     startMinimized: false,       // also used as the login item's "open hidden"
     launchOnStartup: false,      // mirror of the OS login item; OS state is source of truth
-    autoUpdateOnLaunch: false,   // check + download updates in the background at startup
+    // Downloading and installing are no longer optional — this only decides
+    // whether the app restarts ITSELF once an update is ready, or waits until
+    // you close it. Either way you end up on the new version.
+    autoUpdateOnLaunch: true,
+    autoRestartMigrated: false,  // set once by load(); see the note there
     notifications: true,
     notificationSound: true,     // new-message chime + sound on OS notifications
     voiceSounds: true,           // join / leave chimes while in a call
@@ -223,6 +227,19 @@ function load() {
     } catch (e) {
         return Object.assign({}, DEFAULTS);
     }
+    // autoUpdateOnLaunch changed meaning. It used to gate whether updates were
+    // downloaded at all and shipped OFF, so nearly every existing profile has a
+    // stored `false` that was never a decision — it was the default. It now
+    // only chooses whether the app restarts itself, and defaults ON.
+    //
+    // Carrying the old false forward would leave people on a build we have
+    // already fixed for exactly the reason the setting no longer exists. One
+    // migration, marked so it cannot run twice and undo a real preference.
+    if (!merged.autoRestartMigrated) {
+        merged.autoUpdateOnLaunch = true;
+        merged.autoRestartMigrated = true;
+    }
+
     // A hand-edited (or previously written) settings.json is just as capable of
     // aiming the credentials somewhere else as the renderer is, so the file is
     // held to the same rule.

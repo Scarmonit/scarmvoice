@@ -4428,19 +4428,34 @@
     const UPDATE_COPY = {
         available: (s) => ({
             title: 'Update available',
-            sub: 'ScarmVoice ' + (s.version || ''),
-            action: 'Download'
+            sub: 'ScarmVoice ' + (s.version || '') + ' — downloading',
+            action: 'Downloading…'
         }),
         downloading: (s) => ({
             title: 'Downloading update',
             sub: 'ScarmVoice ' + (s.version || '') + ' \u00b7 ' + (s.progress || 0) + '%',
             action: 'Downloading\u2026'
         }),
-        ready: (s) => ({
-            title: 'Update ready',
-            sub: 'ScarmVoice ' + (s.version || '') + ' — restart to install',
-            action: 'Restart to update'
-        })
+        // Nothing here asks permission any more — updates download and install
+        // themselves. This reports what is happening and offers the one choice
+        // still worth having: not this second.
+        ready: (s) => {
+            const v = 'ScarmVoice ' + (s.version || '');
+            // Held back by a call: the one interruption never worth making.
+            if (s.waitingFor === 'call') {
+                return { title: 'Update ready', sub: v + ' — installs when your call ends', action: 'Restart now' };
+            }
+            // "Not now" defers the RESTART, not the update — closing the app
+            // still applies it, so the copy says so rather than implying it was
+            // cancelled.
+            if (s.postponed) {
+                return { title: 'Update ready', sub: v + ' — installs when you close the app', action: 'Restart now' };
+            }
+            if (typeof s.restartIn === 'number') {
+                return { title: 'Restarting to update', sub: v + ' · ' + s.restartIn + 's', action: 'Not now' };
+            }
+            return { title: 'Update ready', sub: v + ' — restart to install', action: 'Restart now' };
+        }
     };
 
     function showBanner() {
@@ -4478,7 +4493,9 @@
         $('ub-sub').textContent = c.sub;
         $('ub-sub').title = c.sub;
         $('ub-action').textContent = c.action;
-        $('ub-action').disabled = updateState.status === 'downloading';
+        // Downloading is not a thing to press, and neither is 'available' any
+        // more — it downloads itself the moment it is seen.
+        $('ub-action').disabled = updateState.status === 'downloading' || updateState.status === 'available';
         $('ub-progress').hidden = updateState.status !== 'downloading';
         if (updateState.status === 'downloading') {
             $('ub-bar').style.width = (updateState.progress || 0) + '%';
@@ -4488,8 +4505,11 @@
     }
 
     function applyUpdateAction() {
-        if (updateState.status === 'ready') L.update.install();
-        else if (updateState.status === 'available') L.update.download();
+        if (updateState.status !== 'ready') return;   // downloading: nothing to do
+        // Mid-countdown the button is the brake, not the accelerator. Once the
+        // countdown is over or held, it is the only way to ask for it sooner.
+        if (typeof updateState.restartIn === 'number') L.update.postpone();
+        else L.update.install();
     }
 
     $('ub-action').addEventListener('click', applyUpdateAction);

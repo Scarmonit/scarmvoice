@@ -960,6 +960,7 @@ function registerIpc() {
     handle('update:download', () => updater.startDownload());
     handle('update:install', () => updater.installNow());
     handle('update:setAuto', (_e, on) => { updater.setAuto(on); return { ok: true }; });
+    handle('update:postpone', () => updater.postpone());
 
     handle('app:notify', (_e, payload) => {
         if (!store.get().notifications) return false;
@@ -990,6 +991,10 @@ function registerIpc() {
         // Joining or leaving voice invalidates any PTT toggle state that
         // accumulated while the renderer was ignoring hotkey events.
         if (voiceState.inVoice !== wasInVoice) ptt.reset();
+        // An update that restarts the app mid-call drops you out of the
+        // conversation. Leaving a call is also the moment a held-back restart
+        // becomes safe, so both edges are reported.
+        try { updater.setBusy(voiceState.inVoice); } catch (e) {}
         refreshTray();
         return voiceState;
     });
