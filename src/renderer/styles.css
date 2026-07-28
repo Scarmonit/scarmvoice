@@ -3813,14 +3813,28 @@ button.ap-row:hover .ap-more { color: var(--text); }
    The reference's is 246px: an 80px face, the name, then one line saying the
    conversation has not started. Reuses .chan-intro's padding and width so the
    two openings sit on the same grid. */
-.dm-intro { padding-bottom: 16px; }
-.dm-intro-face { width: 80px; height: 80px; margin-bottom: 8px; }
+/* Gaps measured off the reference: 18 / 18 / 26, and 20 from the foot of the
+   block to the date divider — ours sat 21px further away than that. */
+.dm-intro { padding-bottom: 20px; }
+.dm-intro-face { width: 80px; height: 80px; margin-bottom: 18px; }
 .dm-intro-face .av {
   width: 80px; height: 80px; border-radius: 50%; font-size: 30px;
   display: grid; place-items: center; font-weight: 800; color: var(--on-accent);
 }
 .dm-intro-face .ico { width: 80px; height: 80px; color: var(--ch-icon); }
-.dm-intro-name { margin: 0 0 6px; font-size: 28px; line-height: 1.15; font-weight: 700; color: var(--text-strong); }
+/* 32px, not 28: cap height measured 21 against the reference's 28, so the
+   glyphs were a quarter short. The tracking is pulled in because our stack is
+   wider per character at matched height than gg sans — the same signature the
+   channel welcome heading shows, and the closest correction available without
+   shipping a font we have no licence to. */
+.dm-intro-name {
+  margin: 0 0 18px; font-size: 32px; line-height: 1.1; font-weight: 700;
+  letter-spacing: -0.02em; color: var(--text-strong);
+}
+.dm-intro-handle {
+  margin: -14px 0 26px; font-size: 18px; font-weight: 500; color: var(--text);
+  letter-spacing: -0.01em;
+}
 .dm-intro-sub { margin: 0; font-size: 15px; color: var(--muted); }
 .dm-intro-sub b { color: var(--text); font-weight: 600; }
 
@@ -3828,3 +3842,58 @@ button.ap-row:hover .ap-more { color: var(--text); }
    from our own, not just from the reference. */
 #dm-composer .dm-composer-row { min-height: 50px; }
 #dm-composer textarea { min-height: 48px; padding: 14px 4px; }
+
+/* ---- the DM profile panel ----------------------------------------------
+   302px on the right of a one-to-one conversation, measured off the reference.
+   It keeps this open by default in a DM because in a DM the person IS the
+   context — which is not true of a channel's member list. */
+#dm-body { flex: 1; min-height: 0; display: flex; }
+#dm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#dm-profile {
+  flex: none; width: 302px; display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--line-2);
+  position: relative; overflow-y: auto;
+}
+#dm-profile[hidden] { display: none; }
+#dm-prof-banner { flex: none; height: 105px; }
+/* Overlapping the banner's bottom edge is what makes the two read as one card
+   rather than a strip above a list. */
+#dm-prof-face {
+  position: absolute; top: 62px; left: 16px;
+  width: 80px; height: 80px; border-radius: 50%;
+  border: 6px solid var(--panel); background: var(--panel);
+}
+#dm-prof-face .av {
+  width: 68px; height: 68px; border-radius: 50%; font-size: 26px;
+  display: grid; place-items: center; font-weight: 800; color: var(--on-accent);
+}
+#dm-prof-body { padding: 34px 16px 16px; display: flex; flex-direction: column; gap: 2px; }
+#dm-prof-name { font-size: 20px; font-weight: 700; color: var(--text-strong); }
+#dm-prof-handle { font-size: 13px; color: var(--muted); }
+#dm-prof-meta { margin-top: 14px; display: flex; flex-direction: column; gap: 4px; }
+#dm-prof-meta .pm-label {
+  font-size: 12px; font-weight: 700; color: var(--text-strong);
+  text-transform: none; letter-spacing: 0;
+}
+#dm-prof-meta .pm-value { font-size: 13px; color: var(--muted); }
+#dm-prof-meta .pm-badge {
+  align-self: flex-start; margin-top: 2px; padding: 1px 6px; border-radius: 4px;
+  font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent);
+}
+/* Pinned to the bottom of the panel, as the reference does. */
+#dm-prof-full {
+  margin: auto 12px 12px; flex: none; height: 38px; border-radius: 8px;
+  background: var(--btn-secondary); color: var(--text);
+  font-size: 14px; font-weight: 500; cursor: pointer;
+  transition: background-color .05s ease;
+}
+#dm-prof-full:hover { background: var(--btn-secondary-hover); }
+
+/* Message avatar: still short of the reference's 40 after the last bump, so
+   measured again and set from the rendered value rather than guessed. */
+.msg-avatar { width: 2.9em; height: 2.9em; }
+/* Composer: 8px short of our own channel component. */
+#dm-composer .dm-composer-row { min-height: 50px; }
+#dm-composer textarea { min-height: 48px; padding: 14px 4px; }
+/* The + read dimmer than the trailing icons (157 against 174). */
+#dm-attach { color: var(--panel-icon); }

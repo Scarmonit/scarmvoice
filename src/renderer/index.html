@@ -624,6 +624,8 @@
         </button>
       </div>
     </header>
+    <div id="dm-body">
+    <div id="dm-main">
     <div id="dm-messages"></div>
     <!-- Same shape as the channel composer: attach on the left, the field, then
          send. It used to be a bare textarea 21px shorter with no attach button,
@@ -644,6 +646,23 @@
         <span class="ico" data-icon="send"></span>
       </button>
     </form>
+    </div>
+
+    <!-- Who you are talking to, beside the conversation. The reference keeps
+         this open by default in a DM: the person is the context, in a way a
+         channel's member list never is. Hidden for a group, which has no single
+         profile to show. -->
+    <aside id="dm-profile" hidden>
+      <div id="dm-prof-banner"></div>
+      <div id="dm-prof-face"></div>
+      <div id="dm-prof-body">
+        <div id="dm-prof-name"></div>
+        <div id="dm-prof-handle"></div>
+        <div id="dm-prof-meta"></div>
+      </div>
+      <button type="button" id="dm-prof-full">View Full Profile</button>
+    </aside>
+    </div>
   </aside>
 
   <!-- Members sidebar. Everyone present, grouped online / away, with their

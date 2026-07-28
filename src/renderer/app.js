@@ -8865,6 +8865,10 @@
 
     const DM_POLL_MS = 12000;
     let dmThreads = [];               // [{ user:{id,username}, last:{...}, unread }]
+    // id -> the directory entry (role, etc). Threads only carry id/username, so
+    // the profile panel gets the rest from here — populated whenever the picker
+    // loads the directory, and left empty rather than guessed if it never has.
+    const dmDirectory = {};
     let dmOpen = null;                // { id, username } of the open conversation
     let dmMsgs = [];
     let dmTimer = null;
@@ -9030,6 +9034,50 @@
         if (input && dmOpen) {
             input.placeholder = 'Message ' + (dmOpen.isGroup ? dmOpen.title : '@' + dmOpen.title);
         }
+
+        renderDmProfile();
+    }
+
+    // The person you are talking to, beside the conversation. Only for a pair —
+    // a group has no single profile, and guessing which member to show would be
+    // worse than showing none.
+    function renderDmProfile() {
+        const panel = $('dm-profile');
+        if (!panel) return;
+        const others = (dmOpen && dmOpen.members || []).filter((m) => !account || m.id !== account.id);
+        const u = (dmOpen && !dmOpen.isGroup) ? others[0] : null;
+        panel.hidden = !u;
+        if (!u) return;
+
+        // The banner takes its colour from the same generator the avatar uses,
+        // so the card reads as one person rather than two palettes.
+        $('dm-prof-banner').style.cssText = avatarStyle(u.username);
+        $('dm-prof-face').innerHTML =
+            `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
+            `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`;
+        $('dm-prof-name').textContent = u.username;
+        $('dm-prof-handle').textContent = '@' + u.username;
+
+        // Only what we actually know. The reference shows "Member Since" from a
+        // creation date we do not carry, and inventing one would be worse than
+        // leaving the row out.
+        const meta = $('dm-prof-meta');
+        meta.innerHTML = '';
+        const known = dmDirectory[u.id];
+        if (known && known.role) {
+            const b = document.createElement('span');
+            b.className = 'pm-badge';
+            b.textContent = known.role === 'admin' ? 'ADMIN' : 'MEMBER';
+            meta.appendChild(b);
+        }
+        const label = document.createElement('div');
+        label.className = 'pm-label';
+        label.textContent = 'Account';
+        const value = document.createElement('div');
+        value.className = 'pm-value';
+        value.textContent = 'Board member #' + u.id;
+        meta.appendChild(label);
+        meta.appendChild(value);
     }
 
     function closeDm() {
@@ -9143,9 +9191,17 @@
                 ? `<span class="av${avatarCls(others[0].id)}" style="${avatarStyle(others[0].username)}">` +
                   `${esc(initials(others[0].username))}${avatarImgHtml(others[0].id)}</span>`
                 : '');
+        // Three elements, not two. The reference puts a distinct handle line
+        // between the name and the sentence — nearly as tall as the name and
+        // brighter than the body — and without it the block reads as a heading
+        // with a caption rather than a person.
+        const handle = dmOpen && dmOpen.isGroup
+            ? (dmOpen.members || []).length + ' members'
+            : '@' + who;
         intro.innerHTML =
             `<div class="dm-intro-face">${head}</div>` +
             `<h2 class="dm-intro-name">${esc(who)}</h2>` +
+            `<div class="dm-intro-handle">${esc(handle)}</div>` +
             '<p class="dm-intro-sub">' + (dmOpen && dmOpen.isGroup
                 ? 'This is the beginning of this group.'
                 : 'This is the beginning of your direct message history with <b>' + esc(who) + '</b>.') +
@@ -9295,6 +9351,7 @@
         if (!account) { openSettings(); return; }
         const res = await L.board('account/users');
         if (!res || !res.success) return toast((res && res.error) || 'Could not load the member directory', true);
+        (res.users || []).forEach((u) => { dmDirectory[u.id] = u; });
         const skip = new Set([account.id, ...(exclude || [])]);
         const others = (res.users || []).filter((u) => !skip.has(u.id));
         if (!others.length) {

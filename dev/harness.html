@@ -53,10 +53,20 @@ window.lounge = {
   // different shapes and a single canned reply answered all of them with the
   // channel list — so the thread list was permanently empty and nothing about
   // groups could be seen at all.
-  board: async (path) => {
+  board: async (path, opts) => {
     const p = String(path || '');
     if (p === 'dm/threads') return { success: true, threads: DM_THREADS };
-    if (p.startsWith('dm/list')) return { success: true, hasMore: false, thread: DM_THREADS[1], messages: DM_MSGS };
+    // Must answer for the thread ASKED FOR. Returning the group for every call
+    // overwrote dmOpen.isGroup on open, so a one-to-one conversation rendered
+    // as a group — the profile panel hid itself and the start block said
+    // "4 members". A stub that ignores its argument tests nothing.
+    if (p.startsWith('dm/list')) {
+      // The query lives in the OPTIONS argument, not the path — reading the
+      // path found nothing and every call fell back to the group.
+      const id = Number((opts && opts.query && opts.query.thread) || 2);
+      const t = DM_THREADS.find((x) => x.id === id) || DM_THREADS[1];
+      return { success: true, hasMore: false, thread: t, messages: t.isGroup ? DM_MSGS : DM_MSGS.slice(0, 2) };
+    }
     if (p === 'dm/send') return { success: true, id: 900, thread: 2, created_at: NOW };
     if (p === 'dm/create') return { success: true, thread: DM_THREADS[1] };
     if (p === 'dm/manage') return { success: true, title: 'Renamed group', members: DM_THREADS[1].members, left: true };
