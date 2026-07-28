@@ -1243,27 +1243,45 @@
         // they left.
         let joinGen = 0;
 
+        // Join timings, so "it feels slow" can be answered with numbers rather
+        // than guesses. Visible in devtools (npm run dev).
+        const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        function mark(what, from) {
+            try { console.info('[voice] ' + what + ': ' + Math.round(now() - from) + 'ms'); } catch (e) {}
+        }
+
         async function join() {
             if (joined || joining) return;
             joining = true;
             const gen = joinGen;
+            const tStart = now();
             pushState();
 
             try {
-                // Fetched on the first join rather than at startup — 647 KB that
-                // used to be parsed before the window could even appear, for a
-                // feature plenty of sessions never touch. voice.js and noise.js
-                // have long since installed their RTCPeerConnection /
-                // getDisplayMedia / getUserMedia patches by the time this runs.
-                const SDK = await window.ScarmLazy.realtimekit();
-                if (gen !== joinGen) return;   // left while the SDK was loading
+                // TOGETHER, not one after the other. The SDK is 647 KB read off
+                // disk and parsed; the token is a round trip to the board and,
+                // behind that, to Cloudflare's API. Neither needs anything from
+                // the other, and running them in series simply added the two
+                // waits together.
+                //
+                // (The SDK is fetched on first use rather than at startup —
+                // 647 KB parsed before the window can appear, for a feature
+                // plenty of sessions never touch. By the time this runs,
+                // voice.js and noise.js have long since installed their
+                // RTCPeerConnection / getDisplayMedia / getUserMedia patches.
+                // ScarmLazy caches, so a warmed SDK resolves instantly here —
+                // see the hover warm-up in app.js.)
+                const tSdk = now();
+                const [SDK, res] = await Promise.all([
+                    window.ScarmLazy.realtimekit(),
+                    window.lounge.voiceToken({
+                        clientId: settings.clientId,
+                        name: settings.displayName || 'Anonymous'
+                    })
+                ]);
+                mark('sdk+token', tSdk);
+                if (gen !== joinGen) return;   // left while we awaited
                 if (!SDK) throw new Error('RealtimeKit SDK failed to load');
-
-                const res = await window.lounge.voiceToken({
-                    clientId: settings.clientId,
-                    name: settings.displayName || 'Anonymous'
-                });
-                if (gen !== joinGen) return;   // leave() ran while we awaited
                 if (!res || !res.success || !res.token) {
                     throw new Error((res && res.error) || 'could not get a voice token');
                 }
@@ -1288,6 +1306,7 @@
                 // quietly falling back to the default device.
                 if (settings.micDeviceId) audioCfg.deviceId = { ideal: settings.micDeviceId };
 
+                const tInit = now();
                 const m = await SDK.init({
                     authToken: res.token,
                     defaults: {
@@ -1309,6 +1328,7 @@
                     }
                 });
 
+                mark('sdk.init', tInit);
                 if (gen !== joinGen) {
                     // Left while init was pending — discard the fresh meeting.
                     try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
@@ -1320,7 +1340,9 @@
 
                 wire(meeting);
                 const joinFn = meeting.join || meeting.joinRoom;
+                const tJoin = now();
                 await joinFn.call(meeting);
+                mark('room join', tJoin);
                 if (gen !== joinGen) {
                     try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
                     if (meeting === m) meeting = null;
@@ -1331,8 +1353,31 @@
                 joining = false;
                 muted = false;
                 lastTransmit = null;
+
+                // YOU ARE IN THE CALL HERE. Audio is flowing, so the UI is told
+                // now — everything below is tuning, and none of it changes that.
+                //
+                // It used to be told at the END, after selectSavedMic(), which
+                // enumerates devices and can re-acquire the microphone. So the
+                // "Connecting..." state outlived the connection by however long
+                // that took, and joining felt seconds slower than it was.
+
+                // Speaking meters read 0.0 forever if the shared context is
+                // suspended when the analysers are built.
+                try { if (window.ScarmAudio) window.ScarmAudio.resume(); } catch (e) {}
+                // Stays ahead of the paint: this is the difference between an
+                // open microphone and a closed one, not a matter of tuning.
+                applyTransmit();
+                applyAllLocalAudio();
+                watchLocal();
+                render();
+                pushState();
+                mark('TOTAL to connected', tStart);
+
                 startRtt();
 
+                // ---- everything past here is tuning, off the critical path ---
+                //
                 // The saved microphone has to be selected THROUGH THE SDK. The
                 // deviceId in mediaConfiguration.audio above is never read for
                 // device selection — the SDK takes the device as an argument to
@@ -1340,31 +1385,21 @@
                 // so without this the call silently used audioInputDevices[0]
                 // while the Settings meter dutifully metered the chosen one.
                 //
-                // Device enumeration is slow and this is the FIRST await after
-                // joined = true, which made it the one await in join() with no
-                // generation check behind it: a session expiring here resumed
-                // afterwards and called setDevice() on the meeting leave() had
-                // already discarded, re-opening the microphone behind the login
-                // gate. selectSavedMic re-checks internally too, because its own
-                // awaits are just as long.
-                await selectSavedMic(gen);
-                if (gen !== joinGen) return;
+                // Device enumeration is slow, which is precisely why it is no
+                // longer awaited in front of the UI. selectSavedMic re-checks
+                // the generation internally, because a session expiring during
+                // it would otherwise resume and call setDevice() on a meeting
+                // leave() had already discarded — re-opening the microphone
+                // behind the login gate.
+                selectSavedMic(gen).then(() => {
+                    if (gen !== joinGen) return;
+                    // Bandwidth priority: without this, audio and a multi-megabit
+                    // screen share compete as equals on the same bundle, and
+                    // voice is what breaks up when the uplink saturates. After
+                    // the mic swap, because that replaces the sender it applies to.
+                    applyStreamPriorities();
+                }).catch(() => {});
 
-                // Bandwidth priority: without this, audio and a multi-megabit
-                // screen share compete as equals on the same bundle, and voice
-                // is what breaks up when the uplink saturates.
-                applyStreamPriorities();
-
-                // Speaking meters read 0.0 forever if the shared context is
-                // suspended when the analysers are built.
-                try { if (window.ScarmAudio) window.ScarmAudio.resume(); } catch (e) {}
-
-                // In push-to-talk we must start silent; in open mic, start live.
-                applyTransmit();
-                applyAllLocalAudio();
-                watchLocal();
-                render();
-                pushState();
                 // Remote participants arrive shortly after join; re-render so the
                 // roster reflects who is actually peered rather than just present.
                 setTimeout(render, 4000);

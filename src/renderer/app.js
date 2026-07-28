@@ -3627,6 +3627,27 @@
 
     // Clicking the channel you're already in is a no-op, as in Discord — leaving
     // is the disconnect button in the voice panel.
+    // Warm the voice SDK on the first sign that somebody is heading for it.
+    //
+    // It is 647 KB read off disk and parsed, and it is deliberately NOT loaded
+    // at startup — most sessions never join a call, and paying for it there
+    // delays the window appearing for everyone. But the moment a pointer lands
+    // on the voice channel there is a much better guess available, and the load
+    // runs in the few hundred milliseconds before the click. ScarmLazy caches
+    // by URL, so join() then finds it already resident.
+    //
+    // Costs nothing if the guess is wrong: a bundle parsed and not used, versus
+    // the same bundle parsed while somebody waits for a call to connect.
+    let voiceWarmed = false;
+    function warmVoiceSdk() {
+        if (voiceWarmed || !window.ScarmLazy) return;
+        voiceWarmed = true;
+        window.ScarmLazy.realtimekit().catch(() => { voiceWarmed = false; });
+    }
+    ['pointerenter', 'focus'].forEach((ev) => {
+        $('btn-join-voice').addEventListener(ev, warmVoiceSdk);
+    });
+
     $('btn-join-voice').addEventListener('click', () => {
         if (voice && voice.isJoined()) return;
         joinVoice();

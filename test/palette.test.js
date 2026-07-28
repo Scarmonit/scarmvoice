@@ -612,7 +612,16 @@ describe('the latency readout', () => {
     it('samples only while the call is up', () => {
         // A timer left running against closed peer connections is a leak that
         // reports a stale number forever.
-        expect(voice()).toMatch(/joined = true;[\s\S]{0,120}startRtt\(\);/);
+        //
+        // Matched over the whole join, not on adjacency to `joined = true`: the
+        // post-join work was reordered so the UI is told it is connected before
+        // any of the tuning runs, and startRtt() moved with it. What matters is
+        // that joining starts it and leaving stops it, which is what these two
+        // assert.
+        const joinBody = voice().slice(voice().indexOf('async function join()'),
+            voice().indexOf('// Point the SDK at the microphone'));
+        expect(joinBody).toMatch(/joined = true;/);
+        expect(joinBody).toMatch(/startRtt\(\);/);
         expect(voice()).toMatch(/SHARE_GEN\+\+;\s*\n\s*stopRtt\(\);/);
         expect(voice()).toMatch(/function stopRtt\(\) \{[^}]*rttMs = null;/);
         expect(voice()).toMatch(/rtt: rttMs,/);
