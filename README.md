@@ -33,12 +33,20 @@ call. Anyone with the board password can run it.
 
 ## Running it
 
-Grab **`ScarmVoice.exe`** (a portable build — no install, no admin) and
-double-click. On first launch enter the board password and pick a display name.
-The session is remembered for 30 days.
+Grab **`ScarmVoice-Setup.exe`** from
+[the latest release](https://github.com/Scarmonit/scarmvoice/releases/latest)
+and run it. It is a one-click, per-user install — no admin prompt — and it puts
+a desktop and Start-menu shortcut down and launches when it finishes. After
+that the app updates itself; there is nothing to download again.
 
-`ScarmVoice-<version>-setup.exe` is the installer version if you'd rather have a
-Start-menu entry and desktop shortcut.
+Signing in is two steps: the shared board password, then your own account
+(username + password, verified by email the first time). The name everyone else
+sees IS that username, which is what stops anybody wearing somebody else's. The
+board session is remembered for 30 days.
+
+> There is no portable build. electron-updater cannot self-update a loose exe,
+> and an app that cannot update itself is an app stuck on whichever bug it
+> shipped with — see *Shipping a release* below.
 
 ## What it does
 

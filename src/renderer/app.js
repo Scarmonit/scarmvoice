@@ -163,6 +163,26 @@
     // table, so `:shrug:` means the same picture everywhere.
     const customEmoji = new Map();
 
+    // Bumped whenever that map changes, and carried in every message signature.
+    //
+    // renderMessages() diffs the list by signature and KEEPS any row whose
+    // signature is unchanged — which is the whole point of it — and a custom
+    // emoji is not part of the post. So the renderMessages() sitting beside
+    // every mutation of this map repainted nothing at all: adding an emoji left
+    // messages already on screen showing `:name:` as text, and removing one left
+    // them pointing at an R2 object that had just been deleted, i.e. a broken
+    // image, until the channel was switched or the app restarted.
+    let emojiGen = 0;
+
+    // The set as the renderer sees it, so a reload that changed nothing does not
+    // rebuild every message on screen (loadCustomEmoji runs on every Settings
+    // open).
+    function emojiFingerprint() {
+        return [...customEmoji.values()].map((e) => e.name + ' ' + e.url).sort().join('');
+    }
+
+    function bumpEmojiGen() { emojiGen++; }
+
     // Emits `text` into `container`, turning `:name:` into the image it names.
     //
     // An unknown `:name:` stays literal text on purpose: it is far more often
@@ -242,6 +262,7 @@
         try {
             const res = await L.board('emoji');
             if (!res || !res.success || !Array.isArray(res.emoji)) return;
+            const before = emojiFingerprint();
             customEmoji.clear();
             res.emoji.forEach((e) => {
                 if (!e || !e.name || !e.key) return;
@@ -252,6 +273,7 @@
                 // that fetches those bytes with the credential held in main.
                 customEmoji.set(e.name, Object.assign({}, e, { url: L.fileUrl(e.key) }));
             });
+            if (emojiFingerprint() !== before) bumpEmojiGen();
         } catch (e) { /* offline — the picker just shows the built-in set */ }
     }
 
@@ -1835,6 +1857,10 @@
             p.att_key, p.att_name, p.att_size, p.created_at,
             p.quote ? [p.quote.name, p.quote.body, p.quote.att_name, p.quote.missing] : 0,
             p.reactions || 0,
+            // Not a property of the post, but it decides how the post DRAWS:
+            // both the body and the reaction chips resolve `:name:` against the
+            // custom-emoji map. See emojiGen.
+            emojiGen,
             grouped, compact
         ]);
     }
@@ -2788,6 +2814,15 @@
 
             const item = {
                 id: ++stageSeq, name: it.name, type: it.type, size: it.size,
+                // The real filesystem path behind this File (see itemFromFile).
+                // Dropping it here made uploadOne's `if (item.path)` branch
+                // unreachable, so EVERY attachment — the picker's, a drop's, a
+                // dropped folder's — was read whole into an ArrayBuffer in this
+                // renderer and then structured-cloned across IPC. That is
+                // precisely what the stream-from-disk path exists to avoid: it
+                // holds the file twice in memory before a byte is sent, and the
+                // 1 GB the composer advertises cannot survive the trip.
+                path: it.path || '',
                 file: it.file, bytes: it.bytes, error
             };
             staged.push(item);
@@ -7202,6 +7237,7 @@
         if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not remove it', true);
         customEmoji.delete(name);
+        bumpEmojiGen();
         renderEmojiAdmin();
         renderMessages();
         toast('Removed :' + name + ':');
@@ -7246,6 +7282,7 @@
         // emoji you just added rendered as a broken image everywhere (the admin
         // list, the picker, any message using it) until Settings was reopened.
         customEmoji.set(res.emoji.name, Object.assign({}, res.emoji, { url: L.fileUrl(res.emoji.key) }));
+        bumpEmojiGen();
         $('set-emoji-name').value = '';
         renderEmojiAdmin();
         renderMessages();

@@ -72,7 +72,10 @@ export async function bootRenderer(opts = {}) {
         uploadFile: vi.fn(async () => ({ success: true })),
         uploadAttachment: vi.fn(async () => ({ success: true })),
         onUploadProgress: unsub,
-        pathForFile: () => '',
+        // Empty by default (a pasted blob has no path). A spec that cares about
+        // the stream-from-disk upload path overrides it, because "" is exactly
+        // the value that makes uploadOne fall back to sending the bytes.
+        pathForFile: opts.pathForFile || (() => ''),
         saveAttachment: vi.fn(async () => ({ success: true, path: 'C:/x/pic.png' })),
         downloadAttachment: vi.fn(async () => ({ success: true, path: 'C:/x/pic.png' })),
         copyImage: vi.fn(async () => ({ success: true })),
