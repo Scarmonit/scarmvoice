@@ -3678,3 +3678,37 @@ button.ap-row:hover .ap-more { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   .btn-danger-soft, .btn-danger-solid { transition: none; }
 }
+
+/* ---- new-conversation picker -------------------------------------------
+   One list, multi-select. Selecting one person is a DM and several is a
+   group, so the control does not change shape between the two. */
+.dm-picker-card { width: min(440px, 92vw); }
+.dm-picker-list {
+  margin-top: 10px; max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px;
+  background: var(--sunk);
+}
+.dm-pick-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 8px 10px; border-radius: 6px;
+  background: transparent; color: var(--text); font-size: 14px; cursor: pointer;
+  transition: background-color .05s ease;
+}
+.dm-pick-row:hover { background: var(--hover); }
+.dm-pick-row.on    { background: var(--chan-active); color: var(--text-strong); }
+.dm-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-pick-name em { margin-left: 6px; font-style: normal; }
+.dm-pick-check { flex: none; width: 16px; text-align: center; color: var(--accent); }
+.dm-picker-empty { padding: 10px; }
+
+/* ---- group conversations ----------------------------------------------- */
+/* "mine or theirs" stops being a complete answer at three people, so a group
+   prints the speaker once per run. */
+.dm-who {
+  margin: 8px 0 2px; padding: 0 4px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.dm-msg.mine + .dm-who { margin-top: 10px; }
+.dm-group-mark { font-weight: 700; }
+.chan.dm-group .chan-name { font-style: normal; }

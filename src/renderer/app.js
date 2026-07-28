@@ -8836,9 +8836,20 @@
     // The open conversation is being read right now. The row already hides its
     // own badge; the rail and the taskbar badge read this total, so leaving it
     // in kept them lit while you were looking at the messages.
+    // Everything below keys off the THREAD id, never the partner's user id.
+    // A group has no single partner — `t.user` is null for one — so anything
+    // reaching through it worked only for as long as two-person conversations
+    // were the only kind that existed.
     function dmUnreadTotal() {
         return dmThreads.reduce((s, t) =>
-            s + ((dmOpen && dmOpen.id === t.user.id) ? 0 : (t.unread || 0)), 0);
+            s + ((dmOpen && dmOpen.id === t.id) ? 0 : (t.unread || 0)), 0);
+    }
+
+    // Who to show a conversation as. A group keeps its name; a pair is named
+    // after the other person. The server already decides this — mirrored here
+    // so an optimistic local render agrees with the next fetch.
+    function dmLabel(t) {
+        return t.title || (t.user && t.user.username) || 'Conversation';
     }
 
     function renderDmSection() {
@@ -8853,13 +8864,23 @@
             return;
         }
         dmThreads.forEach((t) => {
-            const open = dmOpen && dmOpen.id === t.user.id;
+            const open = dmOpen && dmOpen.id === t.id;
             const unread = open ? 0 : (t.unread || 0);
             const b = document.createElement('button');
-            b.className = 'chan dm' + (open ? ' active' : '') + (unread ? ' unread' : '');
-            b.innerHTML = `<span class="hash">@</span><span class="chan-name">${esc(t.user.username)}</span>` +
+            b.className = 'chan dm' + (t.isGroup ? ' dm-group' : '') +
+                (open ? ' active' : '') + (unread ? ' unread' : '');
+            // A group is marked as one at a glance rather than by reading the
+            // names: the reference draws a stacked avatar, we use the icon slot
+            // the channel row already has.
+            const mark = t.isGroup
+                ? `<span class="hash dm-group-mark" title="${esc(String((t.members || []).length))} people">#</span>`
+                : '<span class="hash">@</span>';
+            b.innerHTML = mark + `<span class="chan-name">${esc(dmLabel(t))}</span>` +
                 (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
-            b.addEventListener('click', () => openDm(t.user));
+            b.title = t.isGroup
+                ? (t.members || []).map((m) => m.username).join(', ')
+                : dmLabel(t);
+            b.addEventListener('click', () => openDm(t));
             list.appendChild(b);
         });
         renderChannels();   // DM unread feeds the rail + taskbar badges
@@ -8873,7 +8894,7 @@
             // The server's count for the open conversation lags its read marker
             // by a poll; the drawer is on screen, so it is read by definition.
             if (dmOpen) {
-                const t = dmThreads.find((x) => x.user.id === dmOpen.id);
+                const t = dmThreads.find((x) => x.id === dmOpen.id);
                 if (t) t.unread = 0;
             }
             renderDmSection();
@@ -8898,9 +8919,19 @@
         closeDm();
     }
 
-    async function openDm(user) {
-        dmOpen = { id: user.id, username: user.username };
-        $('dm-title').textContent = user.username;
+    // Takes a THREAD. `{ id, title, isGroup, members }` — the shape the thread
+    // list already hands out, so opening one never has to look a partner up.
+    async function openDm(thread) {
+        const id = thread.id;
+        dmOpen = {
+            id,
+            title: dmLabel(thread),
+            isGroup: !!thread.isGroup,
+            members: thread.members || []
+        };
+        $('dm-title').textContent = dmOpen.title;
+        // A group says how many people are in it; a pair does not need telling.
+        $('dm-panel').classList.toggle('is-group', dmOpen.isGroup);
         $('dm-panel').hidden = false;
         closeThread();
         dmMsgs = [];
@@ -8912,12 +8943,12 @@
         // else can all land during the fetch, and the tail used to run anyway —
         // scrolling a panel that had moved on and pulling focus into a hidden
         // input.
-        if (!dmOpen || dmOpen.id !== user.id) return;
+        if (!dmOpen || dmOpen.id !== id) return;
         // Opening a conversation always lands on the newest message; only the
         // background re-renders defer to where the reader already is.
         const box = $('dm-messages');
         box.scrollTop = box.scrollHeight;
-        const t = dmThreads.find((x) => x.user.id === user.id);
+        const t = dmThreads.find((x) => x.id === id);
         if (t && t.unread) { t.unread = 0; renderDmSection(); }
         renderDmSection();
         $('dm-input').focus();
@@ -8927,6 +8958,7 @@
         dmOpen = null;
         loadDmMessages.lastSig = null;
         $('dm-panel').hidden = true;
+        $('dm-panel').classList.remove('is-group');
         renderDmSection();
     }
 
@@ -8934,9 +8966,19 @@
 
     async function loadDmMessages(force) {
         if (!dmOpen) return;
-        const forUser = dmOpen.id;
-        const res = await L.board('dm/list', { query: { with: forUser } });
-        if (!dmOpen || dmOpen.id !== forUser) return;      // switched conversations mid-flight
+        const forThread = dmOpen.id;
+        const res = await L.board('dm/list', { query: { thread: forThread } });
+        if (!dmOpen || dmOpen.id !== forThread) return;    // switched conversations mid-flight
+        // The server is the authority on who is in a group; it can change
+        // between opening and reading, and the sender labels below depend on it.
+        if (res && res.success && res.thread) {
+            dmOpen.members = res.thread.members || dmOpen.members;
+            dmOpen.isGroup = !!res.thread.isGroup;
+            if (res.thread.title) {
+                dmOpen.title = res.thread.title;
+                $('dm-title').textContent = res.thread.title;
+            }
+        }
         if (!res || !res.success) {
             if (authGone(res)) return;
             if (res && res.needsAccount) { closeDm(); toast('Sign into your board account to use DMs', true); return; }
@@ -8977,16 +9019,34 @@
             box.appendChild(e);
             return;
         }
+        // In a group the bubble alone cannot say who spoke — "mine or theirs"
+        // stops being a complete answer the moment there are three people. The
+        // name is printed once per run rather than on every message, which is
+        // what the reference does and what stops a back-and-forth turning into
+        // a column of repeated names.
+        const nameOf = (id) => {
+            const u = (dmOpen && dmOpen.members || []).find((x) => x.id === id);
+            return u ? u.username : 'someone';
+        };
         let prevDay = '';
+        let prevFrom = null;
         dmMsgs.forEach((m) => {
             const day = dayStr(m.created_at);
             if (day !== prevDay) {
                 prevDay = day;
+                prevFrom = null;              // a new day always reintroduces the speaker
                 const sep = document.createElement('div');
                 sep.className = 'dm-day';
                 sep.textContent = day;
                 box.appendChild(sep);
             }
+            if (dmOpen && dmOpen.isGroup && !m.fromMe && m.from !== prevFrom) {
+                const who = document.createElement('div');
+                who.className = 'dm-who';
+                who.textContent = nameOf(m.from);
+                box.appendChild(who);
+            }
+            prevFrom = m.fromMe ? null : m.from;
             const row = document.createElement('div');
             row.className = 'dm-msg' + (m.fromMe ? ' mine' : '');
             const bubble = document.createElement('div');
@@ -9009,15 +9069,18 @@
         const input = $('dm-input');
         const body = input.value.trim();
         if (!body) return;
-        const to = dmOpen.id;
+        const thread = dmOpen.id;
         input.value = '';
-        const res = await L.board('dm/send', { method: 'POST', body: { to, body } });
+        const res = await L.board('dm/send', { method: 'POST', body: { thread, body } });
         if (!res || !res.success) {
             input.value = body;   // give the text back
             return toast((res && res.error) || 'Could not send the DM', true);
         }
-        if (dmOpen && dmOpen.id === to) {
-            dmMsgs.push({ id: res.id, body, created_at: res.created_at || Date.now(), fromMe: true });
+        if (dmOpen && dmOpen.id === thread) {
+            dmMsgs.push({
+                id: res.id, body, created_at: res.created_at || Date.now(),
+                fromMe: true, from: account ? account.id : null
+            });
             renderDmMessages();
         }
         loadDmThreads();
@@ -9030,40 +9093,111 @@
     });
     $('dm-close').addEventListener('click', closeDm);
 
+    // ---- new conversation picker ----
+    // One picker for both: one person selected makes a DM, several make a
+    // group. Splitting it into "New DM" and "New Group" would ask the reader to
+    // decide which they want before they have chosen who, which is backwards.
+    const dmPick = { all: [], chosen: new Set() };
+    const DM_GROUP_MAX = 10;                  // server enforces the same cap
+
+    function renderDmPicker() {
+        const box = $('dm-picker-list');
+        const q = ($('dm-picker-search').value || '').trim().toLowerCase();
+        const shown = dmPick.all.filter((u) => !q || u.username.toLowerCase().includes(q));
+        box.innerHTML = '';
+        if (!shown.length) {
+            box.innerHTML = '<div class="hint dm-picker-empty">No one matches that.</div>';
+        }
+        shown.forEach((u) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            const on = dmPick.chosen.has(u.id);
+            row.className = 'dm-pick-row' + (on ? ' on' : '');
+            row.innerHTML = `<span class="dm-pick-name">${esc(u.username)}` +
+                (u.role === 'admin' ? ' <em class="hint">admin</em>' : '') + '</span>' +
+                `<span class="dm-pick-check">${on ? '✓' : ''}</span>`;
+            row.addEventListener('click', () => {
+                if (dmPick.chosen.has(u.id)) dmPick.chosen.delete(u.id);
+                // The cap counts me too, which is why it is one fewer here.
+                else if (dmPick.chosen.size >= DM_GROUP_MAX - 1) {
+                    return toast('A group can hold ' + DM_GROUP_MAX + ' people');
+                } else dmPick.chosen.add(u.id);
+                renderDmPicker();
+            });
+            box.appendChild(row);
+        });
+        const n = dmPick.chosen.size;
+        const ok = $('dm-picker-ok');
+        ok.disabled = n === 0;
+        ok.textContent = n > 1 ? `Create Group DM (${n + 1})` : 'Create DM';
+        $('dm-picker-hint').textContent = n > 1
+            ? 'A group with you and ' + n + ' others.'
+            : 'Pick someone to message. Pick a few to start a group.';
+    }
+
+    function closeDmPicker() {
+        releaseFocus($('dm-picker'));
+        $('dm-picker').hidden = true;
+        dmPick.chosen.clear();
+    }
+
+    $('dm-picker-cancel').addEventListener('click', closeDmPicker);
+    $('dm-picker-search').addEventListener('input', renderDmPicker);
+    $('dm-picker').addEventListener('click', (e) => { if (e.target === $('dm-picker')) closeDmPicker(); });
+
+    $('dm-picker-ok').addEventListener('click', async () => {
+        const users = [...dmPick.chosen];
+        if (!users.length) return;
+        const res = await L.board('dm/create', { method: 'POST', body: { users } });
+        if (!res || !res.success) {
+            return toast((res && res.error) || 'Could not start that conversation', true);
+        }
+        closeDmPicker();
+        await loadDmThreads();
+        // The server hands back the thread — including the EXISTING one when a
+        // single person was picked, so choosing someone you already talk to
+        // reopens that conversation instead of starting a second one beside it.
+        if (res.thread) openDm(res.thread);
+    });
+
     // Start a conversation: pick any account holder from the directory.
-    $('btn-new-dm').addEventListener('click', async (e) => {
+    $('btn-new-dm').addEventListener('click', async () => {
         if (!account) { openSettings(); return; }
-        // Measured BEFORE the await: event.currentTarget is nulled once dispatch
-        // finishes, so reading it afterwards is an unconditional TypeError and
-        // the menu never opened at all.
-        const r = e.currentTarget.getBoundingClientRect();
         const res = await L.board('account/users');
         if (!res || !res.success) return toast((res && res.error) || 'Could not load the member directory', true);
         const others = (res.users || []).filter((u) => u.id !== account.id);
         if (!others.length) {
             return toast('No one else has a board account yet — DMs need one on both ends');
         }
-        openCtxMenu(others.map((u) => ({
-            label: u.username + (u.role === 'admin' ? ' (admin)' : ''),
-            icon: 'at',
-            onClick: () => openDm({ id: u.id, username: u.username })
-        })), r.left, r.bottom + 4);
+        dmPick.all = others;
+        dmPick.chosen.clear();
+        $('dm-picker-search').value = '';
+        renderDmPicker();
+        $('dm-picker').hidden = false;
+        trapFocus($('dm-picker'), { label: 'New message', initial: $('dm-picker-search') });
     });
 
     // Realtime delivery — pushed by the server the moment the sender posts.
     function onDmEvent(m) {
         if (!m || !m.from) return;
-        if (dmOpen && dmOpen.id === m.from.id) {
+        // Route by thread. The event carries one now; a message from an older
+        // server, or a pair conversation, still resolves because the thread
+        // list knows which thread that person's messages belong to.
+        const tid = m.thread || (dmThreads.find((x) => !x.isGroup && x.user && x.user.id === m.from.id) || {}).id;
+        if (dmOpen && tid && dmOpen.id === tid) {
             // Open conversation: append and stop there. The event already
             // carries the body, and the re-fetch that used to follow read from a
             // replica that often hadn't seen the write yet — so the message we
             // had just shown disappeared again until the next poll agreed.
             if (!dmMsgs.some((x) => x.id === m.id)) {
-                dmMsgs.push({ id: m.id, body: m.body, created_at: m.created_at, fromMe: false });
+                dmMsgs.push({
+                    id: m.id, body: m.body, created_at: m.created_at,
+                    fromMe: false, from: m.from.id
+                });
                 renderDmMessages();
             }
         } else {
-            const t = dmThreads.find((x) => x.user.id === m.from.id);
+            const t = tid ? dmThreads.find((x) => x.id === tid) : null;
             if (t) {
                 t.unread = (t.unread || 0) + 1;
                 t.last = { id: m.id, body: m.body, created_at: m.created_at, fromMe: false };
@@ -9073,10 +9207,15 @@
             }
         }
         if (alertsAllowed(null)) {
-            const conversationVisible = windowFocused && dmOpen && dmOpen.id === m.from.id;
+            const conversationVisible = windowFocused && dmOpen && tid && dmOpen.id === tid;
             if (!conversationVisible) window.loungeSounds.playMessage();
             if (!windowFocused && settings.notifications !== false) {
-                L.app.notify({ title: `${m.from.username} (DM)`, body: (m.body || '').slice(0, 140) });
+                // A group has to name both the sender and the group; the
+                // sender alone gives no clue where it arrived.
+                const title = m.isGroup && m.title
+                    ? `${m.from.username} — ${m.title}`
+                    : `${m.from.username} (DM)`;
+                L.app.notify({ title, body: (m.body || '').slice(0, 140) });
             }
         }
     }

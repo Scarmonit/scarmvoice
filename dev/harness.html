@@ -25,12 +25,47 @@ const POSTS = [
   { id: 2, client_id: 'ctest', name: 'Scarmonit', body: 'test message', created_at: NOW, channel: 'general' }
 ];
 
+// One pair and one group, so the difference between them is visible without a
+// live account: the group is the case that has no single partner and used to
+// crash the thread list.
+const DM_THREADS = [
+  { id: 1, isGroup: false, title: 'Parker', members: [{ id: 1, username: 'Scarmonit' }, { id: 2, username: 'Parker' }],
+    user: { id: 2, username: 'Parker' },
+    last: { id: 10, body: 'see you then', created_at: NOW - 3600000, fromMe: false }, unread: 2 },
+  { id: 2, isGroup: true, title: 'Parker, XIAIX, Teebob',
+    members: [{ id: 1, username: 'Scarmonit' }, { id: 2, username: 'Parker' },
+              { id: 3, username: 'XIAIX' }, { id: 4, username: 'Teebob' }],
+    user: null,
+    last: { id: 12, body: 'works for me', created_at: NOW - 600000, fromMe: false }, unread: 0 }
+];
+const DM_MSGS = [
+  { id: 10, body: 'are we still on for tonight?', created_at: NOW - 900000, fromMe: false, from: 2 },
+  { id: 11, body: 'yeah, 8pm', created_at: NOW - 800000, fromMe: true, from: 1 },
+  { id: 12, body: 'works for me', created_at: NOW - 600000, fromMe: false, from: 3 }
+];
+
 window.lounge = {
   // Signed IN, so the app runs its real entry path and the channel list and
   // message column actually render. Everything it reaches for on the way is
   // stubbed below.
   auth: { login: fn({ success: true }), logout: fn({ success: true }), status: fn({ authed: true }) },
-  board: fn({ success: true, posts: POSTS, channels: [{ name: 'general' }, { name: 'random' }], typing: [], voice: [] }),
+  // Path-aware, because the DM screens ask this same function for four
+  // different shapes and a single canned reply answered all of them with the
+  // channel list — so the thread list was permanently empty and nothing about
+  // groups could be seen at all.
+  board: async (path) => {
+    const p = String(path || '');
+    if (p === 'dm/threads') return { success: true, threads: DM_THREADS };
+    if (p.startsWith('dm/list')) return { success: true, hasMore: false, thread: DM_THREADS[1], messages: DM_MSGS };
+    if (p === 'dm/send') return { success: true, id: 900, thread: 2, created_at: NOW };
+    if (p === 'dm/create') return { success: true, thread: DM_THREADS[1] };
+    if (p === 'account/users') return { success: true, users: [
+      { id: 2, username: 'Parker', role: 'member' },
+      { id: 3, username: 'XIAIX', role: 'member' },
+      { id: 4, username: 'Teebob', role: 'member' }
+    ] };
+    return { success: true, posts: POSTS, channels: [{ name: 'general' }, { name: 'random' }], typing: [], voice: [] };
+  },
   uploadFile: fn({ success: true }), onUploadProgress: unsub,
   saveAttachment: fn({ success: true }), downloadAttachment: fn({ success: true }),
   copyImage: fn({ success: true }), revealFile: noop,

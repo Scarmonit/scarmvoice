@@ -132,6 +132,39 @@ capture before building.
 5. **GIF picker**, then stickers.
 6. §4 behaviour, once §3 is captured.
 
+## Direct messages — in progress
+
+Decision: **open DMs**. Anyone on the board can message anyone; no friends,
+requests, Pending or Suggestions. A private board where everyone is already a
+member does not need the gate the reference has because it is a public platform.
+
+Reference, measured:
+
+| | reference | ours |
+| --- | --- | --- |
+| placement | top-level view, conversation fills the main column | `<aside id="dm-panel">` sliding over the app |
+| participants | 1:1 **and groups** (cap 10) | 1:1 only |
+| sidebar nav rows | 38px | — |
+| DM row | 42px, radius 8px, padding `0 0 0 8px`, avatar + status dot + unread badge | flat list |
+| entry point | rail home button | button in the channel sidebar |
+
+**Backend: done and deployed.** Threads (`dm_threads`, `dm_members`,
+`dm_messages.thread_id`), existing conversations migrated, membership as the
+permission model, unread as a per-member high-water mark, group notify fan-out,
+`dm/create` for groups. Old 1:1 request shapes still work, so the shipped app
+kept running while this landed.
+
+**Frontend: not started.** In order:
+
+1. Panel → full-column view; rail home button as the entry point.
+2. Sidebar DM list at the measured metrics above; unread badge; group avatars.
+3. New Group DM picker (`dm/create`, cap 10).
+4. Group message rendering — a group has to say who spoke; 1:1 never did.
+   `dm/list` returns `from` per message for exactly this.
+5. `renderDmSection`/`openDm`/`onDmEvent` in app.js key off `t.user.id`, which
+   is **null for a group**. They must move to `t.id` before any group can be
+   opened, or the first group DM crashes the list.
+
 ## Done
 
 - **Account disable / delete** (2026-07-28). Backend `account/removal.js`,

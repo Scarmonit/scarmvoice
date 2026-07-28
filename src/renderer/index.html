@@ -1225,6 +1225,22 @@
   </form>
 </div>
 
+<!-- Start a conversation. One person selected is a DM; several is a group —
+     the same picker either way, because "new DM" and "new group" are the same
+     decision made at different sizes. -->
+<div id="dm-picker" class="overlay" hidden>
+  <div class="dialog-card dm-picker-card">
+    <h2>New message</h2>
+    <p class="hint" id="dm-picker-hint">Pick someone to message. Pick a few to start a group.</p>
+    <input type="text" id="dm-picker-search" placeholder="Search members" autocomplete="off" maxlength="40">
+    <div id="dm-picker-list" class="dm-picker-list"></div>
+    <div class="dialog-actions">
+      <button type="button" id="dm-picker-cancel">Cancel</button>
+      <button type="button" id="dm-picker-ok" disabled>Create DM</button>
+    </div>
+  </div>
+</div>
+
 <!-- Expanded image viewer. Closes on X, Esc, or a backdrop click. -->
 <div id="lightbox" hidden>
   <div class="lb-tools">
