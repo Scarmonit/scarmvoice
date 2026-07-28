@@ -1175,6 +1175,9 @@
             avatarTimer = setInterval(refreshAvatars, 5 * 60 * 1000);
 
             if (settings.autoJoinVoice) joinVoice();
+            // Nothing to guess at when the answer is "always": this session is
+            // going to open the microphone, so build the model up front.
+            else if (settings.noiseSuppressionAI) setTimeout(warmVoice, 2500);
         } catch (e) {
             console.error('[app] could not open the board:', e);
             // Whatever did start has to be unwound, or the half-loaded session
@@ -3627,25 +3630,41 @@
 
     // Clicking the channel you're already in is a no-op, as in Discord — leaving
     // is the disconnect button in the voice panel.
-    // Warm the voice SDK on the first sign that somebody is heading for it.
+    // Warm everything heavy that sits in front of a call, on the first sign that
+    // somebody is heading for one.
     //
-    // It is 647 KB read off disk and parsed, and it is deliberately NOT loaded
-    // at startup — most sessions never join a call, and paying for it there
-    // delays the window appearing for everyone. But the moment a pointer lands
-    // on the voice channel there is a much better guess available, and the load
-    // runs in the few hundred milliseconds before the click. ScarmLazy caches
-    // by URL, so join() then finds it already resident.
+    // TWO bundles, and the second is the bigger problem:
     //
-    // Costs nothing if the guess is wrong: a bundle parsed and not used, versus
-    // the same bundle parsed while somebody waits for a call to connect.
+    //   • the RealtimeKit SDK, 647 KB read off disk and parsed;
+    //   • the RNNoise worklet, 1.9 MB of JavaScript wrapping a WebAssembly
+    //     model — which sits directly in front of the MICROPHONE. noise.js
+    //     patches getUserMedia, and every acquisition awaits addModule() before
+    //     it returns a stream. Joining acquires the microphone, so that compile
+    //     was inside the join, every time.
+    //
+    // Neither is loaded at startup: most sessions never join a call, and 2.5 MB
+    // of parse delays the window appearing for everyone. But a pointer landing
+    // on the voice channel is a far better guess than "never", and the work then
+    // runs in the seconds before the click instead of inside it. Costs a wasted
+    // parse when the guess is wrong, against the same parse happening while
+    // somebody waits to be connected.
     let voiceWarmed = false;
-    function warmVoiceSdk() {
-        if (voiceWarmed || !window.ScarmLazy) return;
+    function warmVoice() {
+        if (voiceWarmed) return;
         voiceWarmed = true;
-        window.ScarmLazy.realtimekit().catch(() => { voiceWarmed = false; });
+        try {
+            if (window.ScarmLazy) window.ScarmLazy.realtimekit().catch(() => { voiceWarmed = false; });
+            // Only when it is actually switched on — off, wrap() returns the raw
+            // stream and none of this is on the path at all.
+            if (window.ScarmNoise && settings.noiseSuppressionAI) window.ScarmNoise.warm();
+        } catch (e) { voiceWarmed = false; }
     }
+    // The whole voice section, not just the button: a bigger target catches the
+    // pointer earlier, which is the entire point.
     ['pointerenter', 'focus'].forEach((ev) => {
-        $('btn-join-voice').addEventListener(ev, warmVoiceSdk);
+        const room = $('voice-room');
+        if (room) room.addEventListener(ev, warmVoice, true);
+        $('btn-join-voice').addEventListener(ev, warmVoice);
     });
 
     $('btn-join-voice').addEventListener('click', () => {

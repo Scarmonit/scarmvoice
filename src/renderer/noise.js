@@ -34,16 +34,25 @@
         try { if (failureCb) failureCb(why || 'unknown'); } catch (e) {}
     }
 
-    // An AudioContext holds a real audio device open. Left running between calls
-    // it kept the render thread (and on some drivers the device itself) awake for
-    // the rest of the session, so it goes away with the last wrapped stream.
+    // An AudioContext holds a real audio device open, so it must not be left
+    // RUNNING between calls — it kept the render thread (and on some drivers the
+    // device itself) awake for the rest of the session.
+    //
+    // But it used to be CLOSED, and closing it threw away the worklet module
+    // with it. That module is 1.9 MB of JavaScript wrapping a WebAssembly build
+    // of RNNoise, and it sits directly in front of the microphone: every
+    // getUserMedia awaits addModule() before it can return a stream, and joining
+    // a call acquires the microphone. So every join after the first re-fetched,
+    // re-parsed and re-compiled the whole thing while the user watched a
+    // spinner — a cost measured in hundreds of milliseconds, paid again on every
+    // single join.
+    //
+    // Suspending parks the audio thread just as effectively and keeps the
+    // registration, so the next acquisition is a resume() rather than a rebuild.
     function release() {
         active = Math.max(0, active - 1);
         if (active || !ctx) return;
-        const dying = ctx;
-        ctx = null;
-        workletReady = null;    // the module registration dies with the context
-        dying.close().catch(() => {});
+        ctx.suspend().catch(() => {});
     }
 
     function ensureWorklet() {
@@ -57,6 +66,21 @@
                 });
         }
         return workletReady;
+    }
+
+    // Build the expensive half AHEAD of the microphone.
+    //
+    // Nothing here acquires audio: it creates the context and compiles the
+    // module, which is the part that costs. Called when somebody looks like they
+    // are about to join, so the load happens in the seconds before the click
+    // rather than inside it — see the warm-up in app.js.
+    function warm() {
+        if (!enabled) return Promise.resolve(false);
+        try {
+            return ensureWorklet().then(() => true, () => false);
+        } catch (e) {
+            return Promise.resolve(false);
+        }
     }
 
     async function wrap(raw) {
@@ -151,6 +175,9 @@
             if (enabled) broken = false;
         },
         isEnabled() { return enabled; },
+        // Compile the model before it is needed. Safe to call repeatedly — the
+        // module registration is cached on the context.
+        warm,
         // "Enabled" is what the user asked for; this is what they are actually
         // getting. Optimistic until an acquisition proves otherwise.
         isWorking() { return enabled && !broken; },
