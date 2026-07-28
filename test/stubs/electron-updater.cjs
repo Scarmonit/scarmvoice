@@ -8,7 +8,11 @@ const state = (globalThis.__UPDATER_STUB__ ||= {
     installs: [],
     checks: 0,
     downloads: 0,
-    handlers: {}
+    handlers: {},
+    // Set to a message to make checkForUpdates() REJECT — offline, DNS failure,
+    // a 500 from the feed. The rejection is a different path from the 'error'
+    // event, and the startup gate has to survive both.
+    checkFails: null
 });
 
 const autoUpdater = {
@@ -23,7 +27,12 @@ const autoUpdater = {
     emit(event, payload) {
         (state.handlers[event] || []).forEach((fn) => fn(payload));
     },
-    checkForUpdates() { state.checks++; return Promise.resolve(null); },
+    checkForUpdates() {
+        state.checks++;
+        return state.checkFails
+            ? Promise.reject(new Error(state.checkFails))
+            : Promise.resolve(null);
+    },
     downloadUpdate() { state.downloads++; return Promise.resolve([]); },
     quitAndInstall(isSilent, isForceRunAfter) {
         state.installs.push({ isSilent, isForceRunAfter, at: Date.now() });

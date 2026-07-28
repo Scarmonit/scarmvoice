@@ -286,10 +286,98 @@ function saveWindowState() {
 }
 
 function showWindow() {
+    // While the startup update gate is open there is no app window yet, and
+    // creating one here would be exactly the partial startup the gate exists to
+    // prevent — a second launch, or a tray click, would build the whole session
+    // behind an update that is still applying. Point at the update screen
+    // instead; the app window follows on its own the moment the gate answers.
+    if (updater.gateOpen()) { focusSplash(); return; }
     if (!win || win.isDestroyed()) { createWindow(true); return; }
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
     win.focus();
+}
+
+// ---- the startup update screen -------------------------------------------
+//
+// A separate, tiny window rather than a state inside the app's own: the app
+// window IS the thing being held back, so anything drawn in it would mean
+// loading index.html, running the renderer and letting boot() start asking the
+// board who we are — the startup this is supposed to come before.
+//
+// It is created LAZILY, and that is the whole reason launching does not feel
+// slower. The common answer is "you are up to date" and it arrives in a few
+// hundred milliseconds, in which case this window is never built at all and the
+// app window appears as it always did. It is only summoned when there is
+// genuinely something to look at: an update being fetched, or a check slow
+// enough (see SPLASH_AFTER_MS) that silence would read as a failure to launch.
+
+let splash = null;
+let splashWanted = false;        // false for a hidden login-item launch
+let gateStep = { phase: 'checking', percent: 0, version: null };
+
+// The window changes underneath the user with no interaction from them, so its
+// content is pushed on every step rather than polled.
+function paintSplash() {
+    if (splash && !splash.isDestroyed() && !splash.webContents.isLoading()) {
+        splash.webContents.send('update:gate', gateStep);
+    }
+}
+
+function ensureSplash() {
+    if (!splashWanted) return;
+    if (splash && !splash.isDestroyed()) { paintSplash(); return; }
+
+    splash = new BrowserWindow({
+        width: 380,
+        height: 264,
+        show: false,
+        center: true,
+        // No chrome: there is nothing to minimise, maximise or navigate, and the
+        // page draws its own quit button. Resizing a fixed message is noise.
+        frame: false,
+        resizable: false,
+        maximizable: false,
+        minimizable: false,
+        fullscreenable: false,
+        backgroundColor: '#0c0c0e',
+        icon: ICON,
+        // It is the only window at this point, so it must be findable in the
+        // taskbar like any other app that is starting.
+        skipTaskbar: false,
+        title: 'ScarmVoice',
+        webPreferences: {
+            preload: path.join(__dirname, 'splash-preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            spellcheck: false
+        }
+    });
+
+    splash.loadFile(path.join(__dirname, '..', 'renderer', 'updating.html'));
+    // Painted on both: 'did-finish-load' is what guarantees the page's listener
+    // exists, and 'ready-to-show' is when it is safe to reveal.
+    splash.webContents.on('did-finish-load', paintSplash);
+    splash.once('ready-to-show', () => {
+        if (!splash || splash.isDestroyed()) return;
+        splash.show();
+        paintSplash();
+    });
+    splash.on('closed', () => { splash = null; });
+}
+
+function focusSplash() {
+    if (!splash || splash.isDestroyed()) return;
+    if (!splash.isVisible()) splash.show();
+    splash.focus();
+}
+
+function closeSplash() {
+    if (!splash || splash.isDestroyed()) { splash = null; return; }
+    const s = splash;
+    splash = null;                 // before close(), so 'closed' finds nothing to do
+    try { s.destroy(); } catch (e) { /* already gone */ }
 }
 
 // The taskbar unread badge is drawn in badge.js (pixel work, no Electron).
@@ -1205,20 +1293,26 @@ function setLoginItem(openAtLogin, openAsHidden) {
 
 // ---- boot ----------------------------------------------------------------
 
-app.whenReady().then(() => {
-    // Drop the default menu. Its roles bind Ctrl +/-/0 to page zoom, which would
-    // swallow the chat font-size shortcuts (and zooming the whole UI is not what
-    // those keys should do here). Clipboard keys are handled natively regardless.
-    Menu.setApplicationMenu(null);
+// How long a check may run before the silence needs explaining. Under this and
+// nobody ever sees the update screen; over it and they see "Checking for
+// updates…" instead of a shortcut that appeared to do nothing.
+const SPLASH_AFTER_MS = 700;
 
-    detectElevation();
-    store.init();
-    net.init();
-    registerProtocol();
-    configurePermissions();
-    registerIpc();
+// Everything the app is, once the gate has agreed it may exist.
+function startApp() {
     createWindow();
     createTray();
+
+    // The update screen stays up until the real window is ready to paint, so
+    // there is never a frame with nothing on screen — and it is torn down only
+    // AFTER the app window exists, or 'window-all-closed' would fire in the gap
+    // between them and quit the app we are in the middle of starting.
+    if (splash) {
+        win.once('ready-to-show', closeSplash);
+        // A window that never becomes ready must not leave the update screen up
+        // for the rest of the session.
+        setTimeout(closeSplash, 15000);
+    }
 
     ptt.onChange((down) => {
         if (win && !win.isDestroyed()) win.webContents.send('ptt:change', { down });
@@ -1230,12 +1324,10 @@ app.whenReady().then(() => {
     });
     ptt.apply();
 
-    // Auto-update: bridge events to the renderer and check shortly after the
-    // window is up (so the banner has somewhere to render).
-    updater.init((channel, payload) => {
-        if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
-    });
-    setTimeout(() => updater.checkOnLaunch(), 4000);
+    // The launch check already happened, in front of this window rather than
+    // four seconds behind it — this arms the periodic recheck for a session
+    // left open for days. See updater.checkOnLaunch.
+    updater.checkOnLaunch();
 
     // Waking from sleep/hibernate almost always leaves the socket half-open —
     // verify and revive it, and have the renderer pull anything it missed.
@@ -1247,6 +1339,60 @@ app.whenReady().then(() => {
     } catch (e) { /* powerMonitor unavailable on this platform */ }
 
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(true); });
+}
+
+app.whenReady().then(async () => {
+    // Drop the default menu. Its roles bind Ctrl +/-/0 to page zoom, which would
+    // swallow the chat font-size shortcuts (and zooming the whole UI is not what
+    // those keys should do here). Clipboard keys are handled natively regardless.
+    Menu.setApplicationMenu(null);
+
+    detectElevation();
+    store.init();
+    net.init();
+    registerProtocol();
+    configurePermissions();
+    registerIpc();
+
+    // A login-item launch is meant to be invisible. Popping a window at the
+    // user because Windows started us at sign-in would be worse than the update
+    // it is reporting — so the gate still runs and still updates first, it just
+    // does it without drawing anything.
+    splashWanted = !(store.get().startMinimized || process.argv.includes('--openAsHidden'));
+
+    // update:gate drives the startup screen; update:state is the in-app banner,
+    // which has nowhere to render until the app window exists.
+    updater.init((channel, payload) => {
+        if (channel === 'update:gate') {
+            gateStep = payload;
+            // Anything past "checking" means an update is genuinely being
+            // applied, and that always deserves a window — however fast it is.
+            if (payload.phase !== 'checking') ensureSplash();
+            paintSplash();
+            return;
+        }
+        if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+    });
+
+    // Nothing starts until the feed has been asked. The app must ALWAYS start
+    // eventually, so every failure inside the gate resolves 'launch' on a
+    // deadline — see updater.startupGate.
+    const slowCheck = setTimeout(ensureSplash, SPLASH_AFTER_MS);
+    let verdict = 'launch';
+    try {
+        verdict = await updater.startupGate();
+    } catch (e) {
+        console.error('[update] startup gate threw, launching anyway:', e && e.message);
+    } finally {
+        clearTimeout(slowCheck);
+    }
+
+    // The update is applying and this process is being replaced. Building the
+    // app now would open the mic, the socket and the session for the two
+    // seconds before the installer kills us.
+    if (verdict === 'installing') return;
+
+    startApp();
 });
 
 // Retire the voice-presence row before the process goes away.

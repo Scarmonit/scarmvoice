@@ -165,11 +165,15 @@ board session is remembered for 30 days.
 - Both independently toggleable in Settings
 
 **Desktop**
-- **Auto-update** via electron-updater against GitHub Releases — a non-blocking
-  banner shows when a new version is available (with release notes and download
-  progress), and an optional "Update automatically" setting downloads in the
-  background and installs on quit. Downloads are **differential** (only changed
-  blocks), so a point release is a ~1 MB fetch, not the full installer
+- **Auto-update** via electron-updater against GitHub Releases, applied **before
+  the app starts**: launching checks the feed first, and if there is an update it
+  is downloaded and installed behind a small "Updating…" window, then the app
+  opens on the new version. Nothing signs in, connects or opens a microphone
+  until that has happened. An update that appears mid-session still installs
+  itself as before (waiting only for a call to end), with a non-blocking banner
+  carrying the version, release notes and progress. Downloads are
+  **differential** (only changed blocks), so a point release is a ~1 MB fetch,
+  not the full installer
 - **Launch on system startup** (off by default) with a companion **Start
   minimized to the tray**, driven by `app.setLoginItemSettings`; the toggle
   reads the real OS state on open, so it's correct even if changed elsewhere
@@ -645,6 +649,58 @@ YouTube's oEmbed endpoint sends no `Access-Control-Allow-Origin`, so that fetch
 also lives in the main process, cached per video id (24 h on success, 5 min on
 failure so a transient error recovers but a deleted video isn't re-fetched every
 render).
+
+### The update happens before the app does
+
+An update used to land *on* a running app: it started normally, checked the feed
+a few seconds later, downloaded in the background and then restarted out from
+under whatever you were doing. Everything about that was right except the order.
+By the time it applied you were signed in, in a channel, possibly mid-sentence —
+and the restart threw all of it away to deliver a version you would happily have
+waited four seconds for at launch.
+
+So the check now runs **in front of the window**. `app.whenReady()` awaits
+`updater.startupGate()` and builds nothing — no window, no tray, no socket, no
+session — until it answers one of two things:
+
+| answer | what `main.js` does |
+| --- | --- |
+| `'launch'` | build the app, as always |
+| `'installing'` | build **nothing**; `quitAndInstall` is already running |
+
+While that is happening there is a small always-on-top-of-nothing window
+(`src/renderer/updating.html`) showing the phase, the version and a real
+percentage. It is a **separate window with its own preload**, and that is the
+point: the app window is the thing being held back, so drawing this inside it
+would mean loading `index.html` and letting `boot()` start asking the board who
+we are — exactly the startup the gate exists to precede. Its bridge carries one
+inbound channel and cannot invoke anything (see `splash-preload.js`, and the
+assertions on it in `test/ipc-contract.test.js`).
+
+Three details are deliberate:
+
+- **The screen is lazy.** The usual answer is "you are up to date" and it arrives
+  in a few hundred milliseconds, in which case the window is never built and
+  launch looks exactly as it did before. It appears when there is genuinely
+  something to watch, or after `SPLASH_AFTER_MS` when a slow check would
+  otherwise leave a shortcut that seems to have done nothing.
+- **A login-item launch stays silent.** `--openAsHidden` / "start minimized"
+  still gates and still updates first — it just draws nothing, because popping a
+  window at somebody Windows started you for is worse than the update.
+- **The app must always start.** Every failure — offline, a feed that never
+  answers, a stalled download, an error mid-stream — resolves `'launch'` on a
+  deadline (15 s for the check, 5 min for the download). Nothing is lost by
+  giving up: `autoInstallOnAppQuit` is armed and the in-session flow picks the
+  same update up on its own. A gate that can strand someone outside their own app
+  is worse than an update that waits for the next launch.
+
+Two smaller consequences. `checkOnLaunch()` no longer performs the launch check —
+the gate already asked, and its answer is what let the window exist — so it only
+arms the three-hourly recheck, *unless* the gate gave up without an answer, in
+which case it does ask rather than leaving the app three hours from its next
+look. And `showWindow()` refuses to build the app window while the gate is open,
+because a second launch or a tray click would otherwise conjure the whole session
+out from under an update that is still applying.
 
 ### Editing
 

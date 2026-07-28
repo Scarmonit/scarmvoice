@@ -4,5 +4,8 @@
 // matter which loads first, and so it survives vi.resetModules().
 export const electronState = (globalThis.__ELECTRON_STUB__ ||= {
     userDataDir: '',
-    encryptionAvailable: true
+    encryptionAvailable: true,
+    // app.isPackaged. Only a packaged build has an update feed, so the startup
+    // gate is a no-op until a spec turns this on.
+    isPackaged: false
 });

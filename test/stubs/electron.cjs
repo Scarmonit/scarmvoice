@@ -18,7 +18,11 @@ module.exports = {
         getPath: () => state.userDataDir,
         getName: () => 'ScarmVoice',
         // updater.js puts this in the User-Agent GitHub's REST API requires.
-        getVersion: () => state.version || '0.0.0-test'
+        getVersion: () => state.version || '0.0.0-test',
+        // updater.available() gates the whole feed on this. A getter, not a
+        // constant, so a spec can flip it per test — and false by default,
+        // which is what an unpackaged dev run reports.
+        get isPackaged() { return !!state.isPackaged; }
     },
     safeStorage: {
         isEncryptionAvailable: () => state.encryptionAvailable,

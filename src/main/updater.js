@@ -71,13 +71,25 @@ function load() {
     updater.on('checking-for-update', () => emit({ status: 'checking', error: null }));
     updater.on('update-available', (info) => {
         const n = parseNotes(info.releaseNotes);
+        checkedAtStartup = true;
         emit({ status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks });
+        // The check is answered, so the gate stops timing THAT and starts timing
+        // the download instead.
+        gateFound(info.version);
         // autoDownload already started it; this only keeps the UI honest if the
         // event order surprises us.
         startDownload();
     });
-    updater.on('update-not-available', () => emit({ status: 'none' }));
-    updater.on('download-progress', (p) => emit({ status: 'downloading', progress: Math.round(p.percent || 0) }));
+    updater.on('update-not-available', () => {
+        checkedAtStartup = true;
+        emit({ status: 'none' });
+        gateSettle('launch', 'already up to date');
+    });
+    updater.on('download-progress', (p) => {
+        const pct = Math.round(p.percent || 0);
+        emit({ status: 'downloading', progress: pct });
+        gateSay('downloading', pct);
+    });
     updater.on('update-downloaded', (info) => {
         // Usually already captured from update-available; re-parse in case this
         // is the only event that carried them.
@@ -89,13 +101,123 @@ function load() {
         });
         // Armed at load(), so quitting applies it no matter what happens next.
         try { updater.autoInstallOnAppQuit = true; } catch (e) {}
+        // At startup this is the whole point of the gate: nothing has started
+        // yet, so there is nothing to interrupt and no reason to wait.
+        if (gateInstall()) return;
         scheduleAutoRestart();
     });
     updater.on('error', (err) => {
         console.error('[update] error:', err && err.message);
         emit({ status: state.status === 'downloading' ? 'available' : 'error', error: (err && err.message) || 'update failed' });
+        // An update we cannot fetch must never be a launch we cannot make.
+        gateSettle('launch', 'update error: ' + ((err && err.message) || 'unknown'));
     });
     return updater;
+}
+
+// ---- the startup gate ----------------------------------------------------
+//
+// An update used to land ON a running app: it started normally, checked a few
+// seconds later, downloaded in the background and then restarted out from under
+// whatever you were doing. Everything about that is correct except the order —
+// by the time the update applies you are signed in, in a channel, possibly
+// typing, and the restart throws all of it away to give you a version you would
+// have been perfectly happy to wait four seconds for at launch.
+//
+// So the check now happens BEFORE the app exists. `main.js` awaits this and
+// creates no window, no tray, no socket and no session until it answers. Two
+// answers only:
+//
+//   'launch'      nothing to do (or nothing we could do) — start normally
+//   'installing'  the update is downloaded and quitAndInstall is running; this
+//                 process is going away and the caller must do nothing further
+//
+// The one rule that matters more than updating is that the app must always
+// start. Every failure — offline, a feed that never answers, a download that
+// stalls, an error mid-stream — resolves 'launch' on a deadline, and nothing is
+// lost by doing so: autoInstallOnAppQuit is already armed and the in-app flow
+// picks the same update up on its own. A gate that can strand someone outside
+// their own app is worse than an update that waits for the next launch.
+const GATE_CHECK_MS = 15000;             // "is there one?" — a feed round trip
+const GATE_DOWNLOAD_MS = 5 * 60 * 1000;  // and then fetching it
+
+let gate = null;                 // { resolve, timer } while the gate is open
+// Set only when the feed actually ANSWERED, so checkOnLaunch doesn't ask twice
+// for something we already know — but does ask when the gate gave up on a
+// timeout or an error, rather than leaving the app three hours from its next
+// look at a check that never landed.
+let checkedAtStartup = false;
+
+// Tell the splash where we are. Deliberately its own channel rather than the
+// `update:state` the in-app banner reads: that state machine describes an update
+// arriving beside a running app, and this one describes the app not existing yet.
+function gateSay(phase, percent) {
+    if (!gate) return;
+    send('update:gate', {
+        phase,
+        percent: typeof percent === 'number' ? percent : 0,
+        version: state.version || null
+    });
+}
+
+function gateArm(ms, why) {
+    clearTimeout(gate.timer);
+    gate.timer = setTimeout(() => gateSettle('launch', why), ms);
+}
+
+function gateSettle(how, why) {
+    if (!gate) return false;
+    const g = gate;
+    gate = null;                 // before resolve(), so nothing re-enters
+    clearTimeout(g.timer);
+    console.info('[update] startup gate -> ' + how + ' (' + why + ')');
+    g.resolve(how);
+    return true;
+}
+
+// An update exists: stop timing the check and start timing the download.
+function gateFound(version) {
+    if (!gate) return;
+    gateArm(GATE_DOWNLOAD_MS, 'the download took too long');
+    gateSay('downloading', 0);
+    console.info('[update] holding startup for ' + version);
+}
+
+// Downloaded while the gate is open — apply it instead of launching. Returns
+// true when it took ownership, so the normal path knows to stand down.
+function gateInstall() {
+    if (!gate) return false;
+    gateSay('installing', 100);
+    gateSettle('installing', 'downloaded at startup');
+    // A beat, so "Installing update…" is actually on screen rather than a frame
+    // nobody sees before the window disappears. installNow() flushes settings
+    // and hands over to the NSIS installer, which relaunches us.
+    setTimeout(installNow, 500);
+    return true;
+}
+
+// True while startup is being held. main.js asks so that a second launch (or
+// the tray) cannot conjure the app window out from under the gate.
+function gateOpen() { return !!gate; }
+
+function startupGate() {
+    // Unpackaged has no feed, and a missing electron-updater is not a reason to
+    // refuse to start.
+    if (!available()) return Promise.resolve('launch');
+    const u = load();
+    if (!u) return Promise.resolve('launch');
+
+    return new Promise((resolve) => {
+        gate = { resolve, timer: null };
+        gateArm(GATE_CHECK_MS, 'the update check took too long');
+        gateSay('checking', 0);
+        try {
+            u.checkForUpdates().catch((e) =>
+                gateSettle('launch', 'check failed: ' + ((e && e.message) || 'unknown')));
+        } catch (e) {
+            gateSettle('launch', 'check threw: ' + ((e && e.message) || 'unknown'));
+        }
+    });
 }
 
 // ---- release notes -------------------------------------------------------
@@ -308,12 +430,18 @@ function init(bridge) {
     state.postponed = false;
 }
 
-// Called shortly after the window is ready.
+// Called once the window is up. Its real job now is arming the periodic
+// recheck: the startup gate has already asked the feed, and its answer is what
+// let this window exist at all, so asking again seconds later is a wasted round
+// trip against a rate-limited API. It still checks when the gate never ran —
+// unpackaged, or an electron-updater that would not load.
 function checkOnLaunch() {
     if (!available()) { emit({ status: 'idle' }); return; }
     const u = load();
     if (!u) { emit({ status: 'idle' }); return; }
-    u.checkForUpdates().catch((e) => emit({ status: 'error', error: e.message }));
+    if (!checkedAtStartup) {
+        u.checkForUpdates().catch((e) => emit({ status: 'error', error: e.message }));
+    }
     // An app left open for days used to check exactly once, at launch, and
     // then never again — so the longer it ran the more out of date it got.
     if (!recheck) {
@@ -465,5 +593,6 @@ async function history(force) {
 
 module.exports = {
     init, checkOnLaunch, checkNow, startDownload, installNow, setAuto,
-    postpone, setBusy, getState, available, parseNotes, history
+    postpone, setBusy, getState, available, parseNotes, history,
+    startupGate, gateOpen
 };

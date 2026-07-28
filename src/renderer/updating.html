@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Nothing here loads anything remote, so the policy can be far tighter than
+     the app window's: no connect, no media, no wasm, and the only script is the
+     one file beside this page. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>ScarmVoice</title>
+<style>
+/* Self-contained on purpose. styles.css is 4000 lines describing an app that
+   does not exist yet, and this window must paint on the first frame — it is the
+   only thing on screen while the update runs. The handful of colours below are
+   copied from the tokens at the top of styles.css so the two agree. */
+:root {
+  --rail:   #0c0c0e;
+  --float:  #242429;
+  --line:   rgba(255, 255, 255, .06);
+  --line-2: rgba(255, 255, 255, .10);
+  --text:   #e8e8ea;
+  --muted:  #adadb3;
+  --dim:    #7e7e84;
+  --accent: #26ddd0;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 30px 34px 26px;
+  background: var(--rail);
+  color: var(--text);
+  font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Frameless: the whole card is the drag handle, so it can be moved out of the
+     way like any other window. */
+  -webkit-app-region: drag;
+  user-select: none;
+  cursor: default;
+  /* A hairline, because a frameless window on a dark desktop has no edge of its
+     own and reads as a hole rather than a window. */
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* The only thing that isn't drag: a way out. Closing the window quits, which is
+   the honest behaviour for a screen that stands in front of the app — nobody
+   should be trapped by an update that is having a bad day. */
+#close {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+#close:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
+#close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+#mark { width: 46px; height: 46px; border-radius: 11px; }
+
+#phase {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .1px;
+  text-align: center;
+}
+
+#detail {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  min-height: 18px;
+}
+
+/* The bar has two modes. Determinate while bytes are arriving, because a real
+   percentage is the one thing that proves the app is not stuck; indeterminate
+   while checking or installing, where there is no number to honestly report and
+   a fake one would be worse than a sweep. */
+#track {
+  width: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+/* display:block matters: this is an <i>, and an inline box ignores width and
+   height entirely — the fill was being set to 42% and drawing nothing. */
+#bar {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  width: 0;
+  transition: width .25s ease;
+}
+
+body.indeterminate #bar {
+  width: 34%;
+  transition: none;
+  animation: sweep 1.15s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(295%); }
+}
+
+#foot {
+  color: var(--dim);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.indeterminate #bar { animation: none; width: 100%; opacity: .45; }
+  #bar { transition: none; }
+}
+</style>
+</head>
+<body class="indeterminate">
+
+<button id="close" type="button" title="Quit" aria-label="Quit ScarmVoice">&#215;</button>
+
+<img id="mark" src="logo.png" alt="" aria-hidden="true">
+
+<!-- aria-live so a screen reader is told what is happening, since this window
+     changes under the user without any interaction from them. -->
+<div id="phase" role="status" aria-live="polite">Checking for updates…</div>
+<div id="detail"></div>
+
+<div id="track" role="progressbar" aria-label="Update progress"><i id="bar"></i></div>
+
+<div id="foot">ScarmVoice will start as soon as this finishes.</div>
+
+<script src="updating.js"></script>
+</body>
+</html>

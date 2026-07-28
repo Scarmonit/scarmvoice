@@ -30,6 +30,14 @@ const invoked = channels('preload.js', /ipcRenderer\.invoke\(\s*'([^']+)'/g);
 const subscribed = channels('preload.js', /\bsub\(\s*'([^']+)'/g);
 const sent = channels('main.js', /(?:webContents|win\.webContents)\.send\(\s*'([^']+)'/g);
 
+// The SECOND bridge. The startup update screen is its own window with its own
+// preload, because it exists precisely while the app — and therefore the app's
+// bridge — has not started. It listens directly rather than through preload.js's
+// `sub` helper, so it needs its own extraction or every channel it owns reads
+// as an event nothing is listening for.
+const splashHeard = channels('splash-preload.js', /ipcRenderer\.on\(\s*'([^']+)'/g);
+const heard = new Set([...subscribed, ...splashHeard]);
+
 describe('ipcMain.handle <-> ipcRenderer.invoke', () => {
     it('registers a handler for every channel the bridge invokes', () => {
         const missing = [...invoked].filter((c) => !handled.has(c)).sort();
@@ -53,7 +61,28 @@ describe('ipcMain.handle <-> ipcRenderer.invoke', () => {
 
 describe('main -> renderer events', () => {
     it('has a subscriber for every event the main process pushes', () => {
-        const unheard = [...sent].filter((c) => !subscribed.has(c)).sort();
-        expect(unheard, 'main.js sends events the bridge never subscribes to').toEqual([]);
+        const unheard = [...sent].filter((c) => !heard.has(c)).sort();
+        expect(unheard, 'main.js sends events neither bridge subscribes to').toEqual([]);
+    });
+
+    // NOT the mirror of the above. `sent` only sees literal channel names in
+    // main.js, and two legitimate senders are invisible to it: emitRt picks its
+    // channel with an expression, and updater.js pushes update:state through the
+    // bridge main.js hands it. A "nothing listens for the unsent" assertion
+    // would fail on all three and teach the next reader to weaken this file.
+});
+
+describe('the startup update screen bridge', () => {
+    // It stands in front of the app while nothing is signed in, so the whole
+    // point is how LITTLE it can reach. preload.js hands the renderer the board
+    // API, uploads, voice and settings; this one is allowed one inbound channel
+    // and no way to invoke anything at all.
+    it('receives progress and nothing else', () => {
+        expect([...splashHeard]).toEqual(['update:gate']);
+    });
+
+    it('cannot invoke anything', () => {
+        const invokes = channels('splash-preload.js', /ipcRenderer\.invoke\(\s*'([^']+)'/g);
+        expect([...invokes], 'the update screen must not be able to call main').toEqual([]);
     });
 });
