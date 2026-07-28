@@ -289,18 +289,32 @@
     //
     // Returns null when nothing has measured it yet. A number nobody measured is
     // worse than no number, so this never guesses.
-    async function sampleRtt() {
+    // Everything the connection knows about itself, read off getStats(). Every
+    // field here is measured by the transport — none of it is estimated, and
+    // anything unmeasured comes back null rather than as a plausible number.
+    async function sampleConnection() {
         prunePCS();
-        let best = null;
+        const out = {
+            rtt: null,            // ms, this sample
+            lossPct: null,        // % of our outbound packets the far end never got
+            candidate: null,      // relay / srflx / host — how the media is routed
+            protocol: null,       // udp / tcp
+            remote: null,         // the address media is actually going to
+            codec: null,
+            peers: 0
+        };
         for (const pc of PCS) {
             if (!pc || typeof pc.getStats !== 'function') continue;
             if (pc.connectionState === 'closed' || pc.connectionState === 'failed') continue;
             let stats;
             try { stats = await pc.getStats(); } catch (e) { continue; }
+            out.peers++;
 
+            const byId = new Map();
             const pairs = new Map();
             let selectedId = null;
             stats.forEach((r) => {
+                byId.set(r.id, r);
                 if (r.type === 'candidate-pair') pairs.set(r.id, r);
                 // Chromium names the live pair on the transport; it is the only
                 // one whose RTT describes the path media is actually taking.
@@ -322,9 +336,47 @@
                 });
             }
             // The shortest live path, when a mesh call has several.
-            if (rtt !== null && (best === null || rtt < best)) best = rtt;
+            if (rtt !== null && (out.rtt === null || rtt * 1000 < out.rtt)) out.rtt = Math.round(rtt * 1000);
+
+            // How the media is routed, from the pair actually in use.
+            if (pair && out.candidate === null) {
+                const local = byId.get(pair.localCandidateId);
+                const remote = byId.get(pair.remoteCandidateId);
+                if (local) {
+                    out.candidate = local.candidateType || null;
+                    out.protocol = local.protocol || null;
+                }
+                if (remote && remote.address) {
+                    out.remote = remote.address + (remote.port ? ':' + remote.port : '');
+                }
+            }
+
+            // Loss on what WE send: the far end reports back how much of our
+            // audio never arrived. packetsSent is ours, packetsLost is theirs —
+            // which is why this is outbound loss and not inbound.
+            let sent = 0;
+            let lost = 0;
+            stats.forEach((r) => {
+                if (r.type === 'outbound-rtp' && r.kind === 'audio') {
+                    if (typeof r.packetsSent === 'number') sent += r.packetsSent;
+                    const c = byId.get(r.codecId);
+                    if (c && c.mimeType && out.codec === null) out.codec = c.mimeType.split('/').pop();
+                }
+                if (r.type === 'remote-inbound-rtp' && r.kind === 'audio'
+                    && typeof r.packetsLost === 'number') {
+                    lost += Math.max(0, r.packetsLost);
+                }
+            });
+            if (sent > 0 && out.lossPct === null) {
+                out.lossPct = Math.round((lost / (sent + lost)) * 1000) / 10;
+            }
         }
-        return best === null ? null : Math.round(best * 1000);
+        return out;
+    }
+
+    // The number on its own, for the callers that only want that.
+    async function sampleRtt() {
+        return (await sampleConnection()).rtt;
     }
     // Alongside loungeShareStats: "what does the app think my latency is, right
     // now" is the first question anyone asks when the number looks wrong.
@@ -343,6 +395,11 @@
         let meeting = null;
         let rttMs = null;
         let rttTimer = null;
+        let conn = null;
+        // Four minutes of samples at one every three seconds — the same span the
+        // reference's graph covers. Older ones fall off the front.
+        const RTT_HISTORY = 80;
+        const rttHistory = [];
         let joined = false;
         let joining = false;
         let muted = false;
@@ -388,7 +445,13 @@
         const RTT_MS = 3000;
         function startRtt() {
             stopRtt();
-            const tick = () => sampleRtt().then((v) => {
+            const tick = () => sampleConnection().then((c) => {
+                const v = c.rtt;
+                conn = c;
+                // A gap rather than a fabricated point: a sample that failed is
+                // not a sample of zero, and the graph has to be able to show it.
+                rttHistory.push(v);
+                while (rttHistory.length > RTT_HISTORY) rttHistory.shift();
                 const changed = (v === null) !== (rttMs === null)
                     || (v !== null && rttMs !== null && Math.abs(v - rttMs) >= 3);
                 rttMs = v;
@@ -401,6 +464,8 @@
             if (rttTimer) clearInterval(rttTimer);
             rttTimer = null;
             rttMs = null;
+            conn = null;
+            rttHistory.length = 0;
         }
 
         function state() {
@@ -1551,6 +1616,28 @@
             // The last sample, or null. Read live by the panel's tooltip so the
             // number under the pointer is the freshest one taken.
             rtt: () => rttMs,
+
+            // Everything the details panel shows. The average is over the
+            // samples we actually took — gaps are skipped rather than counted
+            // as zero, which would drag it down every time a sample failed.
+            connection() {
+                const taken = rttHistory.filter((v) => v !== null);
+                const avg = taken.length
+                    ? Math.round(taken.reduce((a, b) => a + b, 0) / taken.length) : null;
+                return {
+                    rtt: rttMs,
+                    avgRtt: avg,
+                    history: rttHistory.slice(),
+                    samples: taken.length,
+                    lossPct: conn ? conn.lossPct : null,
+                    candidate: conn ? conn.candidate : null,
+                    protocol: conn ? conn.protocol : null,
+                    remote: conn ? conn.remote : null,
+                    codec: conn ? conn.codec : null,
+                    peers: conn ? conn.peers : 0,
+                    joined
+                };
+            },
             // A join in flight is neither joined nor idle. Callers that tear the
             // session down need to see this state, or the pending join resolves
             // after they've finished cleaning up and opens the mic behind them.

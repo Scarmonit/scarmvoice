@@ -154,19 +154,27 @@
   <div id="user-dock">
     <div id="voice-panel">
       <div id="voice-live" class="voice-live" hidden>
-        <div class="vl-status" id="vl-status">
+        <button type="button" class="vl-status" id="vl-status" aria-haspopup="dialog" aria-expanded="false">
           <!-- Signal strength rather than a dot: it says the same thing and has
                room to say how WELL, which a dot never has. The round trip the
                transport measured is on the tooltip. -->
           <span class="ico vl-signal" id="vl-signal" data-icon="signal"
                 data-tip="Measuring latency…"></span>
-          <span class="vl-text">
-            <span id="vl-label">Voice Connected</span>
-            <!-- Where you are, read from the same two labels the sidebar shows,
-                 so the two can never disagree. -->
-            <span id="vl-where"></span>
+          <!-- Two faces on one card: the state, and what hovering it will do.
+               The flip is what says the line is a control at all. -->
+          <span class="vl-flip">
+            <span class="vl-face vl-face-front">
+              <span id="vl-label">Voice Connected</span>
+              <!-- Where you are, read from the same two labels the sidebar
+                   shows, so the two can never disagree. -->
+              <span id="vl-where"></span>
+            </span>
+            <span class="vl-face vl-face-back">
+              <span class="vl-details">Voice Details</span>
+              <span id="vl-where-2"></span>
+            </span>
           </span>
-        </div>
+        </button>
         <!-- Only while connected: a clip is mixed into the outgoing mic, so
              outside a call there is nowhere for it to go. -->
         <button id="btn-soundboard" class="btn-vl" data-tip="Soundboard" aria-label="Soundboard">
@@ -264,6 +272,38 @@
       </button>
     </div>
   </div>
+  </div>
+
+  <!-- Connection details. Everything in here is read off getStats() — the
+       transport's own measurements — and anything it has not measured is shown
+       as unknown rather than as a plausible number. -->
+  <div id="conn-pop" class="conn-pop" hidden role="dialog" aria-label="Connection details">
+    <div class="cp-tab">Connection</div>
+    <div class="cp-graph">
+      <svg id="cp-plot" viewBox="0 0 300 88" preserveAspectRatio="none" aria-hidden="true"></svg>
+      <div class="cp-axis"><span>100</span><span>50</span><span>0</span></div>
+      <div class="cp-times" id="cp-times"></div>
+    </div>
+    <div class="cp-route" id="cp-route">-</div>
+    <dl class="cp-stats">
+      <div><dt>Average ping</dt><dd id="cp-avg">-</dd></div>
+      <div><dt>Last ping</dt><dd id="cp-last">-</dd></div>
+      <div><dt>Outbound packet loss rate</dt><dd id="cp-loss">-</dd></div>
+    </dl>
+    <p class="cp-note">
+      You may notice delayed audio at 250 ms or higher. You may sound robotic if
+      your packet loss rate is over 10%. If the problem persists, disconnect and
+      try again.
+    </p>
+    <div class="cp-actions">
+      <button type="button" class="keycap" id="cp-copy">
+        <span class="ico" data-icon="copy"></span><span>Debug Info</span>
+      </button>
+      <button type="button" class="keycap" id="cp-logs">
+        <span class="ico" data-icon="doc"></span><span>Open Logs</span>
+      </button>
+    </div>
+    <div class="cp-crypt" id="cp-crypt"></div>
   </div>
 
   <!-- The two audio panels the carets open. Not context menus: they carry

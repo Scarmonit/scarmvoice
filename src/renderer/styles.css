@@ -654,7 +654,40 @@ button { font-family: inherit; }
 }
 .voice-live { display: flex; align-items: center; gap: 8px; }
 .voice-live[hidden] { display: none; }
-.vl-status { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+/* A button, because it opens something. The two faces are stacked on one card
+   and the card turns on hover — which is the only thing that says the line is a
+   control rather than a caption. */
+.vl-status {
+  display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1;
+  padding: 0; background: none; border: 0; cursor: pointer; text-align: left;
+  font: inherit;
+}
+.vl-flip {
+  position: relative; min-width: 0; flex: 1;
+  height: 34px; perspective: 240px;
+}
+.vl-face {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; gap: 1px; justify-content: center;
+  min-width: 0;
+  backface-visibility: hidden;
+  transition: transform .28s cubic-bezier(.2, .9, .3, 1);
+}
+.vl-face-front { transform: rotateX(0deg); }
+.vl-face-back { transform: rotateX(-180deg); }
+.vl-status:hover .vl-face-front, .vl-status[aria-expanded="true"] .vl-face-front { transform: rotateX(180deg); }
+.vl-status:hover .vl-face-back, .vl-status[aria-expanded="true"] .vl-face-back { transform: rotateX(0deg); }
+.vl-details {
+  font-size: 14px; color: var(--voice-ok); font-weight: 700; line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#vl-where-2 {
+  font-size: 12px; color: var(--muted); font-weight: 500; line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vl-face { transition: none; }
+}
 /* Sized at id specificity: the base .ico rule is later in the sheet and would
    otherwise win the tie and hand it 18px. */
 /* 19px of box for 16px of ink — the bars do not fill their own square. */
@@ -3315,4 +3348,71 @@ button.ap-row:hover .ap-more { color: var(--text); }
   #btn-cam:hover .cam-lens, #btn-cam:hover .cam-body,
   #btn-share:hover .mon-frame, .btn-share:active { transform: none; }
   #voice-panel.is-gone { opacity: 0; transform: none; }
+}
+
+
+/* ---------- connection details ------------------------------------------ */
+/* What the transport measured, and nothing it did not. */
+.conn-pop {
+  position: fixed; z-index: 300;
+  width: 316px; padding: 14px 14px 12px;
+  background: var(--float); border: 1px solid var(--line-2);
+  border-radius: 10px; box-shadow: var(--shadow-lg);
+  animation: mep-in .13s cubic-bezier(.2, .9, .3, 1);
+}
+.conn-pop[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .conn-pop { animation: none; } }
+
+.cp-tab {
+  display: inline-block; padding-bottom: 7px; margin-bottom: 12px;
+  border-bottom: 2px solid var(--accent);
+  font-size: 14px; font-weight: 600; color: var(--text-strong);
+}
+
+.cp-graph { position: relative; background: var(--sunk); border-radius: 6px; padding: 6px 34px 0 6px; }
+.cp-graph svg { display: block; width: 100%; height: 88px; overflow: visible; }
+.cp-line { fill: none; stroke: #7f7fe8; stroke-width: 1.4; stroke-linejoin: round; }
+.cp-rule { stroke: var(--line-2); stroke-width: 1; }
+/* The axis reads against the plot, so it is positioned to the same box rather
+   than laid out beside it — the labels have to line up with the rules. */
+.cp-axis {
+  position: absolute; right: 8px; top: 6px; height: 88px;
+  display: flex; flex-direction: column; justify-content: space-between;
+  font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums;
+}
+.cp-times {
+  display: flex; justify-content: space-between;
+  padding: 4px 34px 6px 6px; margin: 0 -34px 0 -6px;
+  font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums;
+}
+
+.cp-route {
+  margin: 12px 0 10px;
+  font-size: 13px; font-weight: 700; color: var(--text-strong);
+  word-break: break-all;
+}
+.cp-stats { margin: 0 0 12px; font-size: 13px; }
+.cp-stats > div { display: flex; gap: 6px; margin-bottom: 3px; }
+.cp-stats dt { color: var(--text-strong); font-weight: 600; }
+.cp-stats dt::after { content: ":"; }
+.cp-stats dd { margin: 0; color: var(--text-strong); font-weight: 600; font-variant-numeric: tabular-nums; }
+.cp-note { margin: 0 0 12px; font-size: 12.5px; line-height: 1.45; color: var(--panel-sub); }
+
+.cp-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.cp-actions .keycap {
+  flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center;
+  justify-content: center; gap: 7px; height: 32px; padding: 0 10px;
+  background: var(--float-2); font-size: 12.5px;
+}
+.cp-actions .keycap:hover { background: var(--elev); }
+.cp-actions .ico { width: 15px; height: 15px; flex: 0 0 15px; }
+
+/* Says what is actually true of the transport. Through an SFU the media is
+   decrypted and re-encrypted at the server, so this is deliberately NOT the
+   reference's "end-to-end encrypted" — that would be a claim about the one
+   thing nobody using the app can check for themselves. */
+.cp-crypt {
+  padding: 8px 10px; border-radius: 6px;
+  background: rgba(103, 175, 116, .12); color: var(--voice-ok);
+  font-size: 12px; font-weight: 600; line-height: 1.35;
 }

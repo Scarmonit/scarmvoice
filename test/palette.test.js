@@ -555,8 +555,15 @@ describe('the voice panel controls', () => {
     });
 
     it('can be switched off entirely', () => {
-        const at = css.lastIndexOf('@media (prefers-reduced-motion: reduce) {');
-        const block = css.slice(at);
+        // The voice-panel block, which is no longer the last one in the sheet:
+        // the reduced-motion query that mentions the signal bars.
+        const Q = '@media (prefers-reduced-motion: reduce) {';
+        let block = '';
+        for (let at = css.indexOf(Q); at > -1; at = css.indexOf(Q, at + 1)) {
+            const chunk = css.slice(at, css.indexOf('\n}', at));
+            if (chunk.includes('vl-signal rect')) { block = chunk; break; }
+        }
+        expect(block).toBeTruthy();
         ['vl-signal rect', 'btn-soundboard:hover .wv', 'cam-rec', 'mon-arrow', 'mon-frame']
             .forEach((sel) => expect(block).toContain(sel));
         expect(block).toMatch(/animation: none/);
@@ -572,7 +579,7 @@ describe('the latency readout', () => {
         // The STUN check on the candidate pair the connection actually settled
         // on IS the latency to the server. An application-level ping over a
         // different socket would be a different number about a different path.
-        const fn = voice().slice(voice().indexOf('async function sampleRtt()'));
+        const fn = voice().slice(voice().indexOf('async function sampleConnection()'));
         const body = fn.slice(0, fn.indexOf('\n    }'));
         expect(body).toMatch(/currentRoundTripTime/);
         // The live pair, named by the transport — not just any succeeded one.
@@ -581,13 +588,15 @@ describe('the latency readout', () => {
         // STUN check lands.
         expect(body.indexOf('currentRoundTripTime')).toBeLessThan(body.indexOf('remote-inbound-rtp'));
         // Seconds in, milliseconds out.
-        expect(body).toMatch(/Math\.round\(best \* 1000\)/);
+        expect(body).toMatch(/Math\.round\(rtt \* 1000\)/);
     });
 
     it('returns nothing rather than a guess', () => {
-        const fn = voice().slice(voice().indexOf('async function sampleRtt()'));
+        const fn = voice().slice(voice().indexOf('async function sampleConnection()'));
         const body = fn.slice(0, fn.indexOf('\n    }'));
-        expect(body).toMatch(/return best === null \? null :/);
+        // Every field starts null and only a measurement fills it.
+        expect(body).toMatch(/rtt: null,/);
+        expect(body).toMatch(/lossPct: null,/);
         // And the panel says so in words instead of drawing a number.
         expect(src()).toMatch(/'Measuring latency…'/);
     });
@@ -921,5 +930,65 @@ describe('the window shell', () => {
         expect(css).toMatch(/#btn-nsai\.on \{ background: var\(--float-2\); \}/);
         expect(css).toMatch(/#btn-ptt\.on \{ background: var\(--float-2\); \}/);
         expect(css).not.toMatch(/\.btn-share\.on \{ background: var\(--accent-soft\)/);
+    });
+});
+
+describe('voice details', () => {
+    const voice = () => fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+
+    it('turns the status line over to say what it does', () => {
+        // A line that opens something has to look like a control. Two faces on
+        // one card, and the card turns.
+        expect(html()).toContain('class="vl-flip"');
+        expect(html()).toContain('Voice Details');
+        expect(css).toMatch(/\.vl-face \{[^}]*backface-visibility: hidden/);
+        expect(css).toMatch(/\.vl-status:hover \.vl-face-front[^{]*\{ transform: rotateX\(180deg\); \}/);
+        // And it is a <button>, not a div with a click handler.
+        expect(html()).toMatch(/<button type="button" class="vl-status"/);
+    });
+
+    it('measures everything it shows', () => {
+        const fn = voice().slice(voice().indexOf('async function sampleConnection()'));
+        const body = fn.slice(0, fn.indexOf('\n    }'));
+        // Loss is what the FAR END reports missing of what we sent — that is
+        // outbound loss. Inbound would be a different number about them.
+        expect(body).toMatch(/remote-inbound-rtp[\s\S]{0,200}packetsLost/);
+        expect(body).toMatch(/outbound-rtp[\s\S]{0,120}packetsSent/);
+        // The route comes from the pair actually carrying media.
+        expect(body).toMatch(/pair\.localCandidateId/);
+        expect(body).toMatch(/pair\.remoteCandidateId/);
+        expect(body).toMatch(/codecId/);
+    });
+
+    it('shows a gap where a sample failed rather than a zero', () => {
+        // A failed sample is not a sample of zero, and a line drawn across the
+        // hole would claim measurements nobody took.
+        expect(voice()).toMatch(/rttHistory\.push\(v\)/);
+        expect(src()).toMatch(/if \(v === null\) \{ flush\(\); return; \}/);
+        // The average skips them too, or it drops every time one fails.
+        expect(voice()).toMatch(/rttHistory\.filter\(\(v\) => v !== null\)/);
+    });
+
+    it('says unknown rather than inventing a number', () => {
+        expect(src()).toMatch(/'unknown'/);
+        expect(src()).toMatch(/Route unknown/);
+    });
+
+    it('does not claim end-to-end encryption it cannot provide', () => {
+        // Media is DTLS-SRTP on every leg, but a call through the SFU is
+        // decrypted and re-encrypted there. Copying the reference's wording
+        // would be a lie about the one thing nobody can check for themselves.
+        expect(src()).not.toMatch(/End-to-end encrypted/i);
+        expect(src()).toMatch(/Encrypted in transit \(DTLS-SRTP\)/);
+        expect(src()).toMatch(/Encrypted peer-to-peer \(DTLS-SRTP\)/);
+    });
+
+    it('grows the graph past its floor instead of clipping a spike', () => {
+        // A fixed axis flattens a 400ms spike into the top edge; a free one
+        // makes 20ms of jitter look like a crisis.
+        expect(src()).toMatch(/const CONN_FLOOR = 100;/);
+        expect(src()).toMatch(/Math\.max\(CONN_FLOOR, Math\.ceil\(Math\.max\.apply\(null, taken\) \/ 50\) \* 50\)/);
     });
 });

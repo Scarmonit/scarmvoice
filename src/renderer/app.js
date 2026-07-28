@@ -3241,6 +3241,9 @@
         }
     }
 
+    let lastSelfMuted = null;
+    let lastSelfDeafened = null;
+
     function setupVoice() {
         voice = window.createVoice({
             onState: (st) => {
@@ -3271,14 +3274,23 @@
                 // heard or hearing, and painting them the same green as a good
                 // connection says the opposite of what they mean.
                 $('vl-status').classList.toggle('warn', !!(st.muted || st.deafened));
+                // Your own row carries these two flags, and nothing else was
+                // repainting it: muting changes your state, not the roster's
+                // membership, so onParticipants never fires.
+                if (st.muted !== lastSelfMuted || st.deafened !== lastSelfDeafened) {
+                    lastSelfMuted = st.muted;
+                    lastSelfDeafened = st.deafened;
+                    renderVoiceRoster();
+                }
                 paintSignal(st.rtt);
                 // Read off the sidebar's own labels, so the panel and the list
                 // can never disagree about where you are.
                 const chanName = document.querySelector('#btn-join-voice .vchan-name');
                 const serverName = document.querySelector('#server-head .sh-name');
-                $('vl-where').textContent =
-                    (chanName ? chanName.textContent : 'Voice') + ' / '
+                const where = (chanName ? chanName.textContent : 'Voice') + ' / '
                     + (serverName ? serverName.textContent : 'ScarmVoice');
+                $('vl-where').textContent = where;
+                $('vl-where-2').textContent = where;
 
                 // Share and camera controls only make sense while connected.
                 $('btn-share').hidden = !st.joined;
@@ -5064,6 +5076,171 @@
         $('set-status').value = settings.status || '';
         sendTextPresence(false);      // publish it now rather than up to 20s later
     }
+
+    // ---------- connection details ------------------------------------------
+    // Everything here is read off getStats(): the round trip the transport
+    // measured, the loss the far end reported, and the candidate pair the media
+    // is actually using. Nothing is estimated, and anything unmeasured is drawn
+    // as "unknown" rather than as a plausible number.
+
+    const CONN_W = 300;
+    const CONN_H = 88;
+    // The graph's ceiling. Fixed at 100ms until the samples exceed it, then it
+    // grows — a fixed axis would flatten a 400ms spike into the top edge and a
+    // free one would make 20ms of jitter look like a crisis.
+    const CONN_FLOOR = 100;
+
+    function connPopOpen() { return !$('conn-pop').hidden; }
+
+    function connPlot(history) {
+        const svg = $('cp-plot');
+        svg.innerHTML = '';
+        const taken = history.filter((v) => v !== null);
+        if (!taken.length) return CONN_FLOOR;
+        const top = Math.max(CONN_FLOOR, Math.ceil(Math.max.apply(null, taken) / 50) * 50);
+        const NS = 'http://www.w3.org/2000/svg';
+        // Two rules, at the axis labels. Drawn first so the trace is over them.
+        [0.5, 1].forEach((f) => {
+            const y = CONN_H - (CONN_H * f) / 2;
+            const ln = document.createElementNS(NS, 'line');
+            ln.setAttribute('x1', 0); ln.setAttribute('x2', CONN_W);
+            ln.setAttribute('y1', y); ln.setAttribute('y2', y);
+            ln.setAttribute('class', 'cp-rule');
+            svg.appendChild(ln);
+        });
+        // One run per unbroken stretch of samples. A gap in the data is drawn as
+        // a gap, not bridged — a line across a hole would claim measurements
+        // nobody took.
+        const step = history.length > 1 ? CONN_W / (history.length - 1) : CONN_W;
+        let run = [];
+        const flush = () => {
+            if (run.length > 1) {
+                const path = document.createElementNS(NS, 'polyline');
+                path.setAttribute('points', run.join(' '));
+                path.setAttribute('class', 'cp-line');
+                svg.appendChild(path);
+            }
+            run = [];
+        };
+        history.forEach((v, i) => {
+            if (v === null) { flush(); return; }
+            const x = (i * step).toFixed(1);
+            const y = (CONN_H - Math.min(1, v / top) * CONN_H).toFixed(1);
+            run.push(x + ',' + y);
+        });
+        flush();
+        return top;
+    }
+
+    function paintConnPop() {
+        if (!connPopOpen()) return;
+        const c = (voice && voice.connection) ? voice.connection() : null;
+        const ms = (v) => (v === null || v === undefined ? 'unknown' : v + ' ms');
+
+        const top = connPlot(c ? c.history : []);
+        const axis = $('conn-pop').querySelectorAll('.cp-axis span');
+        axis[0].textContent = String(top);
+        axis[1].textContent = String(Math.round(top / 2));
+
+        // Real clock times under the graph, spaced by the sampling interval —
+        // labelling the axis with anything else would be decoration.
+        const times = $('cp-times');
+        times.innerHTML = '';
+        const n = c ? c.history.length : 0;
+        if (n > 1) {
+            const spanMs = (n - 1) * 3000;
+            for (let i = 0; i < 4; i++) {
+                const t = new Date(Date.now() - spanMs + (spanMs * i) / 3);
+                const el = document.createElement('span');
+                el.textContent = timeStr(t.getTime());
+                times.appendChild(el);
+            }
+        }
+
+        $('cp-avg').textContent = ms(c && c.avgRtt);
+        $('cp-last').textContent = ms(c && c.rtt);
+        $('cp-loss').textContent = (c && c.lossPct !== null && c.lossPct !== undefined)
+            ? c.lossPct.toFixed(1) + '%' : 'unknown';
+
+        // What the route actually is, rather than a server name we do not have.
+        // "relay" means a TURN server is forwarding; "srflx" and "host" are
+        // direct. It is the honest version of the reference's region line.
+        const ROUTE = { relay: 'Relayed (TURN)', srflx: 'Direct', prflx: 'Direct', host: 'Direct (local)' };
+        const bits = [];
+        if (c && c.candidate) bits.push(ROUTE[c.candidate] || c.candidate);
+        if (c && c.protocol) bits.push(c.protocol.toUpperCase());
+        if (c && c.remote) bits.push(c.remote);
+        $('cp-route').textContent = bits.length ? bits.join(' · ') : 'Route unknown';
+
+        // The honest encryption line. Media is DTLS-SRTP on every leg, but a
+        // call through the SFU is decrypted and re-encrypted there — so it is
+        // NOT end-to-end, and saying otherwise would be a lie about the one
+        // thing nobody can check for themselves.
+        const mesh = c && c.peers > 1;
+        $('cp-crypt').textContent = mesh
+            ? 'Encrypted peer-to-peer (DTLS-SRTP)'
+            : 'Encrypted in transit (DTLS-SRTP) — relayed through the voice server';
+    }
+
+    let connTimer = null;
+
+    function openConnPop() {
+        const pop = $('conn-pop');
+        const anchor = $('vl-status');
+        pop.hidden = false;
+        $('vl-status').setAttribute('aria-expanded', 'true');
+        paintConnPop();
+        const r = anchor.getBoundingClientRect();
+        const h = pop.offsetHeight;
+        let top = r.top - h - 10;
+        if (top < POP_TITLEBAR + 6) top = POP_TITLEBAR + 6;
+        pop.style.top = Math.round(top) + 'px';
+        pop.style.left = Math.round(Math.max(8, r.left - 4)) + 'px';
+        // Repainted on the same three-second beat the sampler runs on, so the
+        // panel is never showing a number older than one sample.
+        clearInterval(connTimer);
+        connTimer = setInterval(paintConnPop, 3000);
+    }
+
+    function closeConnPop() {
+        $('conn-pop').hidden = true;
+        $('vl-status').setAttribute('aria-expanded', 'false');
+        clearInterval(connTimer);
+        connTimer = null;
+    }
+
+    $('vl-status').addEventListener('click', () => {
+        if (connPopOpen()) closeConnPop(); else openConnPop();
+    });
+    document.addEventListener('mousedown', (e) => {
+        if (!connPopOpen()) return;
+        if (e.target.closest('#conn-pop') || e.target.closest('#vl-status')) return;
+        closeConnPop();
+    });
+
+    $('cp-copy').addEventListener('click', async () => {
+        const c = (voice && voice.connection) ? voice.connection() : {};
+        const lines = [
+            'ScarmVoice connection',
+            'version: ' + ($('set-version').textContent || 'unknown'),
+            'route: ' + $('cp-route').textContent,
+            'codec: ' + (c.codec || 'unknown'),
+            'peers: ' + (c.peers || 0),
+            'last ping: ' + $('cp-last').textContent,
+            'average ping: ' + $('cp-avg').textContent + ' over ' + (c.samples || 0) + ' samples',
+            'outbound packet loss: ' + $('cp-loss').textContent,
+            'voice mode: ' + (settings.voiceMode || 'open')
+        ];
+        try {
+            await navigator.clipboard.writeText(lines.join('\n'));
+            toast('Connection details copied');
+        } catch (e) { toast('Could not copy', true); }
+    });
+
+    $('cp-logs').addEventListener('click', async () => {
+        const ok = await L.app.openLogs();
+        if (!ok) toast('No log folder yet', true);
+    });
 
     // ---------- tooltips -----------------------------------------------------
     // `title` is the browser's, which means a delay measured in seconds, no
