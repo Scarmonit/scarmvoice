@@ -1243,6 +1243,51 @@
         // they left.
         let joinGen = 0;
 
+        // A participant token, minted BEFORE the click.
+        //
+        // Measured: this round trip is a flat ~820ms of a ~2.2s join — the
+        // single largest fixed cost, and identical on every join, because it is
+        // not the SDK load (which caches) but the request behind it: the board,
+        // and then Cloudflare's RealtimeKit API to add a participant. Only about
+        // 110ms of that is the network from here.
+        //
+        // None of it needs the click. So it is fetched when somebody looks like
+        // they are heading for a call, and the click spends it already in hand.
+        const TOKEN_FRESH_MS = 120000;   // well inside the token's own lifetime
+        let tokenAhead = null;           // { at, promise }
+
+        function mintToken() {
+            return window.lounge.voiceToken({
+                clientId: settings.clientId,
+                name: settings.displayName || 'Anonymous'
+            });
+        }
+
+        // Idempotent and cheap to call: a token already in flight or recently
+        // minted is reused, so hovering the voice channel repeatedly does not
+        // mint a participant each time.
+        function prefetchToken() {
+            if (joined || joining) return;
+            if (tokenAhead && (now() - tokenAhead.at) < TOKEN_FRESH_MS) return;
+            const entry = { at: now(), promise: mintToken() };
+            tokenAhead = entry;
+            entry.promise.catch(() => { if (tokenAhead === entry) tokenAhead = null; });
+        }
+
+        // The token to join with, and whether it was one we had lying about —
+        // which is what decides whether a failed init is worth retrying.
+        async function takeToken() {
+            const held = tokenAhead;
+            tokenAhead = null;
+            if (held && (now() - held.at) < TOKEN_FRESH_MS) {
+                try {
+                    const res = await held.promise;
+                    if (res && res.success && res.token) return { res, ahead: true };
+                } catch (e) { /* fall through and mint a fresh one */ }
+            }
+            return { res: await mintToken(), ahead: false };
+        }
+
         // Join timings, so "it feels slow" can be answered with numbers rather
         // than guesses. Visible in devtools (npm run dev).
         const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -1276,18 +1321,15 @@
                 // ScarmLazy caches, so a warmed SDK resolves instantly here —
                 // see the hover warm-up in app.js.)
                 const tSdk = now();
-                const [SDK, res] = await Promise.all([
+                const [SDK, tok] = await Promise.all([
                     window.ScarmLazy.realtimekit(),
-                    window.lounge.voiceToken({
-                        clientId: settings.clientId,
-                        name: settings.displayName || 'Anonymous'
-                    })
+                    takeToken()
                 ]);
                 mark('sdk+token', tSdk);
                 if (gen !== joinGen) return;   // left while we awaited
                 if (!SDK) throw new Error('RealtimeKit SDK failed to load');
-                if (!res || !res.success || !res.token) {
-                    throw new Error((res && res.error) || 'could not get a voice token');
+                if (!tok.res || !tok.res.success || !tok.res.token) {
+                    throw new Error((tok.res && tok.res.error) || 'could not get a voice token');
                 }
 
                 const audioCfg = {
@@ -1311,8 +1353,10 @@
                 if (settings.micDeviceId) audioCfg.deviceId = { ideal: settings.micDeviceId };
 
                 const tInit = now();
-                const m = await SDK.init({
-                    authToken: res.token,
+                // Built per attempt, because the retry below needs a fresh
+                // token in the same shape.
+                const initOpts = (authToken) => ({
+                    authToken: authToken,
                     defaults: {
                         // In push-to-talk, start with the mic off so joining never
                         // leaks a moment of audio before the gate is applied.
@@ -1331,6 +1375,24 @@
                         }
                     }
                 });
+
+                let m;
+                try {
+                    m = await SDK.init(initOpts(tok.res.token));
+                } catch (e) {
+                    // A token minted ahead of the click is the one thing here
+                    // that can have gone stale between minting and use. Anything
+                    // else is a real failure and is rethrown untouched — but this
+                    // is worth exactly one more try with a fresh token, because
+                    // the alternative is an optimisation that can stop people
+                    // joining at all.
+                    if (!tok.ahead || gen !== joinGen) throw e;
+                    console.warn('[voice] prefetched token rejected — minting a fresh one');
+                    const fresh = await mintToken();
+                    if (gen !== joinGen) return;
+                    if (!fresh || !fresh.success || !fresh.token) throw e;
+                    m = await SDK.init(initOpts(fresh.token));
+                }
 
                 mark('sdk.init', tInit);
                 if (gen !== joinGen) {
@@ -1573,6 +1635,8 @@
             state,
             roster,
             micTestConstraints,
+            // Mint the participant token ahead of the click. See prefetchToken.
+            warm: prefetchToken,
 
             startShare,
             stopShare,

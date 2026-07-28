@@ -1175,9 +1175,12 @@
             avatarTimer = setInterval(refreshAvatars, 5 * 60 * 1000);
 
             if (settings.autoJoinVoice) joinVoice();
-            // Nothing to guess at when the answer is "always": this session is
-            // going to open the microphone, so build the model up front.
-            else if (settings.noiseSuppressionAI) setTimeout(warmVoice, 2500);
+            // Measured: the very first join paid 1389ms in sdk.init against
+            // 730ms for the ones after it, because the click beat the warm-up to
+            // the noise model. Run it as soon as the main thread is free rather
+            // than on a fixed delay, so the first join is not the slow one.
+            else if (window.requestIdleCallback) requestIdleCallback(warmVoice, { timeout: 2000 });
+            else setTimeout(warmVoice, 1200);
         } catch (e) {
             console.error('[app] could not open the board:', e);
             // Whatever did start has to be unwound, or the half-loaded session
@@ -3657,6 +3660,9 @@
             // Only when it is actually switched on — off, wrap() returns the raw
             // stream and none of this is on the path at all.
             if (window.ScarmNoise && settings.noiseSuppressionAI) window.ScarmNoise.warm();
+            // The measured heavyweight: a flat ~820ms round trip, the largest
+            // single fixed cost in a join, and none of it needs the click.
+            if (voice && voice.warm) voice.warm();
         } catch (e) { voiceWarmed = false; }
     }
     // The whole voice section, not just the button: a bigger target catches the

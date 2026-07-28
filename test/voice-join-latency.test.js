@@ -121,6 +121,72 @@ describe('the two things join() waits on first', () => {
     });
 });
 
+describe('the token minted before the click', () => {
+    // Measured at a flat ~820ms of a ~2.2s join, on EVERY join — the largest
+    // single fixed cost, and nothing about it needs the click.
+    it('is not fetched again when the call is joined', async () => {
+        const v = makeVoice();
+        v.warm();
+        await settle(2);
+        expect(tokenCalls).toBe(1);
+
+        tokenGate.resolve({ success: true, token: 'jwt' });
+        await settle();
+
+        v.join();
+        await settle(2);
+        // Still one. The join spent the token it already had.
+        expect(tokenCalls).toBe(1);
+    });
+
+    it('is minted once however many times somebody hovers', async () => {
+        const v = makeVoice();
+        v.warm();
+        v.warm();
+        v.warm();
+        await settle(2);
+        // Each mint adds a participant server-side, so hovering must not.
+        expect(tokenCalls).toBe(1);
+    });
+
+    it('is fetched at join time when nobody warmed it', async () => {
+        const v = makeVoice();
+        v.join();
+        await settle(2);
+        expect(tokenCalls).toBe(1);
+    });
+
+    it('falls back to a fresh one if the held token is rejected', async () => {
+        // The one risk of minting early: a token can go stale between minting
+        // and use. Left unhandled that turns a speed-up into people not being
+        // able to join at all.
+        const v = makeVoice();
+        v.warm();
+        tokenGate.resolve({ success: true, token: 'stale' });
+        await settle();
+
+        let seen = [];
+        let first = true;
+        const sdk = {
+            init: (opts) => {
+                seen.push(opts.authToken);
+                if (first) { first = false; return Promise.reject(new Error('token expired')); }
+                return Promise.resolve(meeting);
+            }
+        };
+        tokenGate = deferred();
+        tokenGate.resolve({ success: true, token: 'fresh' });
+
+        v.join();
+        await settle(2);
+        sdkGate.resolve(sdk);
+        await settle();
+
+        expect(seen).toEqual(['stale', 'fresh']);
+        expect(v.isJoined()).toBe(true);
+    });
+});
+
 describe('when the UI is told it is connected', () => {
     async function joinUpTo(v) {
         v.join();
