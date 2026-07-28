@@ -93,14 +93,22 @@ test('exposes the whole preload bridge to the renderer', async () => {
     expect(shape).toBeTruthy();
     expect(Object.keys(shape).sort()).toEqual([
         'account', 'app', 'auth', 'board', 'copyImage', 'downloadAttachment', 'edit',
-        'fetchImage', 'fileUrl', 'onUploadProgress', 'ptt', 'revealFile', 'rt',
-        'saveAttachment', 'settings', 'share', 'startup', 'unfurl', 'update',
-        'uploadFile', 'voiceToken', 'win', 'youtube'
+        'fetchImage', 'fileUrl', 'onUploadProgress', 'pathForFile', 'ptt', 'revealFile',
+        'rt', 'saveAttachment', 'settings', 'share', 'startup', 'unfurl', 'update',
+        'uploadAttachment', 'uploadFile', 'voiceToken', 'win', 'youtube'
     ]);
+
+    // The pair behind large attachments, and the reason this list is asserted at
+    // all: `pathForFile` only works from the preload (webUtils is unreachable
+    // from the renderer), and `uploadAttachment` is what streams that path
+    // straight to storage. Either one missing silently demotes every upload to
+    // the read-it-all-into-memory path.
+    expect(shape.pathForFile).toBe('fn');
+    expect(shape.uploadAttachment).toBe('fn');
 
     // The account bridge exists so the token those calls mint stays in the main
     // process — the renderer only ever gets the parsed user back.
-    expect(shape.account).toEqual(['login', 'logout', 'me', 'register', 'resend', 'verify']);
+    expect(shape.account).toEqual(['login', 'logout', 'me', 'register', 'removal', 'resend', 'verify']);
 
     // The taskbar badge and the log folder are reached through app.*; both were
     // added after the original contract and both are called from the renderer.

@@ -7657,6 +7657,9 @@
         const next = settings.voiceMode === 'ptt' ? 'open' : 'ptt';
         await saveSettings({ voiceMode: next });
         $('set-mode').value = next;
+        // See the note on #btn-ptt below: the key-up that would have cleared
+        // this is discarded once the mode has moved off 'ptt'.
+        if (voice) voice.setPttHeld(false);
         if (voice) voice.setSettings(settings);
         paintVoicePane();
         paintAudioPanels();
@@ -7708,6 +7711,13 @@
         await saveSettings({ voiceMode: next });
         $('set-mode').value = next;
         $('row-ptt').style.display = next === 'ptt' ? '' : 'none';
+        // The held state only means anything in 'ptt', and BOTH key handlers
+        // bail on `voiceMode !== 'ptt'` — so a key that is still down when the
+        // mode changes never gets its release recorded. Left set, the next
+        // switch back to push-to-talk re-reads it and opens the microphone with
+        // nobody holding anything. This is the control reachable DURING a call,
+        // which is exactly where that costs something.
+        if (voice) voice.setPttHeld(false);
         if (voice) voice.setSettings(settings);
         $('btn-ptt').classList.toggle('on', next === 'ptt');
         setTip($('btn-ptt'), next === 'ptt' ? 'Push to Talk On' : 'Push to Talk Off');

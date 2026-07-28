@@ -678,6 +678,14 @@ unavailable**. With the hook loaded, holding the key while working in another
 window is the entire point; without it the key-up lands in whatever window took
 over and the mic would stay open indefinitely.
 
+**Changing the voice mode clears the held state**, and every one of the four
+controls that can change it has to. `pttHeld` only means anything while the mode
+is `ptt` — the transmit gate is `!muted && (mode === 'ptt' ? pttHeld : true)` —
+and both key handlers bail on `voiceMode !== 'ptt'`. So a key still held when the
+mode changes never has its release recorded, and the next switch back to
+push-to-talk re-reads a stale `true` and opens the microphone with nobody holding
+anything.
+
 ### The soundboard is in the mic, not the speakers
 
 Playing a clip through the speakers reaches exactly one person: whoever pressed

@@ -41,6 +41,8 @@ export const DEFAULT_SETTINGS = {
 // opts.board     — the /api/board/* router (a vi.fn)
 // opts.user      — who account.me() reports
 // opts.settings  — merged over DEFAULT_SETTINGS
+// opts.voice     — merged over the inert voice double, for the specs that are
+//                  about what the renderer TELLS the voice engine
 export async function bootRenderer(opts = {}) {
     const user = opts.user || { id: 1, username: 'Me', role: 'member' };
     const board = opts.board || vi.fn(async () => ({ success: true }));
@@ -163,8 +165,9 @@ export async function bootRenderer(opts = {}) {
         qrcode: async () => window.qrcode || null,
         realtimekit: async () => window.RealtimeKitClient || null
     });
-    // Voice is never what these specs are about; stand in for it.
-    window.createVoice = () => ({
+    // Voice is rarely what these specs are about; stand in for it. `opts.voice`
+    // is merged over the top for the ones that are.
+    const voiceDouble = Object.assign({
         join: async () => {}, leave: noop, roster: () => [], shares: () => [],
         state: () => ({ joined: false, shareQuality: '1080p', shareMotion: 'sharp' }),
         setSettings: noop, setMuted: noop, setDeafened: noop, setPttHeld: noop,
@@ -174,12 +177,16 @@ export async function bootRenderer(opts = {}) {
         enableCam: async () => false, disableCam: async () => false,
         isCamOn: () => false, toggleCam: noop, cams: () => [],
         isJoined: () => false, isMuted: () => false, isDeafened: () => false
-    });
+    }, opts.voice || {});
+    window.createVoice = () => voiceDouble;
     run('app.js');
 
     await settle();
     // `rt(msg)` delivers one realtime frame, exactly as main.js relays it.
-    return { $, board, lounge, settings, rt: (msg) => { if (rtMessage) rtMessage(msg); } };
+    return {
+        $, board, lounge, settings, voice: voiceDouble,
+        rt: (msg) => { if (rtMessage) rtMessage(msg); }
+    };
 }
 
 // Type into the composer the way a person does, so the input listeners
