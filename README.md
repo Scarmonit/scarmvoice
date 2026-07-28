@@ -530,6 +530,27 @@ Reads are retried in `net.js` too, twice with backoff, on a dropped connection o
 a 429/502/503/504. **Writes never are**: the failure can happen after the server
 already accepted the post, so a retry would send it twice.
 
+### One composer, and the drafts in it
+
+There is a single composer element. Opening a conversation *moves* the node into
+the drawer rather than building a second one, which is what keeps every
+listener, sub-control and pixel of it identical in both places.
+
+The cost is that a DOM node carries its contents with it. A half-typed message
+written for `#general` was still in the box after clicking through to a
+conversation, so the next Enter sent it to whoever was on the other end — and a
+file that had been attached but not sent went the same way, into a private
+conversation it was never meant for.
+
+Discarding on the move would fix the misdelivery and introduce a worse problem,
+since nothing else in this app throws away text somebody has already typed. So
+the composer's contents are stashed under the surface they were written for and
+handed back on return: channels share one draft (as they always did), and every
+conversation gets its own. The stash is dropped on sign-out, because thread ids
+are global rather than per-account and the next person to sign in on that
+machine must not find someone else's draft waiting in a conversation of theirs
+that happens to share the number.
+
 ### Window state and the lightbox
 
 Resize/move fire continuously while dragging, so saves are debounced (400 ms)

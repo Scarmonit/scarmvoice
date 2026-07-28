@@ -5015,6 +5015,13 @@
         // The DM drawer holds its own poll-independent state; leaving it open
         // means the next session starts with a stranger's conversation on screen.
         closeDm();
+        // …and the drafts it stashed are keyed by thread id, which is global
+        // rather than per-account. Kept across a sign-out, the next person to
+        // use this machine would find them waiting in a conversation of their
+        // own that happened to share the number. (closeDm() has just stashed
+        // the open one, so this has to come after it.)
+        drafts.clear();
+        composerSurface = 'channel';
         stopDmPolling();
         stopPolling();
         stopPresence();
@@ -6298,10 +6305,17 @@
         // The server re-authenticates with the password before it will bind a
         // new authenticator — a session token alone must not be enough to lock
         // the real owner out of their own account.
+        // inputType + maxLength are not decoration. The shared dialog field is
+        // type=text and capped at 60 unless a caller says otherwise, so without
+        // both of these an account password was typed in the clear — in an app
+        // whose whole purpose is sharing your screen — and silently truncated
+        // at 60 characters, which is inside the range a password manager
+        // generates. The server then rejected a password the user had entered
+        // correctly, with nothing on screen to explain why.
         const pw = await openDialog({
             title: 'Confirm your password',
             message: 'Enter your account password to set up two-factor authentication.',
-            ok: 'Continue', withInput: true
+            ok: 'Continue', withInput: true, inputType: 'password', maxLength: 72
         });
         if (pw === null || pw === false) return;
         const res = await L.board('account/twofactor', { method: 'POST', body: { action: 'setup', password: String(pw) } });
@@ -6330,7 +6344,8 @@
         const pw = await openDialog({
             title: 'Confirm your password',
             message: 'Enter your account password to turn two-factor off.',
-            ok: 'Turn off', withInput: true, danger: true
+            ok: 'Turn off', withInput: true, danger: true,
+            inputType: 'password', maxLength: 72
         });
         if (pw === null || pw === false) return;
         const res = await L.board('account/twofactor', {
@@ -6509,7 +6524,7 @@
                 const pw = await openDialog({
                     title: `New password for ${u.username}`,
                     message: 'They are signed out everywhere and sign back in with this. Tell them privately.',
-                    ok: 'Reset', withInput: true
+                    ok: 'Reset', withInput: true, inputType: 'password', maxLength: 72
                 });
                 if (pw === null || pw === false) return;
                 if (String(pw).length < 8) return toast('Password must be at least 8 characters', true);
@@ -9068,6 +9083,11 @@
             b.title = t.isGroup
                 ? (t.members || []).map((m) => m.username).join(', ')
                 : dmLabel(t);
+            // .has-img makes the initials transparent, so a picture that fails
+            // to load leaves an EMPTY circle unless something takes it back off
+            // again. Every other surface that draws a face wires this; the four
+            // DM ones were built without it.
+            wireAvatarFallback(b);
             b.addEventListener('click', () => openDm(t));
             list.appendChild(b);
         });
@@ -9172,6 +9192,7 @@
                 ? `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
                   `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`
                 : '<span class="ico" data-icon="users"></span>';
+            wireAvatarFallback(face);
             if (window.ScarmIcons) window.ScarmIcons.hydrate(face);
         }
 
@@ -9209,6 +9230,7 @@
         $('dm-prof-face').innerHTML =
             `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
             `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`;
+        wireAvatarFallback($('dm-prof-face'));
         $('dm-prof-name').textContent = u.username;
         $('dm-prof-handle').textContent = '@' + u.username;
 
@@ -9282,6 +9304,54 @@
     // which is the whole point. A marker holds its place in #main so it goes
     // back exactly where it was rather than at the end.
     let composerHome = null;
+
+    // Which conversation the composer's CONTENTS belong to, and what was left
+    // behind on the surfaces it is not currently sitting on.
+    //
+    // Moving the node is what makes the one composer possible, and it is also
+    // what made it dangerous: the element carries its value, its staged files
+    // and its reply chip along with it, so a half-typed message written for
+    // #general was still in the box after clicking through to a conversation,
+    // and the next Enter sent it to whoever was on the other end. A file that
+    // had been attached but not sent went the same way — into a private
+    // conversation it was never meant for. Only the reply chip was ever
+    // cleared, which is the one of the three that could not misdeliver
+    // anything (a DM send has no quote to carry it).
+    //
+    // Nothing is discarded to fix it. Each surface keeps its own draft and gets
+    // it back on return, because losing text somebody has already typed is the
+    // failure this file goes out of its way to avoid everywhere else.
+    let composerSurface = 'channel';        // the composer starts in #main
+    const drafts = new Map();               // surface key -> { text, staged, reply }
+
+    // Channels share one draft, which is what they did before this existed;
+    // every conversation gets its own, because that is where the misdelivery is.
+    function composerSurfaceKey() {
+        return dmOpen ? 'dm:' + dmOpen.id : 'channel';
+    }
+
+    function stashDraft(key) {
+        if (!key) return;
+        const text = input.value;
+        if (!text && !staged.length && !replyTarget) { drafts.delete(key); return; }
+        drafts.set(key, { text, staged, reply: replyTarget });
+    }
+
+    function restoreDraft(key) {
+        const d = drafts.get(key) || null;
+        drafts.delete(key);
+        input.value = d ? d.text : '';
+        // Handed back whole rather than rebuilt: the object URLs behind those
+        // previews belong to the stashed items, and clearStaged() would revoke
+        // them out from under a draft that is only being put down, not thrown
+        // away.
+        staged = d ? d.staged : [];
+        replyTarget = (d && d.reply) || null;
+        renderStaged();          // also refreshes the send button
+        renderReplyChip();
+        autosize();
+    }
+
     function moveComposer(intoDm) {
         const form = $('composer');
         if (!form) return;
@@ -9292,9 +9362,16 @@
         const slot = $('dm-composer-slot');
         if (intoDm && slot) slot.appendChild(form);
         else if (composerHome.parentNode) composerHome.parentNode.insertBefore(form, composerHome.nextSibling);
-        // Leaving a half-typed message and a staged upload behind when the
-        // surface changes would send them to the wrong conversation.
-        clearReply();
+
+        // Both callers can fire twice for one transition (setDmMode calls
+        // closeDm, which moves the composer, and then moves it again), so the
+        // swap is keyed on the surface actually changing rather than on being
+        // called.
+        const next = composerSurfaceKey();
+        if (next === composerSurface) return;
+        stashDraft(composerSurface);
+        composerSurface = next;
+        restoreDraft(next);
     }
 
     function closeDm() {
@@ -9476,6 +9553,7 @@
                 : 'This is the beginning of your direct message history with <b>' + esc(who) + '</b>.') +
             '</p>';
         box.appendChild(intro);
+        wireAvatarFallback(intro);
         if (window.ScarmIcons) window.ScarmIcons.hydrate(intro);
 
         let lastDay = '';
