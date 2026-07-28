@@ -3291,6 +3291,10 @@
 
                 $('btn-soundboard').hidden = !st.joined;
                 $('btn-nsai').hidden = !st.joined;
+                $('btn-ptt').hidden = !st.joined;
+                $('btn-ptt').classList.toggle('on', settings.voiceMode === 'ptt');
+                setTip($('btn-ptt'), settings.voiceMode === 'ptt'
+                    ? 'Push to Talk On' : 'Push to Talk Off');
                 $('btn-nsai').classList.toggle('on', !!settings.noiseSuppressionAI);
                 setTip($('btn-nsai'), settings.noiseSuppressionAI
                     ? 'Noise Suppression On' : 'Noise Suppression Off');
@@ -6746,6 +6750,19 @@
         $('btn-nsai').classList.toggle('on', next);
         setTip($('btn-nsai'), next ? 'Noise Suppression On' : 'Noise Suppression Off');
         if (voice.isJoined()) toast('Rejoin voice to apply AI noise suppression');
+    });
+
+    // The same setting the Voice & Audio dropdown drives, from the call it
+    // changes. Two modes, so a button can express it where a dropdown could not
+    // be reached without leaving the call.
+    $('btn-ptt').addEventListener('click', async () => {
+        const next = settings.voiceMode === 'ptt' ? 'open' : 'ptt';
+        await saveSettings({ voiceMode: next });
+        $('set-mode').value = next;
+        $('row-ptt').style.display = next === 'ptt' ? '' : 'none';
+        if (voice) voice.setSettings(settings);
+        $('btn-ptt').classList.toggle('on', next === 'ptt');
+        setTip($('btn-ptt'), next === 'ptt' ? 'Push to Talk On' : 'Push to Talk Off');
     });
 
     $('set-nsai').addEventListener('change', async (e) => {

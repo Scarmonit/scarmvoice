@@ -154,7 +154,9 @@ function createWindow(forceShow) {
         // track the renderer's title bar (--rail) or the caption buttons sit on a
         // visible patch of the wrong shade.
         titleBarStyle: 'hidden',
-        titleBarOverlay: { color: '#08090c', symbolColor: '#e9ebf0', height: 38 },
+        // Height and colour both track --tb / --side in styles.css: Windows
+        // draws the caption buttons over our bar, so a mismatch leaves a notch.
+        titleBarOverlay: { color: '#131316', symbolColor: '#e9ebf0', height: 31 },
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,

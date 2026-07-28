@@ -39,11 +39,14 @@
 <!-- Draggable title bar. Native window buttons are overlaid on the right by
      Electron's titleBarOverlay, so we keep that area clear. -->
 <header id="titlebar">
+  <!-- The dot stays: it is the realtime connection, and the title bar is the
+       one place always on screen. The wordmark went — the sidebar carries the
+       name, and the bar carries it centred the way the reference does. -->
   <div class="tb-brand">
     <span class="tb-dot" id="tb-dot" title="Realtime status"></span>
-    <span class="tb-name">ScarmVoice</span>
     <span class="tb-conn" id="tb-conn" hidden></span>
   </div>
+  <span class="tb-title" id="tb-title">ScarmVoice</span>
   <div class="tb-spacer"></div>
 </header>
 
@@ -187,6 +190,11 @@
              people change while someone is complaining about their keyboard. -->
         <button id="btn-nsai" class="btn-share" data-tip="Noise Suppression" aria-label="Noise Suppression" hidden>
           <span class="ico" data-icon="noise"></span>
+        </button>
+        <!-- The other thing you change mid-call, and the only one of the two
+             voice modes you can act on from here. -->
+        <button id="btn-ptt" class="btn-share" data-tip="Push to Talk" aria-label="Push to Talk" hidden>
+          <span class="ico" data-icon="mic-record"></span>
         </button>
       </div>
     </div>
@@ -354,8 +362,10 @@
     </div>
   </div>
 
-  <main id="main">
-    <header id="chan-head">
+  <!-- Outside #main, because it spans the member list as well: a header that
+       stops at the chat column leaves the member list with a divider running the
+       whole window height and the search field in the wrong column. -->
+  <header id="chan-head">
       <span class="ch-hash" aria-hidden="true">#</span>
       <h1 id="chan-title">general</h1>
       <span id="chan-meta"></span>
@@ -379,8 +389,9 @@
           <span class="ico" data-icon="search"></span>
         </button>
       </div>
-    </header>
+  </header>
 
+  <main id="main">
     <!-- Filter + search bar. Filters the loaded messages live; text search runs
          over them too, so "images from Alice matching 'logo'" all combine. -->
     <div id="filter-bar" hidden>

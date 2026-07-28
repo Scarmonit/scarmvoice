@@ -61,6 +61,8 @@
   /* Settings nav, when it is not the page you are on. Dimmer than --muted so
      the one you ARE on is the only bright thing in that column. */
   --nav-idle:   #9a9aa0;
+  /* The speaker on a voice channel row: a marker, dimmer than the name. */
+  --speaker-ico: #87878e;
   /* The user panel's own type ramp. Both lines were brighter than the
      reference — the name by 24 points and the status by 19 — which is what made
      the panel shout next to a channel list that whispers. */
@@ -123,7 +125,7 @@
   --shadow-lg: 0 20px 56px rgba(0, 0, 0, .6);
 
   --radius: 10px;
-  --tb: 38px;
+  --tb: 31px;
   /* A barely-there vertical lift, layered over a surface colour rather than
      replacing it. Light in dark mode, dark in light mode — see the light block. */
   --sheen: linear-gradient(180deg, rgba(255, 255, 255, .018), rgba(255, 255, 255, 0) 60%);
@@ -199,10 +201,20 @@ button { font-family: inherit; }
   display: flex;
   align-items: center;
   padding: 0 12px;
-  background: var(--rail);
+  /* The same shade as the columns under it, with a line beneath rather than a
+     darker plate: the bar is the top of the window, not a separate slab. */
+  background: var(--side);
+  box-shadow: 0 1px 0 var(--line);
   -webkit-app-region: drag;
   position: relative;
   z-index: 40;
+}
+/* Centred, and the only text up there: a wordmark on the left duplicated the
+   name the sidebar already carries. */
+.tb-title {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  font-size: 12px; font-weight: 600; color: var(--text-strong);
+  pointer-events: none;
 }
 .tb-brand { display: flex; align-items: center; gap: 9px; }
 .tb-name {
@@ -327,8 +339,13 @@ button { font-family: inherit; }
   min-height: 0;
   display: grid;
   grid-template-columns: var(--w-rail) var(--w-side) minmax(0, 1fr) auto;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  /* The channel header spans the message column AND the member list, which is
+     why it is not inside #main: a header that stops at the chat column leaves
+     the member list divided from top to bottom and puts the search field one
+     column left of where it belongs. */
   grid-template-areas:
+    "rail side head head"
     "rail side main members"
     "user user main members";
   /* Draggable regions swallow pointer events, which would silently kill file
@@ -340,6 +357,7 @@ button { font-family: inherit; }
 #user-dock { grid-area: user; }
 #main { grid-area: main; }
 #members-panel { grid-area: members; }
+#chan-head { grid-area: head; }
 #app[hidden] { display: none; }
 
 /* ---------- rail -------------------------------------------------------- */
@@ -356,7 +374,7 @@ button { font-family: inherit; }
 }
 .rail-server, .rail-btn {
   position: relative;
-  width: 48px; height: 48px; flex: 0 0 48px;
+  width: 40px; height: 40px; flex: 0 0 40px;
   display: grid; place-items: center;
   background: var(--side); border: 0; cursor: pointer;
   color: var(--muted);
@@ -368,7 +386,7 @@ button { font-family: inherit; }
    shade lighter than the rail to read at 48px. */
 .rail-server { background: var(--rail-plate); }
 .rail-server:hover { background: var(--rail-plate-hover); }
-.rail-server img { width: 44px; height: 44px; object-fit: contain; display: block; }
+.rail-server img { width: 36px; height: 36px; object-fit: contain; display: block; }
 /* The active marker: a bright pill on the rail's very edge, not an underline.
    It has to be white and it has to be on the EDGE — that pairing is what makes
    it findable at a glance in a column of round avatars. The rail's 12px side
@@ -380,7 +398,7 @@ button { font-family: inherit; }
   transition: transform .16s ease, height .16s ease;
 }
 .rail-server:hover::before { transform: translateY(-50%) scaleY(1); height: 22px; }
-.rail-server.active::before { transform: translateY(-50%) scaleY(1); height: 38px; }
+.rail-server.active::before { transform: translateY(-50%) scaleY(1); height: 32px; }
 .rail-server.active { border-radius: 14px; }
 .rail-badge {
   position: absolute; right: -3px; bottom: -3px;
@@ -407,7 +425,9 @@ button { font-family: inherit; }
   flex: 0 0 48px; height: 48px;
   display: flex; align-items: center; gap: 6px;
   padding: 0 10px 0 16px;
-  box-shadow: 0 1px 0 var(--divider);
+  /* Lighter than the surface. The rail and the member list were fixed; this row
+     was the last one still drawing its rule as a shadow. */
+  box-shadow: 0 1px 0 var(--line);
 }
 /* The whole name is the target, chevron included: it is one control. */
 .sh-menu {
@@ -431,7 +451,8 @@ button { font-family: inherit; }
   color: var(--muted);
 }
 .sh-act:hover { background: var(--hover); color: var(--text); }
-.sh-act .ico { width: 19px; height: 19px; }
+.sh-act { color: var(--text-strong); }
+.sh-act .ico { width: 21px; height: 21px; }
 
 .side-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 8px 8px; min-height: 0; }
 .side-section + .side-section { margin-top: 16px; }
@@ -478,7 +499,9 @@ button { font-family: inherit; }
   display: flex; align-items: center; gap: 6px;
   width: 100%; height: 32px; margin-bottom: 2px; padding: 0 8px;
   background: none; border: 0; border-radius: 4px;
-  color: var(--muted); text-align: left; cursor: pointer;
+  /* Dim, so the one you are reading is the only bright row. At --muted the
+     active and inactive rows were close enough to flatten the distinction. */
+  color: var(--dim); text-align: left; cursor: pointer;
   font-size: 15px; font-weight: 500;
 }
 .chan:hover { background: var(--hover); color: var(--text); }
@@ -535,15 +558,17 @@ button { font-family: inherit; }
   font-size: 15px; font-weight: 500;
 }
 .vchan:hover { background: var(--hover); color: var(--text); }
-.vchan.connected { color: var(--text); }
+.vchan { color: var(--dim); }
+.vchan.connected { color: var(--text-strong); }
 .vchan.connected .vchan-ico { color: var(--accent); }
 .vchan.connecting { color: var(--muted); cursor: default; }
 .vchan:disabled { cursor: default; }
 .vchan-ico {
   flex: 0 0 21px; width: 21px; height: 21px;
   fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
-  color: var(--dim);
+  color: var(--speaker-ico);
 }
+.vchan.connected .vchan-ico { color: var(--speaker-ico); }
 .vchan-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vchan { height: 32px; }
 .vchan-count, .vchan-timer {
@@ -679,7 +704,14 @@ button { font-family: inherit; }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 .btn-share:hover { background: var(--elev); }
-.btn-share.on { background: var(--accent-soft); color: var(--accent); }
+/* Camera and screen keep their live colours — red for "you are on camera",
+   green for "you are sharing" — because those are states other people can see.
+   A plain setting is not that: it reads as on or off, in the same neutral the
+   rest of the tray uses. */
+#btn-nsai { background: var(--sunk); }
+#btn-nsai.on { background: var(--float-2); }
+#btn-ptt { background: var(--sunk); }
+#btn-ptt.on { background: var(--float-2); }
 .btn-share .ico { width: 20px; height: 20px; flex: 0 0 20px; }
 
 /* ---------- user panel -------------------------------------------------- */
@@ -879,6 +911,13 @@ button { font-family: inherit; }
   color: var(--dim); font-size: 14px; font-weight: 500;
 }
 #members-list .vp:hover .vp-name, #members-list .vp.speaking .vp-name { color: var(--muted); }
+/* Your own row is not more important than anyone else's here — .me brightens
+   the whole row, which was overriding the dim the list is supposed to have. */
+#members-list .vp.me { color: inherit; }
+#members-list .vp.me .vp-name { color: var(--dim); }
+/* Nothing on the right: the row already says "In voice" on its second line, and
+   an icon at the far edge was saying it twice. */
+#members-list .vp .vp-flag { display: none; }
 .vp-sub {
   display: flex; align-items: center; gap: 4px; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -902,15 +941,15 @@ button { font-family: inherit; }
 }
 
 #chan-head {
-  height: 48px; flex: 0 0 48px;
   display: flex; align-items: center; gap: 8px;
+  background: var(--chat);
   padding: 0 12px 0 16px;
   /* Lighter than the surface, not darker: the rule between two panes is a line
      you can see, not a shadow you infer. */
   box-shadow: 0 1px 0 var(--line);
   z-index: 5;
 }
-.ch-hash { color: var(--dim); font-size: 26px; font-weight: 400; line-height: 1; }
+.ch-hash { color: var(--muted); font-size: 26px; font-weight: 400; line-height: 1; }
 #chan-title {
   font-size: 15.5px; font-weight: 700; margin: 0; color: var(--text-strong);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1107,18 +1146,21 @@ button { font-family: inherit; }
 /* The top of a channel's history. Left-aligned and at the BOTTOM of the
    scroller, where the first message would be — a centred line floating at the
    top said "this pane is empty" rather than "this is where it starts". */
-.chan-intro { margin-top: auto; padding: 40px 16px 8px; max-width: 720px; }
+.chan-intro { margin-top: auto; padding: 40px 16px 0; max-width: 720px; }
 .ci-mark {
   display: grid; place-items: center;
-  width: 68px; height: 68px; margin-bottom: 16px;
+  width: 80px; height: 80px; margin-bottom: 18px;
   border-radius: 50%; background: var(--chat-2);
-  color: var(--text-strong); font-size: 38px; font-weight: 400; line-height: 1;
+  color: var(--text-strong); font-size: 50px; font-weight: 400; line-height: 1;
 }
+/* A shade tighter than default. Our stack resolves to Segoe UI, which is wider
+   per character than the reference's face — so at a matched cap height the line
+   still runs longer unless the tracking comes in. */
 .ci-title {
-  margin: 0 0 8px; font-size: 32px; line-height: 1.15; font-weight: 800;
-  color: var(--text-strong); letter-spacing: -.01em;
+  margin: 0 0 8px; font-size: 40px; line-height: 1.12; font-weight: 800;
+  color: var(--text-strong); letter-spacing: -.022em;
 }
-.ci-sub { margin: 0; font-size: 15px; color: var(--text-body); }
+.ci-sub { margin: 0; font-size: 17px; color: var(--text-body); }
 .ci-btn {
   display: inline-flex; align-items: center; gap: 7px;
   margin-top: 16px; height: 32px; padding: 0 12px;
@@ -1319,7 +1361,7 @@ button { font-family: inherit; }
 
 /* ---------- composer ---------------------------------------------------- */
 
-#composer { flex: 0 0 auto; padding: 0 8px 24px; }
+#composer { flex: 0 0 auto; padding: 0 8px 8px; }
 
 #reply-chip {
   display: flex; align-items: center; gap: 8px;
@@ -1339,10 +1381,10 @@ button { font-family: inherit; }
 
 .composer-row {
   display: flex; align-items: flex-end; gap: 0;
-  /* A hairline round it, and a taller box. Flat against the column and
-     unbordered, it read as part of the background rather than as the thing you
-     type into. */
-  background: var(--sheen), var(--input);
+  /* One flat fill and a hairline round it. Unbordered it read as part of the
+     column; with the sheen on top it had a visible band across the top third,
+     which is two fills where the reference has one. */
+  background: var(--input);
   border: 1px solid var(--line); border-radius: 8px;
   min-height: 58px;
 }
@@ -2626,6 +2668,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --panel-icon:  #5a5a61;
   --ch-icon:     #6a6a71;
   --nav-idle:    #6f6f76;
+  --speaker-ico: #7c7c83;
   --placeholder: #8e8e96;
 
   /* Inverted: a white lift on a white surface is invisible, and the reference

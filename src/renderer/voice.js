@@ -659,7 +659,11 @@
                         id: cidOf(meeting.self),
                         name: meeting.self.name || settings.displayName || 'You',
                         isMe: true,
-                        muted
+                        muted,
+                        // Known locally and nowhere else — without it your own
+                        // row in the sidebar showed a muted mic and no deafened
+                        // headset, whatever the user panel said.
+                        deafened
                     });
                 }
                 const pj = meeting.participants && meeting.participants.joined;

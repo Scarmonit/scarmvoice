@@ -656,7 +656,10 @@ describe('the rail and the channel list', () => {
         expect(rule).toMatch(/width:\s*5px/);
         expect(rule).toMatch(/background:\s*var\(--text-strong\)/);
         expect(rule).toMatch(/left:\s*-12px/);
-        expect(css).toMatch(/\.rail-server\.active::before \{[^}]*height:\s*38px/);
+        // Taller than the hover stub, whatever the exact figure.
+        const on = Number(/\.rail-server\.active::before \{[^}]*height:\s*(\d+)px/.exec(css)[1]);
+        const hover = Number(/\.rail-server:hover::before \{[^}]*height:\s*(\d+)px/.exec(css)[1]);
+        expect(on).toBeGreaterThan(hover);
     });
 
     it('makes the server name a way in rather than a caption', () => {
@@ -734,8 +737,11 @@ describe('the rail and the channel list', () => {
         // component; the reference's own width is what makes them read as its.
         expect(css).toMatch(/\.btn-share \{[^}]*flex:\s*0 1 78px/);
         const live = html().slice(html().indexOf('class="vp-actions"'), html().indexOf('id="soundboard"'));
-        expect((live.match(/class="btn-share"/g) || []).length).toBe(3);
+        // Four: camera, screen, noise suppression, push to talk. All four are
+        // things you change DURING a call and none duplicates another control.
+        expect((live.match(/class="btn-share"/g) || []).length).toBe(4);
         expect(live).toContain('id="btn-nsai"');
+        expect(live).toContain('id="btn-ptt"');
     });
 });
 
@@ -822,7 +828,9 @@ describe('the composer and the member list', () => {
 
     it('gives the composer an edge and some height', () => {
         expect(css).toMatch(/\.composer-row \{[^}]*min-height:\s*58px/);
-        expect(css).toMatch(/#composer \{ flex: 0 0 auto; padding: 0 8px 24px; \}/);
+        expect(css).toMatch(/#composer \{ flex: 0 0 auto; padding: 0 8px 8px; \}/);
+        // One fill, not two: the sheen put a visible band across the top third.
+        expect(/\.composer-row \{[^}]*background: var\(--input\);/.test(css)).toBe(true);
     });
 
     it('drops the panel title above a list that already has a heading', () => {
@@ -842,5 +850,76 @@ describe('the composer and the member list', () => {
         expect(src()).toMatch(/\? 'In voice'/);
         expect(src()).not.toMatch(/vp-invoice/);
         expect(src()).not.toMatch(/esc\(r\.name\) \+ \(isMe \? ' \(you\)'/);
+    });
+});
+
+describe('the window shell', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+    const voice = () => fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');
+
+    it('runs the channel header across the member list too', () => {
+        // A header that stops at the chat column leaves the member list divided
+        // from the title bar to the floor, and puts the search field a whole
+        // column left of where it belongs.
+        expect(css).toMatch(/"rail side head head"/);
+        expect(css).toMatch(/"rail side main members"/);
+        expect(css).toMatch(/#chan-head \{ grid-area: head; \}/);
+        // Which is only possible with the header OUTSIDE #main.
+        const main = html().slice(html().indexOf('<main id="main">'));
+        expect(main.slice(0, main.indexOf('</main>'))).not.toContain('id="chan-head"');
+    });
+
+    it('keeps the title bar and the native caption buttons the same height', () => {
+        // Windows draws the caption buttons over our bar. If the two disagree
+        // there is a notch in the corner in whichever colour lost.
+        const tb = Number(/--tb:\s*(\d+)px/.exec(css)[1]);
+        const main = fs.readFileSync(path.join(RENDERER, '..', 'main', 'main.js'), 'utf8');
+        const overlay = Number(/titleBarOverlay: \{[^}]*height: (\d+)/.exec(main)[1]);
+        expect(overlay).toBe(tb);
+        // And the same colour as the columns under it.
+        expect(/titleBarOverlay: \{ color: '#131316'/.test(main)).toBe(true);
+        expect(/#titlebar \{[^}]*background: var\(--side\)/.test(css)).toBe(true);
+        expect(/#titlebar \{[^}]*box-shadow: 0 1px 0 var\(--line\)/.test(css)).toBe(true);
+        // Centred name, and no wordmark competing with the sidebar's.
+        expect(html()).toContain('class="tb-title"');
+        expect(html()).not.toContain('class="tb-name"');
+    });
+
+    it('draws the last inverted divider the right way round', () => {
+        // The rail and the member list were fixed in earlier rounds; the server
+        // header was the one row still drawing its rule as a shadow.
+        expect(/#server-head \{[^}]*box-shadow: 0 1px 0 var\(--line\)/.test(css)).toBe(true);
+    });
+
+    it('separates an active channel row from an inactive one', () => {
+        // At --muted the two were close enough to flatten the distinction.
+        expect(/\.chan \{[^}]*color: var\(--dim\)/.test(css)).toBe(true);
+        expect(lum(hex('dim', dark))).toBeLessThan(lum(hex('muted', dark)));
+        // And the header hash is a marker beside the name, not a second name.
+        expect(css).toMatch(/\.ch-hash \{ color: var\(--muted\)/);
+    });
+
+    it('publishes your own deafen state to your own row', () => {
+        // roster() carried `muted` and not `deafened`, so the sidebar showed a
+        // slashed mic and an unslashed headset whatever the user panel said.
+        const at = voice().indexOf('isMe: true,');
+        expect(voice().slice(at, at + 400)).toMatch(/deafened/);
+    });
+
+    it('shows nothing on the right of a member row', () => {
+        // The row already says "In voice" on its second line; an icon at the far
+        // edge was saying it twice.
+        expect(css).toMatch(/#members-list \.vp \.vp-flag \{ display: none; \}/);
+        // …but the sidebar's voice roster keeps both states, where they are the
+        // only thing reporting them.
+        expect(css).not.toMatch(/#voice-users[^{]*\.vp-flag \{ display: none/);
+    });
+
+    it('keeps a plain setting out of the accent colour', () => {
+        // Camera and screen keep their live colours — those are states other
+        // people can see. A setting is not that.
+        expect(css).toMatch(/#btn-nsai\.on \{ background: var\(--float-2\); \}/);
+        expect(css).toMatch(/#btn-ptt\.on \{ background: var\(--float-2\); \}/);
+        expect(css).not.toMatch(/\.btn-share\.on \{ background: var\(--accent-soft\)/);
     });
 });
