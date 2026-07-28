@@ -300,3 +300,131 @@ describe('login flow', () => {
         expect($('login-verify').textContent).toMatch(/wait for you/i);
     });
 });
+
+// The account panel and the two device menus only exist once something is
+// clicked, so booting alone never touches them — every id they reach for is
+// unverified until then. That is precisely how the profile-picture button
+// shipped broken, so these drive the clicks.
+describe('the account panel', () => {
+    const $ = (id) => document.getElementById(id);
+    const click = (id) => $(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    it('opens from the name and paints who you are', () => {
+        expect($('me-popover').hidden).toBe(true);
+        click('btn-name');
+        expect($('me-popover').hidden).toBe(false);
+        expect($('btn-name').getAttribute('aria-expanded')).toBe('true');
+        // Signed out in this harness, so the two account-only actions are gone
+        // and the handle says so rather than showing an empty @.
+        expect($('mep-handle').textContent).toBe('not signed in');
+        expect($('mep-switch').hidden).toBe(true);
+        expect($('mep-copy-id').hidden).toBe(true);
+        expect(errors).toEqual([]);
+    });
+
+    it('closes when the name is clicked again', () => {
+        click('btn-name');
+        expect($('me-popover').hidden).toBe(true);
+        expect($('btn-name').getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('offers the four presence modes with the active one ticked', () => {
+        click('btn-name');
+        click('mep-status');
+        const menu = $('ctx-menu');
+        expect(menu.hidden).toBe(false);
+
+        const labels = [...menu.querySelectorAll('.ctx-item')].map((b) => b.textContent.trim());
+        expect(labels[0]).toBe('Online');
+        expect(labels[1]).toBe('Idle');
+        expect(labels[2]).toMatch(/^Do Not Disturb/);
+        expect(labels[3]).toMatch(/^Invisible/);
+
+        // Every mode carries its colour, which is the thing being chosen.
+        const dots = [...menu.querySelectorAll('.ctx-dot')].map((d) => d.className);
+        expect(dots.length).toBe(4);
+        expect(dots[1]).toContain('away');
+        expect(dots[2]).toContain('dnd');
+        expect(dots[3]).toContain('invisible');
+
+        // Default profile: Online is the active one.
+        const checked = [...menu.querySelectorAll('.ctx-item.checked')].map((b) => b.textContent.trim());
+        expect(checked).toEqual(['Online']);
+    });
+
+    it('writes the chosen mode and keeps the dnd boolean in step', async () => {
+        window.lounge.settings.set.mockClear();
+        // Idle is the second item in the menu opened by the test above.
+        const items = [...$('ctx-menu').querySelectorAll('.ctx-item')];
+        items[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+
+        const patch = window.lounge.settings.set.mock.calls[0][0];
+        expect(patch.presence).toBe('idle');
+        // The Settings checkbox reads the boolean; if these two ever disagree
+        // the app says one thing and does another.
+        expect(patch.dnd).toBe(false);
+        // And the me-bar's second line is never blank — it shows the mode when
+        // there is no custom status.
+        expect($('me-status').textContent).toBe('Idle');
+        expect($('me-status').hidden).toBe(false);
+        expect(errors).toEqual([]);
+    });
+
+    it('turns Do Not Disturb into the boolean the rest of the app reads', async () => {
+        click('btn-name');
+        click('mep-status');
+        window.lounge.settings.set.mockClear();
+        const items = [...$('ctx-menu').querySelectorAll('.ctx-item')];
+        items[2].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+
+        const patch = window.lounge.settings.set.mock.calls[0][0];
+        expect(patch.presence).toBe('dnd');
+        expect(patch.dnd).toBe(true);
+        expect($('me-status').textContent).toBe('Do Not Disturb');
+    });
+
+    it('stops publishing presence entirely while invisible', async () => {
+        click('btn-name');
+        click('mep-status');
+        const items = [...$('ctx-menu').querySelectorAll('.ctx-item')];
+        items[3].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+
+        // "Invisible" is not a status the server understands — it is the
+        // ABSENCE of one, so the row is retired rather than relabelled. If this
+        // ever sends a status instead, everyone else renders an unknown state.
+        const presenceCalls = window.lounge.board.mock.calls.filter((c) => c[0] === 'presence');
+        expect(presenceCalls.length).toBeGreaterThan(0);
+        expect(presenceCalls[presenceCalls.length - 1][1].body.leaving).toBe(true);
+    });
+});
+
+describe('the mic and speaker carets', () => {
+    const $ = (id) => document.getElementById(id);
+    const click = (id) => $(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+    it('open a device menu without a media stack present', async () => {
+        // jsdom has no navigator.mediaDevices, which is the same shape as a
+        // machine that has refused microphone access — the menu still has to
+        // open and say why it is empty rather than throwing.
+        click('btn-mic-menu');
+        await new Promise((r) => setTimeout(r, 0));
+        const menu = $('ctx-menu');
+        expect(menu.hidden).toBe(false);
+        const labels = [...menu.querySelectorAll('.ctx-item')].map((b) => b.textContent.trim());
+        expect(labels[0]).toBe('System default microphone');
+        expect(labels.some((l) => /allow microphone access/i.test(l))).toBe(true);
+        expect(labels[labels.length - 1]).toBe('Voice Settings');
+        expect(errors).toEqual([]);
+    });
+
+    it('offers the speaker list from the other caret', async () => {
+        click('btn-spk-menu');
+        await new Promise((r) => setTimeout(r, 0));
+        const labels = [...$('ctx-menu').querySelectorAll('.ctx-item')].map((b) => b.textContent.trim());
+        expect(labels[0]).toBe('System default speaker');
+        expect(errors).toEqual([]);
+    });
+});

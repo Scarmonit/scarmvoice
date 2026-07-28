@@ -536,8 +536,8 @@ button { font-family: inherit; }
 
 #me-bar {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 4px;
-  padding: 8px; background: var(--panel);
+  display: flex; align-items: center; gap: 2px;
+  padding: 7px 6px; background: var(--panel);
   box-shadow: 0 -1px 0 var(--divider);
 }
 #voice-panel:has(#voice-live:not([hidden])) + #me-bar { box-shadow: none; }
@@ -577,8 +577,8 @@ button { font-family: inherit; }
 .sb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sb-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--dim); text-align: center; }
 .me-id {
-  display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
-  padding: 4px 6px; border-radius: 5px;
+  display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1;
+  padding: 3px 4px; border-radius: 5px;
   background: none; border: 0; cursor: pointer; text-align: left;
 }
 .me-id:hover { background: var(--hover); }
@@ -604,7 +604,20 @@ button { font-family: inherit; }
   font-size: 11px; color: var(--dim); font-weight: 500;
 }
 .me-status[hidden] { display: none; }
-.me-actions { display: flex; gap: 0; flex: 0 0 auto; }
+.me-actions { display: flex; align-items: center; gap: 0; flex: 0 0 auto; }
+
+/* A toggle and its caret read as ONE control: the caret is deliberately narrow
+   and sits tight against the icon, so the pair still scans as a single mic or
+   headset button rather than two unrelated squares. */
+.me-ctl { display: flex; align-items: center; }
+.me-ctl .me-ctl-main { width: 26px; border-radius: 5px 2px 2px 5px; }
+.me-ctl .me-ctl-caret {
+  width: 12px; border-radius: 2px 5px 5px 2px;
+  color: var(--dim);
+}
+.me-ctl .me-ctl-caret .ico { width: 11px; height: 11px; }
+.me-ctl:hover .me-ctl-caret { color: var(--muted); }
+.me-ctl-caret[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 
 /* ---------- icon buttons ------------------------------------------------ */
 
@@ -2428,3 +2441,137 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .acct-avatar-actions .keycap { min-width: 0; padding: 5px 12px; font-size: 12px; }
 .keycap.danger { color: var(--danger); }
 #avatar-hint.err { color: var(--danger); }
+
+/* ==========================================================================
+   me-bar motion + the account panel
+   ========================================================================== */
+
+/* Hover motion on the user-panel controls.
+   The transform lives on the .ico, never on the button, so the hover pill
+   itself stays perfectly still while the glyph inside it moves — animating the
+   button would make the background jitter against its neighbours. */
+#btn-settings { width: 28px; }
+#me-bar .icon-btn .ico {
+  transition: transform .22s cubic-bezier(.2, .9, .3, 1.35);
+  transform-origin: 50% 50%;
+}
+#me-bar .icon-btn:active .ico { transform: scale(.9); }
+
+/* The gear turns, the way it does in Discord. A partial turn, not a full one:
+   a 360° spin reads as a loading spinner. */
+#btn-settings:hover .ico { transform: rotate(100deg); }
+#btn-settings .ico { transition: transform .4s cubic-bezier(.2, .8, .25, 1); }
+
+/* The mic lifts as if being picked up… */
+#btn-mute:hover .ico { transform: translateY(-2px) scale(1.1); }
+/* …and the headset tips, like it is being put on. */
+#btn-deafen:hover .ico { transform: rotate(-9deg) scale(1.1); }
+/* The carets nudge the way they point. */
+.me-ctl .me-ctl-caret .ico { transform: rotate(90deg); }
+.me-ctl-caret:hover .ico { transform: rotate(90deg) translateX(1.5px); }
+
+/* The avatar swells very slightly when the identity block is hovered, which is
+   what makes it read as a button rather than a label. */
+.me-id .me-av-wrap { transition: transform .18s cubic-bezier(.2, .9, .3, 1.35); }
+.me-id:hover .me-av-wrap { transform: scale(1.06); }
+.me-id[aria-expanded="true"] { background: var(--hover); }
+
+/* Motion is decoration here — every one of these states is also carried by
+   colour and by the pill background, so removing it costs nothing. */
+@media (prefers-reduced-motion: reduce) {
+  #me-bar .icon-btn .ico,
+  #btn-settings .ico,
+  .me-id .me-av-wrap { transition: none; }
+  #btn-settings:hover .ico,
+  #btn-mute:hover .ico,
+  #btn-deafen:hover .ico,
+  .me-id:hover .me-av-wrap { transform: none; }
+  /* The caret keeps its rotation — that is direction, not motion. */
+  .me-ctl-caret:hover .ico { transform: rotate(90deg); }
+}
+
+/* ---------- account panel ---------------------------------------------- */
+
+.me-pop {
+  position: fixed; z-index: 300;
+  width: 300px; padding-bottom: 8px;
+  background: var(--float); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: mep-in .13s cubic-bezier(.2, .9, .3, 1);
+}
+@keyframes mep-in { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+@media (prefers-reduced-motion: reduce) { .me-pop { animation: none; } }
+
+/* The banner is tinted from the same hash the avatar uses, so a person's panel
+   is recognisably theirs without needing a second uploaded image. */
+.mep-banner { height: 60px; background: var(--elev); }
+.mep-av-wrap {
+  position: relative; display: block;
+  width: 76px; height: 76px; margin: -38px 0 0 14px;
+  border-radius: 50%; border: 6px solid var(--float); background: var(--float);
+}
+.mep-avatar {
+  position: relative; display: grid; place-items: center;
+  width: 100%; height: 100%; border-radius: 50%;
+  font-size: 26px; font-weight: 800; color: var(--on-accent);
+}
+.mep-presence {
+  position: absolute; right: 0; bottom: 0;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--online); border: 5px solid var(--float);
+}
+.mep-presence.away { background: var(--idle); }
+.mep-presence.dnd { background: var(--danger); }
+.mep-presence.invisible { background: var(--dim); }
+
+.mep-card { padding: 8px 14px 0; }
+.mep-names { padding: 4px 0 2px; }
+.mep-name { font-size: 19px; font-weight: 800; color: var(--text-strong); line-height: 1.2; }
+.mep-handle { font-size: 13px; color: var(--muted); margin-top: 1px; }
+.mep-custom {
+  margin: 8px 0 2px; padding: 8px 10px;
+  background: var(--panel); border-radius: 8px;
+  font-size: 13px; color: var(--text-body); white-space: pre-wrap; word-break: break-word;
+}
+.mep-custom[hidden] { display: none; }
+
+.mep-menu {
+  margin-top: 12px; padding: 6px; background: var(--panel);
+  border-radius: 8px; display: flex; flex-direction: column; gap: 1px;
+}
+.mep-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 7px 9px; border: 0; border-radius: 5px;
+  background: none; color: var(--text-body);
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.mep-item:hover { background: var(--hover); color: var(--text); }
+.mep-item .ico { width: 16px; height: 16px; flex: 0 0 16px; color: var(--muted); }
+.mep-item:hover .ico { color: var(--text); }
+.mep-status-row .presence { position: static; flex: 0 0 10px; width: 10px; height: 10px; border: 0; }
+/* Pushes the trailing chevron to the far edge and turns it to point right,
+   which is what says "this one opens another menu". */
+.mep-more { margin-left: auto; color: var(--dim); }
+.mep-sep { height: 1px; margin: 5px 4px; background: var(--line); }
+
+/* Presence swatches inside a context menu (the status picker) and on the
+   panel's status row. The base .presence rule is scoped to .vp, so these two
+   contexts have to state their own geometry rather than inherit it. */
+.ctx-item .ctx-dot,
+.mep-status-row .presence {
+  position: static; flex: 0 0 10px;
+  width: 10px; height: 10px; border: 0; border-radius: 50%;
+  background: var(--online);
+}
+.ctx-item .ctx-dot.away,   .mep-status-row .presence.away { background: var(--idle); }
+.ctx-item .ctx-dot.dnd,    .mep-status-row .presence.dnd  { background: var(--danger); }
+/* Invisible is drawn hollow: it is the absence of a presence, not a colour. */
+.ctx-item .ctx-dot.invisible,
+.mep-status-row .presence.invisible,
+.mep-presence.invisible,
+.me-presence.invisible {
+  background: transparent; box-shadow: inset 0 0 0 2.5px var(--dim);
+}
+/* The me-bar dot already had online and dnd; these complete the set. */
+.me-presence.away { background: var(--idle); }

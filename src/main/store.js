@@ -59,6 +59,14 @@ const DEFAULTS = {
     theme: 'dark',               // 'dark' | 'light' | 'system'
     density: 'cozy',             // 'cozy' | 'compact'
 
+    // Presence you CHOOSE, as opposed to the one computed from window focus and
+    // idle time. 'online' means "let the app decide" and is what auto-away hangs
+    // off; the other three are overrides.
+    //   online | idle | dnd | invisible
+    // `dnd` below is kept in step with this so the Settings checkbox, and every
+    // older build and test that reads the boolean, still agree with the picker.
+    presence: 'online',
+
     // Notifications
     dnd: false,                  // do not disturb: silences every alert + sound
     mutedChannels: [],           // legacy binary mute; still written for older builds + the website

@@ -1196,7 +1196,7 @@
     // channels are excluded — they are muted precisely so they don't nag.
     let lastTaskbarBadge = -1;
     function setTaskbarBadge(total) {
-        const n = settings.dnd ? 0 : Math.max(0, total | 0);
+        const n = isDnd() ? 0 : Math.max(0, total | 0);
         if (n === lastTaskbarBadge) return;     // don't re-flash on every render
         lastTaskbarBadge = n;
         L.app.setBadge(n);
@@ -4034,12 +4034,60 @@
         window.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true });
     });
 
+    // The four things you can CHOOSE to be. 'online' is the only one that still
+    // lets the app decide — it is what auto-away hangs off. The rest are
+    // overrides and stay put.
+    const PRESENCE_MODES = ['online', 'idle', 'dnd', 'invisible'];
+    const PRESENCE_LABEL = {
+        online: 'Online', idle: 'Idle', dnd: 'Do Not Disturb', invisible: 'Invisible'
+    };
+    // What each mode looks like to the presence table, and therefore to
+    // everyone else's member list. 'invisible' has no wire value on purpose —
+    // see sendTextPresence, which stops publishing entirely.
+    const PRESENCE_WIRE = { idle: 'away', dnd: 'dnd' };
+
+    function presenceMode() {
+        const m = settings.presence;
+        if (PRESENCE_MODES.includes(m)) return m;
+        // A profile written before this setting existed: the boolean is the
+        // only thing it can tell us.
+        return settings.dnd ? 'dnd' : 'online';
+    }
+    function isInvisible() { return presenceMode() === 'invisible'; }
+    // Everything that used to read settings.dnd asks this instead, so the
+    // checkbox in Settings and the picker in the account panel can never
+    // disagree about whether you are silenced.
+    function isDnd() { return presenceMode() === 'dnd'; }
+
+    async function setPresenceMode(mode) {
+        if (!PRESENCE_MODES.includes(mode)) return;
+        // `dnd` is written alongside so the Settings checkbox, older builds and
+        // the existing tests all keep reading a value that matches.
+        await saveSettings({ presence: mode, dnd: mode === 'dnd' });
+        renderMe();
+        renderChannels();          // the taskbar badge is suppressed while DND is on
+        paintMePopover();
+        const dndBox = $('set-dnd');
+        if (dndBox) dndBox.checked = isDnd();
+        // Publish it now rather than up to TEXT_PRESENCE_MS later.
+        sendTextPresence(false);
+    }
+
     function myPresenceStatus() {
-        // Do-not-disturb outranks the computed states — everyone should see it.
-        if (settings.dnd) return 'dnd';
+        const mode = presenceMode();
+        // An explicit choice outranks everything computed — that is what makes
+        // it a choice.
+        if (mode !== 'online') return PRESENCE_WIRE[mode] || 'online';
         if (document.hidden || !windowFocused) return 'away';
         if (Date.now() - lastActivity > AWAY_AFTER_MS) return 'away';
         return 'online';
+    }
+    // The dot class for a mode, shared by the me-bar, the panel and the menu.
+    function presenceDotClass(mode) {
+        if (mode === 'idle') return 'away';
+        if (mode === 'dnd') return 'dnd';
+        if (mode === 'invisible') return 'invisible';
+        return '';
     }
 
     // Voice rows arriving from /api/board/list historically carried no user_id.
@@ -4060,6 +4108,11 @@
     }
 
     async function sendTextPresence(leaving) {
+        // Invisible is not a status the server understands — it is the ABSENCE
+        // of one. Publishing "invisible" would just render as an unknown state
+        // in every other client, so instead we retire the row, exactly as
+        // leaving does, and stay out of the member list entirely.
+        const gone = !!leaving || isInvisible();
         const res = await L.board('presence', {
             method: 'POST',
             body: {
@@ -4067,7 +4120,7 @@
                 name: settings.displayName || 'Anonymous',
                 status: myPresenceStatus(),
                 custom: settings.status || '',
-                leaving: !!leaving
+                leaving: gone
             }
         });
         if (res && res.success && res.members) {
@@ -4783,14 +4836,20 @@
 
     function renderMe() {
         const name = settings.displayName || 'Anonymous';
+        const mode = presenceMode();
+        const label = PRESENCE_LABEL[mode];
         $('me-name-text').textContent = name;
         paintAvatarEl($('me-avatar'), name, myUserId());
+        // The second line is never empty: your custom status if you wrote one,
+        // and what you are otherwise. A blank line under the name is what made
+        // this look like a label rather than an account.
         const st = $('me-status');
-        st.textContent = settings.status || '';
-        st.hidden = !settings.status;
+        st.textContent = settings.status || label;
+        st.title = settings.status ? `${label} — ${settings.status}` : label;
+        st.hidden = false;
         const dot = $('me-presence');
-        dot.classList.toggle('dnd', !!settings.dnd);
-        dot.title = settings.dnd ? 'Do not disturb' : 'Online';
+        dot.className = 'me-presence ' + presenceDotClass(mode);
+        dot.title = label;
         // Rename/delete are admin-only server-side; leaving the header buttons
         // up for a member is a control that can only ever return a 403.
         $('btn-rename-channel').hidden = !isAdmin();
@@ -4805,10 +4864,198 @@
         await saveSettings({ status: r.trim().slice(0, 80) });
         renderMe();
         renderAccountCard();
+        paintMePopover();
         $('set-status').value = settings.status || '';
         sendTextPresence(false);      // publish it now rather than up to 20s later
     }
-    $('btn-name').addEventListener('click', changeName);
+
+    // ---------- account panel (the me-bar identity block) -------------------
+    // Everything about you that isn't a setting: who you are, what you are
+    // showing as, and the two account-level actions. Opened by clicking your
+    // name, closed by anything else.
+
+    function mePopoverOpen() { return !$('me-popover').hidden; }
+
+    function paintMePopover() {
+        if (!mePopoverOpen()) return;
+        const name = settings.displayName || 'Anonymous';
+        const mode = presenceMode();
+        $('mep-name').textContent = name;
+        // The handle is the account username. It is the same string as the
+        // display name today — deliberately, it is what stops anyone wearing
+        // someone else's name — so showing both is honest rather than
+        // redundant: it says the name IS the account.
+        $('mep-handle').textContent = account ? '@' + account.username : 'not signed in';
+        paintAvatarEl($('mep-avatar'), name, myUserId());
+        // Tinted from the same hash the avatar is, so the panel is recognisably
+        // yours without asking for a second image to upload.
+        $('mep-banner').setAttribute('style', avatarStyle(name));
+        $('mep-presence').className = 'mep-presence ' + presenceDotClass(mode);
+        $('mep-status-dot').className = 'presence ' + presenceDotClass(mode);
+        $('mep-status-label').textContent = PRESENCE_LABEL[mode];
+        const custom = $('mep-custom');
+        custom.textContent = settings.status || '';
+        custom.hidden = !settings.status;
+        // Nothing to switch to, and no id to copy, without an account.
+        $('mep-switch').hidden = !account;
+        $('mep-copy-id').hidden = !account;
+    }
+
+    function openMePopover() {
+        const pop = $('me-popover');
+        const anchor = $('btn-name');
+        pop.hidden = false;
+        paintMePopover();
+        // Measured after it is shown, then clamped. It is position:fixed so the
+        // sidebar's own overflow can never clip it.
+        const r = anchor.getBoundingClientRect();
+        const h = pop.offsetHeight;
+        const w = pop.offsetWidth;
+        let top = r.top - h - 8;
+        if (top < POP_TITLEBAR + 6) top = POP_TITLEBAR + 6;
+        let left = r.left - 4;
+        if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+        pop.style.top = Math.round(top) + 'px';
+        pop.style.left = Math.round(Math.max(8, left)) + 'px';
+        anchor.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeMePopover() {
+        $('me-popover').hidden = true;
+        $('btn-name').setAttribute('aria-expanded', 'false');
+    }
+
+    function toggleMePopover() {
+        if (mePopoverOpen()) closeMePopover(); else openMePopover();
+    }
+
+    $('btn-name').addEventListener('click', (e) => { e.stopPropagation(); toggleMePopover(); });
+
+    document.addEventListener('mousedown', (e) => {
+        if (!mePopoverOpen()) return;
+        if (e.target.closest('#me-popover') || e.target.closest('#btn-name')) return;
+        // The status picker is a context menu drawn OUTSIDE the panel, so a
+        // click in it must not read as a click away from the panel.
+        if (e.target.closest('#ctx-menu')) return;
+        closeMePopover();
+    });
+    window.addEventListener('blur', closeMePopover);
+
+    // The status picker. A context menu rather than a bespoke submenu: it is a
+    // list of mutually exclusive options with a tick on the active one, which
+    // is exactly what openCtxMenu already draws.
+    $('mep-status').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const r = e.currentTarget.getBoundingClientRect();
+        const mode = presenceMode();
+        const item = (m, note) => ({
+            label: PRESENCE_LABEL[m] + (note ? ' \u2014 ' + note : ''),
+            dot: presenceDotClass(m),
+            check: mode === m,
+            onClick: () => setPresenceMode(m)
+        });
+        openCtxMenu([
+            item('online'),
+            item('idle'),
+            item('dnd', 'no notifications'),
+            item('invisible', 'appear offline'),
+            'sep',
+            { label: settings.status ? 'Edit custom status' : 'Set a custom status', icon: 'pencil',
+                onClick: () => { closeMePopover(); changeName(); } },
+            settings.status && { label: 'Clear custom status', icon: 'x',
+                onClick: async () => {
+                    await saveSettings({ status: '' });
+                    renderMe(); renderAccountCard(); paintMePopover();
+                    $('set-status').value = '';
+                    sendTextPresence(false);
+                } }
+        ], r.right + 6, r.top - 4);
+    });
+
+    $('mep-edit').addEventListener('click', () => { closeMePopover(); openSettings(); });
+
+    $('mep-copy-id').addEventListener('click', () => {
+        if (!account) return;
+        navigator.clipboard.writeText(String(account.id)).then(
+            () => { closeMePopover(); toast('User ID copied'); },
+            () => toast('Could not copy', true)
+        );
+    });
+
+    // The app holds one account at a time, so "switch" is sign out and back in.
+    // The BOARD session is left alone — this is the one-field hop back that
+    // Settings' own account sign-out does, not a full sign-out.
+    $('mep-switch').addEventListener('click', async () => {
+        closeMePopover();
+        await teardownSession();
+        await L.account.logout();
+        account = null;
+        dmThreads = [];
+        closeDm();
+        renderAccountCard();
+        renderDmSection();
+        closeSettings();
+        $('app').hidden = true;
+        showAccountStep();
+    });
+
+    // ---------- input / output device menus ---------------------------------
+    // What the carets beside the mic and headset open: the same device list the
+    // Settings panel builds, in the place you actually reach for it.
+
+    async function deviceMenuItems(kind) {
+        let devices = [];
+        try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { /* none */ }
+        const isMic = kind === 'audioinput';
+        const current = (isMic ? settings.micDeviceId : settings.speakerDeviceId) || '';
+        const list = devices.filter((d) => d.kind === kind);
+
+        const choose = async (deviceId) => {
+            await saveSettings(isMic ? { micDeviceId: deviceId } : { speakerDeviceId: deviceId });
+            if (voice) voice.setSettings(settings);
+            // Changing the microphone mid-call needs a rejoin — the published
+            // track is already negotiated. The speaker is only an output sink
+            // and takes effect at once, so only one of these warns.
+            if (isMic && voice && voice.isJoined()) toast('Rejoin voice to switch microphone');
+        };
+
+        const items = [{
+            label: isMic ? 'System default microphone' : 'System default speaker',
+            icon: isMic ? 'mic' : 'headset',
+            check: !current,
+            onClick: () => choose('')
+        }];
+        list.forEach((d, i) => {
+            items.push({
+                // Labels are blank until microphone permission has been granted
+                // at least once, so fall back to a number rather than a gap.
+                label: d.label || `${isMic ? 'Microphone' : 'Speaker'} ${i + 1}`,
+                icon: isMic ? 'mic' : 'headset',
+                check: d.deviceId === current,
+                onClick: () => choose(d.deviceId)
+            });
+        });
+        if (!list.length) {
+            items.push({ label: 'No devices found \u2014 allow microphone access', icon: 'warning', disabled: true, onClick: () => {} });
+        }
+        items.push('sep');
+        items.push({ label: 'Voice Settings', icon: 'sliders', onClick: () => openSettings() });
+        return items;
+    }
+
+    function wireDeviceMenu(btnId, kind) {
+        $(btnId).addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const r = e.currentTarget.getBoundingClientRect();
+            const items = await deviceMenuItems(kind);
+            // Opened UPWARD: this button sits at the very bottom of the window,
+            // so a menu anchored below it would just be clamped against the edge.
+            const guess = Math.min(items.length * 32 + 14, 340);
+            openCtxMenu(items, r.left, Math.max(8, r.top - 6 - guess));
+        });
+    }
+    wireDeviceMenu('btn-mic-menu', 'audioinput');
+    wireDeviceMenu('btn-spk-menu', 'audiooutput');
 
     // ---------- layout chrome: rail, categories, members sidebar ----------
 
@@ -4928,7 +5175,7 @@
     // know (a terse cross-channel nudge carries no body) pass false, which is
     // the quiet answer — see notifyOtherChannel.
     function alertsAllowed(channelName, isMention) {
-        if (settings.dnd) return false;
+        if (isDnd()) return false;
         const mode = channelAlertMode(channelName);
         if (mode === 'none') return false;
         if (mode === 'mentions') return !!isMention;
@@ -5076,7 +5323,7 @@
 
         // Account / notifications / appearance / privacy
         $('set-status').value = settings.status || '';
-        $('set-dnd').checked = !!settings.dnd;
+        $('set-dnd').checked = isDnd();
         $('set-theme').value = settings.theme || 'dark';
         $('set-density').value = settings.density || 'cozy';
         $('set-vad').value = String(vadValue());
@@ -5863,10 +6110,11 @@
         sendTextPresence(false);        // publish it now rather than up to 20s later
     });
     $('set-dnd').addEventListener('change', async (e) => {
-        await saveSettings({ dnd: e.target.checked });
-        renderMe();
-        renderChannels();       // the taskbar badge is suppressed while DND is on
-        sendTextPresence(false);   // everyone's member list shows the red dot now, not in 20s
+        // Through setPresenceMode, so the checkbox and the account panel's
+        // picker can never end up saying different things. Unticking returns to
+        // Online rather than to whatever override was set before — the checkbox
+        // has no way to express "back to Idle", so it must not pretend to.
+        await setPresenceMode(e.target.checked ? 'dnd' : 'online');
         toast(e.target.checked ? 'Do not disturb on — everything is silenced' : 'Do not disturb off');
     });
     $('set-theme').addEventListener('change', async (e) => {
@@ -6259,6 +6507,18 @@
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'ctx-item' + (it.danger ? ' danger' : '') + (it.check ? ' checked' : '');
+            // `dot` is for the presence picker: the thing being chosen IS a
+            // colour, so a line icon would say less than the swatch does.
+            if (it.dot !== undefined) {
+                b.innerHTML = `<i class="presence ctx-dot ${esc(it.dot)}"></i>` +
+                    `<span class="ctx-label">${esc(it.label)}</span>` +
+                    (it.check ? I('check', 'ico ctx-check') : '');
+                if (it.check) b.setAttribute('aria-checked', 'true');
+                if (it.disabled) b.disabled = true;
+                else b.addEventListener('click', () => { closeCtxMenu(); it.onClick(); });
+                menu.appendChild(b);
+                return;
+            }
             // it.icon is a name in the icon set, never a glyph.
             // A `check` item is one option of a set (per-channel alerts), so it
             // carries a tick on the trailing edge showing the current choice
@@ -7872,6 +8132,7 @@
             // used to close the thread behind the picture that was still up.
             if (emojiPopOpen()) closeEmojiPop();
             else if (!$('ctx-menu').hidden) closeCtxMenu();
+            else if (mePopoverOpen()) closeMePopover();
             else if (!$('lightbox').hidden) closeLightbox();
             else if (!$('dialog').hidden) closeDialog(inp_null());
             else if (threadOpen()) closeThread();
