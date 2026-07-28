@@ -10,15 +10,21 @@
  */
 
 :root {
-  /* ---- surfaces (dark → light, outside → in) ---- */
-  --rail:       #08090c;   /* far-left server rail, and the title bar */
-  --panel:      #0b0c10;   /* user panel + voice panel, below the sidebars */
-  --side:       #101218;   /* channel sidebar + members sidebar */
-  --chat:       #15171d;   /* message column */
-  --chat-2:     #1a1c23;   /* panels layered on the message column */
-  --float:      #1b1e26;   /* modals, menus, popovers, tooltips */
-  --input:      #212530;   /* composer + text inputs */
-  --elev:       #272b36;   /* hover on a floating surface */
+  /* ---- surfaces (dark → light, outside → in) ----
+     Kept within ~4 points of neutral: blue minus red is noted after each one.
+     Anything wider than that and the whole app reads navy. */
+  --rail:       #0c0c0e;   /* far-left server rail, the title bar, and the
+                              background the user card floats on        (+2) */
+  --side:       #131316;   /* channel sidebar + members sidebar         (+3) */
+  --chat:       #17171a;   /* message column                            (+3) */
+  --input:      #1b1b1f;   /* composer + text inputs — four points above the
+                              column behind it, so the box barely separates
+                              from it instead of hovering over it       (+4) */
+  --chat-2:     #1c1c20;   /* panels layered on the message column      (+4) */
+  --panel:      #1c1c20;   /* the user card + the voice card: RAISED out of
+                              the sidebar, not sunk into it             (+4) */
+  --float:      #1f1f24;   /* modals, menus, popovers, tooltips         (+5) */
+  --elev:       #26262b;   /* hover on a floating surface               (+5) */
 
   --hover:      rgba(255, 255, 255, .045);
   --active:     rgba(255, 255, 255, .085);
@@ -30,23 +36,29 @@
   --line-solid: rgba(255, 255, 255, .08);
 
   /* ---- text ---- */
-  --text:  #e9ebf0;
+  --text:  #e8e8ea;
   --text-strong: #ffffff;      /* author names, active channel */
-  --text-body:   #dcdfe6;      /* message prose */
-  --muted: #a7aebc;
-  --dim:   #767e8e;
+  --text-body:   #dbdbde;      /* message prose */
+  --muted: #adadb3;
+  --dim:   #7e7e84;
+  /* Two deliberate steps against --text, measured as a fraction of its
+     brightness, because the reference's hierarchy is gentler than ours was:
+     the user panel's glyphs at .67, and placeholder text at .42 — ours was
+     .75 and .55, which made the icons hot and the placeholder loud. */
+  --panel-icon: #9b9ba1;
+  --placeholder: #62626a;
   --field: var(--rail);        /* text inputs + selects */
   --field-line: transparent;
   --code-bg: var(--rail);
-  --code-text: #d6deeb;
-  --spoiler: #2b2f38;
-  --spoiler-hover: #353a45;
+  --code-text: #dcdce0;
+  --spoiler: #2e2e33;
+  --spoiler-hover: #383840;
   --divider: rgba(0, 0, 0, .28);
   --scrim: rgba(4, 5, 7, .82);
   --scrollbar: rgba(0, 0, 0, .45);
   --scrollbar-hover: rgba(0, 0, 0, .65);
-  --rail-plate: linear-gradient(155deg, #232937, #0d0f14);
-  --rail-plate-hover: linear-gradient(155deg, #2c3444, #12151c);
+  --rail-plate: linear-gradient(155deg, #2a2a30, #121215);
+  --rail-plate-hover: linear-gradient(155deg, #34343c, #17171b);
 
   /* ---- accent + status ---- */
   --accent-rgb:  38, 221, 208;   /* drives every rgba() accent tint */
@@ -57,8 +69,8 @@
   --accent-line: rgba(var(--accent-rgb), .40);
   --on-accent:   #04211f;
 
-  --online-rgb:  45, 189, 110;
-  --online:      #2dbd6e;
+  --online-rgb:  35, 165, 90;
+  --online:      #23a55a;
   --idle:        #dfa32c;
   --danger:      #f2455e;
   --danger-hi:   #ff8095;
@@ -82,7 +94,7 @@
   --tb: 38px;
   /* A barely-there vertical lift, layered over a surface colour rather than
      replacing it. Light in dark mode, dark in light mode — see the light block. */
-  --sheen: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0) 60%);
+  --sheen: linear-gradient(180deg, rgba(255, 255, 255, .018), rgba(255, 255, 255, 0) 60%);
   --w-rail: 72px;
   --w-side: 300px;
   --w-members: 232px;
@@ -508,9 +520,10 @@ button { font-family: inherit; }
 #voice-panel:has(#voice-live:not([hidden])) {
   display: block;
   flex: 0 0 auto;
+  margin: 0 8px 6px; border-radius: 8px;
   padding: 8px;
   background: var(--panel);
-  box-shadow: 0 -1px 0 var(--divider);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
 }
 .voice-live { display: flex; align-items: center; gap: 8px; padding: 2px 2px 2px 6px; }
 .voice-live[hidden] { display: none; }
@@ -555,12 +568,19 @@ button { font-family: inherit; }
 /* ---------- user panel -------------------------------------------------- */
 
 #me-bar {
-  display: flex; align-items: center; gap: 4px;
-  /* More on the right than the left: the cog was sitting hard against the
-     window edge, where the reference leaves it room to breathe. */
-  padding: 10px 18px 10px 10px; background: var(--sheen), var(--panel);
-  box-shadow: 0 -1px 0 var(--divider);
+  display: flex; align-items: center;
+  /* The gap BETWEEN groups. Each control keeps its own caret tight against it
+     (see .me-ctl), so this is what separates mic-and-its-caret from
+     headset-and-its-caret — the grouping only reads if the two distances are
+     clearly different. */
+  gap: 10px;
+  margin: 0 8px 8px; border-radius: 8px;
+  padding: 7px; background: var(--sheen), var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
 }
+/* Only the bottom row shows through, and only in the card's margin — every
+   other grid cell paints its own surface over this. */
+#app { background: var(--rail); }
 /* ---------- soundboard tray -------------------------------------------- */
 /* Anchored to the sidebar rather than to the button: the voice panel is short
    and near the bottom of the window, so a tray hanging off the button would
@@ -601,47 +621,64 @@ button { font-family: inherit; }
   background: none; border: 0; cursor: pointer; text-align: left;
 }
 .me-id:hover { background: var(--hover); }
-.me-av-wrap { position: relative; flex: 0 0 34px; width: 34px; height: 34px; }
+.me-av-wrap { position: relative; flex: 0 0 32px; width: 32px; height: 32px; }
 .me-avatar {
-  width: 34px; height: 34px; border-radius: 50%;
+  width: 32px; height: 32px; border-radius: 50%;
   display: grid; place-items: center;
-  font-size: 13px; font-weight: 800; color: var(--on-accent);
+  font-size: 12px; font-weight: 800; color: var(--on-accent);
 }
+/* 16px overall with a 3px ring, so the coloured core is 10px. The ring is not
+   decoration — it is a cutout, punched in the card's own colour, and it is most
+   of why a dot this size still reads as part of the avatar. */
 .me-presence {
-  position: absolute; right: -2px; bottom: -2px;
-  width: 12px; height: 12px; border-radius: 50%;
+  position: absolute; right: -3px; bottom: -3px;
+  width: 16px; height: 16px; border-radius: 50%;
   background: var(--online); border: 3px solid var(--panel);
 }
 .me-text { min-width: 0; display: flex; flex-direction: column; }
 .me-name {
   font-size: 15px; font-weight: 600; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Display only — the stored name is untouched. Usernames in the reference
+     are lower-case by rule and render that way. */
+  text-transform: lowercase;
 }
 .me-status {
   display: block; max-width: 150px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 12px; color: var(--dim); font-weight: 500;
+  /* --muted, not --dim: as a fraction of the name above it this line was at
+     .55 where the reference sits at .75, which read as switched off. */
+  font-size: 12px; color: var(--muted); font-weight: 500;
 }
 .me-status[hidden] { display: none; }
-.me-actions { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+/* The same distance #me-bar uses, so mic-group / headset-group / cog are all
+   separated by one gap and only the caret sits closer than that. */
+/* Measured glyph-edge to glyph-edge, this puts ~18px between the groups
+   against ~12-15px inside them — which is the whole point: a caret has to
+   read as belonging to the control BEFORE it. */
+.me-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 
 /* A toggle and its caret read as ONE control: the caret is deliberately narrow
    and sits tight against the icon, so the pair still scans as a single mic or
    headset button rather than two unrelated squares. */
 .me-ctl { display: flex; align-items: center; }
-.me-ctl .me-ctl-main { width: 32px; border-radius: 5px 2px 2px 5px; }
+.me-ctl .me-ctl-main { width: 30px; border-radius: 5px 2px 2px 5px; }
 .me-ctl .me-ctl-caret {
-  width: 16px; border-radius: 2px 5px 5px 2px;
-  color: var(--dim);
+  width: 20px; border-radius: 2px 5px 5px 2px;
+  color: var(--panel-icon);
 }
-.me-ctl .me-ctl-caret .ico { width: 13px; height: 13px; }
-.me-ctl:hover .me-ctl-caret { color: var(--muted); }
+.me-ctl:hover .me-ctl-caret { color: var(--text); }
 .me-ctl-caret[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 
 /* ---------- icon buttons ------------------------------------------------ */
 
 .icon-btn {
   width: 32px; height: 32px; display: grid; place-items: center;
+  /* The browser's own button padding is 1px 6px, and nothing here ever reset
+     it: on a fixed-width button that leaves a content box narrower than the
+     glyph, and a centred item wider than its area overflows to ONE side. Every
+     icon in the app was sitting a couple of pixels right of its own button. */
+  padding: 0;
   background: none; border: 0; border-radius: 5px; cursor: pointer;
   color: var(--muted); font-size: 14px; line-height: 1;
 }
@@ -1116,14 +1153,15 @@ button { font-family: inherit; }
   background: none; border: 0; outline: none; resize: none;
   max-height: 45vh; line-height: 1.375; padding: 14px 0; font-size: 15px;
 }
-#composer-input::placeholder { color: var(--dim); }
+/* Dimmer than a --dim label: this is text that is not there yet. */
+#composer-input::placeholder { color: var(--placeholder); }
 #btn-attach {
   width: 50px; height: 50px; flex: 0 0 50px;
   display: grid; place-items: center; align-self: flex-end;
   background: none; border: 0; cursor: pointer; color: var(--muted);
 }
 #btn-attach:hover { color: var(--text); }
-#btn-attach .ico { width: 24px; height: 24px; }
+#btn-attach .ico { width: 20px; height: 20px; }
 .composer-tools {
   flex: 0 0 auto; align-self: flex-end;
   display: flex; align-items: center; gap: 2px;
@@ -2294,14 +2332,14 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    ========================================================================== */
 
 :root[data-theme="light"] {
-  --rail:       #dcdee3;
-  --panel:      #e9ebef;
-  --side:       #f2f3f5;
+  --rail:       #dededf;
+  --side:       #eeeeef;
   --chat:       #ffffff;
-  --chat-2:     #f6f7f9;
+  --chat-2:     #f6f6f7;
+  --input:      #f4f4f5;
+  --panel:      #ffffff;   /* raised out of --side, as in dark */
   --float:      #ffffff;
-  --input:      #eaecef;
-  --elev:       #e0e2e6;
+  --elev:       #e6e6e8;
 
   --hover:      rgba(0, 0, 0, .045);
   --active:     rgba(0, 0, 0, .085);
@@ -2310,21 +2348,23 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --line-2:     rgba(0, 0, 0, .14);
   --line-solid: rgba(0, 0, 0, .12);
 
-  --text:        #202226;
-  --text-strong: #06070a;
-  --text-body:   #2e3035;
-  --muted:       #4e5058;
-  --dim:         #767980;
+  --text:        #202124;
+  --text-strong: #06060a;
+  --text-body:   #2e2e32;
+  --muted:       #4e4e55;
+  --dim:         #76767c;
+  --panel-icon:  #5a5a61;
+  --placeholder: #8e8e96;
 
   /* Inverted: a white lift on a white surface is invisible, and the reference
      darkens rather than lightens in its light theme. */
   --sheen: linear-gradient(180deg, rgba(0, 0, 0, .028), rgba(0, 0, 0, 0) 60%);
   --field:      #ffffff;
   --field-line: rgba(0, 0, 0, .14);
-  --code-bg:    #f0f1f4;
-  --code-text:  #1f2933;
-  --spoiler:      #c9ccd2;
-  --spoiler-hover: #b8bcc4;
+  --code-bg:    #f1f1f3;
+  --code-text:  #202024;
+  --spoiler:      #cbcbcf;
+  --spoiler-hover: #babac0;
   --divider:    rgba(0, 0, 0, .09);
   --scrim:      rgba(28, 30, 34, .45);
   --scrollbar:  rgba(0, 0, 0, .22);
@@ -2341,8 +2381,8 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --accent-line: rgba(14, 145, 134, .42);
   --on-accent:   #ffffff;
 
-  --online-rgb:  28, 156, 86;
-  --online:      #1c9c56;
+  --online-rgb:  27, 142, 76;
+  --online:      #1b8e4c;
   --idle:        #a9761a;
   --danger:      #d32a45;
   --danger-hi:   #ad2137;
@@ -2555,28 +2595,48 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    The transform lives on the .ico, never on the button, so the hover pill
    itself stays perfectly still while the glyph inside it moves — animating the
    button would make the background jitter against its neighbours. */
-#btn-settings { width: 32px; }
-/* Full-size glyphs in the user panel: the reference sits at 20px, and the
-   smaller ones were only ever a way to claw back room for the name. */
+#btn-settings { width: 30px; }
+#me-bar .icon-btn { color: var(--panel-icon); }
+#me-bar .icon-btn:hover { color: var(--text); }
+/* Sized per glyph rather than per button. Each of these fills a different
+   fraction of its own 24-unit box — the headset's ink is the narrowest of the
+   three — so one box size for all of them is what left the headset looking two
+   points small beside the mic and the cog. */
 #me-bar .icon-btn .ico { width: 22px; height: 22px; }
+#me-bar #btn-deafen .ico { width: 27px; height: 27px; }
+/* Small enough to sit INSIDE its 20px button. Anything wider overflows, and the
+   overflow is not split evenly, so the mark drifts toward its neighbour. */
+#me-bar .me-ctl-caret .ico { width: 16px; height: 16px; }
 #me-bar .icon-btn .ico {
   transition: transform .22s cubic-bezier(.2, .9, .3, 1.35);
   transform-origin: 50% 50%;
 }
 #me-bar .icon-btn:active .ico { transform: scale(.9); }
 
-/* The gear turns, the way it does in Discord. A partial turn, not a full one:
-   a 360° spin reads as a loading spinner. */
-#btn-settings:hover .ico { transform: rotate(100deg); }
-#btn-settings .ico { transition: transform .4s cubic-bezier(.2, .8, .25, 1); }
+/* The gear turns a quarter, not a full circle: a 360° spin reads as a spinner. */
+#btn-settings:hover .ico { transform: rotate(90deg); }
+#btn-settings .ico { transition: transform .4s cubic-bezier(.25, .1, .25, 1); }
 
-/* The mic lifts as if being picked up… */
-#btn-mute:hover .ico { transform: translateY(-2px) scale(1.1); }
-/* …and the headset tips, like it is being put on. */
-#btn-deafen:hover .ico { transform: rotate(-9deg) scale(1.1); }
-/* The carets nudge the way they point. */
-.me-ctl .me-ctl-caret .ico { transform: rotate(90deg); }
-.me-ctl-caret:hover .ico { transform: rotate(90deg) translateX(1.5px); }
+/* The mic swells, on an easing that overshoots slightly and settles back —
+   which is what stops it reading as a plain scale. */
+#btn-mute .ico { transition: transform .25s cubic-bezier(.34, 1.56, .64, 1); }
+#btn-mute:hover .ico { transform: scale(1.15); }
+
+/* The headset shakes itself out, decaying rather than swinging evenly: an
+   animation, not a transition, because a transition has only two ends. */
+@keyframes headset-wiggle {
+  0%   { transform: rotate(0deg); }
+  20%  { transform: rotate(-12deg); }
+  40%  { transform: rotate(10deg); }
+  60%  { transform: rotate(-8deg); }
+  80%  { transform: rotate(6deg); }
+  100% { transform: rotate(0deg); }
+}
+#btn-deafen:hover .ico { animation: headset-wiggle .45s ease-in-out; }
+
+/* The carets nudge the way they point — down, now that the glyph is drawn
+   that way rather than turned into place. */
+.me-ctl-caret:hover .ico { transform: translateY(1.5px); }
 
 /* The avatar swells very slightly when the identity block is hovered, which is
    what makes it read as a button rather than a label. */
@@ -2589,13 +2649,14 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   #me-bar .icon-btn .ico,
   #btn-settings .ico,
+  #btn-mute .ico,
   .me-id .me-av-wrap { transition: none; }
   #btn-settings:hover .ico,
   #btn-mute:hover .ico,
   #btn-deafen:hover .ico,
+  .me-ctl-caret:hover .ico,
   .me-id:hover .me-av-wrap { transform: none; }
-  /* The caret keeps its rotation — that is direction, not motion. */
-  .me-ctl-caret:hover .ico { transform: rotate(90deg); }
+  #btn-deafen:hover .ico { animation: none; }
 }
 
 /* ---------- account panel ---------------------------------------------- */

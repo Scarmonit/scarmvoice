@@ -500,10 +500,15 @@ async function fetchRemoteImage(raw) {
 // sends" must never be buffered unbounded into the main process — a multi-GB
 // image/png would take down the whole app, not just a tab.
 async function boundedBuffer(res, limit) {
+    // The limit is the caller's, and they do not all pass the same one — the
+    // message has to quote the one actually being enforced rather than a
+    // number that was true of one caller when this was written.
+    const tooBig = () => new Error(
+        'That file is larger than ' + Math.round(limit / (1024 * 1024)) + ' MB');
     const declared = Number(res.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > limit) {
         try { await res.body?.cancel(); } catch (e) { /* already gone */ }
-        throw new Error('That file is larger than 25 MB');
+        throw tooBig();
     }
     if (!res.body) return Buffer.alloc(0);
 
@@ -517,7 +522,7 @@ async function boundedBuffer(res, limit) {
             total += value.length;
             // Content-Length can lie or be absent, so the running total is the
             // check that actually holds.
-            if (total > limit) throw new Error('That file is larger than 25 MB');
+            if (total > limit) throw tooBig();
             chunks.push(value);
         }
     } finally {

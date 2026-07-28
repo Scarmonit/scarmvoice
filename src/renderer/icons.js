@@ -78,6 +78,12 @@
         plus: '<path d="M12 5v14M5 12h14"/>',
         'plus-circle': '<circle cx="12" cy="12" r="8.6"/><path d="M12 8.2v7.6M8.2 12h7.6"/>',
         chevron: '<path d="M9.4 5.6L15.8 12l-6.4 6.4"/>',
+        // The same mark drawn pointing down, rather than the right-pointing one
+        // turned with a CSS rotate. A rotated glyph keeps its UNROTATED box, so
+        // the two disagree about where its centre is — which is how the user
+        // panel's carets ended up sitting seven pixels right of their buttons,
+        // beside the icon that follows them instead of the one they belong to.
+        'chevron-down': '<path d="M5.6 9.4L12 15.8l6.4-6.4"/>',
         search: '<circle cx="11" cy="11" r="6.8"/><path d="M20.8 20.8l-4.4-4.4"/>',
         x: '<path d="M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>',
         check: '<path d="M4.6 12.6l4.8 4.8L19.4 7.2"/>',
