@@ -1216,6 +1216,14 @@
         badge.textContent = total > 99 ? '99+' : String(total);
         badge.hidden = !total;
 
+        // The DM button carries only its own count. Folding DMs into the server
+        // badge alone would leave the button that opens them silent about them.
+        const dmBadge = $('rail-dm-badge');
+        if (dmBadge) {
+            dmBadge.textContent = dmN > 99 ? '99+' : String(dmN);
+            dmBadge.hidden = !dmN;
+        }
+
         setTaskbarBadge(alerting);
     }
 
@@ -4703,6 +4711,14 @@
                 break;
             case 'dm':
                 onDmEvent(m);
+                break;
+            case 'dm-thread':
+                // A group was created, renamed, added to, or someone left it.
+                // The change is always to the LIST, and may also be to the
+                // conversation on screen — refetching covers both without a
+                // branch per variety of change.
+                loadDmThreads();
+                if (dmOpen && m.thread === dmOpen.id) loadDmMessages(true);
                 break;
             case 'voiceTakeover':
                 // The same account joined voice somewhere else — one voice
@@ -8867,15 +8883,23 @@
             const open = dmOpen && dmOpen.id === t.id;
             const unread = open ? 0 : (t.unread || 0);
             const b = document.createElement('button');
-            b.className = 'chan dm' + (t.isGroup ? ' dm-group' : '') +
+            b.className = 'chan dm dm-row' + (t.isGroup ? ' dm-group' : '') +
                 (open ? ' active' : '') + (unread ? ' unread' : '');
-            // A group is marked as one at a glance rather than by reading the
-            // names: the reference draws a stacked avatar, we use the icon slot
-            // the channel row already has.
-            const mark = t.isGroup
-                ? `<span class="hash dm-group-mark" title="${esc(String((t.members || []).length))} people">#</span>`
-                : '<span class="hash">@</span>';
-            b.innerHTML = mark + `<span class="chan-name">${esc(dmLabel(t))}</span>` +
+            // A face, not an @. The reference identifies a conversation by who
+            // is in it, and for a group it stacks two of them — which is what
+            // says "more than one person" before any name is read.
+            const face = (u) => u
+                ? `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
+                  `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`
+                : '<span class="av"></span>';
+            let art;
+            if (t.isGroup) {
+                const others = (t.members || []).filter((m) => !account || m.id !== account.id).slice(0, 2);
+                art = '<span class="dm-stack">' + others.map(face).join('') + '</span>';
+            } else {
+                art = '<span class="dm-face">' + face(t.user) + '</span>';
+            }
+            b.innerHTML = art + `<span class="chan-name">${esc(dmLabel(t))}</span>` +
                 (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
             b.title = t.isGroup
                 ? (t.members || []).map((m) => m.username).join(', ')
@@ -8932,6 +8956,7 @@
         $('dm-title').textContent = dmOpen.title;
         // A group says how many people are in it; a pair does not need telling.
         $('dm-panel').classList.toggle('is-group', dmOpen.isGroup);
+        renderDmHead();
         $('dm-panel').hidden = false;
         closeThread();
         dmMsgs = [];
@@ -8954,6 +8979,21 @@
         $('dm-input').focus();
     }
 
+    // The header carries everything that is true only of a group, so it is one
+    // function rather than a toggle repeated at each call site.
+    function renderDmHead() {
+        const group = !!(dmOpen && dmOpen.isGroup);
+        const count = $('dm-count');
+        count.hidden = !group;
+        if (group) {
+            const n = (dmOpen.members || []).length;
+            count.textContent = n + ' member' + (n === 1 ? '' : 's');
+        }
+        $('dm-add').hidden = !group;
+        $('dm-more').hidden = !group;
+        $('dm-title').textContent = dmOpen ? dmOpen.title : 'Direct message';
+    }
+
     function closeDm() {
         dmOpen = null;
         loadDmMessages.lastSig = null;
@@ -8974,10 +9014,11 @@
         if (res && res.success && res.thread) {
             dmOpen.members = res.thread.members || dmOpen.members;
             dmOpen.isGroup = !!res.thread.isGroup;
-            if (res.thread.title) {
-                dmOpen.title = res.thread.title;
-                $('dm-title').textContent = res.thread.title;
-            }
+            if (res.thread.title) dmOpen.title = res.thread.title;
+            // Membership drives the member count, the add/options buttons and
+            // the sender labels below, so the header is repainted with it
+            // rather than only when the conversation is first opened.
+            renderDmHead();
         }
         if (!res || !res.success) {
             if (authGone(res)) return;
@@ -9097,7 +9138,7 @@
     // One picker for both: one person selected makes a DM, several make a
     // group. Splitting it into "New DM" and "New Group" would ask the reader to
     // decide which they want before they have chosen who, which is backwards.
-    const dmPick = { all: [], chosen: new Set() };
+    const dmPick = { all: [], chosen: new Set(), mode: 'create', thread: 0 };
     const DM_GROUP_MAX = 10;                  // server enforces the same cap
 
     function renderDmPicker() {
@@ -9148,6 +9189,21 @@
     $('dm-picker-ok').addEventListener('click', async () => {
         const users = [...dmPick.chosen];
         if (!users.length) return;
+        // Adding to a group and starting one are the same choice made in two
+        // places, so they share the picker and differ only in where it posts.
+        if (dmPick.mode === 'add' && dmPick.thread) {
+            const r = await L.board('dm/manage', {
+                method: 'POST', body: { thread: dmPick.thread, action: 'add', users }
+            });
+            if (!r || !r.success) return toast((r && r.error) || 'Could not add them', true);
+            if (dmOpen && dmOpen.id === dmPick.thread) {
+                dmOpen.members = r.members || dmOpen.members;
+                renderDmHead();
+            }
+            closeDmPicker();
+            loadDmThreads();
+            return toast(users.length === 1 ? 'Added them to the group' : 'Added ' + users.length + ' people');
+        }
         const res = await L.board('dm/create', { method: 'POST', body: { users } });
         if (!res || !res.success) {
             return toast((res && res.error) || 'Could not start that conversation', true);
@@ -9160,21 +9216,92 @@
         if (res.thread) openDm(res.thread);
     });
 
-    // Start a conversation: pick any account holder from the directory.
-    $('btn-new-dm').addEventListener('click', async () => {
+    // Open the picker. `exclude` keeps people already in the group off the list
+    // — offering to add someone who is already there is an error the server
+    // would have to reject, and one the reader should never be shown.
+    async function openDmPicker(mode, thread, exclude) {
         if (!account) { openSettings(); return; }
         const res = await L.board('account/users');
         if (!res || !res.success) return toast((res && res.error) || 'Could not load the member directory', true);
-        const others = (res.users || []).filter((u) => u.id !== account.id);
+        const skip = new Set([account.id, ...(exclude || [])]);
+        const others = (res.users || []).filter((u) => !skip.has(u.id));
         if (!others.length) {
-            return toast('No one else has a board account yet — DMs need one on both ends');
+            return toast(mode === 'add'
+                ? 'Everyone with an account is already in this group'
+                : 'No one else has a board account yet — DMs need one on both ends');
         }
         dmPick.all = others;
         dmPick.chosen.clear();
+        dmPick.mode = mode;
+        dmPick.thread = thread || 0;
         $('dm-picker-search').value = '';
+        $('dm-picker').querySelector('h2').textContent = mode === 'add' ? 'Add people' : 'New message';
         renderDmPicker();
         $('dm-picker').hidden = false;
-        trapFocus($('dm-picker'), { label: 'New message', initial: $('dm-picker-search') });
+        trapFocus($('dm-picker'), { label: mode === 'add' ? 'Add people' : 'New message', initial: $('dm-picker-search') });
+    }
+
+    $('btn-new-dm').addEventListener('click', () => openDmPicker('create', 0, []));
+
+    $('dm-add').addEventListener('click', () => {
+        if (!dmOpen || !dmOpen.isGroup) return;
+        openDmPicker('add', dmOpen.id, (dmOpen.members || []).map((m) => m.id));
+    });
+
+    $('dm-more').addEventListener('click', (e) => {
+        if (!dmOpen || !dmOpen.isGroup) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        const thread = dmOpen.id;
+        openCtxMenu([
+            {
+                label: 'Rename group', icon: 'pencil',
+                onClick: async () => {
+                    const name = await askText('Rename group', dmOpen && dmOpen.title === defaultGroupName(dmOpen) ? '' : (dmOpen ? dmOpen.title : ''), 'Save');
+                    if (name === null || name === false) return;
+                    const res = await L.board('dm/manage', {
+                        method: 'POST', body: { thread, action: 'rename', title: String(name).trim() }
+                    });
+                    if (!res || !res.success) return toast((res && res.error) || 'Could not rename it', true);
+                    if (dmOpen && dmOpen.id === thread) {
+                        dmOpen.title = res.title || dmOpen.title;
+                        renderDmHead();
+                    }
+                    loadDmThreads();
+                }
+            },
+            {
+                label: 'Leave group', icon: 'ban', danger: true,
+                onClick: async () => {
+                    const ok = await askConfirm(
+                        'Leave this group?',
+                        'You will stop receiving its messages. Someone still in it can add you back.',
+                        'Leave', true
+                    );
+                    if (!ok) return;
+                    const res = await L.board('dm/manage', { method: 'POST', body: { thread, action: 'leave' } });
+                    if (!res || !res.success) return toast((res && res.error) || 'Could not leave the group', true);
+                    if (dmOpen && dmOpen.id === thread) closeDm();
+                    loadDmThreads();
+                    toast('You left the group');
+                }
+            }
+        ], r.left - 140, r.bottom + 4);
+    });
+
+    // An unnamed group is shown as its member list, so the rename box should
+    // start empty rather than pre-filled with names the reader never typed.
+    function defaultGroupName(t) {
+        return (t.members || []).filter((m) => !account || m.id !== account.id)
+            .map((m) => m.username).join(', ');
+    }
+
+    // The rail's DM button: the other place you can be, not one of the servers.
+    // Opens the most recent conversation, or the picker when there are none.
+    $('rail-dms').addEventListener('click', () => {
+        if (!account) { openSettings(); return; }
+        if (dmOpen) return closeDm();
+        if (dmThreads.length) return openDm(dmThreads[0]);
+        openDmPicker('create', 0, []);
     });
 
     // Realtime delivery — pushed by the server the moment the sender posts.

@@ -1873,8 +1873,11 @@ button { font-family: inherit; }
    `margin-right` on the column's own children keeps the drawer where it is
    (absolute, flush to the right edge) and simply narrows what sits behind it. */
 #main { --drawer-w: min(420px, 62%); --drawer-shift: 0px; }
-#main:has(> #thread-panel:not([hidden])),
-#main:has(> #dm-panel:not([hidden])) { --drawer-shift: var(--drawer-w); }
+/* Threads are still a drawer — a thread is a branch off the message you are
+   looking at, so the column behind it staying put is the point. DMs are not:
+   they moved out of #main entirely and take the whole conversation area, so
+   they are no longer listed here. */
+#main:has(> #thread-panel:not([hidden])) { --drawer-shift: var(--drawer-w); }
 #main > #chan-head,
 #main > #filter-bar,
 #main > #pinned-panel,
@@ -2901,14 +2904,46 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .chan.dm-signin .chan-name { color: var(--muted); font-style: italic; }
 
 /* DM conversation drawer — same shell as the thread panel. */
+/* Columns 3-5 and rows 1-3: the header, message and member areas together —
+   everything to the right of the channel sidebar. Named areas cannot express
+   "all three of these", so this is placed by line number against the grid
+   declared on #app.
+
+   It replaces a `position: absolute; right: 0` drawer. A drawer says the
+   conversation is a thing laid over where you really are; the reference says a
+   DM IS where you are, and the header changing with it is most of that. */
 #dm-panel {
-  position: absolute; top: 0; right: 0; bottom: 0;
-  width: var(--drawer-w); z-index: 40;
+  grid-column: 3 / 5;
+  /* 1 / 4, not 1 / 3. #main occupies rows 2 AND 3 — the composer lives in the
+     third — so stopping at 3 left the channel composer showing underneath the
+     DM's own, two message boxes stacked with different placeholders. Columns
+     stay 3-5, so the user dock in row 3 is untouched. */
+  grid-row: 1 / 4;
+  z-index: 40;
   display: flex; flex-direction: column;
-  background: var(--chat-2);
-  box-shadow: -16px 0 44px rgba(0, 0, 0, .45);
+  min-width: 0; min-height: 0;
+  background: var(--chat);
 }
 #dm-panel[hidden] { display: none; }
+
+#dm-head {
+  flex: none; height: 48px; display: flex; align-items: center; gap: 8px;
+  padding: 0 8px 0 16px;
+  background: var(--chat);
+  border-bottom: 1px solid var(--line);
+}
+#dm-head > .ico { color: var(--ch-icon); flex: none; }
+#dm-title {
+  font-size: 15px; font-weight: 600; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.dm-count {
+  flex: none; font-size: 12px; color: var(--muted);
+  padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--line);
+}
+.dm-count[hidden] { display: none; }
+.dm-head-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: none; }
+.dm-head-actions .icon-btn[hidden] { display: none; }
 #dm-messages {
   flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: 6px;
@@ -3712,3 +3747,36 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .dm-msg.mine + .dm-who { margin-top: 10px; }
 .dm-group-mark { font-weight: 700; }
 .chan.dm-group .chan-name { font-style: normal; }
+
+/* ---- DM rows in the sidebar --------------------------------------------
+   Measured off the reference: 42px tall, 8px radius, padding 0 0 0 8px. It
+   identifies a conversation by a face rather than a glyph, and a group by two
+   faces stacked — which says "more than one person" before a name is read. */
+.chan.dm-row {
+  /* padding measured off the reference: left only. The unread badge carries
+     its own right margin rather than the row reserving space it does not
+     always need. */
+  height: 42px; border-radius: 8px; padding: 0 0 0 8px; gap: 12px;
+}
+.chan.dm-row .unread { margin-right: 8px; }
+.dm-face, .dm-stack { flex: none; display: inline-flex; align-items: center; }
+.dm-face .av { width: 32px; height: 32px; font-size: 12px; }
+/* Two faces, the second tucked behind and down-right, cut out of the first so
+   the overlap reads as depth instead of a smudge. */
+.dm-stack { position: relative; width: 32px; height: 32px; }
+.dm-stack .av {
+  position: absolute; width: 22px; height: 22px; font-size: 9px;
+  border-radius: 50%;
+}
+.dm-stack .av:first-child { top: 0; left: 0; z-index: 2; box-shadow: 0 0 0 2px var(--side); }
+.dm-stack .av:last-child  { bottom: 0; right: 0; z-index: 1; }
+.dm-stack .av:only-child   { top: 4px; left: 4px; }
+.chan.dm-row .chan-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chan.dm-row .unread { margin-left: auto; }
+
+/* ---- the rail's DM button ----------------------------------------------
+   Above the separator, where the reference puts its home button: direct
+   messages are not one of the servers, they are the other place you can be. */
+.rail-btn.rail-dms { position: relative; }
+.rail-btn.rail-dms .ico { width: 22px; height: 22px; }
+#rail-dm-badge[hidden] { display: none; }

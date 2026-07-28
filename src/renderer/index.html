@@ -72,6 +72,14 @@
   <!-- Far-left rail. One "server" (this board), its icon at the top and the
        app controls at the bottom. -->
   <nav id="rail" aria-label="Servers">
+    <!-- Direct messages first, above the separator, the way the reference puts
+         its home button: DMs are not one of the servers, they are the other
+         place you can be. -->
+    <button type="button" class="rail-btn rail-dms" id="rail-dms" title="Direct Messages">
+      <span class="ico" data-icon="at"></span>
+      <span class="rail-badge" id="rail-dm-badge" hidden></span>
+    </button>
+    <div class="rail-sep"></div>
     <button type="button" class="rail-server active" id="rail-home" title="ScarmVoice">
       <img src="logo.png" alt="" aria-hidden="true">
       <span class="rail-badge" id="rail-badge" hidden></span>
@@ -584,21 +592,6 @@
       </form>
     </aside>
 
-    <aside id="dm-panel" hidden>
-      <div class="thread-head">
-        <span class="ico" data-icon="at"></span>
-        <span id="dm-title">Direct message</span>
-        <button class="icon-btn" id="dm-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
-      </div>
-      <div id="dm-messages"></div>
-      <form id="dm-composer" autocomplete="off">
-        <textarea id="dm-input" rows="1" placeholder="Message…" maxlength="2000"></textarea>
-        <button type="submit" id="dm-send" title="Send (Enter)">
-          <span class="ico" data-icon="send"></span>
-        </button>
-      </form>
-    </aside>
-
     <div id="drop-hint" hidden>
       <div class="drop-inner">
         <span class="drop-ico" data-icon="upload"></span>
@@ -606,6 +599,37 @@
       </div>
     </div>
   </main>
+
+  <!-- Direct messages get the whole conversation area, header included, the way
+       the reference does. A DM is not a drawer laid over the channel you were
+       reading — it is where you are. Sitting in #app rather than inside #main
+       is what lets it span the header, message and member columns; as a child
+       of #main it could only ever be an overlay on one of them. -->
+  <aside id="dm-panel" hidden>
+    <header id="dm-head">
+      <span class="ico" data-icon="at"></span>
+      <span id="dm-title">Direct message</span>
+      <span id="dm-count" class="dm-count" hidden></span>
+      <div class="dm-head-actions">
+        <button type="button" class="icon-btn" id="dm-add" title="Add people" hidden>
+          <span class="ico" data-icon="user-add"></span>
+        </button>
+        <button type="button" class="icon-btn" id="dm-more" title="Group options" hidden>
+          <span class="ico" data-icon="sliders"></span>
+        </button>
+        <button type="button" class="icon-btn" id="dm-close" title="Close (Esc)">
+          <span class="ico" data-icon="x"></span>
+        </button>
+      </div>
+    </header>
+    <div id="dm-messages"></div>
+    <form id="dm-composer" autocomplete="off">
+      <textarea id="dm-input" rows="1" placeholder="Message…" maxlength="2000"></textarea>
+      <button type="submit" id="dm-send" title="Send (Enter)">
+        <span class="ico" data-icon="send"></span>
+      </button>
+    </form>
+  </aside>
 
   <!-- Members sidebar. Everyone present, grouped online / away, with their
        custom status; people in the call keep the per-person volume controls. -->
