@@ -144,8 +144,10 @@
       <div id="voice-live" class="voice-live" hidden>
         <div class="vl-status" id="vl-status">
           <!-- Signal strength rather than a dot: it says the same thing and has
-               room to say how WELL, which a dot never has. -->
-          <span class="ico vl-signal" data-icon="signal"></span>
+               room to say how WELL, which a dot never has. The round trip the
+               transport measured is on the tooltip. -->
+          <span class="ico vl-signal" id="vl-signal" data-icon="signal"
+                data-tip="Measuring latency…"></span>
           <span class="vl-text">
             <span id="vl-label">Voice Connected</span>
             <!-- Where you are, read from the same two labels the sidebar shows,

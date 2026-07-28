@@ -282,6 +282,54 @@
     }
     window.loungeShareStats = () => reportShareStats('manual');
 
+    // Round-trip time, measured by the transport rather than by us. The STUN
+    // connectivity check on whichever candidate pair the connection actually
+    // settled on IS the latency to the server — an application-level ping over
+    // a different socket would be a different number about a different path.
+    //
+    // Returns null when nothing has measured it yet. A number nobody measured is
+    // worse than no number, so this never guesses.
+    async function sampleRtt() {
+        prunePCS();
+        let best = null;
+        for (const pc of PCS) {
+            if (!pc || typeof pc.getStats !== 'function') continue;
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') continue;
+            let stats;
+            try { stats = await pc.getStats(); } catch (e) { continue; }
+
+            const pairs = new Map();
+            let selectedId = null;
+            stats.forEach((r) => {
+                if (r.type === 'candidate-pair') pairs.set(r.id, r);
+                // Chromium names the live pair on the transport; it is the only
+                // one whose RTT describes the path media is actually taking.
+                if (r.type === 'transport' && r.selectedCandidatePairId) selectedId = r.selectedCandidatePairId;
+            });
+            let pair = selectedId ? pairs.get(selectedId) : null;
+            if (!pair) pairs.forEach((p) => { if (p.state === 'succeeded' && p.nominated) pair = p; });
+            if (!pair) pairs.forEach((p) => { if (!pair && p.state === 'succeeded') pair = p; });
+
+            let rtt = (pair && typeof pair.currentRoundTripTime === 'number')
+                ? pair.currentRoundTripTime : null;
+            // RTCP's own estimate, for the window before the first STUN check
+            // lands. Same units, measured a different way.
+            if (rtt === null) {
+                stats.forEach((r) => {
+                    if (r.type === 'remote-inbound-rtp' && typeof r.roundTripTime === 'number') {
+                        if (rtt === null || r.roundTripTime < rtt) rtt = r.roundTripTime;
+                    }
+                });
+            }
+            // The shortest live path, when a mesh call has several.
+            if (rtt !== null && (best === null || rtt < best)) best = rtt;
+        }
+        return best === null ? null : Math.round(best * 1000);
+    }
+    // Alongside loungeShareStats: "what does the app think my latency is, right
+    // now" is the first question anyone asks when the number looks wrong.
+    window.loungeRtt = sampleRtt;
+
     function createVoice(opts) {
         const on = Object.assign({
             onState: () => {},
@@ -293,6 +341,8 @@
         }, opts || {});
 
         let meeting = null;
+        let rttMs = null;
+        let rttTimer = null;
         let joined = false;
         let joining = false;
         let muted = false;
@@ -331,9 +381,32 @@
             return (p && (p.customParticipantId || p.id)) || null;
         }
 
+        // Three seconds is what the number is worth: it is a running average
+        // inside the transport already, so sampling faster only shows jitter.
+        // A push only when the DISPLAYED value would change, or the panel
+        // repaints on every tick for a millisecond nobody can see.
+        const RTT_MS = 3000;
+        function startRtt() {
+            stopRtt();
+            const tick = () => sampleRtt().then((v) => {
+                const changed = (v === null) !== (rttMs === null)
+                    || (v !== null && rttMs !== null && Math.abs(v - rttMs) >= 3);
+                rttMs = v;
+                if (changed) pushState();
+            }).catch(() => {});
+            tick();
+            rttTimer = setInterval(tick, RTT_MS);
+        }
+        function stopRtt() {
+            if (rttTimer) clearInterval(rttTimer);
+            rttTimer = null;
+            rttMs = null;
+        }
+
         function state() {
             return {
                 joined, joining, muted, deafened,
+                rtt: rttMs,
                 transmitting: lastTransmit === true,
                 sharing: localSharing,
                 sharers: shareList().map((s) => ({ id: s.id, name: s.name, isLocal: s.isLocal })),
@@ -1166,6 +1239,7 @@
                 joining = false;
                 muted = false;
                 lastTransmit = null;
+                startRtt();
 
                 // The saved microphone has to be selected THROUGH THE SDK. The
                 // deviceId in mediaConfiguration.audio above is never read for
@@ -1328,6 +1402,7 @@
             prunePCS();
             SHARE_TRACK_ID = null;
             SHARE_GEN++;
+            stopRtt();
             // Re-armed so the next join logs its SFU peer diagnostic even if the
             // roster comes back identical.
             lastRosterSig = '';
@@ -1469,6 +1544,9 @@
             },
 
             isJoined: () => joined,
+            // The last sample, or null. Read live by the panel's tooltip so the
+            // number under the pointer is the freshest one taken.
+            rtt: () => rttMs,
             // A join in flight is neither joined nor idle. Callers that tear the
             // session down need to see this state, or the pending join resolves
             // after they've finished cleaning up and opens the mic behind them.

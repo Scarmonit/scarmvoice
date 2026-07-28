@@ -2966,6 +2966,15 @@ button.ap-row:hover .ap-more { color: var(--text); }
    either — the bars hold still and let the amber say so. */
 #voice-live .vl-status.warn .vl-signal rect { animation: none; }
 
+/* Bars above the measured quality go dark and stop moving, so the glyph reports
+   the round trip rather than decorating it. Four is also the unmeasured state:
+   before the first sample there is no evidence of a problem to draw. */
+#voice-live .vl-signal[data-bars="1"] rect:nth-child(n+2),
+#voice-live .vl-signal[data-bars="2"] rect:nth-child(n+3),
+#voice-live .vl-signal[data-bars="3"] rect:nth-child(n+4) {
+  animation: none; opacity: .22;
+}
+
 /* 2. The soundboard's bars dance, left to right, only while hovered. Bigger and
       faster than the signal's breathe, so it reads as play rather than status. */
 #btn-soundboard:hover .wv { animation: vp-jump 900ms cubic-bezier(.4, 0, .2, 1) infinite; }

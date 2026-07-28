@@ -3143,6 +3143,28 @@
 
     // ---------- voice -----------------------------------------------------
 
+    // How many of the four bars are lit, from the round trip the transport
+    // measured. Unmeasured is NOT drawn as poor — before the first sample there
+    // is no evidence either way, and the tooltip says so in words.
+    function signalBars(rtt) {
+        if (rtt === null || rtt === undefined) return 4;
+        if (rtt <= 100) return 4;
+        if (rtt <= 200) return 3;
+        if (rtt <= 400) return 2;
+        return 1;
+    }
+
+    function paintSignal(rtt) {
+        const el = $('vl-signal');
+        if (!el) return;
+        el.setAttribute('data-bars', String(signalBars(rtt)));
+        const text = (rtt === null || rtt === undefined) ? 'Measuring latency…' : rtt + ' ms';
+        if (el.getAttribute('data-tip') !== text) {
+            el.setAttribute('data-tip', text);
+            refreshTip(el);
+        }
+    }
+
     function setupVoice() {
         voice = window.createVoice({
             onState: (st) => {
@@ -3173,6 +3195,7 @@
                 // heard or hearing, and painting them the same green as a good
                 // connection says the opposite of what they mean.
                 $('vl-status').classList.toggle('warn', !!(st.muted || st.deafened));
+                paintSignal(st.rtt);
                 // Read off the sidebar's own labels, so the panel and the list
                 // can never disagree about where you are.
                 const chanName = document.querySelector('#btn-join-voice .vchan-name');
@@ -3271,6 +3294,10 @@
         if (voice && voice.isJoined()) return;
         joinVoice();
     });
+    $('vl-signal').addEventListener('pointerover', () => {
+        if (voice && voice.rtt) paintSignal(voice.rtt());
+    });
+
     $('btn-leave-voice').addEventListener('click', () => {
         // Before the await, not after: leaving is a network round trip, and an
         // exit that starts when the server answers is not an exit.

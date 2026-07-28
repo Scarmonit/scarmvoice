@@ -480,3 +480,74 @@ describe('the voice panel controls', () => {
         expect(block).toMatch(/transition: none/);
     });
 });
+
+describe('the latency readout', () => {
+    const voice = () => fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('reads the number the transport measured, not one of our own', () => {
+        // The STUN check on the candidate pair the connection actually settled
+        // on IS the latency to the server. An application-level ping over a
+        // different socket would be a different number about a different path.
+        const fn = voice().slice(voice().indexOf('async function sampleRtt()'));
+        const body = fn.slice(0, fn.indexOf('\n    }'));
+        expect(body).toMatch(/currentRoundTripTime/);
+        // The live pair, named by the transport — not just any succeeded one.
+        expect(body).toMatch(/selectedCandidatePairId/);
+        // RTCP's estimate only as the fallback, for the window before the first
+        // STUN check lands.
+        expect(body.indexOf('currentRoundTripTime')).toBeLessThan(body.indexOf('remote-inbound-rtp'));
+        // Seconds in, milliseconds out.
+        expect(body).toMatch(/Math\.round\(best \* 1000\)/);
+    });
+
+    it('returns nothing rather than a guess', () => {
+        const fn = voice().slice(voice().indexOf('async function sampleRtt()'));
+        const body = fn.slice(0, fn.indexOf('\n    }'));
+        expect(body).toMatch(/return best === null \? null :/);
+        // And the panel says so in words instead of drawing a number.
+        expect(src()).toMatch(/'Measuring latency…'/);
+    });
+
+    it('samples only while the call is up', () => {
+        // A timer left running against closed peer connections is a leak that
+        // reports a stale number forever.
+        expect(voice()).toMatch(/joined = true;[\s\S]{0,120}startRtt\(\);/);
+        expect(voice()).toMatch(/SHARE_GEN\+\+;\s*\n\s*stopRtt\(\);/);
+        expect(voice()).toMatch(/function stopRtt\(\) \{[^}]*rttMs = null;/);
+        expect(voice()).toMatch(/rtt: rttMs,/);
+    });
+
+    it('repaints only when the displayed value would change', () => {
+        // It is a running average inside the transport already, so a push on
+        // every tick would repaint the panel for a millisecond nobody can see.
+        const at = voice().indexOf('function startRtt()');
+        const body = voice().slice(at, at + 700);
+        expect(body).toMatch(/Math\.abs\(v - rttMs\) >= 3/);
+        expect(body).toMatch(/if \(changed\) pushState\(\)/);
+    });
+
+    it('reads the freshest sample under the pointer', () => {
+        // The state push is up to three seconds old; a listener on the element
+        // runs in the target phase, before the document-level one reads the
+        // attribute.
+        expect(src()).toMatch(/\$\('vl-signal'\)\.addEventListener\('pointerover'/);
+        expect(src()).toMatch(/if \(voice && voice\.rtt\) paintSignal\(voice\.rtt\(\)\)/);
+        expect(voice()).toMatch(/rtt: \(\) => rttMs,/);
+    });
+
+    it('lights the bars from the same number', () => {
+        const fn = src().slice(src().indexOf('function signalBars('));
+        const body = fn.slice(0, fn.indexOf('\n    }'));
+        // Unmeasured is not drawn as poor: before the first sample there is no
+        // evidence either way, and the tooltip says so.
+        expect(body).toMatch(/if \(rtt === null \|\| rtt === undefined\) return 4;/);
+        [[100, 4], [200, 3], [400, 2]].forEach(([ms, bars]) => {
+            expect(body).toContain('if (rtt <= ' + ms + ') return ' + bars + ';');
+        });
+        // And the ones above the measured quality go dark.
+        [1, 2, 3].forEach((n) => {
+            expect(css).toContain('.vl-signal[data-bars="' + n + '"] rect:nth-child(n+' + (n + 1) + ')');
+        });
+    });
+});
