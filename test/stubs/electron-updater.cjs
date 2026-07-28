@@ -1,0 +1,33 @@
+// Stands in for electron-updater under test (see test/setup.js).
+//
+// The real one talks to GitHub and, on quitAndInstall, launches an installer and
+// kills the process — neither of which a unit test can survive. This records the
+// calls instead, so the module's DECISIONS (does it install, and when) are
+// observable without anything actually happening.
+const state = (globalThis.__UPDATER_STUB__ ||= {
+    installs: [],
+    checks: 0,
+    downloads: 0,
+    handlers: {}
+});
+
+const autoUpdater = {
+    autoDownload: false,
+    autoInstallOnAppQuit: false,
+    allowDowngrade: false,
+    on(event, fn) {
+        (state.handlers[event] ||= []).push(fn);
+        return this;
+    },
+    // Let a test drive the real event sequence (update-downloaded etc.).
+    emit(event, payload) {
+        (state.handlers[event] || []).forEach((fn) => fn(payload));
+    },
+    checkForUpdates() { state.checks++; return Promise.resolve(null); },
+    downloadUpdate() { state.downloads++; return Promise.resolve([]); },
+    quitAndInstall(isSilent, isForceRunAfter) {
+        state.installs.push({ isSilent, isForceRunAfter, at: Date.now() });
+    }
+};
+
+module.exports = { autoUpdater, __state: state };

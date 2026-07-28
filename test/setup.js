@@ -15,7 +15,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const STUBS = {
     electron: path.join(here, 'stubs', 'electron.cjs'),
     // rt.js's socket, so half-open connections can be produced on demand.
-    ws: path.join(here, 'stubs', 'ws.cjs')
+    ws: path.join(here, 'stubs', 'ws.cjs'),
+    // updater.js's feed. The real one talks to GitHub and, on quitAndInstall,
+    // launches an installer and kills the process — so "did it decide to
+    // install, and when" is only testable against a stand-in.
+    'electron-updater': path.join(here, 'stubs', 'electron-updater.cjs')
 };
 
 const originalResolve = Module._resolveFilename;

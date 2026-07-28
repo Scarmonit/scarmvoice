@@ -252,23 +252,28 @@ function parseNotes(raw) {
 
 // ---- applying it --------------------------------------------------------
 
-const COUNTDOWN_S = 10;          // long enough to say no, short enough to ignore
 const RECHECK_MS = 3 * 60 * 60 * 1000;   // a long session should still see updates
 
 let busy = false;                // in a call — never restart through one
-let tick = null;                 // countdown interval
 let recheck = null;              // periodic check timer
 
-function clearCountdown() {
-    if (tick) { clearInterval(tick); tick = null; }
-}
+// Kept as a no-op shape so the two callers below read the same as before.
+function clearCountdown() { /* there is no countdown any more */ }
 
-// Start (or restart) the countdown to installing. Called when the download
-// finishes, and again whenever the thing that was blocking it goes away.
+// Apply a downloaded update. There is no longer a delay in front of this.
+//
+// It used to count ten seconds down with a "Not now" button under it, which
+// meant every update waited on someone either ignoring it or missing it. An
+// update that has already downloaded is not a proposal — the app is going to
+// restart into it either way, and doing that at once is both faster and more
+// honest than a timer that mostly runs out anyway.
+//
+// The ONE thing still allowed to hold it back is a call in progress. Restarting
+// mid-conversation drops you out of it, which is a worse interruption than any
+// update is worth, and the wait is bounded by the length of the call — setBusy()
+// applies it the moment the call ends.
 function scheduleAutoRestart() {
     if (state.status !== 'ready') return;
-    if (state.postponed) return;             // asked not to, until next launch
-    clearCountdown();
 
     if (busy) {
         // Not an error and not a failure — just later. Saying so is better than
@@ -277,26 +282,16 @@ function scheduleAutoRestart() {
         return;
     }
 
-    let left = COUNTDOWN_S;
-    emit({ restartIn: left, waitingFor: null });
-    tick = setInterval(() => {
-        // A call can start DURING the countdown; that has to stop it, or the
-        // guard only works for calls that were already running.
-        if (busy) { clearCountdown(); emit({ restartIn: null, waitingFor: 'call' }); return; }
-        left -= 1;
-        if (left > 0) { emit({ restartIn: left }); return; }
-        clearCountdown();
-        emit({ restartIn: 0 });
-        installNow();
-    }, 1000);
+    emit({ restartIn: null, waitingFor: null });
+    installNow();
 }
 
-// "Not now". Only defers the RESTART — autoInstallOnAppQuit is already armed,
-// so the update still applies when the app closes.
+// There is no longer anything to postpone: a ready update installs at once,
+// and the only thing that holds it is a call in progress. Kept callable so the
+// IPC surface is unchanged, and honest about doing nothing rather than
+// reporting a deferral it cannot deliver.
 function postpone() {
-    clearCountdown();
-    emit({ postponed: true, restartIn: null, waitingFor: null });
-    return { ok: true };
+    return { ok: false, forced: true };
 }
 
 // main.js calls this when voice state changes.
@@ -310,15 +305,7 @@ function setBusy(inVoice) {
 function init(bridge) {
     if (bridge) send = bridge;
     state.auto = true;
-    // The Settings checkbox writes `autoUpdateOnLaunch`, and until now nothing
-    // ever read it back. Every launch started with postponed = false, so an
-    // update that became ready restarted the app out from under someone who had
-    // explicitly asked it not to — the one thing that switch is for. A stored
-    // `false` is a standing "not now": the update still downloads, still arms
-    // itself for quit, and simply never takes the app down on its own.
-    try {
-        if (store.get().autoUpdateOnLaunch === false) state.postponed = true;
-    } catch (e) { /* no profile yet — the default (auto) stands */ }
+    state.postponed = false;
 }
 
 // Called shortly after the window is ready.
@@ -364,21 +351,14 @@ function installNow() {
     return { ok: true };
 }
 
-// Kept so the existing IPC and the settings toggle keep resolving, but it no
-// longer gates anything: downloading and installing are not opt-in any more.
-// Turning it "off" postpones the restart of an update already in hand, which
-// is the only part a preference can honestly control — the alternative is a
-// switch that leaves someone on a build with a bug we have already fixed.
-function setAuto(on) {
+// Nothing left to switch. Updates download and install themselves, and the
+// Settings checkbox that used to call this is gone — a control that cannot
+// change the outcome is worse than no control. Kept callable so the IPC surface
+// is unchanged for an older renderer talking to this main process mid-update.
+function setAuto() {
     state.auto = true;
-    // Turning it off has to hold back the NEXT update too, not only one that
-    // happens to be ready this second. Gated on `ready`, switching it off and
-    // then receiving an update restarted the app anyway — which is the same
-    // hole init() closes across launches, one session wide.
-    if (!on) return postpone();
-    emit({ postponed: false });
     scheduleAutoRestart();
-    return { ok: true };
+    return { ok: true, forced: true };
 }
 
 function getState() { return state; }

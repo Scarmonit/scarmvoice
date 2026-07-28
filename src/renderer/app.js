@@ -1745,6 +1745,61 @@
         updateJump();
     }, true);
 
+    // ---------- local echo ---------------------------------------------------
+    //
+    // A message you just sent, shown immediately, until a server page carries it.
+    //
+    // Posting used to be write-then-refetch, and the refetch is where it broke:
+    // /api/board/list is served from a D1 READ REPLICA, so the page that comes
+    // back milliseconds after the write frequently does not contain it yet.
+    // Nothing else redraws the channel — the realtime nudge deliberately skips
+    // the sender, and with the socket up the fallback poll is a whole minute
+    // apart — so your own message was missing from your own screen until you
+    // switched channels and came back (which reloads from scratch). Everyone
+    // else saw it at once, which is exactly what made it look impossible.
+    //
+    // The echo carries the REAL id the server just returned, so it occupies the
+    // same row key as the eventual server copy: when the page catches up there
+    // is no duplicate and no flicker, just a row whose signature changed.
+    const ECHO_MAX_MS = 60000;     // a page that never carries it is a deletion
+    let selfEchoes = [];
+
+    // Drop echoes the server has caught up on, and any that have outlived the
+    // window in which a replica could still be behind.
+    function pruneEchoes() {
+        if (!selfEchoes.length) return;
+        const have = new Set(posts.map((p) => p.id));
+        const cutoff = Date.now() - ECHO_MAX_MS;
+        selfEchoes = selfEchoes.filter((e) => !have.has(e.id) && e.created_at > cutoff);
+    }
+
+    function echoPost(id, body, chan, quoteId, attachment) {
+        if (!id) return;
+        const q = quoteId ? posts.find((p) => p.id === quoteId) : null;
+        selfEchoes.push({
+            id,
+            channel: chan,
+            client_id: settings.clientId,
+            user_id: myUserId() || null,
+            name: settings.displayName || 'Anonymous',
+            body: body || '',
+            created_at: Date.now(),
+            pinned: 0,
+            reply_count: 0,
+            reactions: [],
+            quote: q ? { name: q.name, body: q.body, att_name: q.att_name } : null,
+            att_key: (attachment && attachment.key) || '',
+            att_name: (attachment && attachment.name) || '',
+            att_type: (attachment && attachment.type) || '',
+            att_size: (attachment && attachment.size) || 0
+        });
+        renderMessages();
+        const box = $('messages');
+        box.scrollTop = box.scrollHeight;
+        following = true;
+        settleScroll();
+    }
+
     // Which type(s) a post satisfies, for filtering.
     const postMatchesFilter = (p) =>
         window.ScarmLib.postMatchesFilter(p, filter, settings.displayName);
@@ -1754,7 +1809,15 @@
         const base = Object.keys(blockedMap()).length
             ? posts.filter((p) => !isBlocked(p.client_id))
             : posts;
-        return filterActive() ? base.filter(postMatchesFilter) : base;
+        if (filterActive()) return base.filter(postMatchesFilter);
+        // Anything the server page has not caught up on yet, on the end where it
+        // belongs. Hidden while a filter is on, for the same reason queued
+        // messages are: this one is about the live conversation.
+        pruneEchoes();
+        if (!selfEchoes.length) return base;
+        const have = new Set(base.map((p) => p.id));
+        const extra = selfEchoes.filter((e) => e.channel === channel && !have.has(e.id));
+        return extra.length ? base.concat(extra) : base;
     }
 
     // Everything that can change how one message draws. Two posts with equal
@@ -2356,6 +2419,9 @@
             updateSendEnabled();  // the button was disabled at submit — re-enable it
             return;
         }
+        // On screen NOW, from the id the server just handed back — not after a
+        // round trip to a replica that may not have the write yet.
+        echoPost(res.id, body, forChannel, quoteId, null);
         announcePosted(forChannel, body);
         await loadMessages(true);
     });
@@ -2453,6 +2519,10 @@
                 if (res && res.success) {
                     outbox = outbox.filter((o) => o !== entry);
                     saveOutbox();
+                    // The queued row disappears the moment it is sent, so
+                    // without an echo the message it became would blink out of
+                    // the conversation until the next page carried it.
+                    echoPost(res.id, entry.body, entry.channel, entry.quoteId, null);
                     announcePosted(entry.channel, entry.body);
                     continue;
                 }
@@ -2593,6 +2663,9 @@
             toast((res && res.error) || 'Could not post the attachment', true);
             return false;
         }
+        // Same replica lag as a plain message — an upload you watched finish
+        // vanishing off your own screen is worse still.
+        if (!dmThread) echoPost(res.id, caption || '', chan || channel, quoteId, attachment);
         return true;
     }
 
@@ -3307,7 +3380,29 @@
 
     function renderTyping() {
         const el = $('typing-line');
-        const names = typingUsers.map((t) => t.name || 'Someone');
+        // One entry per PERSON, not per install id.
+        //
+        // The same person reaches this list down two pipes — the socket, which
+        // labels them with whatever install id the realtime layer resolved, and
+        // the HTTP poll, which uses the id they actually posted under. When those
+        // two ids differ (see renderVoiceRoster for how that happens), the
+        // client_id check that guards the push below sees two strangers and the
+        // line read "XIAIX and XIAIX are typing…".
+        //
+        // Your own name goes too: the same mismatch means the client_id filter on
+        // the poll's list cannot be trusted to have excluded you, and telling
+        // someone that they are typing is never useful.
+        const me = String(settings.displayName || '').trim().toLowerCase();
+        const seen = new Set();
+        const names = [];
+        typingUsers.forEach((t) => {
+            const name = t.name || 'Someone';
+            const key = name.trim().toLowerCase();
+            if (seen.has(key)) return;
+            if (me && key === me) return;
+            seen.add(key);
+            names.push(name);
+        });
         if (!names.length) { el.textContent = ''; return; }
         if (names.length === 1) el.textContent = `${names[0]} is typing…`;
         else if (names.length === 2) el.textContent = `${names[0]} and ${names[1]} are typing…`;
@@ -3932,13 +4027,43 @@
         // a person signed in on two devices stays one row.
         const uidByCid = new Map();
         voicePresence.forEach((p) => { if (p.user_id) uidByCid.set(p.client_id, p.user_id); });
+        members.forEach((m) => { if (m.client_id && m.user_id) uidByCid.set(m.client_id, m.user_id); });
 
-        live.forEach((p) => byId.set(p.id, Object.assign({}, p, { uid: uidByCid.get(p.id) || null })));
+        // …and account id by NAME, as the fallback for a participant whose
+        // install id nothing else recognises.
+        //
+        // That is not hypothetical. The realtime layer substitutes an id of its
+        // own for any install it cannot verify, so its roster can name the same
+        // person by a different id than the SFU and the presence table do — and
+        // then the merge below, which keys on the account, had no account to key
+        // on for the SFU row and drew that person TWICE. The two sources take
+        // turns every few seconds, so the second copy appeared to join and leave
+        // on a loop for as long as they stayed in the call.
+        //
+        // A name is safe to resolve on here, and only here: it is not a
+        // credential, it decides nothing but which of two rows for one person to
+        // keep, and the server derives it from the account rather than accepting
+        // it from the client (see displayNameFor). The failure it can produce is
+        // merging two people who genuinely share a display name into one row —
+        // strictly better than splitting one person into two, and impossible
+        // while names are account usernames.
+        const uidByName = new Map();
+        const noteName = (name, uid) => {
+            const n = String(name || '').trim().toLowerCase();
+            if (n && n !== 'anonymous' && uid && !uidByName.has(n)) uidByName.set(n, uid);
+        };
+        voicePresence.forEach((p) => noteName(p.name, p.user_id));
+        members.forEach((m) => noteName(m.name, m.user_id));
+
+        const uidFor = (p) => uidByCid.get(p.id) ||
+            uidByName.get(String(p.name || '').trim().toLowerCase()) || null;
+
+        live.forEach((p) => byId.set(p.id, Object.assign({}, p, { uid: uidFor(p) })));
         voicePresence.forEach((p) => {
             if (!byId.has(p.client_id)) {
                 byId.set(p.client_id, {
                     id: p.client_id,
-                    uid: p.user_id || null,
+                    uid: p.user_id || uidByName.get(String(p.name || '').trim().toLowerCase()) || null,
                     name: p.name || 'Anonymous',
                     isMe: p.client_id === settings.clientId ||
                         !!(account && p.user_id && p.user_id === account.id),
@@ -4018,9 +4143,42 @@
             wireAvatarFallback(li);
             if (!isMe && inCall && !p.remoteOnly) {
                 li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
+            } else if (isMe && inCall) {
+                // Your own row did nothing at all. Everyone else's opens a
+                // popover of things to do to them, so the one row that is you
+                // being inert made the list look half-wired — and the only way
+                // out of the call was the small hang-up glyph in the panel
+                // below, which is not where anyone looks after clicking their
+                // own name.
+                li.addEventListener('click', (e) => openSelfVoiceMenu(e.currentTarget));
             }
             ul.appendChild(li);
         });
+    }
+
+    // What you can do to YOURSELF in the call. The same three things the voice
+    // panel's buttons do, from the row that names you.
+    function openSelfVoiceMenu(anchor) {
+        if (!voice || !voice.isJoined()) return;
+        const r = anchor.getBoundingClientRect();
+        const muted = voice.isMuted();
+        const deafened = voice.isDeafened();
+        openCtxMenu([
+            { label: muted ? 'Unmute Microphone' : 'Mute Microphone',
+                icon: muted ? 'mic' : 'mic-off',
+                onClick: () => voice.toggleMuted() },
+            { label: deafened ? 'Undeafen' : 'Deafen',
+                icon: deafened ? 'headset' : 'headset-off',
+                onClick: () => voice.toggleDeafened() },
+            'sep',
+            { label: 'Leave Voice', icon: 'phone-hangup', danger: true,
+                onClick: () => {
+                    // Same order the panel's own button uses: the tray goes
+                    // before the round trip, so leaving is instant on screen.
+                    $('voice-panel').classList.add('is-gone');
+                    leaveVoice();
+                } }
+        ], r.right + 6, r.top);
     }
 
     // Everyone present, grouped online / away like Discord's members sidebar.
@@ -4377,7 +4535,20 @@
         // An explicit choice outranks everything computed — that is what makes
         // it a choice.
         if (mode !== 'online') return PRESENCE_WIRE[mode] || 'online';
-        if (document.hidden || !windowFocused) return 'away';
+        // Away means AWAY: the window is put away, or nobody has touched it in
+        // five minutes.
+        //
+        // `!windowFocused` used to count, which made everyone away almost all of
+        // the time — clicking any other window published it within twenty
+        // seconds, so the member list showed people as away while they were
+        // sitting right there reading it. Blur is not absence; it is the normal
+        // state of a chat client you are not typing into at this instant. No
+        // other client treats it as away, and this one already has a real idle
+        // rule underneath.
+        //
+        // document.hidden stays, and means what it says here: minimised, or
+        // hidden in the tray. That IS the window put away.
+        if (document.hidden) return 'away';
         if (Date.now() - lastActivity > AWAY_AFTER_MS) return 'away';
         return 'online';
     }
@@ -4513,25 +4684,19 @@
             sub: 'ScarmVoice ' + (s.version || '') + ' \u00b7 ' + (s.progress || 0) + '%',
             action: 'Downloading\u2026'
         }),
-        // Nothing here asks permission any more — updates download and install
-        // themselves. This reports what is happening and offers the one choice
-        // still worth having: not this second.
+        // Nothing here asks permission, and nothing here offers a delay: an
+        // update that is ready installs itself and the app comes back on the new
+        // version. This card is a statement of what is happening, and it is
+        // normally on screen for about a second.
         ready: (s) => {
             const v = 'ScarmVoice ' + (s.version || '');
-            // Held back by a call: the one interruption never worth making.
+            // The one thing that can hold it: a call. Then the button is real,
+            // because restarting now is a choice only the person in the call
+            // can make.
             if (s.waitingFor === 'call') {
                 return { title: 'Update ready', sub: v + ' — installs when your call ends', action: 'Restart now' };
             }
-            // "Not now" defers the RESTART, not the update — closing the app
-            // still applies it, so the copy says so rather than implying it was
-            // cancelled.
-            if (s.postponed) {
-                return { title: 'Update ready', sub: v + ' — installs when you close the app', action: 'Restart now' };
-            }
-            if (typeof s.restartIn === 'number') {
-                return { title: 'Restarting to update', sub: v + ' · ' + s.restartIn + 's', action: 'Not now' };
-            }
-            return { title: 'Update ready', sub: v + ' — restart to install', action: 'Restart now' };
+            return { title: 'Restarting to update', sub: v, action: 'Restarting…' };
         }
     };
 
@@ -4570,9 +4735,10 @@
         $('ub-sub').textContent = c.sub;
         $('ub-sub').title = c.sub;
         $('ub-action').textContent = c.action;
-        // Downloading is not a thing to press, and neither is 'available' any
-        // more — it downloads itself the moment it is seen.
-        $('ub-action').disabled = updateState.status === 'downloading' || updateState.status === 'available';
+        // Only ever pressable in the one case there is still a decision to make:
+        // an update held back by a call. Everything else is narration.
+        $('ub-action').disabled = updateState.status !== 'ready' ||
+            updateState.waitingFor !== 'call';
         $('ub-progress').hidden = updateState.status !== 'downloading';
         if (updateState.status === 'downloading') {
             $('ub-bar').style.width = (updateState.progress || 0) + '%';
@@ -4582,11 +4748,10 @@
     }
 
     function applyUpdateAction() {
-        if (updateState.status !== 'ready') return;   // downloading: nothing to do
-        // Mid-countdown the button is the brake, not the accelerator. Once the
-        // countdown is over or held, it is the only way to ask for it sooner.
-        if (typeof updateState.restartIn === 'number') L.update.postpone();
-        else L.update.install();
+        // The only live button left: "Restart now" on an update a call is
+        // holding back. Everywhere else the app has already restarted itself.
+        if (updateState.status !== 'ready') return;
+        L.update.install();
     }
 
     $('ub-action').addEventListener('click', applyUpdateAction);
@@ -6109,7 +6274,6 @@
         $('set-nsai').checked = !!settings.noiseSuppressionAI;
         $('set-agc').checked = !!settings.autoGainControl;
         $('set-tray').checked = settings.minimizeToTray !== false;
-        $('set-autoupdate').checked = settings.autoUpdateOnLaunch === true;
         refreshUpdateStatus();
         // Read the login item's ACTUAL OS state, so the toggle is correct even
         // if the user changed it outside the app.
@@ -7357,10 +7521,6 @@
     // Keep the settings line in sync while the panel is open.
     L.update.onState((s) => { if (!$('settings').hidden) updateStatusText(s); });
 
-    $('set-autoupdate').addEventListener('change', async (e) => {
-        await saveSettings({ autoUpdateOnLaunch: e.target.checked });
-        await L.update.setAuto(e.target.checked);
-    });
     $('btn-check-update').addEventListener('click', async () => {
         $('update-status').textContent = 'Checking for updates…';
         const r = await L.update.check();
@@ -7435,10 +7595,12 @@
     bindKeyRecorder('set-mute-key', 'muteBinding');
     bindKeyRecorder('set-deafen-key', 'deafenBinding');
 
-    $('btn-logout').addEventListener('click', async () => {
+    // "Sign out" means out of EVERYTHING — board session and account — so the
+    // next sign-in walks both steps again. One function, because it is now
+    // offered from two places (Settings, and the account panel over your name)
+    // and half a sign-out is worse than none.
+    async function signOutEverything() {
         await teardownSession();
-        // "Sign out" means out of EVERYTHING — board session and account —
-        // so the next sign-in walks both steps again.
         await L.account.logout();
         account = null;
         dmThreads = [];
@@ -7450,6 +7612,22 @@
         $('login').hidden = false;
         $('login-error').textContent = '';
         $('login-pw').focus();
+    }
+
+    $('btn-logout').addEventListener('click', signOutEverything);
+
+    // The same thing from the account panel. Asked first: this one sits two
+    // clicks from anywhere, right under "Copy User ID", and signing out costs a
+    // password and a second sign-in step to undo.
+    $('mep-logout').addEventListener('click', async () => {
+        closeMePopover();
+        const ok = await askConfirm(
+            'Log out of ScarmVoice?',
+            'You will be signed out of your account and of the board itself, so ' +
+            'signing back in takes the shared password and then your account.',
+            'Log Out', true
+        );
+        if (ok) await signOutEverything();
     });
 
     // ---------- inline audio player ---------------------------------------
@@ -8259,6 +8437,10 @@
         if (!res || !res.success) return toast((res && res.error) || 'Could not delete', true);
 
         posts = posts.filter((x) => x.id !== p.id);
+        // A local echo is retired by a server page CARRYING the message, which
+        // a deleted one never will — so it has to be dropped by hand or it
+        // lingers on screen for the length of the echo window.
+        selfEchoes = selfEchoes.filter((e) => e.id !== p.id);
         renderMessages();
         await loadMessages(false);
         L.rt.notifyPosted(channel);

@@ -567,22 +567,33 @@ function handle(channel, fn) {
 }
 
 function registerIpc() {
-    handle('auth:login', async (_e, password) => {
-        const res = await net.login(password);
-        if (res.success) rt.start(emitRt);
-        return res;
-    });
+    // NEITHER of these opens the socket any more, and that is the whole point.
+    //
+    // The upgrade carries this install's id, and the server will only honour it
+    // once the id is BOUND to the account (account_clients). Binding happens in
+    // account/me, which the renderer calls from enterApp() — after this. So a
+    // socket opened here presented an unbound id, the server refused to take the
+    // client's word for it and substituted a random one, and rt.start() from
+    // enterApp() is a no-op while a socket already exists: the substitute then
+    // stuck for the entire session.
+    //
+    // Everything downstream keys off that id. The realtime voice roster and the
+    // typing feed came back under the random id while the HTTP ones came back
+    // under the real one, so one person arrived as two — a voice participant who
+    // joined and left every few seconds as the two sources took turns, and
+    // "X and X are typing". Signing out or quitting never helped, because the
+    // next launch opened the socket in exactly the same order.
+    //
+    // enterApp() is now the only thing that starts it, and it does so after
+    // refreshAccount() — which is what its own comment there always claimed.
+    handle('auth:login', async (_e, password) => net.login(password));
 
     handle('auth:logout', async () => {
         rt.stop();
         return net.logout();
     });
 
-    handle('auth:status', async () => {
-        const res = await net.status();
-        if (res.authed) rt.start(emitRt);
-        return res;
-    });
+    handle('auth:status', async () => net.status());
 
     handle('board:call', async (_e, { path: p, opts }) => {
         // register/login/verify responses all carry the account token, so the

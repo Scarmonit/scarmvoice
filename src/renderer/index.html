@@ -417,6 +417,15 @@
         <button type="button" class="mep-item" id="mep-copy-id">
           <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
         </button>
+        <!-- Signing out lived only at the bottom of Settings, which is a strange
+             place to look for it: this panel is the account, so the way out of
+             the account belongs here. It is the FULL sign-out — board session
+             and account both — which is why it is separated from "Switch
+             Accounts" above it and drawn as the destructive one. -->
+        <div class="mep-sep"></div>
+        <button type="button" class="mep-item danger" id="mep-logout">
+          <span class="ico" data-icon="external"></span><span>Log Out</span>
+        </button>
       </div>
     </div>
   </div>
@@ -1149,10 +1158,13 @@
         <label class="row check">
           <input type="checkbox" id="set-autojoin"><span>Join voice automatically on launch</span>
         </label>
-        <label class="row check">
-          <input type="checkbox" id="set-autoupdate">
-          <span>Restart automatically to finish updates <em class="hint">— off still installs them when you close the app, never during a call</em></span>
-        </label>
+        <!-- No toggle here any more. Updates download and install themselves the
+             moment they are ready, and the app restarts into them — the only
+             thing that holds it is a call in progress. A checkbox that cannot
+             change any of that would be decoration. -->
+        <div class="row">
+          <span class="hint">Updates install themselves as soon as they are ready. The app never restarts during a call.</span>
+        </div>
         <div class="row between" id="update-row">
           <span class="hint" id="update-status">You're on the latest version.</span>
           <span class="row-actions">
