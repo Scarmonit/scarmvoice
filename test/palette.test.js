@@ -155,8 +155,10 @@ describe('the caret glyph', () => {
         const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
         expect(icons).toMatch(/'chevron-down':/);
         // A rotated glyph keeps its unrotated box, so the box and the ink
-        // disagree about where the centre is. Both carets use the drawn one.
-        expect((html.match(/data-icon="chevron-down"/g) || []).length).toBe(2);
+        // disagree about where the centre is. Both me-bar carets use the drawn
+        // one — as does the server header's, which is the same mark.
+        const bar = html.slice(html.indexOf('id="me-bar"'), html.indexOf('id="mic-pop"'));
+        expect((bar.match(/data-icon="chevron-down"/g) || []).length).toBe(2);
         expect(/\.me-ctl \.me-ctl-caret \.ico \{[^}]*rotate/.test(css)).toBe(false);
     });
 
@@ -390,8 +392,9 @@ describe('the status line', () => {
         expect(src).toMatch(/const text = voiceNow \? 'In voice'/);
         expect(src).toMatch(/\.ms-voice'\)\.toggleAttribute\('hidden', !voiceNow\)/);
         // And it has to follow joining and leaving, not only settings changes.
+        // Same handler block, wherever renderMe ends up inside it.
         const st = src.slice(src.indexOf("$('btn-soundboard').hidden = !st.joined;"));
-        expect(st.slice(0, 400)).toMatch(/renderMe\(\);/);
+        expect(st.slice(0, st.indexOf('closeSoundboard()'))).toMatch(/renderMe\(\);/);
         expect(/#me-bar \.ms-voice \{[^}]*color:\s*var\(--voice-ok\)/.test(css)).toBe(true);
     });
 });
@@ -549,5 +552,109 @@ describe('the latency readout', () => {
         [1, 2, 3].forEach((n) => {
             expect(css).toContain('.vl-signal[data-bars="' + n + '"] rect:nth-child(n+' + (n + 1) + ')');
         });
+    });
+});
+
+describe('the rail and the channel list', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('divides the rail from the list with a line, not with a shade', () => {
+        // Three points of shade was more separation than the reference uses, and
+        // it made the rail read as a different surface rather than as the left
+        // end of the same one.
+        const rail = (css.match(/#rail \{[^}]*\}/g) || []).find((r) => r.includes('background'));
+        expect(rail).toMatch(/background:\s*var\(--side\)/);
+        expect(rail).toMatch(/box-shadow:\s*inset -1px 0 0 var\(--line\)/);
+    });
+
+    it('marks the active server with a bright pill on the edge', () => {
+        // An underline under the avatar in --line-2 was nearly invisible. This
+        // is the one mark that says where you are in a column of round icons:
+        // it has to be white and it has to be on the edge.
+        const rule = /\.rail-server::before \{[^}]*\}/.exec(css)[0];
+        expect(rule).toMatch(/width:\s*5px/);
+        expect(rule).toMatch(/background:\s*var\(--text-strong\)/);
+        expect(rule).toMatch(/left:\s*-12px/);
+        expect(css).toMatch(/\.rail-server\.active::before \{[^}]*height:\s*38px/);
+    });
+
+    it('makes the server name a way in rather than a caption', () => {
+        const head = html().slice(html().indexOf('<header id="server-head">'), html().indexOf('side-scroll'));
+        expect(head).toContain('id="server-menu"');
+        expect(head).toContain('aria-haspopup="menu"');
+        expect(head).toContain('data-icon="chevron-down"');
+        expect(head).toContain('id="btn-invite"');
+        // One line: the host moved to the header's own tooltip, where it answers
+        // "which server is this" without spending a line on it.
+        expect(head).not.toContain('sh-host');
+        expect(src()).toMatch(/server-menu'\)\.setAttribute\('data-tip', serverHost\(\)\)/);
+        // A chevron has to open something.
+        expect(src()).toMatch(/\$\('server-menu'\)\.addEventListener\('click'/);
+        expect(src()).toMatch(/\$\('btn-invite'\)\.addEventListener\('click', copyServerLink\)/);
+    });
+
+    it('titles its categories rather than shouting them', () => {
+        // All-caps categories are the pre-redesign pattern — the same era
+        // mismatch the settings screen had.
+        const rule = /\.cat-toggle \{[^}]*\}/.exec(css)[0];
+        expect(rule).not.toMatch(/text-transform:\s*uppercase/);
+        expect(Number(/font-size:\s*([\d.]+)px/.exec(rule)[1])).toBeGreaterThanOrEqual(13);
+        // And the arrow follows the label, pointing at what it opens.
+        const cats = html().match(/<button type="button" class="cat-toggle"[\s\S]*?<\/button>/g);
+        expect(cats.length).toBe(3);
+        cats.forEach((c) => expect(c.indexOf('cat-arrow')).toBeGreaterThan(c.indexOf('<span>')));
+        expect(css).toMatch(/\.side-section\.collapsed \.cat-arrow \{ transform: rotate\(-90deg\); \}/);
+    });
+
+    it('brightens the hash with the label it belongs to', () => {
+        // Leaving it grey while the name went white made the two look like they
+        // belonged to different rows.
+        expect(css).toMatch(/\.chan\.active \.hash \{ color: var\(--text-strong\); \}/);
+        expect(Number(/\.chan \.hash \{[^}]*font-size:\s*(\d+)px/.exec(css)[1])).toBeGreaterThanOrEqual(22);
+        expect(css).toMatch(/\.chan\.active \{ background: var\(--chan-active\)/);
+        expect(/\.chan \{[^}]*height:\s*32px/.test(css)).toBe(true);
+    });
+
+    it('puts the row s own controls on the row you are on', () => {
+        // A column of these on every channel is noise; the reference shows them
+        // on the active row and under the pointer.
+        expect(css).toMatch(/\.chan\.active \.chan-acts, \.chan:hover \.chan-acts \{ display: flex; \}/);
+        // Not <button>s: a button cannot contain buttons, and the inner click
+        // would never reach the right handler.
+        expect(src()).toMatch(/class="chan-act" role="button"/);
+        expect(src()).toMatch(/function openChannelMenu\(name, x, y\)/);
+    });
+
+    it('counts heads until you join, then times the call', () => {
+        expect(src()).toMatch(/function paintCallTimer\(\)/);
+        // Started from the JOINED state, not from the click: the number has to
+        // be the length of the call, not of the wait for it.
+        expect(src()).toMatch(/setCallRunning\(!!inCall\)/);
+        expect(src()).toMatch(/\$\('voice-count'\)\.hidden = !!inCall;/);
+        expect(src()).toMatch(/\$\('voice-timer'\)\.hidden = !inCall;/);
+        // And the interval is cleared, or it ticks against a call that ended.
+        expect(src()).toMatch(/clearInterval\(callTimer\)/);
+    });
+
+    it('renders a voice roster as secondary to the channel above it', () => {
+        // At full brightness these were the loudest thing in the sidebar, which
+        // put the eye on the roster instead of on the channel list.
+        expect(css).toMatch(/\.vp\.vu \.vp-name \{[^}]*color:\s*var\(--dim\)/);
+        expect(css).toMatch(/\.vp\.vu \.av \{[^}]*width:\s*24px/);
+        // Muted and deafened are two states and someone can be in both.
+        expect(src()).toMatch(/title="Muted">' \+ I\('mic-off'\)/);
+        expect(src()).toMatch(/title="Deafened">' \+ I\('headset-off'\)/);
+        // No "(you)": the roster is short and your own avatar is in it.
+        expect(src()).not.toMatch(/vp-name">\$\{esc\(p\.name\)\}\$\{isMe \? ' \(you\)'/);
+    });
+
+    it('sizes the voice panel buttons rather than stretching them', () => {
+        // Two features spread across the whole card read as a different
+        // component; the reference's own width is what makes them read as its.
+        expect(css).toMatch(/\.btn-share \{[^}]*flex:\s*0 1 78px/);
+        const live = html().slice(html().indexOf('class="vp-actions"'), html().indexOf('id="soundboard"'));
+        expect((live.match(/class="btn-share"/g) || []).length).toBe(3);
+        expect(live).toContain('id="btn-nsai"');
     });
 });

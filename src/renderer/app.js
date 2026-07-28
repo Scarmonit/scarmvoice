@@ -1173,9 +1173,28 @@
             b.className = 'chan' + (c.name === channel ? ' active' : '') +
                 (unread ? ' unread' : '') + (channelQuieted(c.name) ? ' muted' : '');
             b.dataset.channel = c.name;
+            // A <button> cannot contain buttons, so the row's own controls are
+            // spans with a role — nested interactive content is invalid markup
+            // and the inner click never reaches the right handler.
             b.innerHTML = `<span class="hash">#</span><span class="chan-name">${esc(c.name)}</span>` +
-                (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '');
-            b.addEventListener('click', () => switchChannel(c.name));
+                (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '') +
+                '<span class="chan-acts">' +
+                `<span class="chan-act" role="button" tabindex="0" data-act="alerts" data-tip="Notification Settings">${I('bell')}</span>` +
+                (isAdmin() ? `<span class="chan-act" role="button" tabindex="0" data-act="edit" data-tip="Edit Channel">${I('gear')}</span>` : '') +
+                '</span>';
+            b.addEventListener('click', (e) => {
+                const act = e.target.closest && e.target.closest('.chan-act');
+                if (!act) return switchChannel(c.name);
+                e.stopPropagation();
+                const r = act.getBoundingClientRect();
+                if (act.dataset.act === 'edit') {
+                    // Straight to the rename, which is what "edit channel" means
+                    // here: everything else about a channel is on the menu.
+                    switchChannel(c.name).then(() => $('btn-rename-channel').click());
+                    return;
+                }
+                openChannelMenu(c.name, r.left, r.bottom + 4);
+            });
             list.appendChild(b);
         });
         // The rail's server icon carries the total, the way Discord badges a
@@ -1264,6 +1283,36 @@
         const created = res.channel || channelAddedBy(before, name);
         if (created) switchChannel(created);
     });
+
+    // The server header. A chevron has to open something, or it is decoration.
+    $('server-menu').addEventListener('click', (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        e.currentTarget.setAttribute('aria-expanded', 'true');
+        openCtxMenu([
+            { label: 'Invite People', icon: 'user-add', onClick: copyServerLink },
+            { label: 'Notification Settings', icon: 'bell',
+                onClick: () => openSettings().then(() => showSettingsPane(settingsPaneByTitle('Notifications'))) },
+            { label: 'Server Settings', icon: 'gear', onClick: () => openSettings() },
+            'sep',
+            { label: 'Copy Server Link', icon: 'link', onClick: copyServerLink }
+        ], r.left, r.bottom + 4);
+    });
+    // The menu closes on the next press wherever it lands, so the chevron's
+    // state follows the same event rather than a callback the menu does not have.
+    document.addEventListener('mousedown', () => {
+        $('server-menu').setAttribute('aria-expanded', 'false');
+    }, true);
+    $('btn-invite').addEventListener('click', copyServerLink);
+
+    async function copyServerLink() {
+        const url = (settings.baseUrl || 'https://scarmonit.com').replace(/\/+$/, '') + '/messageboard/';
+        try {
+            await navigator.clipboard.writeText(url);
+            toast('Invite link copied — ' + url);
+        } catch (e) {
+            toast('Could not copy the link', true);
+        }
+    }
 
     $('btn-rename-channel').addEventListener('click', async () => {
         if (channel === 'general') return toast('#general cannot be renamed', true);
@@ -3214,6 +3263,10 @@
                 setTip($('btn-cam'), st.cam ? 'Turn Off Camera' : 'Turn On Camera');
 
                 $('btn-soundboard').hidden = !st.joined;
+                $('btn-nsai').hidden = !st.joined;
+                $('btn-nsai').classList.toggle('on', !!settings.noiseSuppressionAI);
+                setTip($('btn-nsai'), settings.noiseSuppressionAI
+                    ? 'Noise Suppression On' : 'Noise Suppression Off');
                 if (st.joined) $('voice-panel').classList.remove('is-gone');
                 // The user panel's second line reports the call, so it has to
                 // follow joining and leaving.
@@ -3699,6 +3752,37 @@
     // The roster merges two sources: the SFU's live participant list (authoritative
     // when we're in the call) and the server's voice_presence table (so people who
     // haven't joined still see who is in there, including browser users).
+    // How long this call has been up. Started when the connection is reported
+    // joined rather than when the click happens: the number has to be the length
+    // of the CALL, not of the wait for it.
+    let callStartedAt = 0;
+    let callTimer = null;
+
+    function paintCallTimer() {
+        if (!callStartedAt) return;
+        const secs = Math.max(0, Math.floor((Date.now() - callStartedAt) / 1000));
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const ss = String(secs % 60).padStart(2, '0');
+        $('voice-timer').textContent = h
+            ? h + ':' + String(m).padStart(2, '0') + ':' + ss
+            : m + ':' + ss;
+    }
+
+    function setCallRunning(on) {
+        if (on === !!callTimer) return;
+        if (on) {
+            callStartedAt = Date.now();
+            paintCallTimer();
+            callTimer = setInterval(paintCallTimer, 1000);
+        } else {
+            clearInterval(callTimer);
+            callTimer = null;
+            callStartedAt = 0;
+            $('voice-timer').textContent = '';
+        }
+    }
+
     function renderVoiceRoster() {
         const inCall = voice && voice.isJoined();
         const live = inCall ? voice.roster() : [];
@@ -3750,6 +3834,12 @@
         const merged = Array.from(byKey.values());
 
         $('voice-count').textContent = merged.length ? String(merged.length) : '';
+        // The head count is what decides whether you join. Once you have, how
+        // long you have been in is the number worth the space — so they swap
+        // rather than compete for it.
+        setCallRunning(!!inCall);
+        $('voice-count').hidden = !!inCall;
+        $('voice-timer').hidden = !inCall;
         renderVoiceUsers(merged, inCall);
         renderMembers(merged, inCall);
     }
@@ -3777,9 +3867,13 @@
             li.dataset.cid = p.id;
             li.innerHTML =
                 `<span class="av${avatarCls(p.uid)}" style="${avatarStyle(p.name)}">${esc(initials(p.name))}${avatarImgHtml(p.uid)}</span>` +
-                `<span class="vp-name">${esc(p.name)}${isMe ? ' (you)' : ''}</span>` +
+                // No "(you)" — the roster is short and your own avatar is in it.
+                `<span class="vp-name">${esc(p.name)}</span>` +
                 (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
-                (p.muted || localMuted ? '<span class="vp-flag">' + I('volume-off') + '</span>' : '');
+                // Muted and deafened are two different states and someone can be
+                // in both. One glyph for the pair could only ever report one.
+                (p.muted || localMuted ? '<span class="vp-flag" title="Muted">' + I('mic-off') + '</span>' : '') +
+                (p.deafened ? '<span class="vp-flag" title="Deafened">' + I('headset-off') + '</span>' : '');
 
             wireAvatarFallback(li);
             if (!isMe && inCall && !p.remoteOnly) {
@@ -4969,10 +5063,12 @@
         const r = el.getBoundingClientRect();
         let left = t.left + (t.width - r.width) / 2;
         left = Math.max(6, Math.min(left, window.innerWidth - r.width - 6));
-        let top = t.top - r.height - 9;
+        // 6, not 9: the arrow is 5px, so a wider gap leaves it pointing across
+        // empty space rather than at the thing it names.
+        let top = t.top - r.height - 6;
         // No room above (the target is up against the title bar) — go below.
         const below = top < POP_TITLEBAR + 4;
-        if (below) top = t.bottom + 9;
+        if (below) top = t.bottom + 6;
         el.classList.toggle('below', below);
         el.style.left = Math.round(left) + 'px';
         el.style.top = Math.round(top) + 'px';
@@ -5384,10 +5480,15 @@
         applyCategory('voice', settings.catVoiceOpen !== false);
         applyTheme();
         applyDensity();
-        let host = '';
-        try { host = new URL(settings.baseUrl || 'https://scarmonit.com').host; }
-        catch (e) { host = settings.baseUrl || ''; }
-        $('sh-host').textContent = host;
+        // The host is no longer a second line under the name — it is on the
+        // header's own tooltip, where it answers "which server is this" without
+        // spending a line on an answer nobody reads twice.
+        $('server-menu').setAttribute('data-tip', serverHost());
+    }
+
+    function serverHost() {
+        try { return new URL(settings.baseUrl || 'https://scarmonit.com').host; }
+        catch (e) { return settings.baseUrl || 'scarmonit.com'; }
     }
 
     // ---------- theme ------------------------------------------------------
@@ -5525,12 +5626,9 @@
         toast('Unblocked ' + (name || 'them'));
     }
 
-    // Right-click a channel for the things Discord puts there.
-    $('channel-list').addEventListener('contextmenu', (e) => {
-        const row = e.target.closest('.chan');
-        if (!row) return;
-        e.preventDefault();
-        const name = row.dataset.channel;
+    // Everything you can do to a channel, in one place — reached by right-click
+    // and by the bell on the row, so neither is the only way in.
+    function openChannelMenu(name, x, y) {
         const mode = channelAlertMode(name);
         // Three radio-ish items rather than one toggle: the middle setting is
         // the whole point, and a toggle cannot express it. `check` marks the
@@ -5553,7 +5651,14 @@
                 { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
                     onClick: () => { switchChannel(name).then(() => $('btn-delete-channel').click()); } }
             ] : [])
-        ], e.clientX, e.clientY);
+        ], x, y);
+    }
+
+    $('channel-list').addEventListener('contextmenu', (e) => {
+        const row = e.target.closest('.chan');
+        if (!row) return;
+        e.preventDefault();
+        openChannelMenu(row.dataset.channel, e.clientX, e.clientY);
     });
 
     // ---------- settings modal --------------------------------------------
@@ -6352,6 +6457,16 @@
     // tell you once a section is longer than the window.
     let showSettingsPane = null;
 
+    // The section whose heading reads like this, for the callers that want to
+    // land somewhere specific rather than on the first pane.
+    function settingsPaneByTitle(title) {
+        return [...document.querySelectorAll('#settings-body .set-group')]
+            .find((g) => {
+                const h = g.querySelector('h3');
+                return h && h.textContent.trim() === title;
+            }) || null;
+    }
+
     (function buildSettingsNav() {
         const modal = document.querySelector('#settings .modal');
         const body = $('settings-body');
@@ -6554,6 +6669,18 @@
             if (voice.isJoined()) toast('Rejoin voice to apply audio processing changes');
         });
     });
+    // The same setting the checkbox in Settings drives, reachable from the call
+    // it affects — which is where anyone actually decides they want it.
+    $('btn-nsai').addEventListener('click', async () => {
+        const next = !settings.noiseSuppressionAI;
+        await saveSettings({ noiseSuppressionAI: next });
+        $('set-nsai').checked = next;
+        window.ScarmNoise.setEnabled(next);
+        $('btn-nsai').classList.toggle('on', next);
+        setTip($('btn-nsai'), next ? 'Noise Suppression On' : 'Noise Suppression Off');
+        if (voice.isJoined()) toast('Rejoin voice to apply AI noise suppression');
+    });
+
     $('set-nsai').addEventListener('change', async (e) => {
         await saveSettings({ noiseSuppressionAI: e.target.checked });
         window.ScarmNoise.setEnabled(e.target.checked);

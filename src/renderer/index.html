@@ -78,18 +78,26 @@
   </nav>
 
   <aside id="sidebar">
-    <!-- "Server" header, above the channel list like Discord's. -->
+    <!-- "Server" header, above the channel list like Discord's. One line and a
+         chevron: it is the entry point to settings and the invite link, not a
+         label, and a second line of host name was saying something the About
+         pane already says. -->
     <header id="server-head">
-      <span class="sh-name">ScarmVoice</span>
-      <span class="sh-host" id="sh-host"></span>
+      <button type="button" class="sh-menu" id="server-menu" aria-haspopup="menu" aria-expanded="false">
+        <span class="sh-name">ScarmVoice</span>
+        <span class="ico sh-caret" data-icon="chevron-down"></span>
+      </button>
+      <button type="button" class="sh-act" id="btn-invite" data-tip="Invite People" aria-label="Invite People">
+        <span class="ico" data-icon="user-add"></span>
+      </button>
     </header>
 
     <div class="side-scroll">
       <section class="side-section" id="text-section">
         <div class="cat-head">
           <button type="button" class="cat-toggle" id="cat-text" aria-expanded="true">
-            <span class="cat-arrow" data-icon="chevron"></span>
             <span>Text Channels</span>
+            <span class="cat-arrow" data-icon="chevron-down"></span>
           </button>
           <button type="button" class="cat-add" id="btn-add-channel" title="Create a channel">
             <span class="ico" data-icon="plus"></span>
@@ -101,8 +109,8 @@
       <section class="side-section" id="dm-section">
         <div class="cat-head">
           <button type="button" class="cat-toggle" id="cat-dms" aria-expanded="true">
-            <span class="cat-arrow" data-icon="chevron"></span>
             <span>Direct Messages</span>
+            <span class="cat-arrow" data-icon="chevron-down"></span>
           </button>
           <button type="button" class="cat-add" id="btn-new-dm" title="Start a conversation">
             <span class="ico" data-icon="plus"></span>
@@ -114,8 +122,8 @@
       <section class="side-section" id="voice-section">
         <div class="cat-head">
           <button type="button" class="cat-toggle" id="cat-voice" aria-expanded="true">
-            <span class="cat-arrow" data-icon="chevron"></span>
             <span>Voice Channels</span>
+            <span class="cat-arrow" data-icon="chevron-down"></span>
           </button>
         </div>
         <div id="voice-room" class="voice-room">
@@ -127,6 +135,7 @@
             <span class="vchan-ico" data-icon="speaker"></span>
             <span class="vchan-name">VoiceChat</span>
             <span class="vchan-count" id="voice-count"></span>
+            <span class="vchan-timer" id="voice-timer" hidden></span>
           </button>
           <ul id="voice-users" class="voice-users"></ul>
         </div>
@@ -173,6 +182,11 @@
         </button>
         <button id="btn-share" class="btn-share" data-tip="Share Your Screen" aria-label="Share Your Screen" hidden>
           <span class="ico" data-icon="screen"></span>
+        </button>
+        <!-- The one other thing worth reaching for mid-call: it is the setting
+             people change while someone is complaining about their keyboard. -->
+        <button id="btn-nsai" class="btn-share" data-tip="Noise Suppression" aria-label="Noise Suppression" hidden>
+          <span class="ico" data-icon="noise"></span>
         </button>
       </div>
     </div>

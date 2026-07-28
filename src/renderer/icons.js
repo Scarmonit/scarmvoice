@@ -39,6 +39,15 @@
             'L4.21 6.74L6.74 4.21L8.73 5.58Z' +
             'M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Z"/>',
 
+        // A person with a plus: "invite somebody", not "manage members".
+        'user-add': '<circle cx="9.5" cy="8" r="3.8"/>' +
+            '<path d="M2.8 20.2a6.9 6.9 0 0 1 13.4 0"/>' +
+            '<path d="M19 6.6v6.4M15.8 9.8h6.4"/>',
+        // A waveform with the noise struck out of it.
+        noise: '<g stroke-linecap="round"><path d="M3.5 10v4"/><path d="M8 6.5v11"/>' +
+            '<path d="M12.5 9v6"/><path d="M17 5.5v13"/><path d="M21 10v4"/></g>' +
+            '<path class="ico-cut" d="M3.6 20.4L20.4 3.6"/><path d="M3.6 20.4L20.4 3.6"/>',
+
         // Connection strength, not a dot. A dot can only say connected or not;
         // four rising bars have somewhere to put "how well" when there is
         // something to report. Filled, because at 16px an outlined bar is

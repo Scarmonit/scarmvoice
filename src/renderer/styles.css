@@ -29,6 +29,9 @@
   --elev:       #343439;   /* hover on a raised control                 (+5) */
 
   --hover:      rgba(255, 255, 255, .045);
+  /* The plate behind the channel you are reading. Flat rather than a white
+     wash, so it lands on the same shade whatever surface it is drawn on. */
+  --chan-active: #2c2c30;
   --active:     rgba(255, 255, 255, .085);
   --msg-hover:  rgba(255, 255, 255, .022);
   --line:       rgba(255, 255, 255, .06);
@@ -331,8 +334,13 @@ button { font-family: inherit; }
 
 /* ---------- rail -------------------------------------------------------- */
 
+/* The same shade as the channel list, divided by a hairline rather than by
+   being three points darker. Depth by shade was more separation than the
+   reference uses, and it made the rail read as a different surface instead of
+   as the left end of the same one. */
 #rail {
-  background: var(--rail);
+  background: var(--side);
+  box-shadow: inset -1px 0 0 var(--line);
   display: flex; flex-direction: column; align-items: center;
   padding: 10px 0 12px; gap: 8px;
 }
@@ -351,16 +359,18 @@ button { font-family: inherit; }
 .rail-server { background: var(--rail-plate); }
 .rail-server:hover { background: var(--rail-plate-hover); }
 .rail-server img { width: 44px; height: 44px; object-fit: contain; display: block; }
-/* The white pill on the rail's very edge marks the active server, as Discord
-   does — the rail's 12px side margin is why this reaches out exactly that far. */
+/* The active marker: a bright pill on the rail's very edge, not an underline.
+   It has to be white and it has to be on the EDGE — that pairing is what makes
+   it findable at a glance in a column of round avatars. The rail's 12px side
+   margin is why a negative offset reaches exactly that far. */
 .rail-server::before {
   content: ""; position: absolute; left: -12px; top: 50%;
-  width: 4px; height: 8px; border-radius: 0 4px 4px 0;
-  background: var(--text); transform: translateY(-50%) scaleY(0);
+  width: 5px; height: 10px; border-radius: 0 5px 5px 0;
+  background: var(--text-strong); transform: translateY(-50%) scaleY(0);
   transition: transform .16s ease, height .16s ease;
 }
-.rail-server:hover::before { transform: translateY(-50%) scaleY(1); }
-.rail-server.active::before { transform: translateY(-50%) scaleY(1); height: 34px; }
+.rail-server:hover::before { transform: translateY(-50%) scaleY(1); height: 22px; }
+.rail-server.active::before { transform: translateY(-50%) scaleY(1); height: 38px; }
 .rail-server.active { border-radius: 14px; }
 .rail-badge {
   position: absolute; right: -3px; bottom: -3px;
@@ -385,16 +395,33 @@ button { font-family: inherit; }
 
 #server-head {
   flex: 0 0 48px; height: 48px;
-  display: flex; flex-direction: column; justify-content: center;
-  padding: 0 16px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px 0 16px;
   box-shadow: 0 1px 0 var(--divider);
-  cursor: default;
 }
-.sh-name { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: .2px; }
-.sh-host {
-  font-size: 10.5px; color: var(--dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* The whole name is the target, chevron included: it is one control. */
+.sh-menu {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 6px 0 0; margin-left: -2px;
+  background: none; border: 0; border-radius: 4px; cursor: pointer;
+  text-align: left;
 }
+.sh-menu:hover { background: var(--hover); }
+.sh-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 16px; font-weight: 700; color: var(--text-strong); letter-spacing: .1px;
+}
+.sh-caret { width: 14px; height: 14px; flex: 0 0 14px; color: var(--muted); }
+.sh-menu[aria-expanded="true"] .sh-caret { transform: rotate(180deg); }
+.sh-act {
+  width: 30px; height: 30px; flex: 0 0 30px;
+  display: grid; place-items: center; padding: 0;
+  background: none; border: 0; border-radius: 4px; cursor: pointer;
+  color: var(--muted);
+}
+.sh-act:hover { background: var(--hover); color: var(--text); }
+.sh-act .ico { width: 19px; height: 19px; }
 
 .side-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px 8px 8px; min-height: 0; }
 .side-section + .side-section { margin-top: 16px; }
@@ -402,21 +429,26 @@ button { font-family: inherit; }
 /* ---------- collapsible category headers -------------------------------- */
 
 .cat-head { display: flex; align-items: center; padding: 0 2px 3px; }
+/* Title Case, not caps. All-caps categories are the pre-redesign pattern —
+   the same era mismatch the settings screen had. Bigger, too: at 11px this
+   read as a legal footnote above the thing it labels. */
 .cat-toggle {
   flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 3px;
+  display: flex; align-items: center; gap: 4px;
   padding: 2px 0; background: none; border: 0; cursor: pointer;
   color: var(--dim); text-align: left;
-  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  font-size: 13.5px; font-weight: 600; letter-spacing: 0;
 }
 .cat-toggle:hover { color: var(--text); }
+/* After the label, and drawn pointing DOWN — at what it opens. Collapsed it
+   turns to point along the row instead. (The right-pointing chevron turned into
+   place is the shape whose box and ink disagree; this one is drawn.) */
 .cat-arrow {
-  width: 12px; height: 12px; flex: 0 0 12px;
+  width: 13px; height: 13px; flex: 0 0 13px;
   fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round;
-  transform: rotate(90deg);
   transition: transform .15s ease;
 }
-.side-section.collapsed .cat-arrow { transform: rotate(0deg); }
+.side-section.collapsed .cat-arrow { transform: rotate(-90deg); }
 .side-section.collapsed #channel-list,
 .side-section.collapsed .voice-room { display: none; }
 .cat-add {
@@ -434,13 +466,13 @@ button { font-family: inherit; }
 .chan {
   position: relative;
   display: flex; align-items: center; gap: 6px;
-  width: 100%; height: 34px; margin-bottom: 2px; padding: 0 8px;
+  width: 100%; height: 32px; margin-bottom: 2px; padding: 0 8px;
   background: none; border: 0; border-radius: 4px;
   color: var(--muted); text-align: left; cursor: pointer;
   font-size: 15px; font-weight: 500;
 }
 .chan:hover { background: var(--hover); color: var(--text); }
-.chan.active { background: var(--active); color: var(--text-strong); }
+.chan.active { background: var(--chan-active); color: var(--text-strong); }
 .chan.unread { color: var(--text); font-weight: 600; }
 /* Unread pill on the sidebar's edge — the sidebar's own 8px padding is why this
    reaches out to a negative offset. */
@@ -451,10 +483,28 @@ button { font-family: inherit; }
 .chan.active.unread::before { display: none; }
 .chan .hash {
   flex: 0 0 20px; width: 20px; text-align: center;
-  color: var(--dim); font-size: 19px; font-weight: 400; line-height: 1;
+  color: var(--dim); font-size: 24px; font-weight: 400; line-height: 1;
 }
-.chan.active .hash { color: var(--muted); }
+/* The hash brightens WITH the label. Leaving it grey while the name went white
+   made the two look like they belonged to different rows. */
+.chan:hover .hash { color: var(--muted); }
+.chan.active .hash { color: var(--text-strong); }
 .chan .chan-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Only on the row you are on, and on the row under the pointer: a column of
+   these on every channel is noise, and the reference shows them the same way. */
+.chan-acts {
+  margin-left: auto; flex: 0 0 auto;
+  display: none; align-items: center; gap: 2px;
+}
+.chan.active .chan-acts, .chan:hover .chan-acts { display: flex; }
+.chan.active .unread, .chan:hover .unread { display: none; }
+.chan-act {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  padding: 0; background: none; border: 0; border-radius: 4px; cursor: pointer;
+  color: var(--muted);
+}
+.chan-act:hover { color: var(--text-strong); background: var(--hover); }
+.chan-act .ico { width: 16px; height: 16px; }
 .chan .unread {
   margin-left: auto;
   min-width: 18px; height: 18px; padding: 0 5px;
@@ -480,15 +530,20 @@ button { font-family: inherit; }
 .vchan.connecting { color: var(--muted); cursor: default; }
 .vchan:disabled { cursor: default; }
 .vchan-ico {
-  flex: 0 0 20px; width: 19px; height: 19px;
+  flex: 0 0 21px; width: 21px; height: 21px;
   fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
   color: var(--dim);
 }
 .vchan-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vchan-count {
+.vchan { height: 32px; }
+.vchan-count, .vchan-timer {
   margin-left: auto; flex: 0 0 auto;
   color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums;
 }
+/* While you are in the call the useful number is how long you have been in it.
+   The head count is what the row says when you are not — which is when it is
+   the number that decides whether you join. */
+.vchan-timer[hidden], .vchan-count[hidden] { display: none; }
 .vchan.connecting .vchan-count::after { content: "connecting…"; color: var(--accent); }
 
 .voice-users {
@@ -521,6 +576,13 @@ button { font-family: inherit; }
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 500;
 }
+/* Under a voice channel these are secondary to the channel itself: small and
+   dim. Rendered at full brightness they were the loudest thing in the sidebar,
+   which put the eye on the roster instead of on the channel list. */
+.vp.vu .vp-name { font-size: 13px; color: var(--dim); font-weight: 500; }
+.vp.vu:hover .vp-name, .vp.vu.speaking .vp-name { color: var(--muted); }
+.vp.vu .av { width: 24px; height: 24px; flex: 0 0 24px; font-size: 10px; }
+.vp.vu .vp-flag .ico { width: 15px; height: 15px; }
 .vp .vp-flag { margin-left: auto; font-size: 12px; opacity: .85; flex: 0 0 auto; }
 .vp .vp-flag + .vp-flag { margin-left: 4px; }
 .vp.unreachable .vp-name { color: var(--dim); }
@@ -560,7 +622,8 @@ button { font-family: inherit; }
 .vl-status { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
 /* Sized at id specificity: the base .ico rule is later in the sheet and would
    otherwise win the tie and hand it 18px. */
-#voice-live .vl-signal { width: 16px; height: 16px; flex: 0 0 16px; color: var(--voice-ok); }
+/* 19px of box for 16px of ink — the bars do not fill their own square. */
+#voice-live .vl-signal { width: 19px; height: 19px; flex: 0 0 19px; color: var(--voice-ok); }
 .vl-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 #vl-label {
   font-size: 14px; color: var(--voice-ok); font-weight: 700; line-height: 1.15;
@@ -590,10 +653,12 @@ button { font-family: inherit; }
 .vp-actions:empty { display: none; }
 /* Filled pills, not bare glyphs. These used to be --input on a --panel card,
    one point apart — which is to say invisible: the row read as loose icons
-   floating on the card rather than as anything you could press. */
+   floating on the card rather than as anything you could press.
+   A fixed width rather than a share of the row: two features stretched across
+   the whole card read as a different component entirely. */
 .btn-share {
   position: relative;
-  flex: 1 1 0; min-width: 0; height: 32px;
+  flex: 0 1 78px; min-width: 0; height: 32px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 6px; cursor: pointer;
   background: var(--float-2); border: 0; color: var(--text-strong);
@@ -2403,6 +2468,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --elev:       #e6e6e8;
 
   --hover:      rgba(0, 0, 0, .045);
+  --chan-active: #dcdcde;
   --active:     rgba(0, 0, 0, .085);
   --msg-hover:  rgba(0, 0, 0, .022);
   --line:       rgba(0, 0, 0, .08);
@@ -2927,6 +2993,8 @@ button.ap-row:hover .ap-more { color: var(--text); }
   margin-left: -5px; border: 5px solid transparent;
   border-top-color: var(--float);
 }
+/* The arrow is 5px, so anything more than that between tip and target leaves it
+   pointing across a gap instead of at something. */
 .tip.below::after {
   top: auto; bottom: 100%;
   border-top-color: transparent; border-bottom-color: var(--float);
