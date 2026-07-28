@@ -149,7 +149,7 @@
         return TIME_FMT;
     }
     function dayFmt() {
-        if (!DAY_FMT) DAY_FMT = new Intl.DateTimeFormat([], { weekday: 'long', month: 'short', day: 'numeric' });
+        if (!DAY_FMT) DAY_FMT = new Intl.DateTimeFormat([], { month: 'long', day: 'numeric', year: 'numeric' });
         return DAY_FMT;
     }
 
@@ -164,30 +164,21 @@
         return Math.floor((ms - d.getTimezoneOffset() * 60000) / 86400000);
     }
 
-    // Memoised on the production path (no explicit `now`). The cache is keyed by
-    // local day and thrown away when the day rolls over, so "Today"/"Yesterday"
-    // never go stale on a window left open past midnight.
+    // Memoised by local day. The label no longer depends on what day it is
+    // TODAY — it is the date itself — so unlike the old "Today"/"Yesterday"
+    // version this cache cannot go stale on a window left open past midnight.
     const dayCache = new Map();
-    let dayCacheFor = null;
 
-    function dayStr(ms, now) {
-        const explicit = now !== undefined;
-        const ref = explicit ? now : Date.now();
-        const todayIdx = localDayIndex(ref);
-
-        if (!explicit) {
-            if (dayCacheFor !== todayIdx) { dayCache.clear(); dayCacheFor = todayIdx; }
-            const hit = dayCache.get(localDayIndex(ms));
-            if (hit !== undefined) return hit;
-        }
-
+    // Always the date. "Today" and "Yesterday" are only true while you are
+    // reading them: scroll back a week and every divider above is still using
+    // yesterday's word about a different day. A divider is a bookmark in a log,
+    // and a log wants the date.
+    function dayStr(ms) {
         const idx = localDayIndex(ms);
-        let out;
-        if (idx === todayIdx) out = 'Today';
-        else if (idx === todayIdx - 1) out = 'Yesterday';
-        else out = dayFmt().format(ms);
-
-        if (!explicit) dayCache.set(idx, out);
+        const hit = dayCache.get(idx);
+        if (hit !== undefined) return hit;
+        const out = dayFmt().format(ms);
+        dayCache.set(idx, out);
         return out;
     }
 

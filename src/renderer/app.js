@@ -1782,24 +1782,12 @@
             });
         }
 
-        if (!list.length) {
-            // A filtered list that came back empty is a result, not a beginning:
-            // one line is the right answer to "nothing matched".
-            const text = active
-                ? 'No loaded messages match these filters.' + (hasMore ? ' Load earlier messages to search further back.' : '')
-                : '';
+        // The top of the channel, whenever we are actually at the top of it —
+        // not only when it is empty. This is scrollback: it stays above the
+        // first message forever rather than vanishing the moment one arrives.
+        if (!hasMore && !active) {
             rows.push({
-                key: 'empty', sig: text + '|' + channel + '|' + String(isAdmin()), make: () => {
-                    if (active) {
-                        const e = document.createElement('div');
-                        e.className = 'empty-state';
-                        e.textContent = text;
-                        return e;
-                    }
-                    // An empty channel is the TOP of its own history, so the
-                    // welcome sits at the bottom of the scroller with the first
-                    // message's worth of space under it — the same place the
-                    // first message would appear.
+                key: 'intro', sig: channel + '|' + String(isAdmin()), make: () => {
                     const e = document.createElement('div');
                     e.className = 'chan-intro';
                     e.innerHTML =
@@ -1819,7 +1807,23 @@
                     return e;
                 }
             });
-        } else {
+        }
+
+        if (!list.length && active) {
+            // A filtered list that came back empty is a result, not a beginning:
+            // one line is the right answer to "nothing matched".
+            const text = 'No loaded messages match these filters.'
+                + (hasMore ? ' Load earlier messages to search further back.' : '');
+            rows.push({
+                key: 'empty', sig: text, make: () => {
+                    const e = document.createElement('div');
+                    e.className = 'empty-state';
+                    e.textContent = text;
+                    return e;
+                }
+            });
+        }
+        if (list.length) {
             let lastDay = '';
             let prev = null;
             list.forEach((p) => {

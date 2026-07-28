@@ -824,7 +824,7 @@ describe('an empty channel', () => {
         // overflows, Chromium strands the first items above the scroll origin
         // where nothing can reach them. An auto margin resolves to zero as soon
         // as there is no free space.
-        expect(css).toMatch(/\.chan-intro \{ margin-top: auto;/);
+        expect(css).toMatch(/#messages > :first-child \{ margin-top: auto; \}/);
         const box = /#messages \{[^}]*\}/.exec(css)[0];
         expect(box).toMatch(/display: flex; flex-direction: column;/);
         expect(box).not.toMatch(/justify-content/);
@@ -990,5 +990,53 @@ describe('voice details', () => {
         // makes 20ms of jitter look like a crisis.
         expect(src()).toMatch(/const CONN_FLOOR = 100;/);
         expect(src()).toMatch(/Math\.max\(CONN_FLOOR, Math\.ceil\(Math\.max\.apply\(null, taken\) \/ 50\) \* 50\)/);
+    });
+});
+
+describe('the message list', () => {
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+    const lib = () => fs.readFileSync(path.join(RENDERER, 'lib.js'), 'utf8');
+
+    it('keeps the channel start as scrollback, not as an empty state', () => {
+        // It is the top of the history, so it belongs above the first message
+        // forever — not only until one arrives.
+        expect(src()).toMatch(/if \(!hasMore && !active\) \{/);
+        const at = src().indexOf("key: 'intro'");
+        expect(at).toBeGreaterThan(-1);
+        // Which means it is NOT inside the "no messages" branch any more.
+        const empty = src().indexOf("key: 'empty'");
+        expect(src().slice(empty, empty + 400)).not.toContain('chan-intro');
+    });
+
+    it('grows the conversation up from the composer', () => {
+        // An auto margin on whatever is first. It resolves to zero the moment
+        // the content overflows, which is why this is safe on a scroller where
+        // justify-content: flex-end is not.
+        expect(css).toMatch(/#messages > :first-child \{ margin-top: auto; \}/);
+    });
+
+    it('dates its dividers instead of naming them', () => {
+        // "Today" and "Yesterday" are only true while you are reading them.
+        expect(lib()).toMatch(/month: 'long', day: 'numeric', year: 'numeric'/);
+        expect(lib()).not.toMatch(/out = 'Today'/);
+        // Title Case, and the rule runs behind the label.
+        const sep = /\.day-sep \{[^}]*\}/.exec(css)[0];
+        expect(sep).not.toMatch(/text-transform: uppercase/);
+        expect(sep).toMatch(/color: var\(--day-sep\)/);
+        expect(lum(hex('day-sep', dark))).toBeGreaterThan(lum(hex('dim', dark)));
+    });
+
+    it('sizes message text off one value', () => {
+        // Everything in the list is em against --chat-fs, so the whole list was
+        // 16-22% oversized from this one number.
+        expect(css).toMatch(/--chat-fs: 14px;/);
+        expect(/\.msg-head \{[^}]*gap: 15px/.test(css)).toBe(true);
+        // Prose sits brighter than --text-body, which is tuned for labels.
+        expect(/\.msg-text \{[^}]*color: var\(--msg-text\)/.test(css)).toBe(true);
+        expect(lum(hex('msg-text', dark))).toBeGreaterThan(lum(hex('text-body', dark)));
+    });
+
+    it('renders an author the way the rest of the app renders a username', () => {
+        expect(/\.msg-author \{[^}]*text-transform: lowercase/.test(css)).toBe(true);
     });
 });

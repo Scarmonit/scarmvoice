@@ -194,46 +194,39 @@ describe('formatting', () => {
         expect(splitName('')).toEqual({ head: '', tail: '' });
     });
 
-    it('labels today and yesterday relative to a supplied clock', () => {
-        const noon = new Date('2026-07-25T12:00:00').getTime();
-        expect(dayStr(noon, noon)).toBe('Today');
-        expect(dayStr(noon - 86400000, noon)).toBe('Yesterday');
-        expect(dayStr(noon - 10 * 86400000, noon)).not.toBe('Today');
+    it('labels a day by its date, not by how long ago it was', () => {
+        // "Today" and "Yesterday" are only true while you are reading them.
+        // Scroll back a week and every divider above is still using yesterday's
+        // word about a different day — a divider is a bookmark in a log, and a
+        // log wants the date.
+        const noon = new Date(2026, 6, 25, 12, 0, 0).getTime();
+        expect(dayStr(noon)).not.toBe('Today');
+        expect(dayStr(noon)).toMatch(/2026/);
+        expect(dayStr(Date.now())).not.toBe('Today');
     });
 
-    it('labels days by the calendar, not by subtracting 24 hours', () => {
-        // The old implementation derived "yesterday" as `now - 86400000`, which
-        // lands on the wrong date whenever a DST change makes the local day 23
-        // or 25 hours long — so around a clock change the day separators were
-        // off by one. Anchored to local noon so the assertions hold in any zone.
-        const localNoon = (y, m, d) => new Date(y, m, d, 12, 0, 0).getTime();
-        const dayBefore = (y, m, d) => {
-            const x = new Date(y, m, d, 12, 0, 0);
-            x.setDate(x.getDate() - 1);
-            return x.getTime();
-        };
-        // US spring-forward (2025-03-09) and fall-back (2025-11-02).
+    it('gives one label per calendar day, not per 24 hours', () => {
+        // The label has to change at local midnight, and a DST day is 23 or 25
+        // hours long — subtracting 86400000 lands on the wrong date around a
+        // clock change. Anchored to local noon so this holds in any zone.
         for (const [y, m, d] of [[2025, 2, 10], [2025, 10, 3]]) {
-            const now = localNoon(y, m, d);
-            expect(dayStr(now, now)).toBe('Today');
-            expect(dayStr(dayBefore(y, m, d), now)).toBe('Yesterday');
-            // Two calendar days back is never "Yesterday", DST or not.
-            const twoBack = new Date(y, m, d, 12, 0, 0);
-            twoBack.setDate(twoBack.getDate() - 2);
-            expect(dayStr(twoBack.getTime(), now)).not.toBe('Yesterday');
+            const noon = new Date(y, m, d, 12, 0, 0);
+            const before = new Date(y, m, d, 12, 0, 0);
+            before.setDate(before.getDate() - 1);
+            expect(dayStr(noon.getTime())).not.toBe(dayStr(before.getTime()));
+            // …and the same day always gives the same label, whatever the hour.
+            const evening = new Date(y, m, d, 23, 30, 0);
+            expect(dayStr(evening.getTime())).toBe(dayStr(noon.getTime()));
         }
     });
 
-    it('memoises without letting Today/Yesterday go stale overnight', () => {
-        // The production path (no explicit clock) caches by local day; the cache
-        // has to be dropped when the day rolls over or a window left open past
-        // midnight keeps calling the previous day "Today".
-        const now = Date.now();
-        expect(dayStr(now)).toBe('Today');
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        expect(dayStr(now, tomorrow.getTime())).toBe('Yesterday');
-        expect(dayStr(now)).toBe('Today');
+    it('memoises by day, which is now safe across midnight', () => {
+        // The old cache had to be dropped when the day rolled over, because the
+        // label depended on what day it was. It no longer does.
+        const a = new Date(2024, 0, 15, 9, 0, 0).getTime();
+        const b = new Date(2024, 0, 15, 22, 0, 0).getTime();
+        expect(dayStr(a)).toBe(dayStr(b));
+        expect(dayStr(a)).toBe(dayStr(a));
     });
 });
 
