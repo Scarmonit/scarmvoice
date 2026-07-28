@@ -155,21 +155,22 @@
         </div>
         <!-- Only while connected: a clip is mixed into the outgoing mic, so
              outside a call there is nowhere for it to go. -->
-        <button id="btn-soundboard" class="btn-vl" title="Soundboard">
+        <button id="btn-soundboard" class="btn-vl" data-tip="Soundboard" aria-label="Soundboard">
           <span class="ico" data-icon="waveform"></span>
         </button>
-        <button id="btn-leave-voice" class="btn-vl btn-leave" title="Disconnect">
+        <button id="btn-leave-voice" class="btn-vl btn-leave" data-tip="Disconnect" aria-label="Disconnect">
           <span class="ico" data-icon="phone-hangup"></span>
         </button>
       </div>
       <div class="vp-actions">
-        <button id="btn-cam" class="btn-share" hidden>
+        <!-- The label is the tooltip AND the accessible name: these are
+             icon-only, so the two must be the same string or a screen reader
+             and a pointer are told different things. app.js keeps both. -->
+        <button id="btn-cam" class="btn-share" data-tip="Turn On Camera" aria-label="Turn On Camera" hidden>
           <span class="ico" data-icon="camera"></span>
-          <span id="btn-cam-label">Turn on camera</span>
         </button>
-        <button id="btn-share" class="btn-share" hidden>
+        <button id="btn-share" class="btn-share" data-tip="Share Your Screen" aria-label="Share Your Screen" hidden>
           <span class="ico" data-icon="screen"></span>
-          <span id="btn-share-label">Share screen</span>
         </button>
       </div>
     </div>

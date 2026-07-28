@@ -391,7 +391,92 @@ describe('the status line', () => {
         expect(src).toMatch(/\.ms-voice'\)\.toggleAttribute\('hidden', !voiceNow\)/);
         // And it has to follow joining and leaving, not only settings changes.
         const st = src.slice(src.indexOf("$('btn-soundboard').hidden = !st.joined;"));
-        expect(st.slice(0, 260)).toMatch(/renderMe\(\);/);
+        expect(st.slice(0, 400)).toMatch(/renderMe\(\);/);
         expect(/#me-bar \.ms-voice \{[^}]*color:\s*var\(--voice-ok\)/.test(css)).toBe(true);
+    });
+});
+
+describe('the voice panel controls', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('names every one of them on hover, and none of them by title', () => {
+        const live = html().slice(html().indexOf('id="voice-live"'), html().indexOf('id="soundboard"'));
+        const tip = (id) => new RegExp('id="' + id + '"[^>]*data-tip="([^"]+)"').exec(live);
+        expect(tip('btn-soundboard')[1]).toBe('Soundboard');
+        expect(tip('btn-leave-voice')[1]).toBe('Disconnect');
+        expect(tip('btn-cam')[1]).toBe('Turn On Camera');
+        expect(tip('btn-share')[1]).toBe('Share Your Screen');
+        // `title` would draw the OS bubble on top of the themed one.
+        ['btn-soundboard', 'btn-leave-voice', 'btn-cam', 'btn-share'].forEach((id) => {
+            expect(new RegExp('id="' + id + '"[^>]*title=').test(live)).toBe(false);
+        });
+    });
+
+    it('flips the two that toggle, through the one helper', () => {
+        // setTip writes data-tip AND aria-label, so a pointer and a screen
+        // reader can never be told different things about the same button.
+        expect(src()).toMatch(/setTip\(\$\('btn-share'\), st\.sharing \? 'Stop Sharing Your Screen' : 'Share Your Screen'\)/);
+        expect(src()).toMatch(/setTip\(\$\('btn-cam'\), st\.cam \? 'Turn Off Camera' : 'Turn On Camera'\)/);
+    });
+
+    it('runs one animation without hover, and only one', () => {
+        // The signal bars, because there the motion IS the information: moving
+        // means connected. Everything else is gated on :hover, which is what
+        // stops the panel being a permanent fidget in the corner of the eye.
+        // Every rule that starts a vp- loop, paired with the selector it is
+        // written under — walked back from the declaration to the { above it.
+        const loops = [];
+        let at = css.indexOf('animation: vp-');
+        while (at > -1) {
+            const open = css.lastIndexOf('{', at);
+            const prev = css.lastIndexOf('}', open);
+            loops.push(css.slice(prev + 1, open).replace(/\/\*[\s\S]*?\*\//g, '').trim());
+            at = css.indexOf('animation: vp-', at + 1);
+        }
+        expect(loops.length).toBeGreaterThan(3);
+        const ambient = loops.filter((sel) => !/:hover|\.on\b/.test(sel));
+        expect(ambient).toEqual(['#voice-live .vl-signal rect']);
+        // …and they stop when the state stops being "all well".
+        expect(css).toMatch(/\.vl-status\.warn \.vl-signal rect \{ animation: none; \}/);
+    });
+
+    it('staggers the two that are made of bars', () => {
+        // Four things pulsing together is a pulse; offset, it is a wave.
+        const delays = (prefix) => [...css.matchAll(/animation-delay: (\d+)ms/g)]
+            .filter((m) => css.lastIndexOf(prefix, m.index) > css.lastIndexOf('}', m.index))
+            .map((m) => Number(m[1]));
+        expect(delays('#voice-live .vl-signal rect:nth-child')).toEqual([180, 360, 540]);
+        expect(delays('#btn-soundboard:hover .wv:nth-child')).toEqual([90, 180, 270, 360]);
+    });
+
+    it('lets the camera lens lead the body', () => {
+        // The 40ms is the whole effect. Without it both parts move as one flat
+        // shape and nothing has reacted to anything.
+        expect(css).toMatch(/\.cam-lens \{ transition: transform [^;]*40ms; \}/);
+        expect(css).toMatch(/\.cam-body \{ transition: transform [^;]*\); \}/);
+        // Percentage origins need a box to resolve against, or every one of
+        // these scales from the corner of the viewBox instead of its own centre.
+        expect(css).toMatch(/transform-box: fill-box/);
+    });
+
+    it('starts the exit at the click, not at the answer', () => {
+        // Leaving is a network round trip. An exit that begins when the server
+        // replies is not an exit.
+        const at = src().indexOf("$('btn-leave-voice').addEventListener");
+        const body = src().slice(at, at + 420);
+        expect(body.indexOf("classList.add('is-gone')")).toBeLessThan(body.indexOf('leaveVoice()'));
+        expect(css).toMatch(/#voice-panel\.is-gone \{ opacity: 0/);
+        // And rejoining has to clear it, or the panel comes back invisible.
+        expect(src()).toMatch(/if \(st\.joined\) \$\('voice-panel'\)\.classList\.remove\('is-gone'\)/);
+    });
+
+    it('can be switched off entirely', () => {
+        const at = css.lastIndexOf('@media (prefers-reduced-motion: reduce) {');
+        const block = css.slice(at);
+        ['vl-signal rect', 'btn-soundboard:hover .wv', 'cam-rec', 'mon-arrow', 'mon-frame']
+            .forEach((sel) => expect(block).toContain(sel));
+        expect(block).toMatch(/animation: none/);
+        expect(block).toMatch(/transition: none/);
     });
 });

@@ -2931,3 +2931,123 @@ button.ap-row:hover .ap-more { color: var(--text); }
   top: auto; bottom: 100%;
   border-top-color: transparent; border-bottom-color: var(--float);
 }
+
+
+/* ---------- voice panel motion ------------------------------------------ */
+/* Every loop in here is gated on :hover except the signal bars, which are the
+   one place a permanent animation earns its keep: the motion IS the
+   information — moving means connected, and it stops the moment it isn't.
+   SVG shapes need transform-box: fill-box before a percentage transform-origin
+   means anything; without it the origin resolves against the whole viewBox and
+   every one of these scales from the wrong place. */
+#voice-live .vl-signal rect,
+.btn-vl .wv,
+.cam-lens, .cam-body, .cam-rec,
+.mon-frame, .mon-arrow {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+/* 1. The signal bars breathe, on a stagger. The offset is what makes it a wave
+      rather than four things pulsing together. Bottom-anchored, so they read
+      as bars rising rather than as boxes shrinking. */
+#voice-live .vl-signal rect {
+  transform-origin: 50% 100%;
+  animation: vp-breathe 2.6s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+#voice-live .vl-signal rect:nth-child(2) { animation-delay: 180ms; }
+#voice-live .vl-signal rect:nth-child(3) { animation-delay: 360ms; }
+#voice-live .vl-signal rect:nth-child(4) { animation-delay: 540ms; }
+@keyframes vp-breathe {
+  0%, 100% { transform: scaleY(1); opacity: 1; }
+  45%      { transform: scaleY(.62); opacity: .5; }
+}
+/* Muted or deafened is not a connection problem, but it is not "all well"
+   either — the bars hold still and let the amber say so. */
+#voice-live .vl-status.warn .vl-signal rect { animation: none; }
+
+/* 2. The soundboard's bars dance, left to right, only while hovered. Bigger and
+      faster than the signal's breathe, so it reads as play rather than status. */
+#btn-soundboard:hover .wv { animation: vp-jump 900ms cubic-bezier(.4, 0, .2, 1) infinite; }
+#btn-soundboard:hover .wv:nth-child(2) { animation-delay: 90ms; }
+#btn-soundboard:hover .wv:nth-child(3) { animation-delay: 180ms; }
+#btn-soundboard:hover .wv:nth-child(4) { animation-delay: 270ms; }
+#btn-soundboard:hover .wv:nth-child(5) { animation-delay: 360ms; }
+@keyframes vp-jump {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(1.75); }
+}
+
+/* 3. The handset drops toward the cradle, and further under the press. Colour
+      is the real warning — a destructive control should look destructive
+      BEFORE it is pressed, not after. */
+.btn-leave .ico { transition: transform 260ms cubic-bezier(.34, 1.56, .64, 1); }
+.btn-leave:hover .ico { transform: translateY(2px); }
+.btn-leave:active .ico { transform: translateY(3.5px) scale(.9); }
+
+/* 4. The lens juts out and the body drifts back — and the lens is 40ms late.
+      That delay is the entire effect: without it both parts move as one flat
+      shape and nothing has reacted to anything. */
+.cam-body { transition: transform 230ms cubic-bezier(.34, 1.56, .64, 1); }
+.cam-lens { transition: transform 230ms cubic-bezier(.34, 1.56, .64, 1) 40ms; }
+#btn-cam:hover .cam-lens { transform: translateX(2.2px); }
+#btn-cam:hover .cam-body { transform: translateX(-.8px); }
+/* Live: red, because you are broadcasting a picture of yourself and that has to
+   be impossible to miss at a glance. The record dot springs in and blinks. */
+.cam-rec {
+  opacity: 0; transform: scale(0);
+  transition: opacity 180ms ease, transform 240ms cubic-bezier(.34, 1.56, .64, 1);
+}
+#btn-cam.on { background: var(--danger-soft); color: var(--danger-hi); }
+#btn-cam.on:hover { background: var(--danger-plate); }
+#btn-cam.on .cam-rec {
+  opacity: 1; transform: scale(1);
+  animation: vp-blink 1.6s ease 240ms infinite;
+}
+@keyframes vp-blink { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
+
+/* 5. An arrow rises out of the monitor and fades. Not a shape sliding — it
+      enters from below at zero and leaves through the top, which is a
+      transmission repeating rather than an object moving. */
+.mon-frame { transition: transform 220ms cubic-bezier(.34, 1.56, .64, 1); }
+.mon-arrow { transition: transform 220ms cubic-bezier(.34, 1.56, .64, 1), opacity 180ms ease; }
+#btn-share:hover .mon-frame { transform: translateY(-1px); }
+#btn-share:hover .mon-arrow { animation: vp-beam 1100ms cubic-bezier(.16, 1, .3, 1) infinite; }
+@keyframes vp-beam {
+  0%   { transform: translateY(2.5px); opacity: 0; }
+  35%  { transform: translateY(0); opacity: 1; }
+  75%  { transform: translateY(-2.5px); opacity: 1; }
+  100% { transform: translateY(-4px); opacity: 0; }
+}
+/* Sharing: green, and the frame pulses on a slow cycle — slow enough to sit in
+   the corner of your eye for an hour without becoming irritating. */
+#btn-share.on { background: rgba(103, 175, 116, .16); color: var(--voice-ok); }
+#btn-share.on:hover { background: rgba(103, 175, 116, .26); }
+#btn-share.on .mon-frame { animation: vp-pulse 2s cubic-bezier(.4, 0, .2, 1) infinite; }
+@keyframes vp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* The press. Both wide buttons give way under the click. */
+.btn-share:active { transform: translateY(1px); }
+
+/* 6. The exit. The class goes on at click time, so the fade has the whole
+      round trip to the server to play in rather than starting when the answer
+      comes back. Shorter than any entrance in the app: nobody wants to wait to
+      leave. */
+#voice-panel {
+  transition: opacity 200ms ease, transform 260ms cubic-bezier(.16, 1, .3, 1);
+}
+#voice-panel.is-gone { opacity: 0; transform: translateY(-6px) scale(.97); pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  #voice-live .vl-signal rect,
+  #btn-soundboard:hover .wv,
+  #btn-cam.on .cam-rec,
+  #btn-share:hover .mon-arrow,
+  #btn-share.on .mon-frame { animation: none; }
+  .btn-leave .ico, .cam-body, .cam-lens, .mon-frame, .mon-arrow,
+  #voice-panel { transition: none; }
+  .btn-leave:hover .ico, .btn-leave:active .ico,
+  #btn-cam:hover .cam-lens, #btn-cam:hover .cam-body,
+  #btn-share:hover .mon-frame, .btn-share:active { transform: none; }
+  #voice-panel.is-gone { opacity: 0; transform: none; }
+}

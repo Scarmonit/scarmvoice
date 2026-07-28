@@ -3184,13 +3184,14 @@
                 // Share and camera controls only make sense while connected.
                 $('btn-share').hidden = !st.joined;
                 $('btn-share').classList.toggle('on', st.sharing);
-                $('btn-share-label').textContent = st.sharing ? 'Stop sharing' : 'Share screen';
+                setTip($('btn-share'), st.sharing ? 'Stop Sharing Your Screen' : 'Share Your Screen');
 
                 $('btn-cam').hidden = !st.joined;
                 $('btn-cam').classList.toggle('on', !!st.cam);
-                $('btn-cam-label').textContent = st.cam ? 'Turn off camera' : 'Turn on camera';
+                setTip($('btn-cam'), st.cam ? 'Turn Off Camera' : 'Turn On Camera');
 
                 $('btn-soundboard').hidden = !st.joined;
+                if (st.joined) $('voice-panel').classList.remove('is-gone');
                 // The user panel's second line reports the call, so it has to
                 // follow joining and leaving.
                 renderMe();
@@ -3198,10 +3199,6 @@
                 // empty voice panel with nothing it can do.
                 if (!st.joined) closeSoundboard();
 
-                // Both tray buttons are icon-only, so the label doubles as the
-                // tooltip rather than being read off the button face.
-                $('btn-cam').title = $('btn-cam-label').textContent;
-                $('btn-share').title = $('btn-share-label').textContent;
 
                 // Share audio rides its own elements in the voice engine (so a
                 // presenter you aren't watching is still audible), and it
@@ -3274,7 +3271,12 @@
         if (voice && voice.isJoined()) return;
         joinVoice();
     });
-    $('btn-leave-voice').addEventListener('click', leaveVoice);
+    $('btn-leave-voice').addEventListener('click', () => {
+        // Before the await, not after: leaving is a network round trip, and an
+        // exit that starts when the server answers is not an exit.
+        $('voice-panel').classList.add('is-gone');
+        leaveVoice();
+    });
 
     $('btn-mute').addEventListener('click', () => {
         if (!voice.isJoined()) return toast('Join voice first');

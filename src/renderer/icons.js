@@ -50,9 +50,12 @@
             '<rect x="19.1" y="4" width="3.4" height="17" rx="1.2"/></g>',
         // A soundboard is clips, not notes — a waveform says "these are sounds
         // you fire", where a quaver says "music is playing".
-        waveform: '<g stroke-linecap="round">' +
-            '<path d="M3 10.5v3"/><path d="M7 6.5v11"/><path d="M11 3.5v17"/>' +
-            '<path d="M15 6.5v11"/><path d="M19 9v6"/><path d="M22.5 11v2"/></g>',
+        waveform: '<g fill="currentColor" stroke="none">' +
+            '<rect class="wv" x="2" y="9.5" width="2.6" height="5" rx="1.3"/>' +
+            '<rect class="wv" x="6.7" y="6" width="2.6" height="12" rx="1.3"/>' +
+            '<rect class="wv" x="11.4" y="3" width="2.6" height="18" rx="1.3"/>' +
+            '<rect class="wv" x="16.1" y="6" width="2.6" height="12" rx="1.3"/>' +
+            '<rect class="wv" x="20.8" y="9.5" width="2.6" height="5" rx="1.3"/></g>',
 
         // ---- microphone family -----------------------------------------
         // Plain mic = the mute toggle. Mic + solid dot = "record a voice
@@ -103,8 +106,14 @@
         'volume-off': '<path d="M11 4.6L6.2 8.7H3.4v6.6h2.8L11 19.4z"/>' +
             '<path d="M16.4 9.6l5 4.8"/><path d="M21.4 9.6l-5 4.8"/>',
 
-        camera: '<path d="M22.4 7.6l-6.4 4.4 6.4 4.4z"/><rect x="1.6" y="5.2" width="14.4" height="13.6" rx="2.4"/>',
-        screen: '<rect x="2.2" y="4" width="19.6" height="13" rx="2.2"/><path d="M8 21h8M12 17v4"/>',
+        camera: '<path class="cam-lens" d="M22.4 7.6l-6.4 4.4 6.4 4.4z"/>' +
+            '<rect class="cam-body" x="1.6" y="5.2" width="14.4" height="13.6" rx="2.4"/>' +
+            '<circle class="cam-rec" cx="19.8" cy="4.6" r="2.3" fill="currentColor" stroke="none"/>',
+        // The arrow rides out of the frame on hover, which is what the button
+        // does: it sends this screen outward.
+        screen: '<g class="mon-frame"><rect x="2.2" y="4" width="19.6" height="13" rx="2.2"/>' +
+            '<path d="M8 21h8M12 17v4"/></g>' +
+            '<g class="mon-arrow"><path d="M12 13.6V8M9.4 10.6L12 8l2.6 2.6"/></g>',
         upload: '<path d="M12 16.4V4.2"/><path d="M6.4 9.8L12 4.2l5.6 5.6"/><path d="M3.6 19.8h16.8"/>',
 
         // ---- navigation + generic actions -------------------------------
