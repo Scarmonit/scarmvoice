@@ -1190,7 +1190,7 @@
                 if (act.dataset.act === 'edit') {
                     // Straight to the rename, which is what "edit channel" means
                     // here: everything else about a channel is on the menu.
-                    switchChannel(c.name).then(() => $('btn-rename-channel').click());
+                    switchChannel(c.name).then(renameChannel);
                     return;
                 }
                 openChannelMenu(c.name, r.left, r.bottom + 4);
@@ -1224,6 +1224,8 @@
 
     // Channel name only — the '#' is a separate glyph in the header.
     function setChannelTitle(name) {
+        const box = document.getElementById('ch-search-text');
+        if (box) box.textContent = 'Search ' + (document.querySelector('#server-head .sh-name') || {}).textContent;
         $('chan-title').textContent = name;
         $('composer-input').placeholder = 'Message #' + name;
     }
@@ -1314,7 +1316,7 @@
         }
     }
 
-    $('btn-rename-channel').addEventListener('click', async () => {
+    async function renameChannel() {
         if (channel === 'general') return toast('#general cannot be renamed', true);
         const name = await askText('Rename #' + channel, channel, 'Rename');
         if (!name || name === channel) return;
@@ -1335,9 +1337,9 @@
         renderMessages();
         renderChannels();
         loadMessages(true);
-    });
+    }
 
-    $('btn-delete-channel').addEventListener('click', async () => {
+    async function deleteChannel() {
         if (channel === 'general') return toast('#general cannot be deleted', true);
         const yes = await askConfirm(
             `Delete #${channel}?`,
@@ -1360,7 +1362,7 @@
         renderMessages();
         renderChannels();
         loadMessages(true);
-    });
+    }
 
     // ---------- messages --------------------------------------------------
 
@@ -1781,14 +1783,39 @@
         }
 
         if (!list.length) {
+            // A filtered list that came back empty is a result, not a beginning:
+            // one line is the right answer to "nothing matched".
             const text = active
                 ? 'No loaded messages match these filters.' + (hasMore ? ' Load earlier messages to search further back.' : '')
-                : `No messages in #${channel} yet — say something.`;
+                : '';
             rows.push({
-                key: 'empty', sig: text, make: () => {
+                key: 'empty', sig: text + '|' + channel + '|' + String(isAdmin()), make: () => {
+                    if (active) {
+                        const e = document.createElement('div');
+                        e.className = 'empty-state';
+                        e.textContent = text;
+                        return e;
+                    }
+                    // An empty channel is the TOP of its own history, so the
+                    // welcome sits at the bottom of the scroller with the first
+                    // message's worth of space under it — the same place the
+                    // first message would appear.
                     const e = document.createElement('div');
-                    e.className = 'empty-state';
-                    e.textContent = text;
+                    e.className = 'chan-intro';
+                    e.innerHTML =
+                        '<span class="ci-mark" aria-hidden="true">#</span>' +
+                        `<h2 class="ci-title">Welcome to #${esc(channel)}!</h2>` +
+                        `<p class="ci-sub">This is the start of the #${esc(channel)} channel.</p>`;
+                    // Only offered to somebody who can actually do it: reshaping
+                    // a channel is admin-only server-side.
+                    if (isAdmin()) {
+                        const b = document.createElement('button');
+                        b.type = 'button';
+                        b.className = 'ci-btn';
+                        b.innerHTML = I('pencil') + '<span>Edit Channel</span>';
+                        b.addEventListener('click', renameChannel);
+                        e.appendChild(b);
+                    }
                     return e;
                 }
             });
@@ -3936,8 +3963,6 @@
         const online = rows.filter((r) => r.status !== 'away').sort(byPresence);
         const away = rows.filter((r) => r.status === 'away').sort(byPresence);
 
-        $('members-count').textContent = rows.length ? String(rows.length) : '';
-
         ul.innerHTML = '';
         if (!rows.length) {
             const e = document.createElement('div');
@@ -3968,20 +3993,28 @@
 
             const blocked = isBlocked(r.id);
             if (blocked) li.classList.add('blocked');
+            // Being in the call is the most interesting thing a row can say, so
+            // it takes the second line rather than being squeezed into an icon
+            // at the far right where it reads as a decoration.
             const sub = blocked ? 'Blocked'
-                : (r.custom || (r.status === 'away' ? 'Away' : (r.status === 'dnd' ? 'Do not disturb' : '')));
+                : (p ? 'In voice'
+                    : (r.custom || (r.status === 'away' ? 'Away' : (r.status === 'dnd' ? 'Do not disturb' : ''))));
             const dotClass = r.status === 'away' ? ' away' : (r.status === 'dnd' ? ' dnd' : '');
             li.innerHTML =
                 '<span class="av-wrap">' +
                 `<span class="av${avatarCls(r.uid)}" style="${avatarStyle(r.name)}">${esc(initials(r.name))}${avatarImgHtml(r.uid)}</span>` +
                 `<i class="presence${dotClass}" aria-hidden="true"></i>` +
                 '</span>' +
-                '<span class="vp-name">' + esc(r.name) + (isMe ? ' (you)' : '') +
-                (sub ? `<span class="vp-sub">${esc(sub)}</span>` : '') + '</span>' +
+                // No "(you)": your own avatar is right there, and the suffix cost
+                // the name the width it needed.
+                '<span class="vp-body"><span class="vp-name">' + esc(r.name) + '</span>' +
+                (sub
+                    ? `<span class="vp-sub${p ? ' in-voice' : ''}">${p ? I('volume', 'ico vp-sub-ico') : ''}${esc(sub)}</span>`
+                    : '') + '</span>' +
                 (blocked ? '<span class="vp-flag" title="Blocked">' + I('ban') + '</span>' : '') +
-                (p ? '<span class="vp-invoice" title="In voice">' + I('volume') + '</span>' : '') +
                 (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
-                (p && (p.muted || localMuted) ? '<span class="vp-flag">' + I('volume-off') + '</span>' : '');
+                (p && (p.muted || localMuted) ? '<span class="vp-flag" title="Muted">' + I('mic-off') + '</span>' : '') +
+                (p && p.deafened ? '<span class="vp-flag" title="Deafened">' + I('headset-off') + '</span>' : '');
 
             wireAvatarFallback(li);
             if (p && !isMe && inCall && !p.remoteOnly) {
@@ -5012,8 +5045,7 @@
         dot.title = label;
         // Rename/delete are admin-only server-side; leaving the header buttons
         // up for a member is a control that can only ever return a 403.
-        $('btn-rename-channel').hidden = !isAdmin();
-        $('btn-delete-channel').hidden = !isAdmin();
+
     }
 
     // Name and status together, like the website's name pill — they're the two
@@ -5436,7 +5468,7 @@
         const btn = $('btn-members');
         btn.classList.toggle('on', show);
         btn.setAttribute('aria-pressed', String(show));
-        btn.title = show ? 'Hide member list' : 'Show member list';
+        setTip(btn, show ? 'Hide Member List' : 'Show Member List');
     }
 
     $('btn-members').addEventListener('click', async () => {
@@ -5647,9 +5679,9 @@
             ...(isAdmin() ? [
                 'sep',
                 { label: 'Rename channel', icon: 'pencil', disabled: name === 'general',
-                    onClick: () => { switchChannel(name).then(() => $('btn-rename-channel').click()); } },
+                    onClick: () => { switchChannel(name).then(renameChannel); } },
                 { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
-                    onClick: () => { switchChannel(name).then(() => $('btn-delete-channel').click()); } }
+                    onClick: () => { switchChannel(name).then(deleteChannel); } }
             ] : [])
         ], x, y);
     }
@@ -8302,6 +8334,12 @@
         panel.hidden = !open;
         if (open) { toggleFilter(false); renderPinned(); }
     }
+
+    // The same menu the channel row and the right-click open, from the header.
+    $('btn-chan-alerts').addEventListener('click', (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        openChannelMenu(channel, r.left - 120, r.bottom + 6);
+    });
 
     $('btn-pinned').addEventListener('click', () => togglePinned($('pinned-panel').hidden));
     $('pinned-close').addEventListener('click', () => togglePinned(false));

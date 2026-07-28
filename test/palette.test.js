@@ -55,12 +55,16 @@ describe('the dark surface ramp', () => {
         expect(lum(hex('side', dark))).toBeGreaterThan(lum(hex('rail', dark)));
     });
 
-    it('keeps the composer from hovering over the column behind it', () => {
-        // Was a thirteen-point step, which read as a raised card. The reference
-        // barely separates the two at all.
+    it('separates the composer from the column with a step AND a line', () => {
+        // Measured twice on two different captures and read differently each
+        // time: once as "barely separates", once as ~9 points with a hairline
+        // round it. The second reading is the newer one and the one that comes
+        // with a border — and a step this size only works BECAUSE of the border,
+        // so the two are checked together.
         const step = lum(hex('input', dark)) - lum(hex('chat', dark));
-        expect(step).toBeGreaterThan(0);
-        expect(step).toBeLessThanOrEqual(6);
+        expect(step).toBeGreaterThan(4);
+        expect(step).toBeLessThanOrEqual(11);
+        expect(/\.composer-row \{[^}]*border: 1px solid var\(--line\)/.test(css)).toBe(true);
     });
 
     it('raises a card on a floating surface too', () => {
@@ -656,5 +660,111 @@ describe('the rail and the channel list', () => {
         const live = html().slice(html().indexOf('class="vp-actions"'), html().indexOf('id="soundboard"'));
         expect((live.match(/class="btn-share"/g) || []).length).toBe(3);
         expect(live).toContain('id="btn-nsai"');
+    });
+});
+
+describe('panes are divided by a line, not by a darker neighbour', () => {
+    it('puts the member list on the chat surface with a hairline between', () => {
+        // The third place this pattern showed up — the rail and the account
+        // panel's row cards were the other two. Making the neighbour darker is
+        // more separation than the reference uses, and it leaves no visible edge.
+        // Two rules carry this selector; the grid-area one comes first.
+        const rule = (css.match(/#members-panel \{[^}]*\}/g) || []).find((r) => r.includes('background'));
+        expect(rule).toMatch(/background:\s*var\(--chat\)/);
+        expect(rule).toMatch(/box-shadow:\s*inset 1px 0 0 var\(--line\)/);
+    });
+
+    it('draws the channel header s rule lighter than the surface', () => {
+        expect(/#chan-head \{[^}]*box-shadow:\s*0 1px 0 var\(--line\)/.test(css)).toBe(true);
+    });
+});
+
+describe('the channel header', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+
+    it('groups every action before the search field', () => {
+        const acts = html().slice(html().indexOf('class="chan-actions"'), html().indexOf('id="filter-bar"'));
+        const ids = [...acts.matchAll(/id="(btn-[a-z-]+)"/g)].map((m) => m[1]);
+        expect(ids).toEqual(['btn-chan-alerts', 'btn-pinned', 'btn-members', 'btn-search']);
+        // Reshaping a channel is not a header action: it lives on the channel,
+        // in the menu the row and the right-click both open.
+        expect(acts).not.toContain('btn-rename-channel');
+        expect(acts).not.toContain('btn-delete-channel');
+    });
+
+    it('marks the active toggle by going white, not by adding a plate', () => {
+        // A tint plus a pill said "toggled" twice, in a colour that means
+        // something else everywhere else in the app.
+        expect(css).toMatch(/#chan-head \.ch-btn\.on \{ background: none; color: var\(--text-strong\); \}/);
+        expect(css).toMatch(/\.ch-btn \{[^}]*color:\s*var\(--ch-icon\)/);
+        expect(lum(hex('ch-icon', dark))).toBeLessThan(lum(hex('muted', dark)));
+    });
+
+    it('sinks the search field and trails its magnifier', () => {
+        const rule = /\.ch-search \{[^}]*\}/.exec(css)[0];
+        expect(rule).toMatch(/width:\s*244px/);
+        expect(rule).toMatch(/background:\s*var\(--sunk\)/);
+        expect(rule).toMatch(/border:\s*1px solid/);
+        // Sunk means DARKER than the surface it is cut into.
+        expect(lum(hex('sunk', dark))).toBeLessThan(lum(hex('chat', dark)));
+        // The glyph is last in the markup and pushed right, so the field reads
+        // as a sentence you finish rather than a button you press.
+        const search = html().slice(html().indexOf('id="btn-search"'), html().indexOf('</button>', html().indexOf('id="btn-search"')));
+        expect(search.indexOf('ch-search-text')).toBeLessThan(search.indexOf('data-icon="search"'));
+        expect(css).toMatch(/\.ch-search \.ico \{[^}]*margin-left:\s*auto/);
+    });
+});
+
+describe('an empty channel', () => {
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('reads as the start of something rather than as an empty pane', () => {
+        expect(src()).toMatch(/e\.className = 'chan-intro'/);
+        expect(src()).toMatch(/Welcome to #\$\{esc\(channel\)\}!/);
+        expect(src()).toMatch(/This is the start of the #\$\{esc\(channel\)\} channel\./);
+        // Only offered to somebody who can act on it.
+        expect(src()).toMatch(/if \(isAdmin\(\)\) \{[\s\S]{0,300}Edit Channel/);
+        // Left-aligned: it is the top of a history, not a centred notice.
+        expect(css).not.toMatch(/\.chan-intro \{[^}]*text-align:\s*center/);
+    });
+
+    it('sits at the bottom without breaking the scroller', () => {
+        // An auto margin, NOT justify-content: flex-end — in a scroller that
+        // overflows, Chromium strands the first items above the scroll origin
+        // where nothing can reach them. An auto margin resolves to zero as soon
+        // as there is no free space.
+        expect(css).toMatch(/\.chan-intro \{ margin-top: auto;/);
+        const box = /#messages \{[^}]*\}/.exec(css)[0];
+        expect(box).toMatch(/display: flex; flex-direction: column;/);
+        expect(box).not.toMatch(/justify-content/);
+    });
+});
+
+describe('the composer and the member list', () => {
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+
+    it('gives the composer an edge and some height', () => {
+        expect(css).toMatch(/\.composer-row \{[^}]*min-height:\s*58px/);
+        expect(css).toMatch(/#composer \{ flex: 0 0 auto; padding: 0 8px 24px; \}/);
+    });
+
+    it('drops the panel title above a list that already has a heading', () => {
+        expect(html()).not.toContain('class="mp-head"');
+        expect(html()).not.toContain('id="members-count"');
+        // Title Case, like the sidebar's categories.
+        const g = /\.mp-group \{[^}]*\}/.exec(css)[0];
+        expect(g).not.toMatch(/text-transform:\s*uppercase/);
+        expect(Number(/font-size:\s*([\d.]+)px/.exec(g)[1])).toBeGreaterThanOrEqual(12);
+    });
+
+    it('stacks the voice state under the name, dimly', () => {
+        // At full brightness a member list pulls the eye off the conversation;
+        // and at the far right edge, "in voice" read as a decoration.
+        expect(css).toMatch(/#members-list \.vp \.vp-name \{[^}]*color:\s*var\(--dim\)/);
+        expect(css).toMatch(/\.vp-body \{[^}]*flex-direction: column/);
+        expect(src()).toMatch(/\? 'In voice'/);
+        expect(src()).not.toMatch(/vp-invoice/);
+        expect(src()).not.toMatch(/esc\(r\.name\) \+ \(isMe \? ' \(you\)'/);
     });
 });

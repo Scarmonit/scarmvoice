@@ -139,9 +139,8 @@ describe('members sidebar', () => {
     it('lists each person once when the voice rows carry no account id', () => {
         // The bug rendered four rows here: Me + Alice from text presence, and
         // Me + Alice again from the voice list under a different key.
-        expect(names()).toEqual(['Alice', 'Me (you)']);
+        expect(names()).toEqual(['Alice', 'Me']);
         expect(rows()).toHaveLength(2);
-        expect($('members-count').textContent).toBe('2');
     });
 
     it('keeps each person in one group, with their real status', () => {
@@ -154,8 +153,11 @@ describe('members sidebar', () => {
 
     it('still marks them as in voice despite the missing account id', () => {
         // Same root cause: the key mismatch also made the roster lose the
-        // "in voice" flag on the real member row.
-        expect(rows().every((li) => !!li.querySelector('.vp-invoice'))).toBe(true);
+        // "in voice" state on the real member row. It is the second line now,
+        // not an icon at the far edge.
+        expect(rows().every((li) => !!li.querySelector('.vp-sub.in-voice'))).toBe(true);
+        expect(rows().map((li) => li.querySelector('.vp-sub').textContent.trim()))
+            .toEqual(['In voice', 'In voice']);
     });
 
     it('does not duplicate when a resync re-delivers uid-less voice rows', async () => {
@@ -164,7 +166,6 @@ describe('members sidebar', () => {
         document.dispatchEvent(new Event('visibilitychange'));
         await settle();
         expect(rows()).toHaveLength(2);
-        expect($('members-count').textContent).toBe('2');
         expect(groups()).toEqual(['Online — 1', 'Away — 1']);
     });
 });

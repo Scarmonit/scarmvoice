@@ -16,11 +16,15 @@
   --rail:       #0c0c0e;   /* far-left server rail, the title bar, and the
                               background the user card floats on        (+2) */
   --side:       #131316;   /* channel sidebar + members sidebar         (+3) */
-  --chat:       #17171a;   /* message column                            (+3) */
-  --input:      #1b1b1f;   /* composer + text inputs — four points above the
-                              column behind it, so the box barely separates
-                              from it instead of hovering over it       (+4) */
-  --chat-2:     #1c1c20;   /* panels layered on the message column      (+4) */
+  --chat:       #1a1a1e;   /* message column                            (+4) */
+  --sunk:       #17171a;   /* a well cut INTO the chat surface: the search
+                              field, and anything else that reads as an
+                              inset rather than a raised control        (+3) */
+  --input:      #222327;   /* composer + text inputs — the reference sits ~9
+                              points above the column with a hairline round
+                              it, which is what stops a flat box reading as
+                              part of the background                    (+5) */
+  --chat-2:     #202024;   /* panels layered on the message column      (+4) */
   --panel:      #202024;   /* the user dock: RAISED out of the sidebar rather
                               than sunk into it                        (+4) */
   --float:      #242429;   /* modals, menus, popovers, tooltips         (+5) */
@@ -51,6 +55,9 @@
      the user panel's glyphs at .67, and placeholder text at .42 — ours was
      .75 and .55, which made the icons hot and the placeholder loud. */
   --panel-icon: #abacb2;
+  /* The channel header's idle glyphs, a step below --muted: they are always
+     there and never the thing you came to look at. */
+  --ch-icon:    #96979e;
   /* The user panel's own type ramp. Both lines were brighter than the
      reference — the name by 24 points and the status by 19 — which is what made
      the panel shout next to a channel list that whispers. */
@@ -119,7 +126,7 @@
   --sheen: linear-gradient(180deg, rgba(255, 255, 255, .018), rgba(255, 255, 255, 0) 60%);
   --w-rail: 72px;
   --w-side: 300px;
-  --w-members: 232px;
+  --w-members: 264px;
 
   /* Chat text scale. Everything inside #messages sizes in em against this, so
      one value moves message text, names, timestamps and avatars together. */
@@ -823,29 +830,28 @@ button { font-family: inherit; }
 
 /* ---------- members sidebar --------------------------------------------- */
 
+/* The same surface as the message column, divided by a LIGHTER hairline —
+   not a darker neighbour with no rule between them. Making the neighbour darker
+   is more separation than the reference uses and it is the third place we had
+   done it; the rail and the popover's row cards were the other two. */
 #members-panel {
   width: var(--w-members);
-  background: var(--side);
+  background: var(--chat);
+  box-shadow: inset 1px 0 0 var(--line);
   display: flex; flex-direction: column;
   min-height: 0;
+  padding-top: 12px;
 }
 #members-panel[hidden] { display: none; }
-.mp-head {
-  flex: 0 0 48px; height: 48px;
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 16px;
-  box-shadow: 0 1px 0 var(--divider);
-  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--dim);
-}
 .side-count { margin-left: auto; color: var(--dim); font-size: 11px; font-weight: 700; }
-#members-list { flex: 1; overflow-y: auto; padding: 12px 8px 16px; min-height: 0; }
+#members-list { flex: 1; overflow-y: auto; padding: 0 8px 16px; min-height: 0; }
 #members-list.voice-roster:empty { display: block; }
 
-/* Group headings inside the members list. */
+/* Group headings inside the members list. Title Case, like the sidebar's
+   categories — all-caps headings are the pattern this app is moving off. */
 .mp-group {
-  padding: 16px 8px 4px;
-  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 16px 8px 6px;
+  font-size: 13px; font-weight: 600; letter-spacing: 0;
   color: var(--dim); cursor: default;
 }
 .mp-group:first-child { padding-top: 0; }
@@ -854,14 +860,29 @@ button { font-family: inherit; }
 .vp .presence {
   position: absolute; right: -2px; bottom: -2px;
   width: 11px; height: 11px; border-radius: 50%;
-  background: var(--online); border: 3px solid var(--side);
+  background: var(--online); border: 3px solid var(--chat);
 }
+/* Inside the sidebar the cutout is punched in the sidebar's colour instead. */
+#voice-users .vp .presence { border-color: var(--side); }
 .vp .presence.away { background: var(--idle); }
+/* Name over status, not name with an icon shoved to the far right: being in
+   the call is the most interesting thing a row can say, and at the far edge it
+   read as decoration. */
+.vp-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+#members-list .vp .vp-name {
+  /* A hundred points dimmer than it was. A member list is a list of people who
+     are there, not a list of things to read — at full brightness it was pulling
+     the eye off the conversation. */
+  color: var(--dim); font-size: 14px; font-weight: 500;
+}
+#members-list .vp:hover .vp-name, #members-list .vp.speaking .vp-name { color: var(--muted); }
 .vp-sub {
-  display: block; max-width: 100%;
+  display: flex; align-items: center; gap: 4px; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 11.5px; color: var(--dim); line-height: 1.3; font-weight: 400;
 }
+.vp-sub.in-voice { color: var(--voice-ok); }
+.vp-sub-ico { width: 12px; height: 12px; flex: 0 0 12px; }
 .vp.away .av, .vp.away .av-wrap { opacity: .55; }
 .vp.away .vp-name { color: var(--muted); }
 .vp-invoice { flex: 0 0 auto; font-size: 11px; opacity: .9; margin-left: auto; }
@@ -880,30 +901,52 @@ button { font-family: inherit; }
 #chan-head {
   height: 48px; flex: 0 0 48px;
   display: flex; align-items: center; gap: 8px;
-  padding: 0 8px 0 16px;
-  box-shadow: 0 1px 0 var(--divider);
+  padding: 0 12px 0 16px;
+  /* Lighter than the surface, not darker: the rule between two panes is a line
+     you can see, not a shadow you infer. */
+  box-shadow: 0 1px 0 var(--line);
   z-index: 5;
 }
-.ch-hash { color: var(--dim); font-size: 22px; font-weight: 400; line-height: 1; }
+.ch-hash { color: var(--dim); font-size: 26px; font-weight: 400; line-height: 1; }
 #chan-title {
-  font-size: 15.5px; font-weight: 700; margin: 0;
+  font-size: 15.5px; font-weight: 700; margin: 0; color: var(--text-strong);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 #chan-meta { font-size: 12px; color: var(--dim); }
-.chan-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
-.ch-sep { width: 1px; height: 22px; margin: 0 4px; background: var(--line-2); }
+.chan-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+/* Idle dimmer, active WHITE — and no plate. A tint plus a pill said "toggled"
+   twice, in a colour that means something else everywhere else in the app. */
+.ch-btn { width: 32px; height: 32px; color: var(--ch-icon); }
+.ch-btn .ico { width: 20px; height: 20px; }
+.ch-btn:hover { background: none; color: var(--text-strong); }
+#chan-head .ch-btn.on { background: none; color: var(--text-strong); }
+#chan-head .ch-btn[aria-pressed="true"].on { background: none; }
+/* A well cut into the header rather than a control raised out of it, with the
+   magnifier trailing the placeholder — the field reads as a sentence you
+   finish, not a button you press. */
 .ch-search {
   display: flex; align-items: center; gap: 6px;
-  height: 26px; padding: 0 8px; margin-left: 2px;
-  background: var(--rail); border: 0; border-radius: 5px; cursor: pointer;
-  color: var(--dim); font-size: 12.5px; font-weight: 500;
+  width: 244px; height: 28px; padding: 0 8px; margin-left: 4px;
+  background: var(--sunk); border: 1px solid var(--line-2); border-radius: 5px;
+  cursor: pointer; color: var(--dim); font-size: 13px; font-weight: 500;
 }
-.ch-search:hover { color: var(--muted); }
-.ch-search .ico { width: 15px; height: 15px; }
-.ch-search span { padding-right: 26px; }
+.ch-search:hover { color: var(--muted); border-color: var(--line-solid); }
+.ch-search .ico { width: 16px; height: 16px; margin-left: auto; }
+.ch-search-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 #messages-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-#messages { flex: 1; overflow-y: auto; padding: 16px 0 24px; min-height: 0; font-size: var(--chat-fs); }
+/* A flex column so the welcome block can push itself to the bottom with an auto
+   margin. NOT justify-content: flex-end — in a scroller that overflows,
+   Chromium strands the first items above the scroll origin where nothing can
+   reach them. An auto margin resolves to zero the moment there is no free
+   space, so a full channel behaves exactly as it did. */
+#messages {
+  flex: 1; overflow-y: auto; padding: 16px 0 24px; min-height: 0;
+  display: flex; flex-direction: column;
+  font-size: var(--chat-fs);
+}
+/* Rows keep their own height rather than stretching to fill what is left. */
+#messages > * { flex: 0 0 auto; }
 
 /* Jump to the newest messages. Fades rather than pops, and stays out of the
    scrollbar's way. visibility is what keeps it untabbable while hidden. */
@@ -1057,6 +1100,30 @@ button { font-family: inherit; }
 .day-sep span { padding: 0 8px; }
 
 .empty-state { text-align: center; color: var(--dim); padding: 60px 20px; font-size: 13px; }
+
+/* The top of a channel's history. Left-aligned and at the BOTTOM of the
+   scroller, where the first message would be — a centred line floating at the
+   top said "this pane is empty" rather than "this is where it starts". */
+.chan-intro { margin-top: auto; padding: 40px 16px 8px; max-width: 720px; }
+.ci-mark {
+  display: grid; place-items: center;
+  width: 68px; height: 68px; margin-bottom: 16px;
+  border-radius: 50%; background: var(--chat-2);
+  color: var(--text-strong); font-size: 38px; font-weight: 400; line-height: 1;
+}
+.ci-title {
+  margin: 0 0 8px; font-size: 32px; line-height: 1.15; font-weight: 800;
+  color: var(--text-strong); letter-spacing: -.01em;
+}
+.ci-sub { margin: 0; font-size: 15px; color: var(--text-body); }
+.ci-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-top: 16px; height: 32px; padding: 0 12px;
+  background: var(--float-2); border: 0; border-radius: 4px; cursor: pointer;
+  color: var(--text-strong); font: inherit; font-size: 14px; font-weight: 500;
+}
+.ci-btn:hover { background: var(--elev); }
+.ci-btn .ico { width: 16px; height: 16px; }
 .load-more {
   display: block; margin: 4px auto 14px;
   background: var(--chat-2); border: 1px solid var(--line); color: var(--muted);
@@ -1249,7 +1316,7 @@ button { font-family: inherit; }
 
 /* ---------- composer ---------------------------------------------------- */
 
-#composer { flex: 0 0 auto; padding: 0 16px 24px; }
+#composer { flex: 0 0 auto; padding: 0 8px 24px; }
 
 #reply-chip {
   display: flex; align-items: center; gap: 8px;
@@ -1269,8 +1336,12 @@ button { font-family: inherit; }
 
 .composer-row {
   display: flex; align-items: flex-end; gap: 0;
-  background: var(--sheen), var(--input); border: 0; border-radius: 8px;
-  min-height: 50px;
+  /* A hairline round it, and a taller box. Flat against the column and
+     unbordered, it read as part of the background rather than as the thing you
+     type into. */
+  background: var(--sheen), var(--input);
+  border: 1px solid var(--line); border-radius: 8px;
+  min-height: 58px;
 }
 .composer-row:focus-within { box-shadow: 0 0 0 1px var(--accent-line); }
 #composer-input {
@@ -1281,7 +1352,7 @@ button { font-family: inherit; }
 /* Dimmer than a --dim label: this is text that is not there yet. */
 #composer-input::placeholder { color: var(--placeholder); }
 #btn-attach {
-  width: 50px; height: 50px; flex: 0 0 50px;
+  width: 56px; height: 56px; flex: 0 0 56px;
   display: grid; place-items: center; align-self: flex-end;
   background: none; border: 0; cursor: pointer; color: var(--muted);
 }
@@ -1290,7 +1361,7 @@ button { font-family: inherit; }
 .composer-tools {
   flex: 0 0 auto; align-self: flex-end;
   display: flex; align-items: center; gap: 2px;
-  height: 50px; padding: 0 8px 0 4px;
+  height: 56px; padding: 0 8px 0 4px;
 }
 #btn-emoji, #btn-mic {
   position: relative;
@@ -2462,6 +2533,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --chat:       #ffffff;
   --chat-2:     #f6f6f7;
   --input:      #f4f4f5;
+  --sunk:       #ebebec;
   --panel:      #ffffff;   /* raised out of --side, as in dark */
   --float:      #f7f7f8;
   --float-2:    #ffffff;   /* raised on --float, as in dark */
@@ -2481,6 +2553,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --muted:       #4e4e55;
   --dim:         #76767c;
   --panel-icon:  #5a5a61;
+  --ch-icon:     #6a6a71;
   --placeholder: #8e8e96;
 
   /* Inverted: a white lift on a white surface is invisible, and the reference

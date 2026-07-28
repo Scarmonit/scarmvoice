@@ -359,23 +359,24 @@
       <span class="ch-hash" aria-hidden="true">#</span>
       <h1 id="chan-title">general</h1>
       <span id="chan-meta"></span>
+      <!-- Every action together, then search. Splitting them either side of the
+           field broke the grouping — and reshaping a channel is not a header
+           action at all: it lives on the channel, in its own menu. -->
       <div class="chan-actions">
-        <button class="icon-btn" id="btn-pinned" title="Pinned messages">
+        <button class="icon-btn ch-btn" id="btn-chan-alerts" data-tip="Notification Settings" aria-label="Notification Settings">
+          <span class="ico" data-icon="bell"></span>
+        </button>
+        <button class="icon-btn ch-btn" id="btn-pinned" data-tip="Pinned Messages" aria-label="Pinned Messages">
           <span class="ico" data-icon="pin"></span>
         </button>
-        <button class="icon-btn" id="btn-members" title="Hide member list" aria-pressed="true">
+        <button class="icon-btn ch-btn" id="btn-members" data-tip="Hide Member List" aria-label="Hide Member List" aria-pressed="true">
           <span class="ico" data-icon="users"></span>
         </button>
-        <button class="ch-search" id="btn-search" title="Search messages (Ctrl+F)">
+        <!-- The magnifier trails the placeholder, as the reference has it: the
+             field reads as a sentence you finish rather than a button. -->
+        <button class="ch-search" id="btn-search" data-tip="Search Messages (Ctrl+F)" aria-label="Search messages">
+          <span class="ch-search-text" id="ch-search-text">Search</span>
           <span class="ico" data-icon="search"></span>
-          <span>Search</span>
-        </button>
-        <span class="ch-sep" aria-hidden="true"></span>
-        <button class="icon-btn" id="btn-rename-channel" title="Rename this channel">
-          <span class="ico" data-icon="pencil"></span>
-        </button>
-        <button class="icon-btn" id="btn-delete-channel" title="Delete this channel">
-          <span class="ico" data-icon="trash"></span>
         </button>
       </div>
     </header>
@@ -546,11 +547,9 @@
 
   <!-- Members sidebar. Everyone present, grouped online / away, with their
        custom status; people in the call keep the per-person volume controls. -->
+  <!-- No panel title: the group heading below already says what this is and
+       how many there are, and two headers for one list is one too many. -->
   <aside id="members-panel">
-    <div class="mp-head">
-      <span>Members</span>
-      <span id="members-count" class="side-count"></span>
-    </div>
     <ul id="members-list" class="voice-roster"></ul>
   </aside>
 </div>
