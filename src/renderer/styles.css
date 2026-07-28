@@ -39,6 +39,9 @@
   --active:     rgba(255, 255, 255, .085);
   --msg-hover:  rgba(255, 255, 255, .022);
   --line:       rgba(255, 255, 255, .06);
+  /* A hairline on a surface that is already light: at --line the composer's
+     edge came out eight points brighter than the reference's. */
+  --line-lo:    rgba(255, 255, 255, .022);
   --line-2:     rgba(255, 255, 255, .10);
   /* Kept as an alias: older rules and any future ones can still ask for a
      visible hairline by name. */
@@ -69,7 +72,11 @@
      has to read as being in front of the card, not level with it. */
   --menu:       #28282d;
   /* The unfilled half of a slider track, and the meter's ground. */
-  --track:      #3b3b40;
+  --track:      #474851;
+  /* Sliders are the reference's blurple rather than our teal. The accent is a
+     brand mark and it is everywhere; a slider is a control, and this is the one
+     place the two were competing for the same read. */
+  --slider:     #5d67f6;
   /* Message prose sits brighter than --text-body, which is tuned for labels. */
   --msg-text:   #eff0f2;
   /* The user panel's own type ramp. Both lines were brighter than the
@@ -1185,7 +1192,7 @@ button { font-family: inherit; }
 .day-sep {
   display: flex; align-items: center; gap: 0;
   margin: 1.6em 30px .6em 16px; color: var(--day-sep);
-  font-size: 0.92em; font-weight: 600; letter-spacing: 0;
+  font-size: 0.75em; font-weight: 600; letter-spacing: 0;
 }
 .day-sep::before, .day-sep::after { content: ""; height: 1px; background: var(--line-2); flex: 1; }
 /* Asymmetric on purpose: the rule reads as passing BEHIND the label, and a
@@ -1207,16 +1214,26 @@ button { font-family: inherit; }
   display: grid; place-items: center;
   width: 80px; height: 80px; margin-bottom: 18px;
   border-radius: 50%; background: var(--chat-2);
-  color: var(--text-strong); font-size: 50px; font-weight: 400; line-height: 1;
+  color: var(--text-strong); font-size: 58px; font-weight: 400; line-height: 1;
 }
 /* A shade tighter than default. Our stack resolves to Segoe UI, which is wider
    per character than the reference's face — so at a matched cap height the line
    still runs longer unless the tracking comes in. */
 .ci-title {
-  margin: 0 0 8px; font-size: 40px; line-height: 1.12; font-weight: 800;
-  color: var(--text-strong); letter-spacing: -.022em;
+  /* 36px with tighter tracking rather than 40. Segoe UI is about a quarter
+     wider than the reference's face at a matched cap height — see the note in
+     .ci-sub — so a heading set to the same height runs a quarter longer. This
+     splits the difference; matching the width exactly would mean a visibly
+     shorter heading. */
+  margin: 0 0 8px; font-size: 36px; line-height: 1.14; font-weight: 800;
+  color: var(--text-strong); letter-spacing: -.03em;
 }
-.ci-sub { margin: 0; font-size: 17px; color: var(--text-body); }
+/* The width gap here is the typeface, not a fallback: every element in the
+   app resolves to the same family, and Segoe UI Variable Text and Display
+   measure within half a percent of each other at these sizes. Segoe UI is
+   simply wider per character than the face the reference uses. Closing it
+   properly means shipping a narrower font. */
+.ci-sub { margin: 0; font-size: 16px; color: var(--msg-text); letter-spacing: -.01em; }
 .ci-btn {
   display: inline-flex; align-items: center; gap: 7px;
   margin-top: 16px; height: 32px; padding: 0 12px;
@@ -1441,7 +1458,7 @@ button { font-family: inherit; }
      column; with the sheen on top it had a visible band across the top third,
      which is two fills where the reference has one. */
   background: var(--input);
-  border: 1px solid var(--line); border-radius: 8px;
+  border: 1px solid var(--line-lo); border-radius: 8px;
   min-height: 58px;
 }
 .composer-row:focus-within { box-shadow: 0 0 0 1px var(--accent-line); }
@@ -2713,6 +2730,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --active:     rgba(0, 0, 0, .085);
   --msg-hover:  rgba(0, 0, 0, .022);
   --line:       rgba(0, 0, 0, .08);
+  --line-lo:    rgba(0, 0, 0, .05);
   --line-2:     rgba(0, 0, 0, .14);
   --line-solid: rgba(0, 0, 0, .12);
 
@@ -2728,6 +2746,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --day-sep:     #6f6f76;
   --menu:        #ffffff;
   --track:       #d4d4d8;
+  --slider:      #4b55e0;
   --msg-text:    #16161a;
   --placeholder: #8e8e96;
 
@@ -3194,7 +3213,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 }
 /* Three groups, not six items in one stack: the device pair, the level pair,
    and the two that leave the menu. */
-.ap-sep { height: 1px; margin: 6px 2px; background: var(--line-2); }
+.ap-sep { height: 1px; margin: 6px 9px; background: var(--line-2); }
 @media (prefers-reduced-motion: reduce) { .audio-pop { animation: none; } }
 
 .ap-row {
@@ -3223,7 +3242,7 @@ button.ap-row:hover .ap-more { color: var(--text); }
 }
 .ap-slider input[type="range"]::-webkit-slider-runnable-track {
   height: 4px; border-radius: 2px;
-  background: linear-gradient(var(--accent), var(--accent)) 0 / var(--fill, 50%) 100% no-repeat,
+  background: linear-gradient(var(--slider), var(--slider)) 0 / var(--fill, 50%) 100% no-repeat,
               var(--track);
 }
 .ap-slider input[type="range"]::-webkit-slider-thumb {

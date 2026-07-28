@@ -64,7 +64,9 @@ describe('the dark surface ramp', () => {
         const step = lum(hex('input', dark)) - lum(hex('chat', dark));
         expect(step).toBeGreaterThan(4);
         expect(step).toBeLessThanOrEqual(11);
-        expect(/\.composer-row \{[^}]*border: 1px solid var\(--line\)/.test(css)).toBe(true);
+        // --line-lo, not --line: on a surface this light a .06 hairline came out
+        // eight points brighter than the reference's edge.
+        expect(/\.composer-row \{[^}]*border: 1px solid var\(--line-lo\)/.test(css)).toBe(true);
     });
 
     it('raises a card on a floating surface too', () => {
@@ -1101,5 +1103,16 @@ describe('the audio menus', () => {
         const bar = html().slice(html().indexOf('id="me-bar"'), html().indexOf('id="mic-pop"'));
         expect(bar).toContain('data-icon="mic-solid"');
         expect(bar).toContain('data-icon="headset-solid"');
+    });
+});
+
+describe('sliders', () => {
+    it('are drawn in the reference blurple, not in the app accent', () => {
+        // The accent is a brand mark and it is everywhere. A slider is a
+        // control, and this was the one place the two competed for the same
+        // read — a teal thumb on a teal fill has no boundary.
+        expect(css).toMatch(/--slider:\s*#5d67f6/);
+        expect(css).toMatch(/::-webkit-slider-runnable-track \{[^}]*var\(--slider\), var\(--slider\)/);
+        expect(css).toMatch(/--track:\s*#474851/);
     });
 });
