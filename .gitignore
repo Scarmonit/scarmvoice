@@ -6,3 +6,6 @@ src/renderer/vendor/*
 *.log
 test-results/
 playwright-report/
+
+# Spec captures are regenerated on demand.
+dev/spec/out/

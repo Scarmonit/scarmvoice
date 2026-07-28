@@ -1,0 +1,153 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ScarmVoice — layout harness</title>
+<!--
+  The real renderer, running in a plain browser against a stub bridge.
+
+  The app itself cannot be driven by Playwright: the global-hotkey hook takes
+  the process down when a second instance attaches. So this is how the shell
+  gets measured, screenshotted and diffed — the same index.html, the same
+  styles.css, the same app.js, with only window.lounge replaced.
+
+  Not shipped: dev/ is outside the packaged app.
+-->
+<body style="margin:0">
+<script>
+const noop = () => {};
+const unsub = () => noop;
+const fn = (v) => async () => (typeof v === 'function' ? v() : v);
+const NOW = Date.now();
+
+// Two days of messages, so day separators and grouping both have something to
+// render. Ids are stable so a capture is comparable run to run.
+const POSTS = [
+  { id: 1, client_id: 'ctest', name: 'Scarmonit', body: 'first', created_at: NOW - 86400000, channel: 'general' },
+  { id: 2, client_id: 'ctest', name: 'Scarmonit', body: 'test message', created_at: NOW, channel: 'general' }
+];
+
+window.lounge = {
+  // Signed IN, so the app runs its real entry path and the channel list and
+  // message column actually render. Everything it reaches for on the way is
+  // stubbed below.
+  auth: { login: fn({ success: true }), logout: fn({ success: true }), status: fn({ authed: true }) },
+  board: fn({ success: true, posts: POSTS, channels: [{ name: 'general' }, { name: 'random' }], typing: [], voice: [] }),
+  uploadFile: fn({ success: true }), onUploadProgress: unsub,
+  saveAttachment: fn({ success: true }), downloadAttachment: fn({ success: true }),
+  copyImage: fn({ success: true }), revealFile: noop,
+  unfurl: fn(null), youtube: fn(null), fetchImage: fn({ success: false }),
+  share: { sources: fn([]), select: noop, cancel: noop }, voiceToken: fn({ success: false }),
+  rt: { start: fn({ connected: false }), stop: fn({ connected: false }), wake: fn({ connected: false }),
+        send: noop, notifyPosted: noop, sendTyping: noop, sendVoice: noop, onMessage: unsub, onStatus: unsub },
+  edit: { cut: noop, copy: noop, paste: noop, selectAll: noop, clipboard: fn({ text: false, image: false }) },
+  settings: { get: fn(() => ({
+      baseUrl: 'https://scarmonit.com', room: 'lounge', clientId: 'ctest',
+      displayName: 'Scarmonit', channel: 'general', theme: 'dark', density: 'cozy',
+      chatFontSize: 'medium', showMembers: true, catTextOpen: true, catVoiceOpen: true, catDmsOpen: true,
+      localVolumes: {}, localMuted: {}, blocked: {}, mutedChannels: [], voiceMode: 'open',
+      presence: 'online', micVolume: 1, outputVolume: 1, speakThreshold: 6,
+      noiseSuppression: true, noiseSuppressionAI: true,
+      pttBinding: { type: 'key', code: 'Backquote' } })), set: fn({}) },
+  ptt: { apply: fn({ mode: 'native' }), available: fn(true), describe: fn('Backquote'), onChange: unsub },
+  win: { minimize: noop, maximize: noop, close: noop, isFocused: fn(true), onFocus: unsub },
+  app: { version: fn('0.0.0-harness'), isElevated: fn(false), openLogs: fn(true), notify: fn(false),
+         setVoiceState: fn({}), setBadge: fn(true), openExternal: fn(true),
+         systemTheme: fn({ dark: true }), setTheme: fn(true),
+         onThemeChange: unsub, onCommand: unsub, onResync: unsub },
+  startup: { get: fn({ openAtLogin: false, openAsHidden: false }), set: fn({ openAtLogin: false, openAsHidden: false }) },
+  update: { getState: fn({ status: 'idle', noteBlocks: [] }), check: noop, download: noop, install: noop, setAuto: noop, onState: unsub },
+  // The account gate runs before the shell does — without an answer here the
+  // app stops on the sign-in card and there is nothing to measure.
+  account: {
+    me: fn({ success: true, user: { id: 1, username: 'Scarmonit', role: 'admin' } }),
+    users: fn({ success: true, users: [
+      { id: 2, username: 'Parker', role: 'member' },
+      { id: 3, username: 'XIAIX', role: 'member' }
+    ] })
+  },
+  fileUrl: (k) => 'about:blank#' + encodeURIComponent(k)
+};
+window.RealtimeKitClient = { init: fn({}) };
+
+// States the app only reaches through a live call or a live account, driven
+// here so they can be captured: in voice, muted, sharing, member admin.
+window.scene = {
+  voice(opts) {
+    opts = opts || {};
+    document.getElementById('voice-live').hidden = false;
+    ['btn-cam', 'btn-share', 'btn-soundboard', 'btn-nsai', 'btn-ptt'].forEach((id) => {
+      const e = document.getElementById(id); if (e) e.hidden = false;
+    });
+    const chan = document.querySelector('#btn-join-voice .vchan-name');
+    const server = document.querySelector('#server-head .sh-name');
+    const where = chan.textContent + ' / ' + server.textContent;
+    document.getElementById('vl-where').textContent = where;
+    document.getElementById('vl-where-2').textContent = where;
+    document.getElementById('voice-count').hidden = true;
+    const t = document.getElementById('voice-timer');
+    t.hidden = false; t.textContent = '12:04';
+    document.querySelector('#btn-join-voice').classList.add('connected');
+    document.getElementById('me-status-text').textContent = 'In voice';
+    document.querySelector('#me-status .ms-voice').removeAttribute('hidden');
+    if (opts.muted || opts.deafened) window.scene.mute(opts.muted, opts.deafened);
+  },
+  mute(muted, deafened) {
+    const set = (id, on) => {
+      const b = document.getElementById(id);
+      b.setAttribute('aria-pressed', String(on));
+      b.querySelector('.ico:not(.ico-off)').toggleAttribute('hidden', !!on);
+      b.querySelector('.ico-off').toggleAttribute('hidden', !on);
+    };
+    set('btn-mute', muted); set('btn-deafen', deafened);
+    document.getElementById('vl-status').classList.toggle('warn', !!(muted || deafened));
+    document.getElementById('vl-label').textContent = deafened ? 'Deafened' : (muted ? 'Muted' : 'Voice Connected');
+  },
+  members() {
+    const box = document.getElementById('member-admin-list');
+    box.innerHTML = ['Parker', 'XIAIX'].map((n) =>
+      '<div class="ma-row"><span class="ma-who"><b>' + n + '</b><em class="hint">member</em></span>' +
+      '<button class="keycap">Make admin</button><button class="keycap danger">Ban</button>' +
+      '<button class="keycap">Reset password</button><button class="keycap">Clear 2FA</button>' +
+      '<button class="keycap danger">Delete</button></div>').join('');
+    document.getElementById('acct-members').hidden = false;
+  },
+  settings(pane) {
+    document.getElementById('settings').style.display = '';
+    document.getElementById('btn-settings').click();
+    if (!pane) return;
+    setTimeout(() => {
+      const b = [...document.querySelectorAll('.set-nav-item')].find((x) => x.textContent.includes(pane));
+      if (b) b.click();
+    }, 200);
+  }
+};
+
+(async () => {
+  const html = await (await fetch('/src/renderer/index.html')).text();
+  document.body.insertAdjacentHTML('beforeend', html
+    .replace(/<script[\s\S]*?<\/script>/g, '')
+    .replace(/^[\s\S]*?<body>/, '').replace(/<\/body>[\s\S]*$/, ''));
+  const css = document.createElement('link');
+  css.rel = 'stylesheet'; css.href = '/src/renderer/styles.css';
+  document.head.appendChild(css);
+  for (const f of ['lib.js', 'icons.js', 'audio.js', 'lazy.js', 'noise.js', 'soundboard.js', 'voice.js', 'sounds.js', 'app.js']) {
+    await new Promise((res) => {
+      const s = document.createElement('script');
+      s.src = '/src/renderer/' + f;
+      s.onload = res;
+      s.onerror = () => { console.error('harness: failed to load ' + f); res(); };
+      document.head.appendChild(s);
+    });
+  }
+  // The entry path shows the shell itself; this only makes sure no overlay is
+  // sitting in front of it.
+  await new Promise((r) => setTimeout(r, 600));
+  document.querySelectorAll('.overlay').forEach((o) => { o.hidden = true; o.style.display = 'none'; });
+  document.getElementById('app').hidden = false;
+  document.body.style.cssText = 'margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden';
+  [...document.body.children].forEach((e) => {
+    if (!['titlebar', 'app', 'settings', 'conn-pop', 'mic-pop', 'spk-pop', 'me-popover'].includes(e.id)
+        && e.tagName !== 'SCRIPT') e.style.display = 'none';
+  });
+  window.HARNESS_READY = true;
+})();
+</script>

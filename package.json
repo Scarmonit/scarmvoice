@@ -22,7 +22,10 @@
     "build": "electron-builder --win --publish never",
     "dist": "electron-builder --win --publish never",
     "release": "node scripts/preflight-release.js && electron-builder --win --publish always",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "spec:app": "node dev/spec/capture-app.cjs",
+    "spec:pack": "node dev/spec/pack.cjs",
+    "spec:diff": "node dev/spec/diff.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
