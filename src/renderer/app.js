@@ -3563,12 +3563,20 @@
                 L.rt.sendVoice(st.joined, st.muted, st.deafened);
 
                 if (st.joined) startPresence(); else stopPresence();
+                // Nothing emits "stopped speaking" for a meter that was torn
+                // down while silent, so the ring is cleared on the way out
+                // rather than left behind.
+                if (!st.joined) markMeSpeaking(false);
             },
             onShares: (list) => { shareSources = list || []; renderStage(); },
             onCams: (list) => renderCams(list),
             onParticipants: () => renderVoiceRoster(),
-            onSpeaking: (cid, on) => {
+            onSpeaking: (cid, on, isLocal) => {
                 speaking[cid] = on;
+                // Your own avatar in the me bar, which is on screen whether or
+                // not the voice list is scrolled into view — and is the one
+                // place you look to check that your microphone is working.
+                if (isLocal) markMeSpeaking(on);
                 // The same person is listed twice — under the voice channel and in
                 // the members sidebar — so light every copy, not just the first.
                 document.querySelectorAll(`.vp[data-cid="${CSS.escape(cid)}"]`)
@@ -3856,6 +3864,17 @@
         camTiles.forEach((tile, id) => {
             tile.wrap.classList.toggle('watching', watching === 'cam:' + id);
         });
+    }
+
+    // The ring around your own face in the me bar. On the WRAPPER, not the
+    // avatar: paintAvatarEl() rewrites the avatar's inline style on every
+    // renderMe(), which a call state change triggers, so a ring drawn there
+    // would be erased at exactly the wrong moment.
+    let meSpeaking = false;
+    function markMeSpeaking(on) {
+        meSpeaking = !!on;
+        const wrap = document.querySelector('#me-bar .me-av-wrap');
+        if (wrap) wrap.classList.toggle('speaking', meSpeaking);
     }
 
     // Keep the speaking ring on camera tiles in sync without a full re-render.
@@ -7458,10 +7477,13 @@
 
         const off = window.ScarmAudio.onTick(() => {
             if (!micTest) return;
-            const rms = meter.rms();
             const bar = $('mic-meter-bar');
-            bar.style.width = Math.min(100, (rms / METER_MAX) * 100).toFixed(1) + '%';
-            bar.classList.toggle('over', rms >= vadRms());
+            bar.style.width = Math.min(100, (meter.rms() / METER_MAX) * 100).toFixed(1) + '%';
+            // The SAME test the live indicator applies, so what this meter shows
+            // as "speaking" is what will actually light the ring. Comparing a
+            // bare RMS here meant the two could disagree, which makes the
+            // threshold slider impossible to calibrate against.
+            bar.classList.toggle('over', meter.isSpeech(vadRms()));
         });
 
         micTest = { stream, meter, off };

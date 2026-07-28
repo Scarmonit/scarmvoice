@@ -3994,3 +3994,15 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .rn-body .nm-p, .rn-body .nm-list { font-size: 13px; line-height: 1.5; color: var(--muted); }
 .rn-body .nm-list { margin: 4px 0 0; padding-left: 18px; }
 .rn-body .nm-list li { margin: 2px 0; }
+
+/* The speaking ring in the me bar. Same colour and weight as the one on a
+   voice-roster row (.vp.speaking .av) so one person reads as one state
+   wherever they appear — but drawn on .me-av-wrap, because the avatar inside
+   it has its own generated background and gets its inline style rewritten on
+   every renderMe(). The wrapper is 32px and position:relative already, which
+   is exactly what a ring needs. */
+.me-av-wrap.speaking::after {
+  content: ""; position: absolute; inset: -2px;
+  border-radius: 50%; border: 2px solid var(--online);
+  pointer-events: none;
+}

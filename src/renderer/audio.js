@@ -19,7 +19,22 @@
     'use strict';
 
     const TICK_MS = 50;             // 20 Hz — smooth enough for a dot or a bar
-    const FFT_SIZE = 512;
+    // 2048 samples is ~43 ms at 48 kHz, so each reading covers nearly the whole
+    // 50 ms between ticks. At 512 it covered 11 ms — a fifth of the interval —
+    // so a tick that happened to land between two syllables read almost
+    // nothing, and the speaking indicator dropped out mid-sentence.
+    const FFT_SIZE = 2048;
+
+    // How fast a level falls once the sound does. Applied per tick, so 0.72 is
+    // a ~150 ms decay: fast enough to feel live, slow enough that the gaps
+    // inside ordinary speech do not read as silence.
+    const RELEASE = 0.72;
+
+    // Speech is PEAKY — its peaks run 3-5x its RMS — where room tone, a fan or
+    // a hum is comparatively flat. Testing the peak against a proportionally
+    // higher bar therefore catches quiet speech that an RMS test misses without
+    // simply lowering the bar for everything.
+    const CREST = 3;
 
     let ctx = null;
     let sinkId = '';
@@ -130,19 +145,44 @@
             return null;
         }
 
-        const data = new Uint8Array(analyser.fftSize);
+        // FLOAT samples, not bytes. getByteTimeDomainData quantises to 1/128,
+        // so at the level ordinary speech actually reaches with AGC off — an
+        // RMS around 0.02-0.04 — the signal was only three to five quantisation
+        // steps tall and the measurement noise was a large fraction of it.
+        const data = new Float32Array(analyser.fftSize);
         const meter = {
-            level: 0,
+            level: 0,        // this reading
+            envLevel: 0,     // fast attack, slow release
+            peakLevel: 0,
             sample() {
-                analyser.getByteTimeDomainData(data);
+                analyser.getFloatTimeDomainData(data);
                 let sum = 0;
+                let peak = 0;
                 for (let i = 0; i < data.length; i++) {
-                    const v = (data[i] - 128) / 128;
+                    const v = data[i];
                     sum += v * v;
+                    const a = v < 0 ? -v : v;
+                    if (a > peak) peak = a;
                 }
-                meter.level = Math.sqrt(sum / data.length);
+                const rms = Math.sqrt(sum / data.length);
+                meter.level = rms;
+                meter.peakLevel = peak;
+                // Rises instantly, falls gently — the shape an indicator wants.
+                meter.envLevel = rms > meter.envLevel
+                    ? rms
+                    : meter.envLevel * RELEASE + rms * (1 - RELEASE);
             },
             rms() { return meter.level; },
+            envelope() { return meter.envLevel; },
+            peak() { return meter.peakLevel; },
+            // THE definition of "this is speech", in one place. Both the live
+            // indicator and the Settings mic-test meter ask this, so the meter
+            // in Settings cannot promise something the indicator then fails to
+            // do — which is what makes the threshold slider calibratable at all.
+            isSpeech(threshold) {
+                const t = Number(threshold) > 0 ? Number(threshold) : 0;
+                return meter.envLevel > t || meter.peakLevel > t * CREST;
+            },
             stop() {
                 meters.delete(meter);
                 try { src.disconnect(); } catch (e) {}

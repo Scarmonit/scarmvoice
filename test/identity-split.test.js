@@ -38,6 +38,7 @@ const THEM_UID = 3;
 let rtOnMessage = null;          // the renderer's socket handler
 let winOnFocus = null;           // main's focus/blur bridge
 let voiceApi = null;             // the fake engine, so a test can drive it
+let voiceOpts = null;            // the callbacks app.js hands the engine
 let peerMuted = false;           // what the SFU says about THEIR microphone
 
 // The member list the presence endpoint returns — the person by their REAL id.
@@ -172,7 +173,8 @@ beforeAll(async () => {
     // A voice engine that is IN the call, with the other person peered under
     // their REAL install id — which is what the SFU always sees, because the
     // token is minted for the id the client actually holds.
-    window.createVoice = () => {
+    window.createVoice = (opts) => {
+        voiceOpts = opts;
         voiceApi = {
             joined: true,
             muted: false,
@@ -277,6 +279,35 @@ describe('what everyone can see about a microphone', () => {
         const voicejs = fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8');
         expect(voicejs).toContain('muted: p.audioEnabled === false');
         expect(voicejs).toMatch(/localMuted: !!\(settings\.localMuted/);
+    });
+});
+
+describe('the speaking ring in the me bar', () => {
+    const wrap = () => document.querySelector('#me-bar .me-av-wrap');
+
+    it('lights up when it is YOU talking', () => {
+        expect(wrap()).toBeTruthy();
+        expect(wrap().classList.contains('speaking')).toBe(false);
+        voiceOpts.onSpeaking('me', true, true);
+        expect(wrap().classList.contains('speaking')).toBe(true);
+        voiceOpts.onSpeaking('me', false, true);
+        expect(wrap().classList.contains('speaking')).toBe(false);
+    });
+
+    it('does not light up for somebody else talking', () => {
+        voiceOpts.onSpeaking(REAL, true, false);
+        expect(wrap().classList.contains('speaking')).toBe(false);
+        voiceOpts.onSpeaking(REAL, false, false);
+    });
+
+    it('survives the repaint a call state change triggers', () => {
+        // renderMe() rewrites the avatar's inline style, which is why the ring
+        // is on the wrapper — drawn on the avatar it would be erased at exactly
+        // the moment somebody joins or leaves the call.
+        voiceOpts.onSpeaking('me', true, true);
+        voiceOpts.onState(voiceApi.state());
+        expect(wrap().classList.contains('speaking')).toBe(true);
+        voiceOpts.onSpeaking('me', false, true);
     });
 });
 

@@ -16,7 +16,10 @@
     // RMS above which a participant reads as "speaking". Settable per user from
     // Settings > Voice & Audio, calibrated against the mic-test meter there.
     const SPEAK_THRESHOLD = 0.055;   // fallback when the setting is unset
-    const SPEAK_HANG_MS = 220;       // hold the indicator briefly so it doesn't strobe
+    // Held long enough to cover the gap between two words. At 220ms the ring
+    // flickered off between syllables; the meter's own release does part of the
+    // work now, and this covers the rest.
+    const SPEAK_HANG_MS = 350;
 
     // ---- screen-share quality ------------------------------------------------
     // Same tiers, bitrates and encoder levers the website uses, so a desktop
@@ -611,12 +614,20 @@
                 const threshold = Number(settings.speakThreshold) > 0
                     ? Number(settings.speakThreshold) / 100
                     : SPEAK_THRESHOLD;
-                if (!gated && meter.rms() > threshold) rec.until = now + SPEAK_HANG_MS;
+                // meter.isSpeech, not a bare RMS compare: the meter owns that
+                // definition so the Settings mic test and this agree. A plain
+                // `rms() > threshold` is what made the ring unreliable — it
+                // asked whether the last 11ms happened to be loud, rather than
+                // whether somebody is talking.
+                if (!gated && meter.isSpeech(threshold)) rec.until = now + SPEAK_HANG_MS;
                 const nowSpeaking = !gated && now < rec.until;
 
                 if (nowSpeaking !== rec.speaking) {
                     rec.speaking = nowSpeaking;
-                    on.onSpeaking(cid, nowSpeaking);
+                    // isLocal is passed through: the me-bar wants to know that
+                    // THIS is you, and comparing ids in the renderer would be
+                    // guessing at something this closure already knows.
+                    on.onSpeaking(cid, nowSpeaking, isLocal);
                 }
             });
         }
@@ -627,7 +638,7 @@
             if (rec.off) rec.off();
             rec.meter.stop();
             delete analysers[cid];
-            if (rec.speaking) on.onSpeaking(cid, false);
+            if (rec.speaking) on.onSpeaking(cid, false, rec.isLocal);
         }
 
         function stopAllSpeaking() {
