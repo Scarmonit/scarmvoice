@@ -2944,34 +2944,36 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .dm-count[hidden] { display: none; }
 .dm-head-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: none; }
 .dm-head-actions .icon-btn[hidden] { display: none; }
+/* The message column, not a chat transcript.
+   The bubble rules that used to live here — right-aligned rounded fills for
+   your own messages, timestamp outside, a separate .dm-day — are gone. DMs
+   render through renderMessage() now, so they inherit .msg, .msg-head,
+   .msg-avatar, .day-sep and everything else the channel column already has.
+   Anything styled here would be a second definition waiting to drift. */
 #dm-messages {
   flex: 1; min-height: 0; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 14px;
-}
-.dm-day {
-  align-self: center; margin: 8px 0 4px;
-  font-size: 11px; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .4px;
+  padding: 12px 0;
+  font-size: var(--chat-fs);
 }
 .dm-empty { color: var(--muted); text-align: center; margin-top: 24px; }
 .dm-empty .dm-retry { display: block; margin: 10px auto 0; }
-.dm-msg { display: flex; align-items: flex-end; gap: 8px; max-width: 88%; align-self: flex-start; }
-.dm-msg.mine { align-self: flex-end; flex-direction: row-reverse; }
-.dm-bubble {
-  background: var(--float); border-radius: 14px; padding: 8px 12px;
-  white-space: pre-wrap; word-break: break-word; font-size: 14px;
-}
-.dm-msg.mine .dm-bubble { background: var(--accent-soft); border: 1px solid var(--accent-line); }
-.dm-time { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+
+/* Matched to the channel composer rather than reinvented: it was 21px shorter,
+   had a different border, and dropped the attach button, so the same app asked
+   for a message two different ways depending on who it was going to. */
 #dm-composer {
   flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
-  padding: 10px 12px; box-shadow: 0 -1px 0 var(--line);
+  padding: 0 8px 8px;
+}
+#dm-composer .dm-composer-row {
+  flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 4px;
+  background: var(--input); border: 1px solid var(--line-lo); border-radius: 8px;
+  padding: 0 8px;
 }
 #dm-composer textarea {
-  flex: 1; min-width: 0; resize: none; max-height: 120px;
-  background: var(--input); border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; color: var(--text); font: inherit;
+  flex: 1; min-width: 0; resize: none; max-height: 120px; min-height: 40px;
+  background: none; border: 0; outline: none;
+  padding: 11px 4px; color: var(--text); font: inherit;
 }
 #dm-composer button {
   flex: 0 0 auto; background: none; border: 0; cursor: pointer;
@@ -3740,11 +3742,8 @@ button.ap-row:hover .ap-more { color: var(--text); }
 /* ---- group conversations ----------------------------------------------- */
 /* "mine or theirs" stops being a complete answer at three people, so a group
    prints the speaker once per run. */
-.dm-who {
-  margin: 8px 0 2px; padding: 0 4px;
-  font-size: 12px; font-weight: 600; color: var(--muted);
-}
-.dm-msg.mine + .dm-who { margin-top: 10px; }
+/* .dm-who is gone: a group names its speaker through .msg-head now, the same
+   as every other message, because DMs render through renderMessage(). */
 .dm-group-mark { font-weight: 700; }
 .chan.dm-group .chan-name { font-style: normal; }
 
@@ -3780,3 +3779,16 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .rail-btn.rail-dms { position: relative; }
 .rail-btn.rail-dms .ico { width: 22px; height: 22px; }
 #rail-dm-badge[hidden] { display: none; }
+
+/* ---- DM avatars are round -----------------------------------------------
+   .av only carried border-radius under .vp, so every avatar used outside the
+   voice list drew as a square tile. Measured against the reference: its rows
+   narrow at the top and widen at the centre — a circle — while ours held the
+   same x span from top to bottom. */
+.dm-face .av, .dm-head-face .av { border-radius: 50%; }
+.dm-head-face {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 29px; height: 29px;
+}
+.dm-head-face .av { width: 29px; height: 29px; font-size: 11px; }
+.dm-head-face .ico { color: var(--ch-icon); }

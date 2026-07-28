@@ -607,7 +607,9 @@
        of #main it could only ever be an overlay on one of them. -->
   <aside id="dm-panel" hidden>
     <header id="dm-head">
-      <span class="ico" data-icon="at"></span>
+      <!-- The reference identifies a conversation by the person's face, not by
+           a generic @. Filled in by renderDmHead(). -->
+      <span class="dm-head-face" id="dm-head-face"></span>
       <span id="dm-title">Direct message</span>
       <span id="dm-count" class="dm-count" hidden></span>
       <div class="dm-head-actions">
@@ -623,8 +625,21 @@
       </div>
     </header>
     <div id="dm-messages"></div>
+    <!-- Same shape as the channel composer: attach on the left, the field, then
+         send. It used to be a bare textarea 21px shorter with no attach button,
+         so the app asked for a message two different ways depending on who it
+         was going to. The placeholder names the recipient, as the reference's
+         does — "Message @Parker", not "Message…". -->
     <form id="dm-composer" autocomplete="off">
-      <textarea id="dm-input" rows="1" placeholder="Message…" maxlength="2000"></textarea>
+      <div class="dm-composer-row">
+        <button type="button" id="dm-attach" title="Attach a file">
+          <span class="ico" data-icon="plus"></span>
+        </button>
+        <textarea id="dm-input" rows="1" placeholder="Message" maxlength="2000"></textarea>
+        <button type="button" id="dm-emoji" title="Emoji">
+          <span class="ico" data-icon="smile"></span>
+        </button>
+      </div>
       <button type="submit" id="dm-send" title="Send (Enter)">
         <span class="ico" data-icon="send"></span>
       </button>

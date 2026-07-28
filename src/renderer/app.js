@@ -9012,6 +9012,24 @@
         $('dm-add').hidden = !group;
         $('dm-more').hidden = !group;
         $('dm-title').textContent = dmOpen ? dmOpen.title : 'Direct message';
+
+        // A face, not an @ — the reference names a conversation by who is in it.
+        const face = $('dm-head-face');
+        if (face) {
+            const others = (dmOpen && dmOpen.members || []).filter((m) => !account || m.id !== account.id);
+            const u = group ? null : others[0];
+            face.innerHTML = u
+                ? `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
+                  `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`
+                : '<span class="ico" data-icon="users"></span>';
+            if (window.ScarmIcons) window.ScarmIcons.hydrate(face);
+        }
+
+        // "Message @Parker", not "Message…" — the field says where it is going.
+        const input = $('dm-input');
+        if (input && dmOpen) {
+            input.placeholder = 'Message ' + (dmOpen.isGroup ? dmOpen.title : '@' + dmOpen.title);
+        }
     }
 
     function closeDm() {
@@ -9080,45 +9098,57 @@
             box.appendChild(e);
             return;
         }
-        // In a group the bubble alone cannot say who spoke — "mine or theirs"
-        // stops being a complete answer the moment there are three people. The
-        // name is printed once per run rather than on every message, which is
-        // what the reference does and what stops a back-and-forth turning into
-        // a column of repeated names.
+        // A DM is a message, not a chat bubble.
+        //
+        // This used to render right-aligned rounded bubbles with the timestamp
+        // outside them — an iMessage layout — while the channel column three
+        // hundred lines up rendered avatar, name, timestamp and flat content on
+        // the background. Two renderers for the same thing, and the DM one was
+        // the poorer relation: no grouping, no reply quoting, no embeds, no
+        // attachments, its own day separator that had already drifted from the
+        // channel's, and every one of those would have had to be built a second
+        // time to catch up.
+        //
+        // The reference does not do that. A DM uses the SAME row as a channel
+        // message, which is why it gets all of the above for nothing. So does
+        // this now: map each message onto the shape renderMessage() expects and
+        // hand it over.
         const nameOf = (id) => {
             const u = (dmOpen && dmOpen.members || []).find((x) => x.id === id);
-            return u ? u.username : 'someone';
+            if (u) return u.username;
+            return (account && id === account.id) ? account.username : 'someone';
         };
-        let prevDay = '';
-        let prevFrom = null;
+        // client_id is what the grouping test compares, and DMs have no install
+        // id — the account id stands in, which is the right identity here
+        // anyway: the same person on two devices is still one speaker.
+        const asPost = (m) => ({
+            id: m.id,
+            client_id: 'dm-user-' + (m.from || 0),
+            user_id: m.from || 0,
+            name: nameOf(m.from),
+            body: m.body,
+            created_at: m.created_at,
+            pinned: 0
+        });
+
+        let lastDay = '';
+        let prev = null;
         dmMsgs.forEach((m) => {
             const day = dayStr(m.created_at);
-            if (day !== prevDay) {
-                prevDay = day;
-                prevFrom = null;              // a new day always reintroduces the speaker
+            if (day !== lastDay) {
+                lastDay = day;
+                prev = null;                  // a new day always reintroduces the speaker
+                // The channel's own separator markup and class, so the two can
+                // never drift apart again — they did, and the DM view was left
+                // on an older style nobody remembered to update.
                 const sep = document.createElement('div');
-                sep.className = 'dm-day';
-                sep.textContent = day;
+                sep.className = 'day-sep';
+                sep.innerHTML = `<span>${esc(day)}</span>`;
                 box.appendChild(sep);
             }
-            if (dmOpen && dmOpen.isGroup && !m.fromMe && m.from !== prevFrom) {
-                const who = document.createElement('div');
-                who.className = 'dm-who';
-                who.textContent = nameOf(m.from);
-                box.appendChild(who);
-            }
-            prevFrom = m.fromMe ? null : m.from;
-            const row = document.createElement('div');
-            row.className = 'dm-msg' + (m.fromMe ? ' mine' : '');
-            const bubble = document.createElement('div');
-            bubble.className = 'dm-bubble';
-            bubble.textContent = m.body;
-            const time = document.createElement('span');
-            time.className = 'dm-time';
-            time.textContent = timeStr(m.created_at);
-            row.appendChild(bubble);
-            row.appendChild(time);
-            box.appendChild(row);
+            const p = asPost(m);
+            box.appendChild(renderMessage(p, prev));
+            prev = p;
         });
         // Follow the live edge only if that's where the reader already was.
         if (atBottom) box.scrollTop = box.scrollHeight;
