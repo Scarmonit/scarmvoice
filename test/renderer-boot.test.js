@@ -316,11 +316,10 @@ describe('the account panel', () => {
         click('btn-name');
         expect($('me-popover').hidden).toBe(false);
         expect($('btn-name').getAttribute('aria-expanded')).toBe('true');
-        // Signed out in this harness, so the two account-only actions are gone
-        // and the handle says so rather than showing an empty @.
+        // Signed out in this harness, so the whole account card goes — both of
+        // its rows are account-only, and an empty card is worse than none.
         expect($('mep-handle').textContent).toBe('not signed in');
-        expect($('mep-switch').hidden).toBe(true);
-        expect($('mep-copy-id').hidden).toBe(true);
+        expect($('mep-menu-account').hidden).toBe(true);
         expect(errors).toEqual([]);
     });
 

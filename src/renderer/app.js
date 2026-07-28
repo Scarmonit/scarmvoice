@@ -83,7 +83,7 @@
     // The pure half of the renderer lives in lib.js so it can be unit-tested;
     // these are local names for the parts used here.
     const {
-        esc, avatarStyle, initials, isOnlyEmoji,
+        esc, avatarStyle, bannerStyle, initials, isOnlyEmoji,
         timeStr, dayStr, fmtSize, fmtDuration, splitName,
         attachmentKind, fileIcon,
         extractUrls, safeHttpUrl, urlFileName, youtubeId,
@@ -4982,20 +4982,26 @@
         // display name today — deliberately, it is what stops anyone wearing
         // someone else's name — so showing both is honest rather than
         // redundant: it says the name IS the account.
-        $('mep-handle').textContent = account ? '@' + account.username : 'not signed in';
+        // No @: the popover shows the bare username, and the sigil only ever
+        // read as decoration here — there is nowhere else on this line for it
+        // to be distinguishing.
+        $('mep-handle').textContent = account ? account.username : 'not signed in';
         paintAvatarEl($('mep-avatar'), name, myUserId());
         // Tinted from the same hash the avatar is, so the panel is recognisably
         // yours without asking for a second image to upload.
-        $('mep-banner').setAttribute('style', avatarStyle(name));
+        $('mep-banner').setAttribute('style', bannerStyle(name));
         $('mep-presence').className = 'mep-presence ' + presenceDotClass(mode);
         $('mep-status-dot').className = 'presence ' + presenceDotClass(mode);
         $('mep-status-label').textContent = PRESENCE_LABEL[mode];
+        // Empty, it still says something: an invitation is the only way anyone
+        // finds out the field is there.
         const custom = $('mep-custom');
-        custom.textContent = settings.status || '';
-        custom.hidden = !settings.status;
-        // Nothing to switch to, and no id to copy, without an account.
-        $('mep-switch').hidden = !account;
-        $('mep-copy-id').hidden = !account;
+        custom.classList.toggle('has-status', !!settings.status);
+        $('mep-custom-text').textContent = settings.status || "What you're up to";
+        custom.setAttribute('data-tip', settings.status ? 'Edit your status' : 'Set a custom status');
+        // Nothing to switch to and no id to copy without an account, which
+        // leaves that whole card with nothing in it.
+        $('mep-menu-account').hidden = !account;
     }
 
     function openMePopover() {
@@ -5070,6 +5076,14 @@
     });
 
     $('mep-edit').addEventListener('click', () => { closeMePopover(); openSettings(); });
+    // The field already exists in Settings; this is the only place it is ever
+    // offered. Straight there, with the caret in it.
+    $('mep-custom').addEventListener('click', async () => {
+        closeMePopover();
+        await openSettings();
+        $('set-status').focus();
+        $('set-status').select();
+    });
 
     $('mep-copy-id').addEventListener('click', () => {
         if (!account) return;

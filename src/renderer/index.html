@@ -285,27 +285,40 @@
       <span class="mep-avatar" id="mep-avatar"></span>
       <i class="mep-presence" id="mep-presence" aria-hidden="true"></i>
     </span>
+    <!-- Beside the avatar rather than under the name, with a tail of circles
+         pointing back at it: it belongs to the person, not to the menu. Empty
+         it is still a target — an invitation to write one is the only way
+         anybody discovers the field exists. -->
+    <button type="button" class="mep-bubble" id="mep-custom">
+      <span class="ico mep-bubble-add" data-icon="plus"></span>
+      <span class="mep-bubble-text" id="mep-custom-text"></span>
+    </button>
     <div class="mep-card">
       <div class="mep-names">
         <div class="mep-name" id="mep-name">Anonymous</div>
         <div class="mep-handle" id="mep-handle"></div>
       </div>
-      <div class="mep-custom" id="mep-custom" hidden></div>
+      <!-- Two cards, not one list with a rule through it: the divider inside a
+           card separates two rows that belong together, and the gap between the
+           cards separates the groups. -->
       <div class="mep-menu">
         <button type="button" class="mep-item" id="mep-edit">
           <span class="ico" data-icon="pencil"></span><span>Edit Profile</span>
         </button>
+        <div class="mep-sep"></div>
         <button type="button" class="mep-item mep-status-row" id="mep-status" aria-haspopup="menu">
           <i class="presence" id="mep-status-dot" aria-hidden="true"></i>
           <span id="mep-status-label">Online</span>
           <span class="ico mep-more" data-icon="chevron"></span>
         </button>
-        <button type="button" class="mep-item" id="mep-copy-id">
-          <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
+      </div>
+      <div class="mep-menu" id="mep-menu-account">
+        <button type="button" class="mep-item" id="mep-switch">
+          <span class="ico" data-icon="users"></span><span>Switch Accounts</span>
         </button>
         <div class="mep-sep"></div>
-        <button type="button" class="mep-item" id="mep-switch">
-          <span class="ico" data-icon="users"></span><span>Switch account</span>
+        <button type="button" class="mep-item" id="mep-copy-id">
+          <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
         </button>
       </div>
     </div>

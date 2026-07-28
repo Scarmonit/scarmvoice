@@ -23,8 +23,10 @@
   --chat-2:     #1c1c20;   /* panels layered on the message column      (+4) */
   --panel:      #1c1c20;   /* the user card + the voice card: RAISED out of
                               the sidebar, not sunk into it             (+4) */
-  --float:      #1f1f24;   /* modals, menus, popovers, tooltips         (+5) */
-  --elev:       #26262b;   /* hover on a floating surface               (+5) */
+  --float:      #242429;   /* modals, menus, popovers, tooltips         (+5) */
+  --float-2:    #2c2c31;   /* a card RAISED on a floating surface — the
+                              action groups inside the account panel    (+5) */
+  --elev:       #2e2e33;   /* hover on a floating surface               (+5) */
 
   --hover:      rgba(255, 255, 255, .045);
   --active:     rgba(255, 255, 255, .085);
@@ -2356,7 +2358,8 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --chat-2:     #f6f6f7;
   --input:      #f4f4f5;
   --panel:      #ffffff;   /* raised out of --side, as in dark */
-  --float:      #ffffff;
+  --float:      #f7f7f8;
+  --float-2:    #ffffff;   /* raised on --float, as in dark */
   --elev:       #e6e6e8;
 
   --hover:      rgba(0, 0, 0, .045);
@@ -2660,7 +2663,11 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    what makes it read as a button rather than a label. */
 .me-id .me-av-wrap { transition: transform .18s cubic-bezier(.2, .9, .3, 1.35); }
 .me-id:hover .me-av-wrap { transform: scale(1.06); }
-.me-id[aria-expanded="true"] { background: var(--hover); }
+/* No persistent highlight while the panel is open. The identity block is
+   flex:1, so a plate behind it runs the whole width up to the controls and the
+   bar stops reading as ONE card — the mic, headset and cog end up looking like
+   they are sitting outside it on the background. The open panel, anchored
+   directly above, is its own indication. */
 
 /* Motion is decoration here — every one of these states is also carried by
    colour and by the pill background, so removing it costs nothing. */
@@ -2682,7 +2689,10 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .me-pop {
   position: fixed; z-index: 300;
   width: 300px; padding-bottom: 8px;
-  background: var(--float); border: 1px solid var(--line);
+  /* No stroke. It was lighter than the fill, which draws an outline around the
+     whole panel — the reference has only the shadow, and its edge pixel is
+     DARKER than its fill. */
+  background: var(--float); border: 0;
   border-radius: 10px; box-shadow: var(--shadow-lg);
   overflow: hidden;
   animation: mep-in .13s cubic-bezier(.2, .9, .3, 1);
@@ -2691,11 +2701,14 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .me-pop { animation: none; } }
 
 /* The banner is tinted from the same hash the avatar uses, so a person's panel
-   is recognisably theirs without needing a second uploaded image. */
-.mep-banner { height: 60px; background: var(--elev); }
+   is recognisably theirs without needing a second uploaded image. Flat, not a
+   two-stop sweep: a profile header with no uploaded banner is a solid band in
+   the reference, and a saturated gradient was the loudest thing in the panel. */
+.mep-banner { height: 105px; background: var(--elev); }
+/* Above the bubble, so the tail tucks behind the ring rather than crossing it. */
 .mep-av-wrap {
-  position: relative; display: block;
-  width: 76px; height: 76px; margin: -38px 0 0 14px;
+  position: relative; z-index: 1; display: block;
+  width: 92px; height: 92px; margin: -46px 0 0 14px;
   border-radius: 50%; border: 6px solid var(--float); background: var(--float);
 }
 .mep-avatar {
@@ -2703,9 +2716,13 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   width: 100%; height: 100%; border-radius: 50%;
   font-size: 26px; font-weight: 800; color: var(--on-accent);
 }
+/* A 16px core inside a full 5px cutout — 26px overall. The offset keeps the
+   whole ring on the avatar: pushed any further out, the part hanging past the
+   edge has nothing to cut, and the dot ends up touching the picture on one
+   side and floating free on the other. */
 .mep-presence {
-  position: absolute; right: 0; bottom: 0;
-  width: 20px; height: 20px; border-radius: 50%;
+  position: absolute; right: 1px; bottom: 1px;
+  width: 26px; height: 26px; border-radius: 50%;
   background: var(--online); border: 5px solid var(--float);
 }
 .mep-presence.away { background: var(--idle); }
@@ -2714,25 +2731,65 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 
 .mep-card { padding: 8px 14px 0; }
 .mep-names { padding: 4px 0 2px; }
-.mep-name { font-size: 19px; font-weight: 800; color: var(--text-strong); line-height: 1.2; }
-.mep-handle { font-size: 13px; color: var(--muted); margin-top: 1px; }
-.mep-custom {
-  margin: 8px 0 2px; padding: 8px 10px;
-  background: var(--panel); border-radius: 8px;
-  font-size: 13px; color: var(--text-body); white-space: pre-wrap; word-break: break-word;
+/* Both lines near-white. The handle is not a caption for the name — it is the
+   account, and in the reference it reads at the same strength. */
+.mep-name {
+  font-size: 20px; font-weight: 800; color: var(--text-strong); line-height: 1.2;
+  text-transform: lowercase;
 }
-.mep-custom[hidden] { display: none; }
+.mep-handle {
+  font-size: 14px; font-weight: 500; color: var(--text-strong); margin-top: 2px;
+  text-transform: lowercase;
+}
 
+/* ---- the custom-status bubble ---- */
+.mep-bubble {
+  position: absolute; left: 104px; right: 12px; top: 90px; z-index: 0;
+  min-height: 53px; padding: 10px 14px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--float-2); border: 0; border-radius: 12px;
+  color: var(--muted); font: inherit; font-size: 13px; line-height: 1.35;
+  text-align: left; cursor: pointer;
+}
+.mep-bubble:hover { background: var(--elev); }
+.mep-bubble .ico { width: 15px; height: 15px; flex: 0 0 15px; }
+/* The plus is the empty-state prompt; with a status written there is text to
+   read instead and the invitation is redundant. */
+.mep-bubble.has-status .mep-bubble-add { display: none; }
+.mep-bubble.has-status { color: var(--text-body); }
+.mep-bubble:not(.has-status) .mep-bubble-text { font-style: italic; }
+.mep-bubble-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  white-space: pre-wrap; word-break: break-word;
+}
+/* The tail: two circles shrinking back toward the avatar, which is what makes
+   this read as something the person said rather than another panel. */
+.mep-bubble::before, .mep-bubble::after {
+  content: ""; position: absolute; border-radius: 50%; background: inherit;
+}
+/* Up and to the left, over the banner — NOT out to the left, where the avatar
+   sits on top of them and swallows the tail entirely. */
+.mep-bubble::before { width: 11px; height: 11px; left: 3px; top: -14px; }
+.mep-bubble::after { width: 6px; height: 6px; left: -5px; top: -25px; }
+
+/* ---- the action groups ---- */
+/* No padding of its own: the rows run edge to edge so the divider between them
+   spans the full card, and the card clips them into its corners. */
 .mep-menu {
-  margin-top: 12px; padding: 6px; background: var(--panel);
-  border-radius: 8px; display: flex; flex-direction: column; gap: 1px;
+  margin-top: 12px; background: var(--float-2);
+  border-radius: 8px; overflow: hidden;
+  display: flex; flex-direction: column;
 }
+.mep-menu[hidden] { display: none; }
 .mep-item {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%; padding: 7px 9px; border: 0; border-radius: 5px;
-  background: none; color: var(--text-body);
-  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; height: 48px; padding: 0 16px; border: 0;
+  background: none; color: var(--muted);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
 }
+/* The same weight as the icon beside it. Pushed to near-white, a label and its
+   own icon stop looking like one thing. */
 .mep-item:hover { background: var(--hover); color: var(--text); }
 .mep-item .ico { width: 16px; height: 16px; flex: 0 0 16px; color: var(--muted); }
 .mep-item:hover .ico { color: var(--text); }
@@ -2740,7 +2797,9 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 /* Pushes the trailing chevron to the far edge and turns it to point right,
    which is what says "this one opens another menu". */
 .mep-more { margin-left: auto; color: var(--dim); }
-.mep-sep { height: 1px; margin: 5px 4px; background: var(--line); }
+/* Full width, inside a card — it divides two rows that belong together. What
+   divides the GROUPS is the gap between the cards. */
+.mep-sep { height: 1px; background: var(--line-2); }
 
 /* Presence swatches inside a context menu (the status picker) and on the
    panel's status row. The base .presence rule is scoped to .vp, so these two

@@ -34,7 +34,7 @@ const hex = (name, block) => {
 const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
 describe('the dark surface ramp', () => {
-    const SURFACES = ['rail', 'side', 'chat', 'input', 'chat-2', 'panel', 'float', 'elev'];
+    const SURFACES = ['rail', 'side', 'chat', 'input', 'chat-2', 'panel', 'float', 'float-2', 'elev'];
 
     it('stays within a few points of neutral', () => {
         // A blue channel far above the red is what made every surface read navy
@@ -63,9 +63,19 @@ describe('the dark surface ramp', () => {
         expect(step).toBeLessThanOrEqual(6);
     });
 
+    it('raises a card on a floating surface too', () => {
+        // The account panel's action groups. They were --panel, three points
+        // DARKER than the popover they sit on, so they read as wells cut into
+        // it rather than as buttons resting on it — the same inversion the user
+        // panel had, one level in.
+        expect(lum(hex('float-2', dark))).toBeGreaterThan(lum(hex('float', dark)));
+        expect(lum(hex('elev', dark))).toBeGreaterThan(lum(hex('float-2', dark)));
+    });
+
     it('does the same in the light theme, where it was inverted too', () => {
         const light = css.slice(css.indexOf(':root[data-theme="light"]'));
         expect(lum(hex('panel', light))).toBeGreaterThan(lum(hex('side', light)));
+        expect(lum(hex('float-2', light))).toBeGreaterThan(lum(hex('float', light)));
     });
 });
 
@@ -154,5 +164,94 @@ describe('hover motion', () => {
         const reduced = css.slice(css.lastIndexOf('@media (prefers-reduced-motion: reduce) {\n  #me-bar'));
         expect(reduced).toMatch(/#btn-deafen:hover \.ico \{ animation: none; \}/);
         expect(reduced).toMatch(/\.me-ctl-caret:hover \.ico,/);
+    });
+});
+
+describe('the account panel', () => {
+    it('raises its action groups instead of sinking them', () => {
+        expect(/\.mep-menu \{[^}]*background:\s*var\(--float-2\)/.test(css)).toBe(true);
+        expect(/\.mep-bubble \{[^}]*background:\s*var\(--float-2\)/.test(css)).toBe(true);
+    });
+
+    it('has no stroke around it', () => {
+        // The old one was lighter than the fill, which draws an outline. The
+        // reference has only a shadow, and its edge is darker than its fill.
+        const rule = /\.me-pop \{[^}]*\}/.exec(css)[0];
+        expect(rule).toMatch(/border:\s*0/);
+        expect(rule).toMatch(/box-shadow:/);
+    });
+
+    it('gives its rows room to breathe', () => {
+        // ~34px before, against the reference's ~49. Everything else about the
+        // rows already matched; it was purely vertical.
+        expect(/\.mep-item \{[^}]*height:\s*48px/.test(css)).toBe(true);
+        // The card has no padding of its own, so the divider inside it spans
+        // the full width and the rows clip into its corners.
+        const menu = /\.mep-menu \{[^}]*\}/.exec(css)[0];
+        expect(menu).not.toMatch(/padding:/);
+        expect(menu).toMatch(/overflow:\s*hidden/);
+    });
+
+    it('matches the row labels to the icons beside them', () => {
+        // Was --text-body against --muted icons, so a label and its own icon
+        // looked like two different things.
+        expect(/\.mep-item \{[^}]*color:\s*var\(--muted\)/.test(css)).toBe(true);
+        expect(/\.mep-item \.ico \{[^}]*color:\s*var\(--muted\)/.test(css)).toBe(true);
+    });
+
+    it('drops the persistent highlight behind the identity block', () => {
+        // .me-id is flex:1, so a plate behind it runs the full width and the
+        // user panel stops reading as one card.
+        expect(/\.me-id\[aria-expanded="true"\]\s*\{/.test(css)).toBe(false);
+    });
+
+    it('is laid out as two cards, in the reference is order', () => {
+        const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+        const pop = html.slice(html.indexOf('id="me-popover"'), html.indexOf('<main id="main">'));
+        const groups = pop.split('class="mep-menu"').slice(1);
+        expect(groups.length).toBe(2);
+        // Two rows each, split by a divider inside the card — the gap between
+        // the CARDS is what separates the groups.
+        groups.forEach((g) => {
+            expect((g.match(/class="mep-item/g) || []).length).toBeGreaterThanOrEqual(2);
+            expect(g).toContain('mep-sep');
+        });
+        const order = [...pop.matchAll(/id="(mep-edit|mep-status|mep-switch|mep-copy-id)"/g)].map((m) => m[1]);
+        expect(order).toEqual(['mep-edit', 'mep-status', 'mep-switch', 'mep-copy-id']);
+    });
+
+    it('sizes the banner, avatar and dot the way the reference does', () => {
+        expect(/\.mep-banner \{ height: 105px/.test(css)).toBe(true);
+        const wrap = /\.mep-av-wrap \{[^}]*\}/.exec(css)[0];
+        expect(wrap).toMatch(/width:\s*92px/);
+        expect(wrap).toMatch(/border:\s*6px/);      // 92 - 2x6 = an 80px picture
+        const dot = /\.mep-presence \{[^}]*\}/.exec(css)[0];
+        expect(dot).toMatch(/width:\s*26px/);
+        expect(dot).toMatch(/border:\s*5px solid var\(--float\)/);   // 26 - 2x5 = a 16px core
+    });
+
+    it('shows the bare username, near-white', () => {
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        // No sigil: there is nothing else on that line for it to distinguish.
+        expect(src).toMatch(/mep-handle'\)\.textContent = account \? account\.username/);
+        expect(/\.mep-handle \{[^}]*color:\s*var\(--text-strong\)/.test(css)).toBe(true);
+    });
+
+    it('offers the custom status where the reference offers it', () => {
+        const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+        // A button, not a div: it is the only place in the app that field is
+        // ever offered, and it has to be reachable empty.
+        expect(html).toMatch(/<button type="button" class="mep-bubble" id="mep-custom">/);
+        // The tail is what makes it read as something the person said.
+        expect(css).toMatch(/\.mep-bubble::before,\s*\.mep-bubble::after/);
+    });
+
+    it('draws the banner flat rather than as a two-stop sweep', () => {
+        const lib = fs.readFileSync(path.join(RENDERER, 'lib.js'), 'utf8');
+        expect(lib).toMatch(/function bannerStyle/);
+        const fn = lib.slice(lib.indexOf('function bannerStyle'));
+        expect(fn.slice(0, fn.indexOf('\n    }'))).not.toMatch(/gradient/);
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        expect(src).toMatch(/mep-banner'\)\.setAttribute\('style', bannerStyle\(name\)\)/);
     });
 });

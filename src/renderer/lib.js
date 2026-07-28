@@ -45,6 +45,14 @@
         return `background:linear-gradient(135deg,hsl(${h},70%,62%),hsl(${(h + 40) % 360},75%,52%))`;
     }
 
+    // The same hue as the avatar, flat and much darker. A profile header with no
+    // uploaded banner is a solid band in every client that has one — a saturated
+    // two-stop sweep across the full width is not a shape a header ever takes,
+    // and at 105px tall it drowned everything under it.
+    function bannerStyle(name) {
+        return `background:hsl(${hueOf(name || '?')},32%,17%)`;
+    }
+
     function initials(name) {
         const n = String(name || '?').trim();
         const parts = n.split(/\s+/).filter(Boolean);
@@ -384,7 +392,7 @@
     }
 
     return {
-        esc, hueOf, avatarStyle, initials, isOnlyEmoji, mentionsMe,
+        esc, hueOf, avatarStyle, bannerStyle, initials, isOnlyEmoji, mentionsMe,
         timeStr, dayStr, fmtSize, fmtDuration, splitName,
         attachmentKind, fileIcon,
         extractUrls, isImageUrl, safeHttpUrl, urlFileName, youtubeId,
