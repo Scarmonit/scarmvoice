@@ -5288,6 +5288,44 @@
         }, every);
     }
 
+    // Everything that floats, closed together.
+    //
+    // #dialog, #lightbox, #picker, #notes, #dm-picker, #popover and #ctx-menu
+    // are all SIBLINGS of #app rather than children — which is the whole reason
+    // closeSettings() is called from teardown below, and #settings was the only
+    // one of the set ever added. Hiding #app does nothing to the rest, so an
+    // expired session left them drawn over the sign-in form. Four of them are
+    // focus-trapped, and trapFocus() early-returns for an element it still
+    // holds: a trap that is never released quietly disables focus management for
+    // every later open of that overlay.
+    //
+    // Two of these are not cosmetic at all:
+    //   • the input panel's level meter holds its own getUserMedia stream — the
+    //     THIRD microphone in this file, after the call's and the mic test's,
+    //     and the only one teardown never released. The OS microphone indicator
+    //     stayed lit behind the login card.
+    //   • the connection panel repaints on a three-second interval that nothing
+    //     else clears, so every session left one more running.
+    function closeFloatingUi() {
+        closeAudioPops();        // releases the input panel's microphone
+        closeConnPop();          // …and its repaint interval
+        closeMePopover();
+        closePopover();
+        closeCtxMenu();
+        closeEmojiPop();
+        closeSoundboard();
+        closePicker();
+        closeLightbox();
+        closeNotes();
+        closeDmPicker();
+        hideTip();
+        // A dialog left open never settles its promise, so whatever was
+        // awaiting it is abandoned mid-flight rather than cancelled.
+        if (!$('dialog').hidden) closeDialog(inp_null());
+        // An attachment clip carries on playing behind the login card otherwise.
+        stopOtherAudio(null);
+    }
+
     // Every way out of the app — expired session, account sign-out, full sign-out
     // — has to release the same things. Account sign-out used to release none of
     // them, so the timers kept polling, presence kept reporting you online and
@@ -5327,6 +5365,8 @@
         // without it the focus trap stayed armed and the password field could
         // not be reached at all.
         closeSettings();
+        // …and #settings is not the only sibling of #app. See closeFloatingUi().
+        closeFloatingUi();
         // Both of these are one-shot coalescing timeouts rather than intervals,
         // so each survives teardown by at most a quarter second — but each then
         // fires a request with no credential, 401s, and calls relogin() again,
@@ -5346,6 +5386,15 @@
         // having the session expire there — left the flag set, and the next
         // sign-in came up in the DM column with the channel sidebar hidden
         // behind a panel whose conversation had been torn down.
+        //
+        // The LIST goes too. dmThreads is per-account, and every deliberate
+        // sign-out clears it by hand — but the two paths that end a session on
+        // their own (an expired board session, a dead account token) never did,
+        // and teardown is the one thing all four share. enterApp() renders the
+        // shell from whatever is in memory before the first fetch answers, so
+        // the next person to sign in on this machine was shown the previous
+        // account's conversations until it did.
+        dmThreads = [];
         setDmMode(false);
         closeDm();
         // …and the drafts it stashed are keyed by thread id, which is global
@@ -6038,12 +6087,23 @@
 
     async function startApMeter() {
         if (apMeter) return;
+        const gen = sessionGen;
         let stream;
         try {
             stream = await navigator.mediaDevices.getUserMedia({
                 audio: settings.micDeviceId ? { deviceId: { exact: settings.micDeviceId } } : true
             });
         } catch (e) { return; }          // no permission, no meter — and no error either
+        // The same race startRecording() and startMicTest() both guard against,
+        // and the reason they have to: stopApMeter() is a no-op while `apMeter`
+        // is still null, so a panel closed — or a session ended — while the
+        // capture was opening would assign the stream AFTER the only thing that
+        // could release it had already run, with no handle left to reach it.
+        // A blurred window closes this panel, so the window is not a small one.
+        if (gen !== sessionGen || $('mic-pop').hidden) {
+            try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+            return;
+        }
         // Metered on the renderer's shared AudioContext, like the Settings one:
         // Chromium allows six contexts, and a call already holds several.
         const meter = window.ScarmAudio.createMeter(stream);
