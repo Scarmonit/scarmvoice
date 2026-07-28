@@ -5506,7 +5506,27 @@
         if (settings.noiseSuppressionAI) return 'ai';
         return settings.noiseSuppression === false ? 'off' : 'standard';
     }
-    const PROFILE_LABEL = { off: 'None', standard: 'Standard', ai: 'Voice Isolation' };
+    const PROFILE_LABEL = { off: 'None', standard: 'Standard', ai: 'Clear Voice' };
+    // The pane's three radios against the same two flags: Clear Voice is AI on,
+    // Studio is everything off, and Custom is neither of those — whatever the
+    // individual filters happen to say.
+    const PANE_PROFILE = { ai: 'clear', off: 'studio', standard: 'custom' };
+
+    // Paints the pane's radios and the Push to Talk switch from settings.
+    function paintVoicePane() {
+        const want = PANE_PROFILE[inputProfile()] || 'custom';
+        document.querySelectorAll('#set-profile input[type="radio"]').forEach((r) => {
+            r.checked = r.value === want;
+        });
+        const ptt = settings.voiceMode === 'ptt';
+        $('set-ptt-toggle').setAttribute('aria-checked', String(ptt));
+        $('row-ptt').style.display = ptt ? '' : 'none';
+        const inv = settings.micVolume === undefined ? 1 : Number(settings.micVolume);
+        $('set-invol').value = String(Math.round(inv * 100));
+        paintRangeFill($('set-invol'));
+        paintRangeFill($('set-outvol'));
+        paintRangeFill($('set-vad'));
+    }
 
     async function setInputProfile(mode) {
         const patch = mode === 'ai'
@@ -5517,6 +5537,7 @@
         $('set-ns').checked = settings.noiseSuppression !== false;
         $('set-nsai').checked = !!settings.noiseSuppressionAI;
         paintAudioPanels();
+        paintVoicePane();
         if (voice && voice.isJoined()) toast('Rejoin voice to apply audio processing changes');
     }
 
@@ -5992,6 +6013,7 @@
         $('set-density').value = settings.density || 'cozy';
         $('set-vad').value = String(vadValue());
         paintThreshold();
+        paintVoicePane();
         renderAccountCard();
         renderMutedChannels();
         renderBlocked();
@@ -6006,6 +6028,7 @@
             $('set-search').dispatchEvent(new Event('input'));
         }
         paintSettingsMe();
+        paintVoicePane();
         if (showSettingsPane) showSettingsPane(null);
         $('settings').hidden = false;
         trapFocus($('settings'), { label: 'Settings', initial: $('settings-close') });
@@ -6671,7 +6694,7 @@
         micTest.meter.stop();
         try { micTest.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
         micTest = null;
-        $('btn-mic-test').textContent = 'Test';
+        $('btn-mic-test').textContent = 'Mic Test';
         $('btn-mic-test').classList.remove('recording');
         $('mic-meter-bar').style.width = '0%';
         $('mic-meter-bar').classList.remove('over');
@@ -6723,7 +6746,7 @@
         });
 
         micTest = { stream, meter, off };
-        $('btn-mic-test').textContent = 'Stop';
+        $('btn-mic-test').textContent = 'Stop Test';
         $('btn-mic-test').classList.add('recording');
     }
 
@@ -6971,6 +6994,39 @@
         $('set-outvol-val').textContent = e.target.value + '%';
         await saveSettings({ outputVolume: Number(e.target.value) / 100 });
     });
+    // The radios, the switch and the fold — the pane's own controls.
+    document.querySelectorAll('#set-profile input[type="radio"]').forEach((r) => {
+        r.addEventListener('change', () => {
+            if (!r.checked) return;
+            // Custom keeps whatever the individual filters already say, so it
+            // only has to stop forcing one of the other two.
+            if (r.value === 'custom') return setInputProfile('standard');
+            setInputProfile(r.value === 'clear' ? 'ai' : 'off');
+        });
+    });
+
+    $('set-ptt-toggle').addEventListener('click', async () => {
+        const next = settings.voiceMode === 'ptt' ? 'open' : 'ptt';
+        await saveSettings({ voiceMode: next });
+        $('set-mode').value = next;
+        if (voice) voice.setSettings(settings);
+        paintVoicePane();
+        paintAudioPanels();
+    });
+
+    $('set-voice-more').addEventListener('click', (e) => {
+        const open = e.currentTarget.getAttribute('aria-expanded') !== 'true';
+        e.currentTarget.setAttribute('aria-expanded', String(open));
+        $('set-voice-advanced').hidden = !open;
+    });
+
+    // The pane's own microphone slider, the same setting the caret menu holds.
+    $('set-invol').addEventListener('input', async (e) => {
+        paintRangeFill(e.target);
+        await saveSettings({ micVolume: Number(e.target.value) / 100 });
+        paintAudioPanels();
+    });
+
     $('set-mode').addEventListener('change', async (e) => {
         await saveSettings({ voiceMode: e.target.value });
         $('row-ptt').style.display = e.target.value === 'ptt' ? '' : 'none';

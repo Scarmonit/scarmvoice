@@ -793,72 +793,134 @@
 
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="mic">
         <h3>Voice &amp; Audio</h3>
-        <label class="row">
-          <span>Microphone</span>
-          <select id="set-mic"></select>
-        </label>
-        <label class="row">
-          <span>Speaker</span>
-          <select id="set-speaker"></select>
-        </label>
-        <div class="row">
-          <span>Mic test</span>
+
+        <!-- Devices and their volumes, paired across two columns: a microphone
+             and its level belong together, and so do a speaker and its own. -->
+        <h4 class="set-sub">Voice</h4>
+        <div class="set-cols">
+          <label class="set-field">
+            <span>Microphone</span>
+            <select id="set-mic"></select>
+          </label>
+          <label class="set-field">
+            <span>Speaker</span>
+            <select id="set-speaker"></select>
+          </label>
+          <label class="set-field">
+            <span>Microphone Volume</span>
+            <input type="range" id="set-invol" min="0" max="200" step="1">
+          </label>
+          <label class="set-field">
+            <span>Speaker Volume</span>
+            <input type="range" id="set-outvol" min="0" max="200" step="1">
+            <output id="set-outvol-val" hidden></output>
+          </label>
+        </div>
+
+        <div class="set-testrow">
+          <button type="button" id="btn-mic-test" class="btn-primary">Mic Test</button>
           <div class="meter" id="mic-meter">
             <i id="mic-meter-bar"></i>
             <span class="meter-mark" id="mic-meter-mark"></span>
           </div>
-          <button type="button" id="btn-mic-test" class="keycap">Test</button>
         </div>
-        <label class="row">
-          <span>Speaking threshold</span>
-          <input type="range" id="set-vad" min="1" max="30" step="1">
-          <output id="set-vad-val"></output>
-        </label>
-        <div class="row note">
-          <span class="hint">How loud you have to be before ScarmVoice shows you as speaking — the marker
-            on the meter above. To gate your microphone itself, use Push to talk.</span>
+        <p class="set-help">Speak and watch the bar. If nothing moves, pick a different
+          microphone above or check that Windows is letting apps use it.</p>
+
+        <div class="set-rule"></div>
+
+        <!-- One choice with three answers, each explained where it is made. A
+             dropdown of processing flags asked people to know what echo
+             cancellation does before they could pick. -->
+        <h4 class="set-sub">Input Profile</h4>
+        <div class="set-radios" id="set-profile">
+          <label class="set-radio">
+            <input type="radio" name="inprofile" value="clear">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Clear Voice</span>
+              <span class="set-radio-sub">Just your voice: keyboards, fans and hum removed</span>
+            </span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="inprofile" value="studio">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Studio</span>
+              <span class="set-radio-sub">Open mic with no processing at all</span>
+            </span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="inprofile" value="custom">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Custom</span>
+              <span class="set-radio-sub">Set each filter yourself, below</span>
+            </span>
+          </label>
         </div>
-        <label class="row">
-          <span>Output volume</span>
-          <input type="range" id="set-outvol" min="0" max="200" step="1">
-          <output id="set-outvol-val"></output>
-        </label>
-        <label class="row">
-          <span>Input mode</span>
-          <select id="set-mode">
-            <option value="open">Open mic</option>
-            <option value="ptt">Push to talk</option>
-          </select>
-        </label>
+
+        <div class="set-toggle">
+          <span class="set-toggle-label">Push to Talk</span>
+          <button type="button" class="switch" id="set-ptt-toggle" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
         <label class="row" id="row-ptt">
           <span>Push-to-talk key</span>
           <button type="button" id="set-ptt" class="keycap">Backquote</button>
           <span class="hint" id="ptt-hint"></span>
         </label>
-        <label class="row">
-          <span>Mute hotkey</span>
-          <button type="button" id="set-mute-key" class="keycap">Click to set</button>
-          <span class="hint">— works system-wide; Backspace while recording clears it</span>
-        </label>
-        <label class="row">
-          <span>Deafen hotkey</span>
-          <button type="button" id="set-deafen-key" class="keycap">Click to set</button>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-ec"><span>Echo cancellation</span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-ns"><span>Noise suppression</span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-nsai">
-          <span>AI noise suppression <em class="hint">— RNNoise, removes keyboards/fans/hum;
-            takes effect the next time your mic opens</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-agc">
-          <span>Automatic gain control <em class="hint">— off is recommended; its level loop can make your volume wobble</em></span>
-        </label>
+
+        <!-- Everything below is either rarely changed or only meaningful once
+             the profile is Custom, so it starts folded. -->
+        <button type="button" class="set-more" id="set-voice-more" aria-expanded="false">
+          <span class="set-more-text">
+            <span class="set-more-title">Show Advanced Voice Settings</span>
+            <span class="set-more-sub">Speaking threshold, hotkeys, individual filters</span>
+          </span>
+          <span class="ico set-more-caret" data-icon="chevron-down"></span>
+        </button>
+
+        <div class="set-advanced" id="set-voice-advanced" hidden>
+          <label class="row">
+            <span>Speaking threshold</span>
+            <input type="range" id="set-vad" min="1" max="30" step="1">
+            <output id="set-vad-val"></output>
+          </label>
+          <div class="row note">
+            <span class="hint">How loud you have to be before ScarmVoice shows you as speaking — the marker
+              on the meter above. To gate your microphone itself, use Push to talk.</span>
+          </div>
+          <label class="row">
+            <span>Input mode</span>
+            <select id="set-mode">
+              <option value="open">Open mic</option>
+              <option value="ptt">Push to talk</option>
+            </select>
+          </label>
+          <label class="row">
+            <span>Mute hotkey</span>
+            <button type="button" id="set-mute-key" class="keycap">Click to set</button>
+            <span class="hint">— works system-wide; Backspace while recording clears it</span>
+          </label>
+          <label class="row">
+            <span>Deafen hotkey</span>
+            <button type="button" id="set-deafen-key" class="keycap">Click to set</button>
+          </label>
+          <label class="row check">
+            <input type="checkbox" id="set-ec"><span>Echo cancellation</span>
+          </label>
+          <label class="row check">
+            <input type="checkbox" id="set-ns"><span>Noise suppression</span>
+          </label>
+          <label class="row check">
+            <input type="checkbox" id="set-nsai">
+            <span>AI noise suppression <em class="hint">— RNNoise, removes keyboards/fans/hum;
+              takes effect the next time your mic opens</em></span>
+          </label>
+          <label class="row check">
+            <input type="checkbox" id="set-agc">
+            <span>Automatic gain control <em class="hint">— off is recommended; its level loop can make your volume wobble</em></span>
+          </label>
+        </div>
       </section>
 
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="bell">

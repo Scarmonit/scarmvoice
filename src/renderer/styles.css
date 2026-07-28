@@ -2952,7 +2952,11 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .ma-row.banned { opacity: .65; }
 .ma-who { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; }
 .ma-row .keycap { min-width: 0; padding: 6px 10px; font-size: 12px; }
-.ma-row .keycap.danger { color: var(--danger); border-color: var(--danger-line); }
+/* Deliberately NOT setting `color` here. The settings pane draws a destructive
+   button as a solid red plate, and a rule at the same specificity setting the
+   text to that same red — which this one used to do — paints the label
+   invisible on its own background. Ban and Delete were blank rectangles. */
+.ma-row .keycap.danger { border-color: transparent; }
 
 /* Two-factor setup (Settings > Account). */
 .acct-2fa-setup { align-items: flex-start; gap: 14px; }
@@ -3239,19 +3243,23 @@ button.ap-row:hover, label.ap-row:hover { background: var(--hover); }
 button.ap-row:hover .ap-more { color: var(--text); }
 
 .ap-slider { flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 10px; }
-/* Drawn rather than left to accent-color: a thin track with a WHITE thumb is
-   what makes the position readable — a thumb in the fill colour has almost no
-   contrast against the fill it is sitting on. */
-.ap-slider input[type="range"] {
+/* Every slider in the app, drawn rather than left to accent-color: a thin track
+   with a WHITE thumb is what makes the position readable — a thumb in the fill
+   colour has almost no contrast against the fill it is sitting on. The fill
+   itself comes from --fill, written by paintRangeFill. */
+.ap-slider input[type="range"],
+.settings-modal input[type="range"] {
   width: 100%; height: 16px; margin: 0;
   -webkit-appearance: none; appearance: none; background: none; outline: none;
 }
-.ap-slider input[type="range"]::-webkit-slider-runnable-track {
+.ap-slider input[type="range"]::-webkit-slider-runnable-track,
+.settings-modal input[type="range"]::-webkit-slider-runnable-track {
   height: 4px; border-radius: 2px;
   background: linear-gradient(var(--slider), var(--slider)) 0 / var(--fill, 50%) 100% no-repeat,
               var(--track);
 }
-.ap-slider input[type="range"]::-webkit-slider-thumb {
+.ap-slider input[type="range"]::-webkit-slider-thumb,
+.settings-modal input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 16px; height: 16px; margin-top: -6px;
   border-radius: 50%; background: #fff; border: 0;
@@ -3514,3 +3522,103 @@ button.ap-row:hover .ap-more { color: var(--text); }
   background: rgba(103, 175, 116, .12); color: var(--voice-ok);
   font-size: 12px; font-weight: 600; line-height: 1.35;
 }
+
+
+/* ---------- Voice & Audio ------------------------------------------------ */
+/* Devices and their volumes paired across two columns: a microphone and its
+   level belong together, and so do a speaker and its own. */
+.set-sub {
+  margin: 0 0 16px; font-size: 20px; line-height: 24px; font-weight: 700;
+  color: var(--text-strong); letter-spacing: -.01em;
+}
+.set-rule { height: 1px; margin: 28px 0; background: var(--line-2); }
+
+.set-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; margin-bottom: 20px; }
+.set-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.set-field > span {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--text-strong);
+}
+.set-field select {
+  height: 40px; padding: 0 10px; border-radius: 4px;
+  background: var(--sunk); border: 1px solid var(--line-2); outline: none;
+  color: var(--text); font-size: 14px; min-width: 0;
+}
+.set-field select:focus { border-color: var(--accent); }
+.set-field input[type="range"] { width: 100%; margin: 12px 0 0; }
+
+/* The test is an action and the meter is its answer, so they share a row. */
+.set-testrow { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+.set-testrow .meter { flex: 1; min-width: 0; }
+.btn-primary {
+  height: 38px; padding: 0 16px; flex: 0 0 auto;
+  border: 0; border-radius: 4px; cursor: pointer;
+  background: var(--slider); color: #fff;
+  font: inherit; font-size: 14px; font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-primary.recording { background: var(--danger); }
+.set-help { margin: 0; font-size: 13px; line-height: 1.45; color: var(--panel-sub); }
+
+/* One choice with three answers, each explained where it is made. */
+.set-radios { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.set-radio {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 8px 0; cursor: pointer;
+}
+.set-radio input[type="radio"] {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; flex: 0 0 20px; margin: 1px 0 0;
+  border-radius: 50%; border: 2px solid var(--nav-idle); background: none;
+  display: grid; place-items: center; cursor: pointer;
+}
+.set-radio input[type="radio"]:checked { border-color: var(--slider); }
+.set-radio input[type="radio"]:checked::after {
+  content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--slider);
+}
+.set-radio-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.set-radio-title { font-size: 14px; font-weight: 500; color: var(--text-strong); }
+.set-radio-sub { font-size: 13px; color: var(--panel-sub); line-height: 1.4; }
+
+/* A switch, not a checkbox: this is one setting with two states and the
+   reference draws it as a switch, which also reads its state from further away
+   than a tick does. */
+.set-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 0; margin-top: 8px;
+}
+.set-toggle-label { font-size: 16px; font-weight: 500; color: var(--text-strong); }
+.switch {
+  width: 40px; height: 24px; flex: 0 0 40px; padding: 0;
+  border: 0; border-radius: 12px; cursor: pointer;
+  background: var(--track); position: relative;
+  transition: background .15s ease;
+}
+.switch-knob {
+  position: absolute; top: 4px; left: 4px;
+  width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  transition: transform .15s cubic-bezier(.2, .9, .3, 1);
+}
+.switch[aria-checked="true"] { background: var(--slider); }
+.switch[aria-checked="true"] .switch-knob { transform: translateX(16px); }
+@media (prefers-reduced-motion: reduce) {
+  .switch, .switch-knob { transition: none; }
+}
+
+/* Rarely changed, or only meaningful once the profile is Custom. */
+.set-more {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; padding: 14px 0; margin-top: 4px;
+  background: none; border: 0; cursor: pointer; text-align: left;
+}
+.set-more-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.set-more-title { font-size: 16px; font-weight: 500; color: var(--text-strong); }
+.set-more-sub { font-size: 13px; color: var(--panel-sub); }
+.set-more-caret {
+  width: 20px; height: 20px; flex: 0 0 20px; color: var(--nav-idle);
+  transition: transform .15s ease;
+}
+.set-more[aria-expanded="true"] .set-more-caret { transform: rotate(180deg); }
+.set-advanced { padding-top: 8px; }
+.set-advanced[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .set-more-caret { transition: none; } }

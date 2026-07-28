@@ -1149,3 +1149,49 @@ describe('values taken from the live client', () => {
         expect(/\.cat-toggle \{[^}]*font-weight: 500/.test(css)).toBe(true);
     });
 });
+
+describe('the Voice & Audio pane', () => {
+    const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+    const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+
+    it('never paints a destructive label its own background colour', () => {
+        // The regression: a solid red plate went on .keycap.danger, while
+        // .ma-row .keycap.danger set the TEXT to that same red at equal
+        // specificity and later in the sheet. Ban and Delete rendered as blank
+        // red rectangles.
+        const row = /\.ma-row \.keycap\.danger \{[^}]*\}/.exec(css)[0];
+        // border-color is fine; a bare `color` is what painted it invisible.
+        expect(row).not.toMatch(/(^|[^-])color:/);
+        expect(css).toMatch(/\.settings-modal \.keycap\.danger \{[^}]*color: #fff/);
+    });
+
+    it('pairs each device with its own level, in two columns', () => {
+        expect(css).toMatch(/\.set-cols \{[^}]*grid-template-columns: 1fr 1fr/);
+        const pane = html().slice(html().indexOf('<h3>Voice &amp; Audio</h3>'), html().indexOf('id="set-voice-advanced"'));
+        ['set-mic', 'set-speaker', 'set-invol', 'set-outvol'].forEach((id) => expect(pane).toContain('id="' + id + '"'));
+    });
+
+    it('asks the input question once, with the answers explained', () => {
+        // A dropdown of processing flags asked people to know what echo
+        // cancellation does before they could choose.
+        expect(html()).toContain('id="set-profile"');
+        expect((html().match(/name="inprofile"/g) || []).length).toBe(3);
+        // Mapped onto the two flags the audio menu already drives.
+        expect(src()).toMatch(/const PANE_PROFILE = \{ ai: 'clear', off: 'studio', standard: 'custom' \}/);
+        expect(src()).toMatch(/function paintVoicePane\(\)/);
+    });
+
+    it('draws push to talk as a switch and folds the rest away', () => {
+        expect(html()).toContain('id="set-ptt-toggle"');
+        expect(html()).toMatch(/role="switch" aria-checked="false"/);
+        expect(css).toMatch(/\.switch\[aria-checked="true"\] \.switch-knob \{ transform: translateX\(16px\); \}/);
+        expect(html()).toContain('id="set-voice-advanced"');
+        expect(src()).toMatch(/\$\('set-voice-more'\)\.addEventListener\('click'/);
+    });
+
+    it('draws every slider in the app the same way', () => {
+        // The settings pane was still getting Chromium's native blue.
+        expect(css).toMatch(/\.settings-modal input\[type="range"\]::-webkit-slider-thumb/);
+        expect(css).toMatch(/\.settings-modal input\[type="range"\]::-webkit-slider-runnable-track/);
+    });
+});
