@@ -2002,6 +2002,9 @@
         const el = document.createElement('div');
         el.className = 'msg' + (grouped ? ' grouped' : '') + (p.pinned ? ' pinned' : '');
         el.dataset.id = p.id;
+        // A row's id alone does not identify it — see graft(). This is the other
+        // half of the key.
+        if (p.isDm) el.dataset.dm = '1';
 
         const parts = [];
         // The gutter holds the avatar, and — on a grouped message — the timestamp
@@ -8146,6 +8149,10 @@
             wrap.remove();                       // no-op if the row is already gone
             textEl.style.display = prevDisplay;
             renderMessages();      // resync anything the poll held back
+            // The editor may have been inside a conversation, which has its own
+            // renderer — and which has been holding its updates back for
+            // exactly as long as this editor was open.
+            if (dmPanelOpen()) renderDmMessages();
         };
         editingRestore = restore;
 
@@ -8336,8 +8343,16 @@
 
     // Append a card to every live copy of this message, but only once per url —
     // the same message can be re-rendered while a fetch is still in flight.
-    function graft(postId, url, build) {
-        document.querySelectorAll(`.msg[data-id="${postId}"] .msg-previews`).forEach((c) => {
+    //
+    // Matched on the KIND of message as well as its id. A DM id and a post id
+    // come out of two different tables and collide freely — both sequences start
+    // at 1 — so a channel post's late-arriving preview could be grafted onto
+    // whichever conversation message happened to share its number, and vice
+    // versa. (A thread reply and a channel row legitimately share an id: they
+    // are the same post drawn twice, which is exactly what this loop is for.)
+    function graft(post, url, build) {
+        const kind = post.isDm ? '.msg[data-dm]' : '.msg:not([data-dm])';
+        document.querySelectorAll(`${kind}[data-id="${post.id}"] .msg-previews`).forEach((c) => {
             if (c.querySelector(`[data-preview-url="${CSS.escape(url)}"]`)) return;
             const el = build();
             if (!el) return;
@@ -8368,7 +8383,7 @@
                 cachePut(youtubeCache, vid, 'pending');
                 L.youtube(vid).then((info) => {
                     cachePut(youtubeCache, vid, info || null);
-                    if (info) graft(post.id, url, () => youtubeCard(info));
+                    if (info) graft(post, url, () => youtubeCard(info));
                 }).catch(() => cachePut(youtubeCache, vid, null));
                 return;
             }
@@ -8397,7 +8412,7 @@
                 cachePut(previewCache, url, preview);
                 // Graft into the live node instead of re-rendering the list, so
                 // the reader's scroll position is never disturbed.
-                if (preview) graft(post.id, url, () => linkCard(preview));
+                if (preview) graft(post, url, () => linkCard(preview));
             }).catch(() => cachePut(previewCache, url, null));
         });
     }
@@ -8991,6 +9006,12 @@
     let dmOpen = null;                // { id, username } of the open conversation
     let dmMsgs = [];
     let dmTimer = null;
+    // Whether the profile column is showing, as a CHOICE rather than as
+    // whatever the last render happened to leave behind. renderDmProfile() runs
+    // on every DM poll, and it used to set `hidden` outright — so closing the
+    // column lasted until the next tick twelve seconds later and then reopened
+    // itself, with the toggle still claiming it was off.
+    let dmProfileOpen = true;
 
     // The open conversation is being read right now. The row already hides its
     // own badge; the rail and the taskbar badge read this total, so leaving it
@@ -9166,7 +9187,16 @@
         if (!panel) return;
         const others = (dmOpen && dmOpen.members || []).filter((m) => !account || m.id !== account.id);
         const u = (dmOpen && !dmOpen.isGroup) ? others[0] : null;
-        panel.hidden = !u;
+        // The button goes with the panel, which is what the comment above always
+        // claimed and nothing ever did: left up in a group it opened this aside
+        // still holding the LAST pair conversation's profile — someone else's
+        // name and face over a group chat.
+        const toggle = $('dm-prof-toggle');
+        if (toggle) {
+            toggle.hidden = !u;
+            toggle.setAttribute('aria-pressed', String(!!u && dmProfileOpen));
+        }
+        panel.hidden = !u || !dmProfileOpen;
         if (!u) return;
 
         // The banner takes its colour from the same hash the avatar does, so the
@@ -9321,9 +9351,12 @@
         }
         const sig = JSON.stringify(res.messages || []);
         if (!force && sig === loadDmMessages.lastSig) return;
-        loadDmMessages.lastSig = sig;
         dmMsgs = res.messages || [];
-        renderDmMessages();
+        // Only claim this payload as rendered if it actually rendered. Stamping
+        // the signature up front meant a renderDmMessages() that bailed for an
+        // open editor recorded messages it never painted, and the poll then
+        // skipped them for as long as nothing else changed.
+        if (renderDmMessages()) loadDmMessages.lastSig = sig;
     }
 
     // The drawer's "Loading…" placeholder never clears on its own, so a failed
@@ -9337,8 +9370,16 @@
         box.querySelector('.dm-retry').addEventListener('click', () => loadDmMessages(true));
     }
 
+    // Returns false when it declined to paint, so the caller knows not to treat
+    // the payload as displayed — exactly as renderThread() does.
     function renderDmMessages() {
         const box = $('dm-messages');
+        // The same courtesy the main list and the thread panel already extend:
+        // a background poll — or a message arriving over the socket — must not
+        // rip the inline editor out from under someone mid-sentence. This list
+        // was the one that didn't, so editing your own DM and having the other
+        // person reply threw away whatever you had typed.
+        if (editingId && box.querySelector('.msg-edit')) return false;
         // Measured before the rebuild: this drawer used to slam to the bottom on
         // every poll, so a DM arriving while you were reading back through the
         // conversation yanked you away from it. The main list and the thread
@@ -9354,7 +9395,7 @@
                 ? 'Pick a conversation on the left.'
                 : 'No conversations yet — start one with the + above.';
             box.appendChild(e);
-            return;
+            return true;
         }
 
         // No early return for an empty conversation any more: the start block
@@ -9450,7 +9491,7 @@
             e.className = 'dm-empty';
             e.textContent = 'Nothing matching “' + dmFilter + '” in the messages loaded here.';
             box.appendChild(e);
-            return;
+            return true;
         }
         shown.forEach((m) => {
             const day = dayStr(m.created_at);
@@ -9471,6 +9512,7 @@
         });
         // Follow the live edge only if that's where the reader already was.
         if (atBottom) box.scrollTop = box.scrollHeight;
+        return true;
     }
 
     // Sending a DM is a branch inside the real composer's submit handler now,
@@ -9671,11 +9713,11 @@
 
     // Show or hide the profile column. Only meaningful for a pair — a group has
     // no single profile, so the button goes with it.
-    $('dm-prof-toggle').addEventListener('click', (e) => {
-        const prof = $('dm-profile');
-        const show = prof.hidden;
-        prof.hidden = !show;
-        e.currentTarget.setAttribute('aria-pressed', String(show));
+    $('dm-prof-toggle').addEventListener('click', () => {
+        dmProfileOpen = !dmProfileOpen;
+        // Through the renderer, so the choice and what is on screen come from
+        // the one place — writing `hidden` here is what the poll then undid.
+        renderDmProfile();
     });
 
     // Filters the messages already loaded. It is not a server-side search —

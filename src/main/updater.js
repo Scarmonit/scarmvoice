@@ -310,6 +310,15 @@ function setBusy(inVoice) {
 function init(bridge) {
     if (bridge) send = bridge;
     state.auto = true;
+    // The Settings checkbox writes `autoUpdateOnLaunch`, and until now nothing
+    // ever read it back. Every launch started with postponed = false, so an
+    // update that became ready restarted the app out from under someone who had
+    // explicitly asked it not to — the one thing that switch is for. A stored
+    // `false` is a standing "not now": the update still downloads, still arms
+    // itself for quit, and simply never takes the app down on its own.
+    try {
+        if (store.get().autoUpdateOnLaunch === false) state.postponed = true;
+    } catch (e) { /* no profile yet — the default (auto) stands */ }
 }
 
 // Called shortly after the window is ready.
@@ -362,8 +371,13 @@ function installNow() {
 // switch that leaves someone on a build with a bug we have already fixed.
 function setAuto(on) {
     state.auto = true;
-    if (!on && state.status === 'ready') return postpone();
-    if (on) { emit({ postponed: false }); scheduleAutoRestart(); }
+    // Turning it off has to hold back the NEXT update too, not only one that
+    // happens to be ready this second. Gated on `ready`, switching it off and
+    // then receiving an update restarted the app anyway — which is the same
+    // hole init() closes across launches, one session wide.
+    if (!on) return postpone();
+    emit({ postponed: false });
+    scheduleAutoRestart();
     return { ok: true };
 }
 

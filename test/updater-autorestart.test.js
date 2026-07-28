@@ -6,19 +6,28 @@
 // restart mid-conversation drops you out of it — a worse interruption than any
 // update is worth.
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { electronState as env } from './helpers/electron-state.js';
 import { loadMain, resetMainModules } from './helpers/load.js';
 
-let updater, sent;
+let updater, sent, root;
 
 beforeEach(() => {
     vi.useFakeTimers();
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'scarmvoice-update-'));
+    env.userDataDir = path.join(root, 'Roaming', 'ScarmVoice');
     resetMainModules();
     updater = loadMain('updater.js');
     sent = [];
     updater.init((channel, state) => sent.push({ channel, state: { ...state } }));
 });
 
-afterEach(() => { vi.useRealTimers(); });
+afterEach(() => {
+    vi.useRealTimers();
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch (e) { /* windows lock */ }
+});
 
 const last = () => (sent.length ? sent[sent.length - 1].state : null);
 
@@ -68,5 +77,39 @@ describe('auto-restart', () => {
         expect(updater.getState().postponed).toBe(true);
         updater.setAuto(true);
         expect(updater.getState().postponed).toBe(false);
+    });
+
+    it('setAuto(false) holds back an update that is not ready yet either', () => {
+        // It used to only postpone when something was ALREADY downloaded, so
+        // turning the switch off and then receiving an update restarted the app
+        // regardless — which is the whole of what the switch promises not to do.
+        expect(updater.getState().status).toBe('idle');
+        updater.setAuto(false);
+        expect(updater.getState().postponed).toBe(true);
+    });
+});
+
+// The checkbox is persisted. Nothing read it back, so it only ever held for the
+// session it was clicked in — the next launch restarted the app on its own.
+describe('the stored preference', () => {
+    // A profile written by someone who turned the restart off.
+    function seed(value) {
+        fs.mkdirSync(env.userDataDir, { recursive: true });
+        fs.writeFileSync(path.join(env.userDataDir, 'settings.json'),
+            JSON.stringify({ autoUpdateOnLaunch: value, autoRestartMigrated: true }));
+        resetMainModules();
+        loadMain('store.js').init();          // same registry as updater's require
+        updater = loadMain('updater.js');
+        sent = [];
+        updater.init((channel, state) => sent.push({ channel, state: { ...state } }));
+        return updater.getState();
+    }
+
+    it('carries a stored "off" across the launch', () => {
+        expect(seed(false).postponed).toBe(true);
+    });
+
+    it('leaves the default alone', () => {
+        expect(seed(true).postponed).toBe(false);
     });
 });
