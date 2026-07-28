@@ -57,10 +57,14 @@
         // ---- microphone family -----------------------------------------
         // Plain mic = the mute toggle. Mic + solid dot = "record a voice
         // message", which is the one thing a bare mic could be confused with.
-        mic: '<rect x="9" y="2.6" width="6" height="11.4" rx="3"/>' +
-            '<path d="M5.5 11.4a6.5 6.5 0 0 0 13 0"/><path d="M12 17.9v3.5"/>',
-        'mic-off': '<rect x="9" y="2.6" width="6" height="11.4" rx="3"/>' +
-            '<path d="M5.5 11.4a6.5 6.5 0 0 0 13 0"/><path d="M12 17.9v3.5"/>' +
+        // Shorter and wider than it was, so its ink lands in the same square
+        // the headset's does. Drawn tall and narrow, the two sat side by side in
+        // the user panel looking like different sizes — the headset measured 17%
+        // larger — even though their boxes matched.
+        mic: '<rect x="9.4" y="4" width="5.2" height="9.6" rx="2.6"/>' +
+            '<path d="M4 11a8 8 0 0 0 16 0"/><path d="M12 19v1.8"/>',
+        'mic-off': '<rect x="9.4" y="4" width="5.2" height="9.6" rx="2.6"/>' +
+            '<path d="M4 11a8 8 0 0 0 16 0"/><path d="M12 19v1.8"/>' +
             // Drawn twice: a thick stroke in the surface colour first, then the
             // line itself. The gap that leaves is what stops the slash reading
             // as part of the mic at 22px — see .ico-cut in styles.css.

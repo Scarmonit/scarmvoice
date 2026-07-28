@@ -3191,6 +3191,9 @@
                 $('btn-cam-label').textContent = st.cam ? 'Turn off camera' : 'Turn on camera';
 
                 $('btn-soundboard').hidden = !st.joined;
+                // The user panel's second line reports the call, so it has to
+                // follow joining and leaving.
+                renderMe();
                 // Leaving the call with the tray open would strand it above an
                 // empty voice panel with nothing it can do.
                 if (!st.joined) closeSoundboard();
@@ -4870,8 +4873,15 @@
         // The second line is never empty: your custom status if you wrote one,
         // and what you are otherwise. A blank line under the name is what made
         // this look like a label rather than an account.
+        //
+        // In a call it says so instead. "Online" is true of everyone reading
+        // this and tells you nothing; being in voice is the fact worth the line,
+        // and it is the one the reference puts there.
         const st = $('me-status');
-        st.textContent = settings.status || label;
+        const voiceNow = !!(voice && voice.isJoined && voice.isJoined());
+        const text = voiceNow ? 'In voice' : (settings.status || label);
+        $('me-status-text').textContent = text;
+        st.querySelector('.ms-voice').toggleAttribute('hidden', !voiceNow);
         st.title = settings.status ? `${label} — ${settings.status}` : label;
         st.hidden = false;
         const dot = $('me-presence');

@@ -89,6 +89,13 @@ store.migrateLegacyProfile();
 // stop web pages autoplaying at you; in a desktop chat client it just means the
 // first join/message chime is silently dropped. Must be set before app ready.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Grayscale antialiasing instead of subpixel (ClearType). The CSS property for
+// this — -webkit-font-smoothing — is a no-op on Windows in Chromium, which is
+// why setting it on <body> changed nothing: the switch is the only lever here.
+// Subpixel rendering fringes every glyph edge with colour (measured: a channel
+// spread of 86 across the user panel's own name, against 1 in the reference),
+// which on a dark theme reads as a faint rainbow along the type.
+app.commandLine.appendSwitch('disable-lcd-text');
 
 // Must be registered before the app is ready.
 protocol.registerSchemesAsPrivileged([{

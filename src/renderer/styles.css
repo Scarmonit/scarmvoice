@@ -48,6 +48,11 @@
      the user panel's glyphs at .67, and placeholder text at .42 — ours was
      .75 and .55, which made the icons hot and the placeholder loud. */
   --panel-icon: #abacb2;
+  /* The user panel's own type ramp. Both lines were brighter than the
+     reference — the name by 24 points and the status by 19 — which is what made
+     the panel shout next to a channel list that whispers. */
+  --panel-name: #d2d2d6;
+  --panel-sub:  #9c9ca2;
   --placeholder: #62626a;
   --field: var(--rail);        /* text inputs + selects */
   --field-line: transparent;
@@ -81,6 +86,13 @@
      the ramp got. This is the colour muted and deafened are drawn in. */
   --danger:      #f23f43;
   --danger-hi:   #ff7d80;
+  /* Muted and deafened are drawn in this, not in --danger: they sit ON a red
+     plate, and a full-strength alert red on a red ground vibrates. */
+  --danger-lo:   #b83539;
+  /* That plate. A lift of the red channel only — the reference's is +16 red
+     with green and blue untouched, which is what keeps it reading as a tint of
+     the surface rather than as a second colour. */
+  --danger-plate: rgba(242, 63, 67, .08);
   --danger-soft: rgba(242, 63, 67, .13);
   --danger-line: rgba(242, 63, 67, .38);
 
@@ -606,8 +618,10 @@ button { font-family: inherit; }
   gap: 10px;
   /* No fill and no sheen of its own: the dock is the card, and a gradient over
      half of it made the seam between the two sections visible as a shade
-     change rather than as the hairline it should be. */
-  padding: 7px; background: none;
+     change rather than as the hairline it should be.
+     More on the right than the left: the cog was 13px from the card edge where
+     the reference leaves it 19. */
+  padding: 7px 13px 7px 7px; background: none;
 }
 /* Only the bottom row shows through, and only in the card's margin — every
    other grid cell paints its own surface over this. */
@@ -667,7 +681,7 @@ button { font-family: inherit; }
 }
 .me-text { min-width: 0; display: flex; flex-direction: column; }
 .me-name {
-  font-size: 15px; font-weight: 600; color: var(--text);
+  font-size: 16px; font-weight: 600; color: var(--panel-name);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   /* Display only — the stored name is untouched. Usernames in the reference
      are lower-case by rule and render that way. */
@@ -676,25 +690,25 @@ button { font-family: inherit; }
 .me-status {
   display: block; max-width: 150px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  /* --muted, not --dim: as a fraction of the name above it this line was at
-     .55 where the reference sits at .75, which read as switched off. */
-  font-size: 12px; color: var(--muted); font-weight: 500;
+  /* Between --dim and --muted: at --dim it read as switched off, at --muted it
+     was 19 points brighter than the reference. */
+  font-size: 12px; color: var(--panel-sub); font-weight: 500;
+  display: flex; align-items: center; gap: 5px;
 }
+/* Green, because it means the same thing the voice panel's green means. */
+#me-bar .ms-voice { width: 12px; height: 12px; flex: 0 0 12px; color: var(--voice-ok); }
 .me-status[hidden] { display: none; }
-/* The same distance #me-bar uses, so mic-group / headset-group / cog are all
-   separated by one gap and only the caret sits closer than that. */
-/* Measured glyph-edge to glyph-edge, this puts ~18px between the groups
-   against ~12-15px inside them — which is the whole point: a caret has to
-   read as belonging to the control BEFORE it. */
-.me-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* Nine between the groups against two inside them, which is the reference's
+   split: a caret has to read as belonging to the control BEFORE it. */
+.me-actions { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; }
 
 /* A toggle and its caret read as ONE control: the caret is deliberately narrow
    and sits tight against the icon, so the pair still scans as a single mic or
    headset button rather than two unrelated squares. */
-.me-ctl { display: flex; align-items: center; }
-.me-ctl .me-ctl-main { width: 30px; border-radius: 5px 2px 2px 5px; }
+.me-ctl { display: flex; align-items: center; gap: 2px; }
+.me-ctl .me-ctl-main { width: 32px; border-radius: 5px 2px 2px 5px; }
 .me-ctl .me-ctl-caret {
-  width: 20px; border-radius: 2px 5px 5px 2px;
+  width: 16px; border-radius: 2px 5px 5px 2px;
   color: var(--panel-icon);
 }
 .me-ctl:hover .me-ctl-caret { color: var(--text); }
@@ -716,16 +730,16 @@ button { font-family: inherit; }
 .icon-btn.on { color: var(--accent); }
 .icon-btn[aria-pressed="true"].on { background: var(--hover); }
 /* Mute / deafen read as "off" states, so they go red rather than accent. */
-/* Muted and deafened are the two states you have to be able to see at a
-   glance from across the room, so they get the one colour nothing else in the
-   panel uses, on top of the slashed glyph. The caret goes with them: the pair
-   is one control, and a red mic beside a grey caret reads as half-broken. */
-#me-bar #btn-mute[aria-pressed="true"],
-#me-bar #btn-deafen[aria-pressed="true"],
-#me-bar .me-ctl:has(.me-ctl-main[aria-pressed="true"]) .me-ctl-caret { color: var(--danger); }
-#me-bar #btn-mute[aria-pressed="true"]:hover,
-#me-bar #btn-deafen[aria-pressed="true"]:hover,
-#me-bar .me-ctl:has(.me-ctl-main[aria-pressed="true"]) .me-ctl-caret:hover {
+/* Muted and deafened are the two states you have to be able to see at a glance
+   from across the room. A red glyph alone reads as "that icon happens to be
+   red"; a red PLATE under it reads as a control that is switched on, which is
+   what it is. Both halves of the pair get one — they are a single control — and
+   the cog deliberately does not, so the plates mark the toggled states and
+   nothing else. */
+#me-bar .me-ctl:has(.me-ctl-main[aria-pressed="true"]) .icon-btn {
+  background: var(--danger-plate); color: var(--danger-lo);
+}
+#me-bar .me-ctl:has(.me-ctl-main[aria-pressed="true"]) .icon-btn:hover {
   background: var(--danger-soft); color: var(--danger-hi);
 }
 /* The backing stroke behind a slash, in the surface the glyph sits on. It is
@@ -2651,6 +2665,9 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    three — so one box size for all of them is what left the headset looking two
    points small beside the mic and the cog. */
 #me-bar .icon-btn .ico { width: 22px; height: 22px; }
+/* The mic and the headset fill different fractions of their own 24-unit box,
+   so matching boxes give mismatched glyphs. These two land on the same ink. */
+#me-bar #btn-mute .ico { width: 27px; height: 27px; }
 #me-bar #btn-deafen .ico { width: 27px; height: 27px; }
 /* Small enough to sit INSIDE its 20px button. Anything wider overflows, and the
    overflow is not split evenly, so the mark drifts toward its neighbour. */

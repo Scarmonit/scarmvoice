@@ -98,12 +98,13 @@ describe('the user panel', () => {
     });
 
     it('separates the two control groups by more than it separates a caret', () => {
-        // A caret has to read as belonging to the control BEFORE it. .me-ctl has
-        // no gap of its own, so this is the only distance between the groups —
-        // if it ever drops to nothing the grouping inverts.
-        const gap = /\.me-actions \{[^}]*gap:\s*(\d+)px/.exec(css);
-        expect(Number(gap[1])).toBeGreaterThanOrEqual(5);
-        expect(/\.me-ctl \{[^}]*gap/.test(css)).toBe(false);
+        // A caret has to read as belonging to the control BEFORE it, so the gap
+        // inside a pair has to stay clearly smaller than the gap between them.
+        // Let these two converge and the grouping inverts.
+        const between = Number(/\.me-actions \{[^}]*gap:\s*(\d+)px/.exec(css)[1]);
+        const within = Number(/\.me-ctl \{[^}]*gap:\s*(\d+)px/.exec(css)[1]);
+        expect(within).toBeLessThan(between);
+        expect(between - within).toBeGreaterThanOrEqual(5);
     });
 
     it('sizes the presence dot as a 10px core inside a 3px cutout', () => {
@@ -116,7 +117,12 @@ describe('the user panel', () => {
 
     it('draws its glyphs dimmer than its text, and the status line brighter than a hint', () => {
         expect(/#me-bar \.icon-btn \{[^}]*color:\s*var\(--panel-icon\)/.test(css)).toBe(true);
-        expect(/\.me-status \{[^}]*color:\s*var\(--muted\)/.test(css)).toBe(true);
+        expect(/\.me-status \{[^}]*color:\s*var\(--panel-sub\)/.test(css)).toBe(true);
+        expect(/\.me-name \{[^}]*color:\s*var\(--panel-name\)/.test(css)).toBe(true);
+        // The panel's three tones, brightest to dimmest, all below --text.
+        expect(lum(hex('panel-name', dark))).toBeLessThan(lum(hex('text', dark)));
+        expect(lum(hex('panel-icon', dark))).toBeLessThan(lum(hex('panel-name', dark)));
+        expect(lum(hex('panel-sub', dark))).toBeLessThan(lum(hex('panel-icon', dark)));
         expect(/#composer-input::placeholder \{ color: var\(--placeholder\); \}/.test(css)).toBe(true);
     });
 });
@@ -328,5 +334,64 @@ describe('the user dock', () => {
         const icons = fs.readFileSync(path.join(RENDERER, 'icons.js'), 'utf8');
         const g = icons.slice(icons.indexOf("'phone-hangup':"));
         expect(g.slice(0, g.indexOf("',\n"))).not.toMatch(/M3\.6 20\.4/);
+    });
+});
+
+describe('the muted and deafened controls', () => {
+    it('put a plate under both halves of the pair, and none under the cog', () => {
+        // A red glyph alone reads as "that icon happens to be red". A plate
+        // under it reads as a control switched on — and the cog staying plain is
+        // what makes the plates mean "toggled" rather than "these are buttons".
+        const on = /#me-bar \.me-ctl:has\(\.me-ctl-main\[aria-pressed="true"\]\) \.icon-btn \{[^}]*\}/.exec(css)[0];
+        expect(on).toMatch(/background:\s*var\(--danger-plate\)/);
+        expect(on).toMatch(/color:\s*var\(--danger-lo\)/);
+        // Scoped to .me-ctl, which the cog is not inside.
+        expect(css).not.toMatch(/#btn-settings[^{]*\{[^}]*--danger-plate/);
+    });
+
+    it('draws them in a red that can sit on that plate', () => {
+        // A full-strength alert red on a red ground vibrates.
+        expect(lum(hex('danger-lo', dark))).toBeLessThan(lum(hex('danger', dark)));
+        // The plate is a lift of the red channel, not a second colour.
+        const plate = /--danger-plate:\s*rgba\((\d+), (\d+), (\d+), \.(\d+)\)/.exec(css);
+        expect(Number('0.' + plate[4])).toBeLessThanOrEqual(0.1);
+    });
+
+    it('gives the mic and the headset the same ink to fill', () => {
+        // Drawn tall and narrow, the mic measured 17% smaller than the headset
+        // beside it even though their boxes matched. Same box AND same glyph
+        // proportions is what makes the pair look like a pair.
+        const w = (id) => {
+            const at = css.indexOf('#me-bar #' + id + ' .ico {');
+            return Number(/width:\s*(\d+)px/.exec(css.slice(at, css.indexOf('}', at)))[1]);
+        };
+        expect(w('btn-mute')).toBe(w('btn-deafen'));
+        const icons = fs.readFileSync(path.join(RENDERER, 'icons.js'), 'utf8');
+        // The stand arc spans the same 16 units the headset's band does.
+        expect(icons).toMatch(/mic: '<rect[^']*'\s*\+\s*\n\s*'<path d="M4 11a8 8 0 0 0 16 0"/);
+    });
+});
+
+describe('text rendering', () => {
+    it('is switched to grayscale antialiasing at the process level', () => {
+        // -webkit-font-smoothing is a no-op on Windows in Chromium, so the CSS
+        // that has always been on <body> never did anything: subpixel rendering
+        // fringed every glyph edge with colour. The switch is the only lever.
+        const main = fs.readFileSync(path.join(RENDERER, '..', 'main', 'main.js'), 'utf8');
+        expect(main).toMatch(/appendSwitch\('disable-lcd-text'\)/);
+    });
+});
+
+describe('the status line', () => {
+    it('reports the call when you are in one', () => {
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        // "Online" is true of everyone reading it. Being in voice is the fact
+        // worth the line.
+        expect(src).toMatch(/const text = voiceNow \? 'In voice'/);
+        expect(src).toMatch(/\.ms-voice'\)\.toggleAttribute\('hidden', !voiceNow\)/);
+        // And it has to follow joining and leaving, not only settings changes.
+        const st = src.slice(src.indexOf("$('btn-soundboard').hidden = !st.joined;"));
+        expect(st.slice(0, 260)).toMatch(/renderMe\(\);/);
+        expect(/#me-bar \.ms-voice \{[^}]*color:\s*var\(--voice-ok\)/.test(css)).toBe(true);
     });
 });

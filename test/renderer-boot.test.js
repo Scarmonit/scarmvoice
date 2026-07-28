@@ -367,7 +367,7 @@ describe('the account panel', () => {
         expect(patch.dnd).toBe(false);
         // And the me-bar's second line is never blank — it shows the mode when
         // there is no custom status.
-        expect($('me-status').textContent).toBe('Idle');
+        expect($('me-status-text').textContent).toBe('Idle');
         expect($('me-status').hidden).toBe(false);
         expect(errors).toEqual([]);
     });
@@ -383,7 +383,7 @@ describe('the account panel', () => {
         const patch = window.lounge.settings.set.mock.calls[0][0];
         expect(patch.presence).toBe('dnd');
         expect(patch.dnd).toBe(true);
-        expect($('me-status').textContent).toBe('Do Not Disturb');
+        expect($('me-status-text').textContent).toBe('Do Not Disturb');
     });
 
     it('stops publishing presence entirely while invisible', async () => {

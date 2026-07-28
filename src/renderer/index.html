@@ -205,7 +205,12 @@
       </span>
       <span class="me-text">
         <span class="me-name" id="me-name-text">Anonymous</span>
-        <span id="me-status" class="me-status">Online</span>
+        <span id="me-status" class="me-status">
+          <!-- Only while connected: in a call the useful thing to say is that
+               you are in one, not that you are online. -->
+          <span class="ico ms-voice" data-icon="speaker" hidden></span>
+          <span id="me-status-text">Online</span>
+        </span>
       </span>
     </button>
     <div class="me-actions">
