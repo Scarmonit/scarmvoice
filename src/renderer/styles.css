@@ -433,6 +433,18 @@ button { font-family: inherit; }
 .rail-server:hover::before { transform: translateY(-50%) scaleY(1); height: 22px; }
 .rail-server.active::before { transform: translateY(-50%) scaleY(1); height: 32px; }
 .rail-server.active { border-radius: 14px; }
+/* The DM button is the OTHER place you can be, so it needs the same marker —
+   without it the server mark read as selected even while you were reading
+   direct messages, which is half of why there was no obvious way back. */
+.rail-btn::before {
+  content: ""; position: absolute; left: -12px; top: 50%;
+  width: 5px; height: 10px; border-radius: 0 5px 5px 0;
+  background: var(--text-strong); transform: translateY(-50%) scaleY(0);
+  transition: transform .16s ease, height .16s ease;
+}
+.rail-btn:hover::before { transform: translateY(-50%) scaleY(1); height: 22px; }
+.rail-btn.active::before { transform: translateY(-50%) scaleY(1); height: 32px; }
+.rail-btn.active { border-radius: 14px; background: var(--elev); color: var(--text); }
 .rail-badge {
   position: absolute; right: -3px; bottom: -3px;
   min-width: 20px; height: 20px; padding: 0 5px;

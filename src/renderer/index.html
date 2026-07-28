@@ -75,12 +75,18 @@
     <!-- Direct messages first, above the separator, the way the reference puts
          its home button: DMs are not one of the servers, they are the other
          place you can be. -->
-    <button type="button" class="rail-btn rail-dms" id="rail-dms" title="Direct Messages">
+    <!-- data-tip, not title: the app has its own tooltip (see showTip) and it
+         appears at once, where the OS bubble waits a second and ignores the
+         theme. aria-label because the button is a glyph with no text — the
+         `title` it used to carry was doing that job by accident. -->
+    <button type="button" class="rail-btn rail-dms" id="rail-dms"
+            data-tip="Direct Messages" aria-label="Direct Messages">
       <span class="ico" data-icon="at"></span>
       <span class="rail-badge" id="rail-dm-badge" hidden></span>
     </button>
     <div class="rail-sep"></div>
-    <button type="button" class="rail-server active" id="rail-home" title="ScarmVoice">
+    <button type="button" class="rail-server active" id="rail-home"
+            data-tip="ScarmVoice" aria-label="ScarmVoice">
       <img src="logo.png" alt="" aria-hidden="true">
       <span class="rail-badge" id="rail-badge" hidden></span>
     </button>

@@ -153,6 +153,9 @@ beforeAll(async () => {
     window.matchMedia = window.matchMedia ||
         (() => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
     Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || noop;
+    // jsdom implements neither, and jumpToLatest() uses scrollTo — without
+    // this the rail tests pass while throwing into vitest's unhandled trap.
+    Element.prototype.scrollTo = Element.prototype.scrollTo || noop;
     window.CSS = window.CSS ||
         { escape: (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\' + c) };
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 }));
@@ -253,6 +256,45 @@ describe('the typing line', () => {
         await settle(2);
         expect($('typing-line').textContent).toBe('');
         typingRows = [];
+    });
+});
+
+describe('the rail', () => {
+    const inDmPlace = () => !$('dm-sidebar').hidden && $('sidebar').hidden;
+
+    it('goes to direct messages and back again from the server mark', async () => {
+        $('rail-dms').click();
+        await settle();
+        expect(inDmPlace()).toBe(true);
+
+        // The way BACK. This used to jump a message list that was not on
+        // screen and leave you exactly where you were, so the only exit was
+        // pressing @ a second time — a toggle pretending to be navigation.
+        $('rail-home').click();
+        await settle();
+        expect(inDmPlace()).toBe(false);
+    });
+
+    it('marks which of the two places you are in', async () => {
+        $('rail-dms').click();
+        await settle();
+        expect($('rail-dms').classList.contains('active')).toBe(true);
+        expect($('rail-home').classList.contains('active')).toBe(false);
+
+        $('rail-home').click();
+        await settle();
+        expect($('rail-home').classList.contains('active')).toBe(true);
+        expect($('rail-dms').classList.contains('active')).toBe(false);
+    });
+
+    it('names both marks on hover', () => {
+        // data-tip, not title: the app draws its own tooltip at once, where the
+        // OS bubble waits a second and ignores the theme.
+        expect($('rail-dms').getAttribute('data-tip')).toBe('Direct Messages');
+        expect($('rail-home').getAttribute('data-tip')).toBe('ScarmVoice');
+        // And a name for anything that cannot see the glyph.
+        expect($('rail-dms').getAttribute('aria-label')).toBe('Direct Messages');
+        expect($('rail-home').getAttribute('aria-label')).toBe('ScarmVoice');
     });
 });
 

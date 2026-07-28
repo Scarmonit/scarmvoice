@@ -1224,7 +1224,53 @@ app.whenReady().then(() => {
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(true); });
 });
 
-app.on('before-quit', () => { quitting = true; });
+// Retire the voice-presence row before the process goes away.
+//
+// The row lives for twelve seconds past its last heartbeat, so quitting mid-call
+// leaves the whole room — and this machine, on its next launch — believing you
+// are still in it for that long. An UPDATE is the case that matters: it restarts
+// the app out from under you, and the new process came back up, polled, and drew
+// you into a call you had just been restarted out of.
+//
+// The renderer already asks on 'beforeunload', but that is a page being torn
+// down: the IPC hop and the request behind it are not guaranteed to outlive it,
+// and on an update-restart they reliably do not. Main outlives the renderer, so
+// this is the one place that can both know the answer and still be running to
+// send it.
+let voiceRetired = false;
+
+async function retireVoicePresence() {
+    if (voiceRetired) return;
+    voiceRetired = true;
+    const s = store.get();
+    try {
+        // Bounded: a dead network must not hold the app open, and a quit that
+        // hangs is a worse bug than the one this fixes. The row expires on its
+        // own if this never lands.
+        await Promise.race([
+            net.board('voice/presence', {
+                method: 'POST',
+                body: {
+                    clientId: s.clientId,
+                    name: s.displayName || 'Anonymous',
+                    muted: !!voiceState.muted,
+                    leaving: true
+                }
+            }),
+            new Promise((resolve) => setTimeout(resolve, 1500))
+        ]);
+    } catch (e) { /* going away regardless */ }
+    voiceState.inVoice = false;
+}
+
+app.on('before-quit', (e) => {
+    quitting = true;
+    if (voiceRetired || !voiceState.inVoice) return;
+    // Deferred, not blocked: quit again once the row is gone. The second pass
+    // returns above, so this can only ever happen once.
+    e.preventDefault();
+    retireVoicePresence().then(() => app.quit(), () => app.quit());
+});
 // store.flush() matters here: settings saves are debounced, so the last change
 // before quitting (window geometry, a slider you just released) is still
 // pending in a timer that quitting would otherwise discard.

@@ -4011,10 +4011,27 @@
         const live = inCall ? voice.roster() : [];
         const byId = new Map();
 
+        // A voice-presence row for THIS INSTALL, while this install is not in a
+        // call, is a leftover. The server keeps a row for twelve seconds past
+        // the last heartbeat, and quitting mid-call leaves one behind — which is
+        // exactly what an update does, because it restarts the app out from
+        // under whatever you were doing. The new process then came up, polled,
+        // found its own stale row and drew ITSELF as sitting in a voice call it
+        // had just been restarted out of, until the row aged out.
+        //
+        // Keyed on the INSTALL id, never the account: this process knows
+        // perfectly well whether it is in a call, and knows nothing about the
+        // phone in your pocket — which may legitimately be in one, and must
+        // still show.
+        const joining = !!(voice && voice.isJoining && voice.isJoining());
+        const presence = (inCall || joining)
+            ? voicePresence
+            : voicePresence.filter((p) => p.client_id !== settings.clientId);
+
         // Install id -> account id. The SFU only knows installs, so this is how
         // a person signed in on two devices stays one row.
         const uidByCid = new Map();
-        voicePresence.forEach((p) => { if (p.user_id) uidByCid.set(p.client_id, p.user_id); });
+        presence.forEach((p) => { if (p.user_id) uidByCid.set(p.client_id, p.user_id); });
         members.forEach((m) => { if (m.client_id && m.user_id) uidByCid.set(m.client_id, m.user_id); });
 
         // …and account id by NAME, as the fallback for a participant whose
@@ -4040,14 +4057,14 @@
             const n = String(name || '').trim().toLowerCase();
             if (n && n !== 'anonymous' && uid && !uidByName.has(n)) uidByName.set(n, uid);
         };
-        voicePresence.forEach((p) => noteName(p.name, p.user_id));
+        presence.forEach((p) => noteName(p.name, p.user_id));
         members.forEach((m) => noteName(m.name, m.user_id));
 
         const uidFor = (p) => uidByCid.get(p.id) ||
             uidByName.get(String(p.name || '').trim().toLowerCase()) || null;
 
         live.forEach((p) => byId.set(p.id, Object.assign({}, p, { uid: uidFor(p) })));
-        voicePresence.forEach((p) => {
+        presence.forEach((p) => {
             if (!byId.has(p.client_id)) {
                 byId.set(p.client_id, {
                     id: p.client_id,
@@ -6172,7 +6189,18 @@
     });
 
     // The rail's server mark: back to the live end of the conversation.
-    $('rail-home').addEventListener('click', () => { jumpToLatest(); input.focus(); });
+    // The rail's server mark is the way BACK, not only a scroll-to-bottom.
+    //
+    // Direct messages are a place: the DM button swaps the whole second column
+    // for them. This button is the other place, and it did nothing about that —
+    // it jumped a message list that was not even on screen. So the only way out
+    // of DMs was to press the @ again, which is a toggle pretending to be
+    // navigation: the button you are already on is not where you look to leave.
+    $('rail-home').addEventListener('click', () => {
+        if (dmMode) setDmMode(false);
+        jumpToLatest();
+        input.focus();
+    });
     // The rail no longer carries a settings button. There were two gears within
     // an inch of each other at the bottom-left — the rail's and the user
     // panel's — doing the same thing. The user panel's is the one Discord has
@@ -9584,6 +9612,10 @@
         const list = $('dm-list');
         if (list) (on ? $('dm-list-slot') : $('dm-section')).appendChild(list);
         $('dm-panel').hidden = !on;
+        // Which of the two places you are in. The server mark was hard-coded
+        // active, so it claimed to be selected while you were reading DMs.
+        $('rail-home').classList.toggle('active', !on);
+        $('rail-dms').classList.toggle('active', on);
         if (!on && dmOpen) closeDm();
         if (on) { renderDmSection(); renderDmHead(); }
         else moveComposer(false);

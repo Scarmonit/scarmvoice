@@ -155,6 +155,9 @@ beforeAll(async () => {
     window.matchMedia = window.matchMedia ||
         (() => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
     Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || noop;
+    // jsdom implements neither, and jumpToLatest() uses scrollTo — without
+    // this the rail tests pass while throwing into vitest's unhandled trap.
+    Element.prototype.scrollTo = Element.prototype.scrollTo || noop;
     window.CSS = window.CSS ||
         { escape: (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\' + c) };
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 }));

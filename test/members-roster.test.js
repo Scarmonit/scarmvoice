@@ -22,9 +22,14 @@ const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const noop = () => {};
 const unsub = () => noop;
 
-// Two people, both in the call. Text presence knows their accounts; the voice
+// Two people in the voice list. Text presence knows their accounts; the voice
 // rows deliberately DO NOT carry user_id — the old server shape, and the exact
 // payload that used to double the list.
+//
+// Note the fake engine below reports isJoined() === false, so THIS install is
+// not in a call. Its own row in the list is therefore a leftover — the server
+// holds one for twelve seconds past the last heartbeat — and must not be drawn.
+// See the "in voice" test at the bottom.
 const MEMBERS = [
     { client_id: 'me', user_id: 1, name: 'Me', status: 'away', custom: '' },
     { client_id: 'other', user_id: 2, name: 'Alice', status: 'online', custom: '' }
@@ -151,13 +156,24 @@ describe('members sidebar', () => {
         expect(me.classList.contains('away')).toBe(true);
     });
 
-    it('still marks them as in voice despite the missing account id', () => {
-        // Same root cause: the key mismatch also made the roster lose the
-        // "in voice" state on the real member row. It is the second line now,
-        // not an icon at the far edge.
-        expect(rows().every((li) => !!li.querySelector('.vp-sub.in-voice'))).toBe(true);
-        expect(rows().map((li) => li.querySelector('.vp-sub').textContent.trim()))
-            .toEqual(['In voice', 'In voice']);
+    it('still marks a peer as in voice despite the missing account id', () => {
+        // Same root cause as above: the key mismatch also made the roster lose
+        // the "in voice" state on the real member row. It is the second line
+        // now, not an icon at the far edge.
+        const alice = rows().find((li) => li.dataset.cid === 'other');
+        expect(alice.querySelector('.vp-sub.in-voice')).toBeTruthy();
+        expect(alice.querySelector('.vp-sub').textContent.trim()).toBe('In voice');
+    });
+
+    it('does not draw ITSELF into a call it is not in', () => {
+        // isJoined() is false here, so the row for our own install id is a
+        // twelve-second leftover — which is what an app restarted mid-call by
+        // an update comes back up and finds. It used to believe it, and showed
+        // the user sitting in a call they had just been restarted out of.
+        // Nobody else can tell this process about its own microphone.
+        const me = rows().find((li) => li.dataset.cid === 'me');
+        expect(me.querySelector('.vp-sub.in-voice')).toBeNull();
+        expect(me.querySelector('.vp-sub').textContent.trim()).toBe('Away');
     });
 
     it('does not duplicate when a resync re-delivers uid-less voice rows', async () => {
