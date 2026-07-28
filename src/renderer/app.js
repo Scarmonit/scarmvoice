@@ -733,7 +733,6 @@
         // tray never fires one at all — see the note on `windowFocused`.
         try { windowFocused = !!(await L.win.isFocused()); } catch (e) { /* keep false */ }
         settings = await L.settings.get();
-        $('login-base').value = settings.baseUrl || '';
         $('set-version').textContent = 'ScarmVoice v' + (await L.app.version());
 
         const st = await L.auth.status();
@@ -807,8 +806,6 @@
         $('login-pw').hidden = true;
         $('login-pw-hint').hidden = true;
         $('login-btn').hidden = true;
-        $('login-advanced').hidden = true;
-        $('login-advanced-box').hidden = true;
         $('login-acct').hidden = which !== 'signin';
         $('login-create').hidden = which !== 'create';
         $('login-verify').hidden = which !== 'verify';
@@ -833,7 +830,6 @@
         $('login-pw').hidden = false;
         $('login-pw-hint').hidden = false;
         $('login-btn').hidden = false;
-        $('login-advanced').hidden = false;
         $('login-acct').hidden = true;
         $('login-create').hidden = true;
         $('login-verify').hidden = true;
@@ -1029,22 +1025,14 @@
         });
     });
 
-    $('login-advanced').addEventListener('click', () => {
-        const box = $('login-advanced-box');
-        box.hidden = !box.hidden;
-    });
-
     $('login-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const btn = $('login-btn');
         const err = $('login-error');
-        const base = $('login-base').value.trim();
 
         err.textContent = '';
         btn.disabled = true;
         btn.textContent = 'Connecting…';
-
-        if (base && base !== settings.baseUrl) await saveSettings({ baseUrl: base.replace(/\/+$/, '') });
 
         const res = await L.auth.login($('login-pw').value);
         btn.disabled = false;
@@ -6267,7 +6255,6 @@
         $('acct-members').hidden = !isAdmin();
         if (isAdmin()) renderMemberAdmin();
         $('set-name').value = settings.displayName || '';
-        $('set-base').value = settings.baseUrl || '';
         $('set-mode').value = settings.voiceMode || 'open';
         $('set-ec').checked = settings.echoCancellation !== false;
         $('set-ns').checked = settings.noiseSuppression !== false;
@@ -6372,9 +6359,10 @@
     }
 
     // ---- profile picture ----
-    // 512 KB, matching the server. Checked here too so an obviously-too-big
-    // photo is refused instantly rather than after a base64 round trip.
-    const AVATAR_MAX_BYTES = 512 * 1024;
+    // 5 MB, matching the server. Checked here too so an obviously-too-big photo
+    // is refused instantly rather than after a base64 round trip — which at this
+    // size is now worth several seconds of encoding and upload.
+    const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
     function avatarHint(msg, isErr) {
         const el = $('avatar-hint');
@@ -6408,7 +6396,7 @@
         e.target.value = '';                       // allow re-picking the same file
         if (!file) return;
         if (file.size > AVATAR_MAX_BYTES) {
-            return avatarHint(`That image is ${fmtSize(file.size)} — 512 KB is the limit.`, true);
+            return avatarHint(`That image is ${fmtSize(file.size)} — 5 MB is the limit.`, true);
         }
         avatarHint('Uploading…');
         $('btn-avatar-pick').disabled = true;
@@ -7351,10 +7339,6 @@
     // #set-name is readonly: the display name IS the account username, so there
     // is nothing to listen for. It stays in the sheet because that is where
     // people look for their name — it just shows rather than asks.
-    $('set-base').addEventListener('change', async (e) => {
-        await saveSettings({ baseUrl: e.target.value.trim().replace(/\/+$/, '') });
-        toast('Server changed — sign out and back in to apply');
-    });
     $('set-mic').addEventListener('change', async (e) => {
         await saveSettings({ micDeviceId: e.target.value });
         if (voice.isJoined()) toast('Rejoin voice to switch microphone');

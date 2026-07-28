@@ -770,12 +770,10 @@
       </div>
     </div>
     <div class="login-error" id="login-error"></div>
-    <button type="button" class="linkish" id="login-advanced">Server settings</button>
-    <div id="login-advanced-box" hidden>
-      <label>Server URL
-        <input type="text" id="login-base" spellcheck="false">
-      </label>
-    </div>
+    <!-- "Server settings" is gone from here too. It was the same field as the
+         one in Behaviour, on the one screen where somebody who had been talked
+         into changing it would be least likely to notice — and the password
+         they type next goes to whatever it names. -->
   </form>
 </div>
 
@@ -818,7 +816,7 @@
           </div>
         </div>
         <div class="row">
-          <span class="hint" id="avatar-hint">PNG, JPEG, GIF or WebP, up to 512 KB. Everyone on the board sees it — the website and phone app too.</span>
+          <span class="hint" id="avatar-hint">PNG, JPEG, GIF or WebP, up to 5 MB. Everyone on the board sees it — the website and phone app too.</span>
         </div>
         <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
         <!-- Read-only on purpose. The name everyone sees IS the account
@@ -880,6 +878,24 @@
         <div class="row note">
           <span class="hint">Until you upload one, your avatar is generated from your display name —
             either way it looks the same here, on the website and in the phone app.</span>
+        </div>
+        <!-- Signing out belongs with the account, not under About: it is the
+             mildest of the three things you can do to one, and the two below it
+             are the other two. It was in About because that is where the button
+             happened to fit, which is not a reason.
+             Deliberately NOT hidden with the block below. Those two act on an
+             account we have resolved; this one is the way OUT, and the moment it
+             matters most is the moment something has gone wrong enough that
+             `account` came back null. -->
+        <div class="row stack acct-removal">
+          <div class="acct-removal-row">
+            <div class="acct-removal-text">
+              <b>Sign out</b>
+              <span class="hint">Signs you out of your account and of ScarmVoice itself.
+                Signing back in takes the shared password and then your account.</span>
+            </div>
+            <button type="button" class="btn-danger-soft" id="btn-logout">Sign Out</button>
+          </div>
         </div>
         <!-- Account removal. Two separate actions rather than one with a
              checkbox, because they are not degrees of the same thing: one is
@@ -1173,17 +1189,21 @@
             <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
           </span>
         </div>
-        <label class="row">
-          <span>Server URL</span>
-          <input type="text" id="set-base" spellcheck="false">
-        </label>
+        <!-- No Server URL field. It decided which host receives the session
+             cookie AND the account token, both bearer-equivalent, so it was the
+             one setting in this sheet that could hand somebody's credentials
+             somewhere else — and there has never been a second server to point
+             it at. store.js still holds the allow-list that made a typo here
+             harmless; now nothing in the UI can reach it at all. -->
       </section>
 
       <section class="set-group" data-nav-icon="app">
         <h3>About</h3>
-        <div class="row between">
+        <!-- Signing out used to sit here, beside the version string, which put
+             the most consequential button in the sheet in the one section that
+             is otherwise pure information. It is in Account now. -->
+        <div class="row">
           <span class="hint" id="set-version"></span>
-          <button type="button" id="btn-logout" class="btn-danger">Sign out</button>
         </div>
         <!-- Everything the app logs goes to a rotating file (see main/log.js);
              this is how it gets attached to a bug report. -->
