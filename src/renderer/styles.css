@@ -72,10 +72,12 @@
   --online-rgb:  35, 165, 90;
   --online:      #23a55a;
   --idle:        #dfa32c;
-  --danger:      #f2455e;
-  --danger-hi:   #ff8095;
-  --danger-soft: rgba(242, 69, 94, .13);
-  --danger-line: rgba(242, 69, 94, .38);
+  /* Was #f2455e, which leans magenta — the same tint correction the rest of
+     the ramp got. This is the colour muted and deafened are drawn in. */
+  --danger:      #f23f43;
+  --danger-hi:   #ff7d80;
+  --danger-soft: rgba(242, 63, 67, .13);
+  --danger-line: rgba(242, 63, 67, .38);
 
   /* Legacy names, aliased so every rule that still asks for them lands on the
      new palette instead of the old gold/red. */
@@ -686,8 +688,24 @@ button { font-family: inherit; }
 .icon-btn.on { color: var(--accent); }
 .icon-btn[aria-pressed="true"].on { background: var(--hover); }
 /* Mute / deafen read as "off" states, so they go red rather than accent. */
-#btn-mute[aria-pressed="true"], #btn-deafen[aria-pressed="true"] { color: var(--danger-hi); }
-#btn-mute[aria-pressed="true"]:hover, #btn-deafen[aria-pressed="true"]:hover { background: var(--danger-soft); }
+/* Muted and deafened are the two states you have to be able to see at a
+   glance from across the room, so they get the one colour nothing else in the
+   panel uses, on top of the slashed glyph. The caret goes with them: the pair
+   is one control, and a red mic beside a grey caret reads as half-broken. */
+#me-bar #btn-mute[aria-pressed="true"],
+#me-bar #btn-deafen[aria-pressed="true"],
+#me-bar .me-ctl:has(.me-ctl-main[aria-pressed="true"]) .me-ctl-caret { color: var(--danger); }
+#me-bar #btn-mute[aria-pressed="true"]:hover,
+#me-bar #btn-deafen[aria-pressed="true"]:hover,
+#me-bar .me-ctl:has(.me-ctl-main[aria-pressed="true"]) .me-ctl-caret:hover {
+  background: var(--danger-soft); color: var(--danger-hi);
+}
+/* The backing stroke behind a slash, in the surface the glyph sits on. It is
+   painted first (the icon lists it before the line), so the line lands on top
+   of the gap it just cut. Drawn only where the surface is known: anywhere else
+   it stays invisible rather than laying a fat line across the glyph. */
+.ico .ico-cut { stroke: none; }
+#me-bar .ico .ico-cut { stroke: var(--panel); stroke-width: 4.4; }
 /* The single geometry contract every icon obeys. A context may change the box
    size, never the weight or the colour source. */
 .ico {
@@ -2384,10 +2402,10 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --online-rgb:  27, 142, 76;
   --online:      #1b8e4c;
   --idle:        #a9761a;
-  --danger:      #d32a45;
-  --danger-hi:   #ad2137;
-  --danger-soft: rgba(211, 42, 69, .10);
-  --danger-line: rgba(211, 42, 69, .34);
+  --danger:      #d32a2e;
+  --danger-hi:   #ad2124;
+  --danger-soft: rgba(211, 42, 46, .10);
+  --danger-line: rgba(211, 42, 46, .34);
 
   --shadow-sm: 0 2px 8px rgba(16, 18, 24, .10);
   --shadow:    0 6px 18px rgba(16, 18, 24, .14);

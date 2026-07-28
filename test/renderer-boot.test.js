@@ -609,3 +609,74 @@ describe('the settings screen', () => {
         expect(nav().map((b) => b.textContent.trim()).sort()).toEqual(titles.sort());
     });
 });
+
+describe('hiding an SVG', () => {
+    // `hidden` is defined on HTMLElement. SVGElement is not an HTMLElement, so
+    // `svg.hidden = true` sets a property nothing reads and the element stays on
+    // screen — silently, with no error anywhere. It cost us two features: the
+    // mic never picked up its slash when muted, and the audio player's play
+    // triangle stayed put for the whole track.
+    it('is not something a property assignment can do', () => {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        document.body.appendChild(svg);
+        svg.hidden = true;
+        expect(svg.hasAttribute('hidden')).toBe(false);   // the trap, pinned
+        svg.toggleAttribute('hidden', true);
+        expect(svg.hasAttribute('hidden')).toBe(true);
+        svg.remove();
+    });
+
+    it('is done by attribute everywhere the renderer swaps a glyph', () => {
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        // Anything named like an icon must not be assigned .hidden. Elements
+        // that are <span>/<div> are free to — this only covers the ones the
+        // icon layer turns into SVG.
+        const offenders = src.split('\n')
+            .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+            .filter(({ line }) => /\b(ico|icon|svg|arrow|caret|glyph)\w*\.hidden\s*=/i.test(line));
+        expect(offenders).toEqual([]);
+    });
+});
+
+describe('the muted and deafened states', () => {
+    const $ = (id) => document.getElementById(id);
+    const shown = (id) => [...$(id).querySelectorAll('svg')]
+        .filter((s) => !s.hasAttribute('hidden')).map((s) => s.getAttribute('class'));
+
+    it('starts on the plain glyph', () => {
+        expect(shown('btn-mute')).toEqual(['ico']);
+        expect(shown('btn-deafen')).toEqual(['ico']);
+    });
+
+    it('has a slashed glyph to swap to, hidden by attribute', () => {
+        // The attribute, not a property — see above. If the markup ever ships
+        // these as anything but a pair, the swap has nothing to swap.
+        ['btn-mute', 'btn-deafen'].forEach((id) => {
+            expect($(id).querySelectorAll('svg').length).toBe(2);
+            expect($(id).querySelector('.ico-off').hasAttribute('hidden')).toBe(true);
+        });
+    });
+
+    it('swaps them with toggleAttribute', () => {
+        // toggleIcons is reachable only through a live voice connection, so the
+        // guarantee is at the source: the one line that does the swap.
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        const fn = src.slice(src.indexOf('function toggleIcons('));
+        const body = fn.slice(0, fn.indexOf('\n    }'));
+        expect(body).toMatch(/on\.toggleAttribute\('hidden'/);
+        expect(body).toMatch(/offIco\.toggleAttribute\('hidden'/);
+    });
+
+    it('draws the slash with a cutout behind it', () => {
+        // A bare line across a 22px glyph reads as part of the drawing. The
+        // backing stroke is what separates them, and it has to come FIRST so
+        // the line lands on top of the gap.
+        const icons = fs.readFileSync(path.join(RENDERER, 'icons.js'), 'utf8');
+        ['mic-off', 'headset-off'].forEach((name) => {
+            const i = icons.indexOf(`'${name}':`);
+            const body = icons.slice(i, icons.indexOf("',\n", i));
+            expect(body.indexOf('ico-cut')).toBeGreaterThan(-1);
+            expect(body.indexOf('ico-cut')).toBeLessThan(body.lastIndexOf('M3.6 3.2'));
+        });
+    });
+});

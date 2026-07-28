@@ -46,6 +46,10 @@
             '<path d="M5.5 11.4a6.5 6.5 0 0 0 13 0"/><path d="M12 17.9v3.5"/>',
         'mic-off': '<rect x="9" y="2.6" width="6" height="11.4" rx="3"/>' +
             '<path d="M5.5 11.4a6.5 6.5 0 0 0 13 0"/><path d="M12 17.9v3.5"/>' +
+            // Drawn twice: a thick stroke in the surface colour first, then the
+            // line itself. The gap that leaves is what stops the slash reading
+            // as part of the mic at 22px — see .ico-cut in styles.css.
+            '<path class="ico-cut" d="M3.6 3.2l16.8 17.6"/>' +
             '<path d="M3.6 3.2l16.8 17.6"/>',
         'mic-record': '<rect x="8.4" y="2.8" width="6" height="11" rx="3"/>' +
             '<path d="M5 11.2a6.4 6.4 0 0 0 12.8 0"/><path d="M11.4 17.6v3.6"/>' +
@@ -57,6 +61,7 @@
         'headset-off': '<path d="M4 14v-2.4a8 8 0 0 1 16 0V14"/>' +
             '<path d="M4 13.4a1.9 1.9 0 0 1 1.9-1.9h1.3v6.6H5.9A1.9 1.9 0 0 1 4 16.2z"/>' +
             '<path d="M20 13.4a1.9 1.9 0 0 0-1.9-1.9h-1.3v6.6h1.3a1.9 1.9 0 0 0 1.9-1.9z"/>' +
+            '<path class="ico-cut" d="M3.6 3.2l16.8 17.6"/>' +
             '<path d="M3.6 3.2l16.8 17.6"/>',
 
         // Handset tipped over, the universal "hang up".

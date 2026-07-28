@@ -3225,12 +3225,17 @@
         refreshTip(el);
     }
 
+    // toggleAttribute, not `.hidden`. These are <svg> elements once icons.js has
+    // hydrated them, and `hidden` is defined on HTMLElement — SVGElement does not
+    // have it, so `el.hidden = true` silently sets a property nobody reads and
+    // the glyph never changes. That is why muting used to leave the mic looking
+    // exactly like an unmuted mic.
     function toggleIcons(id, off) {
         const btn = $(id);
         const on = btn.querySelector('.ico:not(.ico-off)');
         const offIco = btn.querySelector('.ico-off');
-        if (on) on.hidden = off;
-        if (offIco) offIco.hidden = !off;
+        if (on) on.toggleAttribute('hidden', !!off);
+        if (offIco) offIco.toggleAttribute('hidden', !off);
     }
 
     async function joinVoice() {
@@ -6719,8 +6724,11 @@
             }
         };
         const setPlayingUI = (playing) => {
-            icoPlay.hidden = playing;
-            icoPause.hidden = !playing;
+            // Attribute, not property: these are <svg>, and `hidden` is an
+            // HTMLElement thing. Setting the property here left the play
+            // triangle showing for the whole track.
+            icoPlay.toggleAttribute('hidden', playing);
+            icoPause.toggleAttribute('hidden', !playing);
             playBtn.title = playing ? 'Pause' : 'Play';
             wrap.classList.toggle('playing', playing);
         };
