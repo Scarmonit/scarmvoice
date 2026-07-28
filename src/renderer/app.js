@@ -717,11 +717,23 @@
 
     // ---------- settings --------------------------------------------------
 
+    // The input gain lives in soundboard.js's mic graph (see ScarmMic), which is
+    // built fresh on every getUserMedia. It is applied BEFORE the track is
+    // published, so it decides how loud everyone ELSE hears you — which is
+    // exactly why a session that never pushed it started at 100% no matter what
+    // the slider said. saveSettings was the only caller, so the stored value was
+    // ignored for the whole of any launch in which nothing happened to be saved:
+    // join voice straight from a cold start and the room got you at full volume.
+    function applyMicGain() {
+        if (!window.ScarmMic) return;
+        window.ScarmMic.setGain(settings.micVolume === undefined ? 1 : settings.micVolume);
+    }
+
     async function saveSettings(patch) {
         settings = await L.settings.set(patch);
         if (voice) voice.setSettings(settings);
         if (window.loungeSounds) window.loungeSounds.setSettings(settings);
-        if (window.ScarmMic) window.ScarmMic.setGain(settings.micVolume === undefined ? 1 : settings.micVolume);
+        applyMicGain();
         return settings;
     }
 
@@ -1098,6 +1110,9 @@
             window.loungeSounds.init(settings);
             window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
             window.ScarmNoise.onFailure(handleNoiseFailure);
+            // Before setupVoice(), so a call joined from a cold start (autoJoin,
+            // or simply the first click) publishes at the level that is saved.
+            applyMicGain();
             setupVoice();
             renderMe();
             // BEFORE the socket opens: this registers the install against the
@@ -5053,7 +5068,7 @@
                     // otherwise a blocked person still lights up the app and
                     // pops their message body onto the desktop.
                     bumpUnread(m.channel);
-                    if (m.cid !== settings.clientId) notifyOtherChannel(m);
+                    if (!nudgeIsMine(m)) notifyOtherChannel(m);
                 }
                 break;
             // An admin ended our call. Unicast by account, so every device this
@@ -5131,6 +5146,26 @@
                 break;
         }
     });
+
+    // Did I write the message this socket nudge is about?
+    //
+    // `cid` is per-INSTALL, so on its own it answers no to everything you post
+    // from the phone or from the website — and the desktop then raised a
+    // notification for a message you had just finished typing somewhere else,
+    // attributed to you by name. wroteByMe() already makes exactly this
+    // distinction for the messages the poll brings back; the nudge carries no
+    // account id, so the NAME answers it here instead.
+    //
+    // Safe to resolve on: the display name is the account username, derived by
+    // the server from the credential rather than accepted from the client, so
+    // nobody else can be wearing it. Same reasoning renderTyping() uses.
+    function nudgeIsMine(m) {
+        if (!m) return false;
+        if (m.cid && m.cid === settings.clientId) return true;
+        const me = String(settings.displayName || '').trim().toLowerCase();
+        if (!me || me === 'anonymous') return false;
+        return String(m.name || '').trim().toLowerCase() === me;
+    }
 
     function bumpUnread(name) {
         const c = channels.find((x) => x.name === name);
@@ -5305,6 +5340,13 @@
         if (avatarTimer) { clearInterval(avatarTimer); avatarTimer = null; }
         // The DM drawer holds its own poll-independent state; leaving it open
         // means the next session starts with a stranger's conversation on screen.
+        //
+        // The PLACE goes too, not just the conversation: dmMode is not something
+        // closeDm() resets, so signing out from inside direct messages — or
+        // having the session expire there — left the flag set, and the next
+        // sign-in came up in the DM column with the channel sidebar hidden
+        // behind a panel whose conversation had been torn down.
+        setDmMode(false);
         closeDm();
         // …and the drafts it stashed are keyed by thread id, which is global
         // rather than per-account. Kept across a sign-out, the next person to
@@ -9463,6 +9505,9 @@
         $('dm-title').textContent = dmOpen.title;
         // A group says how many people are in it; a pair does not need telling.
         $('dm-panel').classList.toggle('is-group', dmOpen.isGroup);
+        // …and it is no longer the empty state, whichever of the two ways in
+        // put that class there.
+        $('dm-panel').classList.remove('empty');
         renderDmHead();
         $('dm-panel').hidden = false;
         moveComposer(true);
@@ -9617,8 +9662,23 @@
         $('rail-home').classList.toggle('active', !on);
         $('rail-dms').classList.toggle('active', on);
         if (!on && dmOpen) closeDm();
-        if (on) { renderDmSection(); renderDmHead(); }
-        else moveComposer(false);
+        if (on) {
+            renderDmSection();
+            renderDmHead();
+            // Arriving in the place with nothing selected. Only openDm() and
+            // closeDm() ever painted this column, and neither runs on the way
+            // IN when there is no conversation to open — so somebody who has
+            // never sent a DM pressed @ and got an entirely blank panel, with
+            // the app's own "No conversations yet" line sitting unused two
+            // hundred lines away.
+            if (!dmOpen) {
+                $('dm-panel').classList.add('empty');
+                $('dm-title').textContent = 'Direct Messages';
+                renderDmMessages();
+            }
+        } else {
+            moveComposer(false);
+        }
         setComposerPlaceholder();
     }
 

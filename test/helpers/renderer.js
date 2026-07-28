@@ -45,6 +45,7 @@ export async function bootRenderer(opts = {}) {
     const user = opts.user || { id: 1, username: 'Me', role: 'member' };
     const board = opts.board || vi.fn(async () => ({ success: true }));
     const settings = Object.assign({}, DEFAULT_SETTINGS, opts.settings || {});
+    let rtMessage = null;
 
     const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
     document.documentElement.innerHTML = html
@@ -87,7 +88,10 @@ export async function bootRenderer(opts = {}) {
             wake: vi.fn(async () => ({ connected: false })),
             send: noop, notifyPosted: noop,
             sendTyping: vi.fn(), sendVoice: noop,
-            onMessage: unsub, onStatus: unsub
+            // Held, so a spec can deliver a socket event the way the Durable
+            // Object does rather than reaching into app.js.
+            onMessage: (cb) => { rtMessage = cb; return noop; },
+            onStatus: unsub
         },
         edit: {
             cut: noop, copy: noop, paste: noop, selectAll: noop,
@@ -140,6 +144,10 @@ export async function bootRenderer(opts = {}) {
     run('lib.js');
     run('audio.js');
     run('noise.js');
+    // jsdom has no navigator.mediaDevices, so its getUserMedia patch no-ops —
+    // but window.ScarmMic is defined either way, which is the half the renderer
+    // pushes the saved input gain into.
+    run('soundboard.js');
     run('sounds.js');
     run('icons.js');
     // jsdom has no script loader, so an injected <script src="vendor/…"> never
@@ -167,7 +175,8 @@ export async function bootRenderer(opts = {}) {
     run('app.js');
 
     await settle();
-    return { $, board, lounge, settings };
+    // `rt(msg)` delivers one realtime frame, exactly as main.js relays it.
+    return { $, board, lounge, settings, rt: (msg) => { if (rtMessage) rtMessage(msg); } };
 }
 
 // Type into the composer the way a person does, so the input listeners
