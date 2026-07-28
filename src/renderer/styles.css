@@ -3881,3 +3881,47 @@ button.ap-row:hover .ap-more { color: var(--text); }
 /* The slot the shared composer lives in while a DM is open. It carries no
    styling of its own — the composer brings its own, which is the point. */
 #dm-composer-slot { flex: none; }
+
+/* ---- the direct-messages column ----------------------------------------
+   Replaces the server's channel list while you are in DMs, the way the
+   reference does. Conversations live only here now: they are not part of a
+   server, and the rail button carries their unread count. */
+#dm-sidebar {
+  grid-area: side;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--side);
+}
+#dm-sidebar[hidden] { display: none; }
+#dm-side-head { flex: none; padding: 10px 10px 6px; }
+#dm-find {
+  width: 100%; height: 28px; padding: 0 8px; border-radius: 4px;
+  background: var(--sunk); color: var(--dim);
+  font-size: 13px; text-align: left; cursor: pointer;
+}
+#dm-find:hover { background: var(--hover); color: var(--muted); }
+#dm-nav { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.dm-nav-row {
+  display: flex; align-items: center; gap: 12px;
+  height: 38px; padding: 0 8px; border-radius: 4px;
+  color: var(--muted); font-size: 15px; font-weight: 500; cursor: pointer;
+}
+.dm-nav-row:hover { background: var(--hover); color: var(--text); }
+.dm-side-label {
+  flex: 1; padding: 0 8px; font-size: 12px; font-weight: 700;
+  color: var(--dim); text-transform: uppercase; letter-spacing: .02em;
+}
+/* Conversations are no longer a category inside the server's channel list. */
+#dm-section { display: none; }
+/* The empty state, when you are in the view with nothing selected. */
+.dm-nothing { margin: auto; }
+#dm-panel.empty #dm-messages { display: flex; }
+
+/* Header search, matched to the channel header's field. */
+.dm-search { position: relative; display: flex; align-items: center; }
+.dm-search input {
+  width: 150px; height: 26px; padding: 0 26px 0 8px; border-radius: 4px;
+  background: var(--sunk); border: 0; outline: none;
+  color: var(--text); font-size: 13px;
+}
+.dm-search input::placeholder { color: var(--dim); }
+.dm-search .ico { position: absolute; right: 6px; color: var(--dim); pointer-events: none; }

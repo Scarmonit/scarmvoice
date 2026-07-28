@@ -600,6 +600,33 @@
     </div>
   </main>
 
+  <!-- The second column while you are in direct messages. The reference swaps
+       this whole column rather than nesting DMs inside a server's channel
+       list, because DMs are not part of a server — they are the other place
+       you can be. #dm-list is MOVED in here rather than duplicated. -->
+  <aside id="dm-sidebar" hidden>
+    <header id="dm-side-head">
+      <button type="button" id="dm-find">Find or start a conversation</button>
+    </header>
+    <div class="side-scroll">
+      <nav id="dm-nav">
+        <button type="button" class="dm-nav-row" id="dm-nav-members">
+          <span class="ico" data-icon="users"></span>
+          <span>Members</span>
+        </button>
+      </nav>
+      <section class="side-section">
+        <div class="cat-head">
+          <span class="dm-side-label">Direct Messages</span>
+          <button type="button" class="cat-add" id="btn-new-dm-2" title="Start a conversation">
+            <span class="ico" data-icon="plus"></span>
+          </button>
+        </div>
+        <div id="dm-list-slot"></div>
+      </section>
+    </div>
+  </aside>
+
   <!-- Direct messages get the whole conversation area, header included, the way
        the reference does. A DM is not a drawer laid over the channel you were
        reading — it is where you are. Sitting in #app rather than inside #main
@@ -613,12 +640,22 @@
       <span id="dm-title">Direct message</span>
       <span id="dm-count" class="dm-count" hidden></span>
       <div class="dm-head-actions">
+        <!-- No pin button here on purpose. Pinning a DM needs a column and an
+             endpoint that do not exist, and a button that does nothing is the
+             bug I have already had to come back and fix twice. -->
         <button type="button" class="icon-btn" id="dm-add" title="Add people" hidden>
           <span class="ico" data-icon="user-add"></span>
         </button>
         <button type="button" class="icon-btn" id="dm-more" title="Group options" hidden>
           <span class="ico" data-icon="sliders"></span>
         </button>
+        <button type="button" class="icon-btn" id="dm-prof-toggle" title="Show profile" aria-pressed="true">
+          <span class="ico" data-icon="user-add"></span>
+        </button>
+        <div class="dm-search">
+          <input type="text" id="dm-search-input" placeholder="Search" autocomplete="off" maxlength="60">
+          <span class="ico" data-icon="search"></span>
+        </div>
         <button type="button" class="icon-btn" id="dm-close" title="Close (Esc)">
           <span class="ico" data-icon="x"></span>
         </button>

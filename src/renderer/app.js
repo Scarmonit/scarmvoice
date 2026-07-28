@@ -1268,8 +1268,8 @@
         // and did nothing at all — the DM stayed up and the click looked
         // broken. Picking a different one switched the column underneath and
         // left it covered, which looked the same.
-        const leavingDm = !!dmOpen;
-        if (leavingDm) closeDm();
+        const leavingDm = dmMode || !!dmOpen;
+        if (leavingDm) setDmMode(false);
         if (name === channel) {
             if (leavingDm) { setChannelTitle(name); renderChannels(); }
             return;
@@ -8912,6 +8912,10 @@
     // the profile panel gets the rest from here — populated whenever the picker
     // loads the directory, and left empty rather than guessed if it never has.
     const dmDirectory = {};
+    // Declared with the other DM state, not beside its listener: renderDmMessages
+    // reads it, and a `let` further down the file is in its temporal dead zone
+    // until that line runs.
+    let dmFilter = '';
     let dmOpen = null;                // { id, username } of the open conversation
     let dmMsgs = [];
     let dmTimer = null;
@@ -9013,6 +9017,10 @@
     // Takes a THREAD. `{ id, title, isGroup, members }` — the shape the thread
     // list already hands out, so opening one never has to look a partner up.
     async function openDm(thread) {
+        // Opening a conversation puts you in the DM view if you were not
+        // already there — a DM cannot be read from inside a server's channel
+        // list any more than a channel can be read from inside a DM.
+        if (!dmMode) setDmMode(true);
         const id = thread.id;
         dmOpen = {
             id,
@@ -9140,6 +9148,29 @@
         });
     }
 
+    // Direct messages as a PLACE, not a category inside a server's channel
+    // list. The reference swaps the whole second column for them, and the
+    // conversation list lives only there — which is why the rail button carries
+    // its own unread count. dmMode is the place; dmOpen is which conversation
+    // inside it, and you can be in the place with nothing selected.
+    let dmMode = false;
+
+    function setDmMode(on) {
+        if (dmMode === on) return;
+        dmMode = on;
+        $('sidebar').hidden = on;
+        $('dm-sidebar').hidden = !on;
+        // The list is MOVED, never copied. A second conversation list would
+        // need a second renderer, and the two would disagree within a week.
+        const list = $('dm-list');
+        if (list) (on ? $('dm-list-slot') : $('dm-section')).appendChild(list);
+        $('dm-panel').hidden = !on;
+        if (!on && dmOpen) closeDm();
+        if (on) { renderDmSection(); renderDmHead(); }
+        else moveComposer(false);
+        setComposerPlaceholder();
+    }
+
     // The one composer, relocated. Moving the node keeps every listener, every
     // sub-control and the exact appearance, because it IS the same element —
     // which is the whole point. A marker holds its place in #main so it goes
@@ -9164,10 +9195,16 @@
         const was = dmOpen;
         dmOpen = null;
         loadDmMessages.lastSig = null;
-        $('dm-panel').hidden = true;
+        // Closing a CONVERSATION does not leave the DM view. Staying puts you
+        // on the empty state with the list still there, which is what the
+        // reference does; hiding the panel here dropped you back into whatever
+        // channel was behind it.
+        if (!dmMode) $('dm-panel').hidden = true;
         $('dm-panel').classList.remove('is-group');
-        if (was) moveComposer(false);
-        if (was) setComposerPlaceholder();
+        $('dm-panel').classList.toggle('empty', dmMode);
+        $('dm-profile').hidden = true;
+        if (was) { moveComposer(false); setComposerPlaceholder(); }
+        if (dmMode) { $('dm-title').textContent = 'Direct Messages'; renderDmMessages(); }
         renderDmSection();
     }
 
@@ -9232,6 +9269,18 @@
         // panel already extend this courtesy.
         const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
         box.innerHTML = '';
+        // In the DM view with nothing selected: the list is on the left and this
+        // column has nothing to say yet.
+        if (!dmOpen) {
+            const e = document.createElement('div');
+            e.className = 'dm-empty dm-nothing';
+            e.textContent = dmThreads.length
+                ? 'Pick a conversation on the left.'
+                : 'No conversations yet — start one with the + above.';
+            box.appendChild(e);
+            return;
+        }
+
         // No early return for an empty conversation any more: the start block
         // below IS the empty state, and it says something useful — whose
         // conversation this is and that it has not started yet. Returning here
@@ -9311,7 +9360,20 @@
 
         let lastDay = '';
         let prev = null;
-        dmMsgs.forEach((m) => {
+        // The header's search box narrows what is on screen. Only what has been
+        // loaded — see the listener — so an empty result means "not in the part
+        // of this conversation you have open", not "nowhere".
+        const shown = dmFilter
+            ? dmMsgs.filter((m) => (m.body || '').toLowerCase().includes(dmFilter))
+            : dmMsgs;
+        if (dmFilter && !shown.length) {
+            const e = document.createElement('div');
+            e.className = 'dm-empty';
+            e.textContent = 'Nothing matching “' + dmFilter + '” in the messages loaded here.';
+            box.appendChild(e);
+            return;
+        }
+        shown.forEach((m) => {
             const day = dayStr(m.created_at);
             if (day !== lastDay) {
                 lastDay = day;
@@ -9515,12 +9577,34 @@
     }
 
     // The rail's DM button: the other place you can be, not one of the servers.
-    // Opens the most recent conversation, or the picker when there are none.
+    // It switches PLACE — the sidebar swaps — rather than opening a particular
+    // conversation, because that is what a home button does.
     $('rail-dms').addEventListener('click', () => {
         if (!account) { openSettings(); return; }
-        if (dmOpen) return closeDm();
-        if (dmThreads.length) return openDm(dmThreads[0]);
-        openDmPicker('create', 0, []);
+        if (dmMode) { setDmMode(false); return; }
+        setDmMode(true);
+        if (dmThreads.length) openDm(dmThreads[0]);
+    });
+
+    $('dm-find').addEventListener('click', () => openDmPicker('create', 0, []));
+    $('btn-new-dm-2').addEventListener('click', () => openDmPicker('create', 0, []));
+    $('dm-nav-members').addEventListener('click', () => openDmPicker('create', 0, []));
+
+    // Show or hide the profile column. Only meaningful for a pair — a group has
+    // no single profile, so the button goes with it.
+    $('dm-prof-toggle').addEventListener('click', (e) => {
+        const prof = $('dm-profile');
+        const show = prof.hidden;
+        prof.hidden = !show;
+        e.currentTarget.setAttribute('aria-pressed', String(show));
+    });
+
+    // Filters the messages already loaded. It is not a server-side search —
+    // there is no DM search endpoint — so it says so rather than pretending to
+    // reach further back than the conversation currently holds.
+    $('dm-search-input').addEventListener('input', (e) => {
+        dmFilter = (e.target.value || '').trim().toLowerCase();
+        renderDmMessages();
     });
 
     // Realtime delivery — pushed by the server the moment the sender posts.
