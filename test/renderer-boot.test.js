@@ -145,6 +145,8 @@ beforeAll(() => {
 
     run('lib.js');
     run('audio.js');
+    run('lazy.js');
+    run('noise.js');
     // Same order as index.html. soundboard.js patches getUserMedia and is a
     // no-op when navigator.mediaDevices is absent, which it is in jsdom — but
     // it still has to parse and still has to define window.ScarmBoard, which is
@@ -401,30 +403,83 @@ describe('the account panel', () => {
     });
 });
 
-describe('the mic and speaker carets', () => {
+describe('the audio panels behind the me-bar carets', () => {
     const $ = (id) => document.getElementById(id);
-    const click = (id) => $(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const click = (el) => (typeof el === 'string' ? $(el) : el)
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
-    it('open a device menu without a media stack present', async () => {
-        // jsdom has no navigator.mediaDevices, which is the same shape as a
-        // machine that has refused microphone access — the menu still has to
-        // open and say why it is empty rather than throwing.
+    it('opens the input panel with every control the design calls for', () => {
         click('btn-mic-menu');
-        await new Promise((r) => setTimeout(r, 0));
-        const menu = $('ctx-menu');
-        expect(menu.hidden).toBe(false);
-        const labels = [...menu.querySelectorAll('.ctx-item')].map((b) => b.textContent.trim());
-        expect(labels[0]).toBe('System default microphone');
-        expect(labels.some((l) => /allow microphone access/i.test(l))).toBe(true);
-        expect(labels[labels.length - 1]).toBe('Voice Settings');
+        expect($('mic-pop').hidden).toBe(false);
+        const titles = [...$('mic-pop').querySelectorAll('.ap-title')].map((t) => t.textContent.trim());
+        expect(titles).toEqual([
+            'Input Device', 'Input Profile', 'Input Volume', 'Push to Talk', 'Voice Settings'
+        ]);
         expect(errors).toEqual([]);
     });
 
-    it('offers the speaker list from the other caret', async () => {
+    it('names the current device and profile rather than leaving them blank', () => {
+        // jsdom has no media stack, which is the same shape as a machine that
+        // has refused microphone access: no labels are readable. The rows still
+        // have to say something.
+        expect($('ap-input-device-value').textContent).toBeTruthy();
+        expect($('ap-input-profile-value').textContent).toBe('Standard');
+    });
+
+    it('shows one panel at a time', () => {
         click('btn-spk-menu');
+        expect($('mic-pop').hidden).toBe(true);
+        expect($('spk-pop').hidden).toBe(false);
+        const titles = [...$('spk-pop').querySelectorAll('.ap-title')].map((t) => t.textContent.trim());
+        expect(titles).toEqual(['Output Device', 'Output Volume', 'Voice Settings']);
+    });
+
+    it('opens the device list from the top row', async () => {
+        click('ap-output-device');
         await new Promise((r) => setTimeout(r, 0));
         const labels = [...$('ctx-menu').querySelectorAll('.ctx-item')].map((b) => b.textContent.trim());
-        expect(labels[0]).toBe('System default speaker');
+        expect(labels[0]).toBe('Windows Default');
+        expect(labels.some((l) => /allow microphone access/i.test(l))).toBe(true);
+        // Opening the list must NOT count as clicking away from the panel.
+        expect($('spk-pop').hidden).toBe(false);
+    });
+
+    it('writes the input volume as a fraction, not a percentage', async () => {
+        click('btn-mic-menu');
+        window.lounge.settings.set.mockClear();
+        const slider = $('ap-input-volume');
+        slider.value = '150';
+        slider.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+        // The gain node multiplies, so 150% has to arrive as 1.5. Sending 150
+        // would be +43 dB of clipping into everyone else's ears.
+        expect(window.lounge.settings.set.mock.calls[0][0].micVolume).toBe(1.5);
+    });
+
+    it('drives the same voice mode the Settings dropdown does', async () => {
+        window.lounge.settings.set.mockClear();
+        const box = $('ap-ptt');
+        box.checked = true;
+        box.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(window.lounge.settings.set.mock.calls[0][0].voiceMode).toBe('ptt');
+        // The two controls are one setting; if the dropdown does not follow,
+        // Settings shows a different answer to the panel.
+        expect($('set-mode').value).toBe('ptt');
         expect(errors).toEqual([]);
+    });
+});
+
+describe('microphone gain', () => {
+    it('is clamped, because it is published to everyone', () => {
+        // This is applied BEFORE the track is published, so an out-of-range
+        // value is the whole room's problem rather than the speaker's.
+        window.ScarmMic.setGain(9);
+        expect(window.ScarmMic.getGain()).toBe(2);
+        window.ScarmMic.setGain(-3);
+        expect(window.ScarmMic.getGain()).toBe(0);
+        window.ScarmMic.setGain('nonsense');
+        expect(window.ScarmMic.getGain()).toBe(1);
+        window.ScarmMic.setGain(1);
     });
 });

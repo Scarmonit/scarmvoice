@@ -75,9 +75,6 @@
     </button>
     <div class="rail-sep"></div>
     <div class="rail-spacer"></div>
-    <button type="button" class="rail-btn" id="rail-settings" title="Settings">
-      <span class="ico" data-icon="gear"></span>
-    </button>
   </nav>
 
   <aside id="sidebar">
@@ -223,6 +220,56 @@
           <span class="ico" data-icon="gear"></span>
         </button>
       </div>
+    </div>
+
+
+    <!-- The two audio panels the carets open. Not context menus: they carry
+         sliders and a checkbox, which a list of items cannot express. -->
+    <div id="mic-pop" class="audio-pop" hidden role="dialog" aria-label="Input settings">
+      <button type="button" class="ap-row ap-pick" id="ap-input-device">
+        <span class="ap-rowtext">
+          <span class="ap-title">Input Device</span>
+          <span class="ap-value" id="ap-input-device-value">Windows Default</span>
+        </span>
+        <span class="ico ap-more" data-icon="chevron"></span>
+      </button>
+      <button type="button" class="ap-row ap-pick" id="ap-input-profile">
+        <span class="ap-rowtext">
+          <span class="ap-title">Input Profile</span>
+          <span class="ap-value" id="ap-input-profile-value">Standard</span>
+        </span>
+        <span class="ico ap-more" data-icon="chevron"></span>
+      </button>
+      <div class="ap-row ap-slider">
+        <span class="ap-title">Input Volume</span>
+        <input type="range" id="ap-input-volume" min="0" max="200" step="1" aria-label="Input volume">
+      </div>
+      <label class="ap-row ap-check">
+        <span class="ap-title">Push to Talk</span>
+        <input type="checkbox" id="ap-ptt">
+      </label>
+      <button type="button" class="ap-row ap-foot" id="ap-input-settings">
+        <span class="ap-title">Voice Settings</span>
+        <span class="ico" data-icon="gear"></span>
+      </button>
+    </div>
+
+    <div id="spk-pop" class="audio-pop" hidden role="dialog" aria-label="Output settings">
+      <button type="button" class="ap-row ap-pick" id="ap-output-device">
+        <span class="ap-rowtext">
+          <span class="ap-title">Output Device</span>
+          <span class="ap-value" id="ap-output-device-value">Windows Default</span>
+        </span>
+        <span class="ico ap-more" data-icon="chevron"></span>
+      </button>
+      <div class="ap-row ap-slider">
+        <span class="ap-title">Output Volume</span>
+        <input type="range" id="ap-output-volume" min="0" max="200" step="1" aria-label="Output volume">
+      </div>
+      <button type="button" class="ap-row ap-foot" id="ap-output-settings">
+        <span class="ap-title">Voice Settings</span>
+        <span class="ico" data-icon="gear"></span>
+      </button>
     </div>
 
     <!-- Account panel, anchored above the me-bar. Positioned by JS so it can

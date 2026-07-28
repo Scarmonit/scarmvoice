@@ -74,6 +74,19 @@
     let baseUrl = '';
     let volume = 0.8;
 
+    // ---- microphone gain ----------------------------------------------------
+    // This lives here, in the soundboard, for one reason: mix() below is already
+    // the place that takes the raw microphone apart and puts it back together
+    // (source -> destination) on every acquisition. Inserting the gain into that
+    // existing hop costs nothing; a second getUserMedia patch just to hold one
+    // GainNode would add another round trip to every mic open for everybody,
+    // including the people who never touch the slider.
+    //
+    // It is applied BEFORE publishing, so it is how loud everyone else hears
+    // you — not a local monitor level.
+    let micGain = 1;
+    const liveMicGains = new Set();
+
     // The bus every clip connects to, and the thing mixed into the mic. Created
     // lazily so a session that never plays a sound never builds any of it.
     let bus = null;
@@ -126,7 +139,13 @@
         try {
             const src = c.createMediaStreamSource(raw);
             const dest = c.createMediaStreamDestination();
-            src.connect(dest);
+            // mic -> gain -> destination, with the soundboard bus joining at the
+            // destination so clips are NOT scaled by the speaker's input volume.
+            const gain = c.createGain();
+            gain.gain.value = micGain;
+            src.connect(gain);
+            gain.connect(dest);
+            liveMicGains.add(gain);
             b.connect(dest);
 
             const track = dest.stream.getAudioTracks()[0];
@@ -138,6 +157,8 @@
                 if (done) return;
                 done = true;
                 srcTracks.forEach((t) => { try { t.removeEventListener('ended', cleanup); } catch (e) {} });
+                liveMicGains.delete(gain);
+                try { gain.disconnect(); } catch (e) {}
                 try { src.disconnect(); } catch (e) {}
                 // ONLY this destination. The bus is shared with every other
                 // live acquisition and with the local monitor, so
@@ -223,6 +244,20 @@
         playing.forEach((rec) => { try { rec.src.stop(); } catch (e) {} });
         playing.clear();
     }
+
+    // The microphone half of this module, kept under its own name so nothing
+    // has to know the two share a graph.
+    window.ScarmMic = {
+        setGain(v) {
+            const n = Number(v);
+            micGain = Number.isFinite(n) ? Math.max(0, Math.min(2, n)) : 1;
+            // Live acquisitions are updated in place: changing this mid-call
+            // must not mean republishing the track, which drops audio for
+            // everyone in the room.
+            liveMicGains.forEach((g) => { try { g.gain.value = micGain; } catch (e) {} });
+        },
+        getGain: () => micGain
+    };
 
     window.ScarmBoard = {
         sounds: () => SOUNDS.slice(),

@@ -79,6 +79,10 @@ const DEFAULTS = {
     // this is how loud everyone ELSE hears them, not just you.
     soundboardVolume: 0.8,
 
+    // Input gain, 0-2. Applied to the microphone before it is published, so
+    // this is how loud EVERYONE ELSE hears you, not a local monitor level.
+    micVolume: 1,
+
     // RMS x100 above which you read as "speaking"; see voice.js
     speakThreshold: 6
 };

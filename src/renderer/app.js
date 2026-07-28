@@ -711,6 +711,7 @@
         settings = await L.settings.set(patch);
         if (voice) voice.setSettings(settings);
         if (window.loungeSounds) window.loungeSounds.setSettings(settings);
+        if (window.ScarmMic) window.ScarmMic.setGain(settings.micVolume === undefined ? 1 : settings.micVolume);
         return settings;
     }
 
@@ -4999,20 +5000,116 @@
         showAccountStep();
     });
 
-    // ---------- input / output device menus ---------------------------------
-    // What the carets beside the mic and headset open: the same device list the
-    // Settings panel builds, in the place you actually reach for it.
+    // ---------- audio panels (the me-bar carets) -----------------------------
+    // Two small panels rather than context menus: they carry sliders and a
+    // checkbox, which a list of items cannot express. The DEVICE lists inside
+    // them are still context menus, opened from the top row — a list of
+    // mutually exclusive options with a tick is exactly what that engine draws.
 
-    async function deviceMenuItems(kind) {
-        let devices = [];
-        try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { /* none */ }
+    // Cache the last enumeration so a panel can name the current device the
+    // instant it opens. enumerateDevices is a permission-gated round trip and
+    // waiting on it would leave the row blank for a beat every single time.
+    let deviceCache = [];
+    async function refreshDeviceCache() {
+        try { deviceCache = await navigator.mediaDevices.enumerateDevices(); }
+        catch (e) { deviceCache = []; }
+        return deviceCache;
+    }
+
+    function deviceLabel(kind, id) {
+        const isMic = kind === 'audioinput';
+        if (!id) return isMic ? 'Windows Default' : 'Windows Default';
+        const d = deviceCache.find((x) => x.kind === kind && x.deviceId === id);
+        // Labels stay blank until microphone permission has been granted at
+        // least once, so a saved device we cannot name is still reported as
+        // chosen rather than silently reading as the default.
+        return (d && d.label) || 'Selected device';
+    }
+
+    // How the app's two noise-suppression switches read as one choice, which is
+    // what the row actually is: off, the browser's own, or the AI model.
+    function inputProfile() {
+        if (settings.noiseSuppressionAI) return 'ai';
+        return settings.noiseSuppression === false ? 'off' : 'standard';
+    }
+    const PROFILE_LABEL = { off: 'None', standard: 'Standard', ai: 'Voice Isolation' };
+
+    async function setInputProfile(mode) {
+        const patch = mode === 'ai'
+            ? { noiseSuppressionAI: true, noiseSuppression: true }
+            : { noiseSuppressionAI: false, noiseSuppression: mode === 'standard' };
+        await saveSettings(patch);
+        window.ScarmNoise.setEnabled(!!settings.noiseSuppressionAI);
+        $('set-ns').checked = settings.noiseSuppression !== false;
+        $('set-nsai').checked = !!settings.noiseSuppressionAI;
+        paintAudioPanels();
+        if (voice && voice.isJoined()) toast('Rejoin voice to apply audio processing changes');
+    }
+
+    function audioPopOpen(id) { return !$(id).hidden; }
+    function closeAudioPops() { $('mic-pop').hidden = true; $('spk-pop').hidden = true; }
+
+    function paintAudioPanels() {
+        $('ap-input-device-value').textContent = deviceLabel('audioinput', settings.micDeviceId);
+        $('ap-output-device-value').textContent = deviceLabel('audiooutput', settings.speakerDeviceId);
+        $('ap-input-profile-value').textContent = PROFILE_LABEL[inputProfile()];
+        const mic = settings.micVolume === undefined ? 1 : Number(settings.micVolume);
+        const out = settings.outputVolume === undefined ? 1 : Number(settings.outputVolume);
+        $('ap-input-volume').value = String(Math.round(mic * 100));
+        $('ap-output-volume').value = String(Math.round(out * 100));
+        $('ap-ptt').checked = settings.voiceMode === 'ptt';
+    }
+
+    // Opened UPWARD: these buttons sit at the very bottom of the window, so a
+    // panel anchored below one would only ever be clamped against the edge.
+    function openAudioPop(popId, anchorId) {
+        closeAudioPops();
+        const pop = $(popId);
+        pop.hidden = false;
+        paintAudioPanels();
+        const r = $(anchorId).getBoundingClientRect();
+        const h = pop.offsetHeight;
+        const w = pop.offsetWidth;
+        let top = r.top - h - 8;
+        if (top < POP_TITLEBAR + 6) top = POP_TITLEBAR + 6;
+        let left = r.left - Math.round(w / 2);
+        if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+        pop.style.top = Math.round(top) + 'px';
+        pop.style.left = Math.round(Math.max(8, left)) + 'px';
+        // Refresh the device names behind the panel; it is already on screen,
+        // so this only ever corrects a stale label rather than delaying it.
+        refreshDeviceCache().then(() => { if (!pop.hidden) paintAudioPanels(); });
+    }
+
+    function toggleAudioPop(popId, anchorId) {
+        if (audioPopOpen(popId)) closeAudioPops();
+        else openAudioPop(popId, anchorId);
+    }
+
+    $('btn-mic-menu').addEventListener('click', (e) => { e.stopPropagation(); toggleAudioPop('mic-pop', 'btn-mic-menu'); });
+    $('btn-spk-menu').addEventListener('click', (e) => { e.stopPropagation(); toggleAudioPop('spk-pop', 'btn-spk-menu'); });
+
+    document.addEventListener('mousedown', (e) => {
+        if ($('mic-pop').hidden && $('spk-pop').hidden) return;
+        if (e.target.closest('.audio-pop') || e.target.closest('.me-ctl-caret')) return;
+        // The device list is a context menu drawn OUTSIDE the panel, so a click
+        // in it must not read as a click away from the panel.
+        if (e.target.closest('#ctx-menu')) return;
+        closeAudioPops();
+    });
+    window.addEventListener('blur', closeAudioPops);
+
+    // The device list itself.
+    async function openDeviceList(kind, anchor) {
         const isMic = kind === 'audioinput';
         const current = (isMic ? settings.micDeviceId : settings.speakerDeviceId) || '';
-        const list = devices.filter((d) => d.kind === kind);
+        const list = (await refreshDeviceCache()).filter((d) => d.kind === kind);
 
         const choose = async (deviceId) => {
             await saveSettings(isMic ? { micDeviceId: deviceId } : { speakerDeviceId: deviceId });
             if (voice) voice.setSettings(settings);
+            $(isMic ? 'set-mic' : 'set-speaker').value = deviceId;
+            paintAudioPanels();
             // Changing the microphone mid-call needs a rejoin — the published
             // track is already negotiated. The speaker is only an output sink
             // and takes effect at once, so only one of these warns.
@@ -5020,15 +5117,11 @@
         };
 
         const items = [{
-            label: isMic ? 'System default microphone' : 'System default speaker',
-            icon: isMic ? 'mic' : 'headset',
-            check: !current,
-            onClick: () => choose('')
+            label: 'Windows Default', icon: isMic ? 'mic' : 'headset',
+            check: !current, onClick: () => choose('')
         }];
         list.forEach((d, i) => {
             items.push({
-                // Labels are blank until microphone permission has been granted
-                // at least once, so fall back to a number rather than a gap.
                 label: d.label || `${isMic ? 'Microphone' : 'Speaker'} ${i + 1}`,
                 icon: isMic ? 'mic' : 'headset',
                 check: d.deviceId === current,
@@ -5036,26 +5129,48 @@
             });
         });
         if (!list.length) {
-            items.push({ label: 'No devices found \u2014 allow microphone access', icon: 'warning', disabled: true, onClick: () => {} });
+            items.push({ label: 'No devices found — allow microphone access', icon: 'warning', disabled: true, onClick: () => {} });
         }
-        items.push('sep');
-        items.push({ label: 'Voice Settings', icon: 'sliders', onClick: () => openSettings() });
-        return items;
+        const r = anchor.getBoundingClientRect();
+        openCtxMenu(items, r.right + 6, r.top);
     }
 
-    function wireDeviceMenu(btnId, kind) {
-        $(btnId).addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const r = e.currentTarget.getBoundingClientRect();
-            const items = await deviceMenuItems(kind);
-            // Opened UPWARD: this button sits at the very bottom of the window,
-            // so a menu anchored below it would just be clamped against the edge.
-            const guess = Math.min(items.length * 32 + 14, 340);
-            openCtxMenu(items, r.left, Math.max(8, r.top - 6 - guess));
-        });
-    }
-    wireDeviceMenu('btn-mic-menu', 'audioinput');
-    wireDeviceMenu('btn-spk-menu', 'audiooutput');
+    $('ap-input-device').addEventListener('click', (e) => { e.stopPropagation(); openDeviceList('audioinput', e.currentTarget); });
+    $('ap-output-device').addEventListener('click', (e) => { e.stopPropagation(); openDeviceList('audiooutput', e.currentTarget); });
+
+    $('ap-input-profile').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cur = inputProfile();
+        const r = e.currentTarget.getBoundingClientRect();
+        openCtxMenu(['off', 'standard', 'ai'].map((m) => ({
+            label: PROFILE_LABEL[m], icon: m === 'off' ? 'mic' : 'sliders',
+            check: cur === m, onClick: () => setInputProfile(m)
+        })), r.right + 6, r.top);
+    });
+
+    // Live while dragging: the gain node is updated in place, so this is
+    // audible to the room immediately without republishing the track.
+    $('ap-input-volume').addEventListener('input', async (e) => {
+        await saveSettings({ micVolume: Number(e.target.value) / 100 });
+    });
+    $('ap-output-volume').addEventListener('input', async (e) => {
+        const v = Number(e.target.value) / 100;
+        await saveSettings({ outputVolume: v });
+        $('set-outvol').value = String(Math.round(v * 100));
+        $('set-outvol-val').textContent = Math.round(v * 100) + '%';
+    });
+
+    $('ap-ptt').addEventListener('change', async (e) => {
+        await saveSettings({ voiceMode: e.target.checked ? 'ptt' : 'open' });
+        $('set-mode').value = settings.voiceMode;
+        $('row-ptt').style.display = settings.voiceMode === 'ptt' ? '' : 'none';
+        if (voice) voice.setPttHeld(false);
+        await L.ptt.apply();
+    });
+
+    $('ap-input-settings').addEventListener('click', () => { closeAudioPops(); openSettings(); });
+    $('ap-output-settings').addEventListener('click', () => { closeAudioPops(); openSettings(); });
+
 
     // ---------- layout chrome: rail, categories, members sidebar ----------
 
@@ -5095,7 +5210,10 @@
 
     // The rail's server mark: back to the live end of the conversation.
     $('rail-home').addEventListener('click', () => { jumpToLatest(); input.focus(); });
-    $('rail-settings').addEventListener('click', openSettings);
+    // The rail no longer carries a settings button. There were two gears within
+    // an inch of each other at the bottom-left — the rail's and the user
+    // panel's — doing the same thing. The user panel's is the one Discord has
+    // and the one that sits where people look, so the rail's is gone.
 
     // Everything about the shell that comes out of saved settings.
     function applyChrome() {
