@@ -1096,8 +1096,11 @@ button { font-family: inherit; }
 /* The left gutter holds the avatar, and — on a grouped message, on hover — the
    timestamp in its place. */
 .msg-gutter { flex: 0 0 2.55em; position: relative; }
+/* 40px at the default chat size, measured off the reference. It was 2.55em,
+   which rendered 39 — one point under in the channel view and, before DMs
+   shared this component, four under in theirs. */
 .msg-avatar {
-  width: 2.55em; height: 2.55em; border-radius: 50%;
+  width: 2.62em; height: 2.62em; border-radius: 50%;
   display: grid; place-items: center;
   font-size: 0.85em; font-weight: 800; color: var(--on-accent);
   margin-top: .12em;
@@ -1211,7 +1214,9 @@ button { font-family: inherit; }
   margin: 1.6em 30px .6em 16px; color: var(--day-sep);
   font-size: 0.75em; font-weight: 600; letter-spacing: 0;
 }
-.day-sep::before, .day-sep::after { content: ""; height: 1px; background: var(--line-2); flex: 1; }
+/* --line, not --line-2: the rule measured eight points brighter than the
+   reference's (#313135 against its #29292D). */
+.day-sep::before, .day-sep::after { content: ""; height: 1px; background: var(--line); flex: 1; }
 /* Asymmetric on purpose: the rule reads as passing BEHIND the label, and a
    label has more air before it than after it when it is centred in one. */
 .day-sep span { padding: 0 4px 0 8px; }
@@ -2950,11 +2955,22 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    render through renderMessage() now, so they inherit .msg, .msg-head,
    .msg-avatar, .day-sep and everything else the channel column already has.
    Anything styled here would be a second definition waiting to drift. */
+/* Same construction as #messages, for the same reason: a flex column so the
+   start block can push the conversation to the bottom with an auto margin.
+   NOT justify-content: flex-end — in a scroller that overflows, Chromium
+   strands the first rows above the scroll origin. The DM view was left
+   top-anchored when the channel column was fixed, because the two had separate
+   scrollers and only one of them got the fix. */
 #dm-messages {
   flex: 1; min-height: 0; overflow-y: auto;
-  padding: 12px 0;
+  padding: 16px 0 12px;
+  display: flex; flex-direction: column;
   font-size: var(--chat-fs);
 }
+#dm-messages > * { flex: 0 0 auto; }
+/* Pushes everything below it down; resolves to zero once the conversation is
+   long enough to fill the column. */
+#dm-messages > .dm-intro { margin-top: auto; }
 .dm-empty { color: var(--muted); text-align: center; margin-top: 24px; }
 .dm-empty .dm-retry { display: block; margin: 10px auto 0; }
 
@@ -3792,3 +3808,23 @@ button.ap-row:hover .ap-more { color: var(--text); }
 }
 .dm-head-face .av { width: 29px; height: 29px; font-size: 11px; }
 .dm-head-face .ico { color: var(--ch-icon); }
+
+/* ---- the DM start block ------------------------------------------------
+   The reference's is 246px: an 80px face, the name, then one line saying the
+   conversation has not started. Reuses .chan-intro's padding and width so the
+   two openings sit on the same grid. */
+.dm-intro { padding-bottom: 16px; }
+.dm-intro-face { width: 80px; height: 80px; margin-bottom: 8px; }
+.dm-intro-face .av {
+  width: 80px; height: 80px; border-radius: 50%; font-size: 30px;
+  display: grid; place-items: center; font-weight: 800; color: var(--on-accent);
+}
+.dm-intro-face .ico { width: 80px; height: 80px; color: var(--ch-icon); }
+.dm-intro-name { margin: 0 0 6px; font-size: 28px; line-height: 1.15; font-weight: 700; color: var(--text-strong); }
+.dm-intro-sub { margin: 0; font-size: 15px; color: var(--muted); }
+.dm-intro-sub b { color: var(--text); font-weight: 600; }
+
+/* 58px, the same as the channel composer. It was 43 — a component diverging
+   from our own, not just from the reference. */
+#dm-composer .dm-composer-row { min-height: 50px; }
+#dm-composer textarea { min-height: 48px; padding: 14px 4px; }

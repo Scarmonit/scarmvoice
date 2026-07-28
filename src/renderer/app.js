@@ -9091,13 +9091,11 @@
         // panel already extend this courtesy.
         const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
         box.innerHTML = '';
-        if (!dmMsgs.length) {
-            const e = document.createElement('div');
-            e.className = 'dm-empty';
-            e.textContent = 'No messages yet — say hi!';
-            box.appendChild(e);
-            return;
-        }
+        // No early return for an empty conversation any more: the start block
+        // below IS the empty state, and it says something useful — whose
+        // conversation this is and that it has not started yet. Returning here
+        // meant a new DM showed a bare line of grey text and no start block at
+        // all, which is the one moment the block matters most.
         // A DM is a message, not a chat bubble.
         //
         // This used to render right-aligned rounded bubbles with the timestamp
@@ -9130,6 +9128,30 @@
             created_at: m.created_at,
             pinned: 0
         });
+
+        // The DM equivalent of the channel welcome block. It is also what pushes
+        // the conversation to the bottom of the column (see #dm-messages >
+        // .dm-intro), so a short conversation sits above the composer instead of
+        // stranded at the top with a screen of nothing under it.
+        const intro = document.createElement('div');
+        intro.className = 'chan-intro dm-intro';
+        const others = (dmOpen && dmOpen.members || []).filter((u) => !account || u.id !== account.id);
+        const who = dmOpen && dmOpen.isGroup ? dmOpen.title : ((others[0] && others[0].username) || dmOpen && dmOpen.title || '');
+        const head = dmOpen && dmOpen.isGroup
+            ? '<span class="ico" data-icon="users"></span>'
+            : (others[0]
+                ? `<span class="av${avatarCls(others[0].id)}" style="${avatarStyle(others[0].username)}">` +
+                  `${esc(initials(others[0].username))}${avatarImgHtml(others[0].id)}</span>`
+                : '');
+        intro.innerHTML =
+            `<div class="dm-intro-face">${head}</div>` +
+            `<h2 class="dm-intro-name">${esc(who)}</h2>` +
+            '<p class="dm-intro-sub">' + (dmOpen && dmOpen.isGroup
+                ? 'This is the beginning of this group.'
+                : 'This is the beginning of your direct message history with <b>' + esc(who) + '</b>.') +
+            '</p>';
+        box.appendChild(intro);
+        if (window.ScarmIcons) window.ScarmIcons.hydrate(intro);
 
         let lastDay = '';
         let prev = null;
