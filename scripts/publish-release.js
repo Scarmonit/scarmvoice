@@ -20,7 +20,10 @@
 //
 // This is the last step: assert both artifacts are present, then publish.
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { readNotes } = require('./release-notes');
 
 const pkg = require(path.join(__dirname, '..', 'package.json'));
 const tag = 'v' + pkg.version;
@@ -57,6 +60,47 @@ if (missing.length) {
         '  Re-run `npm run release`; electron-builder will reuse the draft.');
 }
 
+// The notes go on BEFORE the release goes live, in the same command that
+// publishes it, so there is no window in which the update banner offers a
+// version it can say nothing about — and no manual step left to forget. The
+// preflight has already checked the file exists, so this can only fail on a
+// version bump between the two, which is worth stopping for.
+let notes;
+try {
+    notes = readNotes(pkg.version);
+} catch (e) {
+    die(e.message + '\n  The release is still a DRAFT — write them and re-run `npm run release`.');
+}
+
+// Through a file, not an argument: the body is multi-line and full of quotes,
+// dashes and backticks, and every one of those is a way for a shell to mangle
+// it or for an argument list to hit its length limit.
+const bodyFile = path.join(os.tmpdir(), `scarmvoice-notes-${pkg.version}.md`);
+try {
+    fs.writeFileSync(bodyFile, notes.body, 'utf8');
+    gh(['release', 'edit', tag, '--repo', repo, '--title', notes.title, '--notes-file', bodyFile]);
+} catch (e) {
+    die(`could not attach the release notes to ${tag}.\n  ` +
+        String((e.stderr || '') + (e.stdout || '')).trim().split('\n')[0]);
+} finally {
+    try { fs.unlinkSync(bodyFile); } catch (e) { /* never existed */ }
+}
+
+// Believe the server, not the write above: this is the last check before
+// anything is offered to anyone, and a release with no body is a release the
+// app cannot describe.
+let live = null;
+try {
+    live = JSON.parse(gh(['release', 'view', tag, '--repo', repo, '--json', 'body,name']));
+} catch (e) {
+    die(`could not confirm the notes landed on ${tag}.\n  ` +
+        String((e.stderr || '') + (e.stdout || '')).trim().split('\n')[0]);
+}
+if (!live || !live.body || live.body.trim().length < 80) {
+    die(`${tag} still has no release notes on GitHub after setting them.\n` +
+        '  Leaving it as a draft rather than offering a version the app cannot describe.');
+}
+
 try {
     // --latest so the download button and the update feed both resolve here.
     gh(['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest']);
@@ -65,4 +109,4 @@ try {
         String((e.stderr || '') + (e.stdout || '')).trim().split('\n')[0]);
 }
 
-console.log(`  published ${tag} with ${assets.join(', ')}`);
+console.log(`  published ${tag} — "${notes.title}" — with ${assets.join(', ')}`);

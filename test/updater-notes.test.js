@@ -6,7 +6,12 @@
 // electron-updater reads. Guessing at the markup is how this broke before: the
 // old parser stripped every tag and produced one unreadable paragraph.
 import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadMain, resetMainModules } from './helpers/load.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let parseNotes;
 
@@ -125,5 +130,51 @@ describe('parseNotes', () => {
         const { text, blocks } = parseNotes(huge);
         expect(blocks.length).toBeLessThanOrEqual(150);
         expect(text.length).toBeLessThanOrEqual(4000);
+    });
+});
+
+// The notes this repo actually ships, read off disk.
+//
+// v0.56.0 was published with NO notes at all, because attaching them was a
+// manual `gh release edit` that lived in nobody's script. They are a build input
+// now (build/release-notes/v<version>.md, checked by the release preflight), and
+// this is the other half of that: a file written in a style parseNotes cannot
+// read would produce a release the app describes as one shapeless paragraph, and
+// nothing else would notice.
+describe('the release notes this repo ships', () => {
+    const DIR = path.join(__dirname, '..', 'build', 'release-notes');
+    const files = fs.existsSync(DIR)
+        ? fs.readdirSync(DIR).filter((f) => f.endsWith('.md')).sort()
+        : [];
+
+    it('has notes for the version in package.json', () => {
+        const version = JSON.parse(
+            fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+        ).version;
+        expect(files).toContain('v' + version + '.md');
+    });
+
+    it.each(files)('%s parses into headings and bullets, not one blob', (name) => {
+        const raw = fs.readFileSync(path.join(DIR, name), 'utf8').replace(/\r\n/g, '\n');
+        const lines = raw.split('\n');
+        const title = lines.shift().trim();
+        const body = lines.join('\n').trim();
+
+        // The first line is the release NAME on GitHub, never part of the body.
+        expect(title.length).toBeGreaterThan(0);
+        expect(title).not.toMatch(/^[-*#]/);
+
+        const { blocks, text } = parseNotes(body);
+        // A `**bold line**` is what parseNotes reads as a section heading, and
+        // `- ` lines as list items. Getting either wrong is invisible until it
+        // is in front of somebody being offered an update.
+        expect(blocks.some((b) => b.t === 'h')).toBe(true);
+        expect(blocks.some((b) => b.t === 'ul' && b.items.length)).toBe(true);
+        // Nothing may reach the renderer still wearing markup.
+        expect(text).not.toMatch(/\*\*/);
+        blocks.forEach((b) => {
+            const strings = b.t === 'ul' ? b.items : [b.text];
+            strings.forEach((s) => expect(s).not.toMatch(/[<>]/));
+        });
     });
 });

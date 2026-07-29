@@ -13,6 +13,7 @@
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readNotes } = require('./release-notes');
 
 const pkg = require(path.join(__dirname, '..', 'package.json'));
 const tag = 'v' + pkg.version;
@@ -58,6 +59,23 @@ function checkVendoredWorklet() {
     console.log('  preflight ok — the vendored RNNoise worklet is current');
 }
 
+// The notes are checked FIRST and they are checked HERE, before anything is
+// built, because they are the one release input a human has to write and so the
+// only one that can be forgotten. v0.56.0 was published without them: the update
+// banner and the whole history in Settings → About had nothing to say about it,
+// which is a release nobody can find out anything about from inside the app.
+// Failing here costs a second; finding out afterwards costs a version number.
+function checkReleaseNotes() {
+    let notes;
+    try {
+        notes = readNotes(pkg.version);
+    } catch (e) {
+        die(e.message);
+    }
+    console.log(`  preflight ok — release notes for v${pkg.version} ("${notes.title}")`);
+}
+
+checkReleaseNotes();
 checkVendoredWorklet();
 
 let body;

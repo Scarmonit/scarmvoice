@@ -228,7 +228,7 @@ GH_TOKEN=$(gh auth token) npm run release   # build AND publish a GitHub release
 | `npm start` | Run from source |
 | `npm run dev` | Same, with devtools |
 | `npm run build` / `npm run dist` | Build the installer locally, `--publish never` |
-| `npm run release` | Build **and publish** to GitHub Releases (needs `GH_TOKEN`) |
+| `npm run release` | Build **and publish** to GitHub Releases (needs `GH_TOKEN` and `build/release-notes/v<version>.md`) |
 | `npm test` | Unit + jsdom suite (vitest) |
 | `npm run test:e2e` | Launch the real app and drive it with Playwright |
 | `npm run vendor` | Re-copy the RealtimeKit browser bundle into `src/renderer/vendor/` |
@@ -257,7 +257,25 @@ Three tiers, each covering what the one below it can't reach:
 
 ### Shipping a release
 
-Bump `version` in package.json, then `GH_TOKEN=$(gh auth token) npm run release`.
+Bump `version` in package.json, **write `build/release-notes/v<version>.md`**,
+then `GH_TOKEN=$(gh auth token) npm run release`.
+
+> **The notes are a build input, not an afterthought.** First line is the release
+> title ("The audit pass"); the rest is the body, written for the person running
+> the app rather than for whoever wrote the code — plain language, no file names,
+> no internal identifiers. A line that is entirely bold is a section heading and
+> `- ` lines are bullets, because that is what `updater.js`'s `parseNotes()`
+> reads (see `scripts/release-notes.js` for the format and any existing file for
+> the house style).
+>
+> Attaching them used to be a manual `gh release edit` afterwards, which meant it
+> lived in somebody's head and in no file — so v0.56.0 went out blank, and blank
+> is not cosmetic: this text is the *only* thing the app can say about a version,
+> in the update banner someone reads while deciding to accept it and in
+> Settings → About. The preflight now refuses to build without them, and
+> `publish-release.js` attaches them and re-reads them off GitHub before it flips
+> the release live. `test/updater-notes.test.js` parses every file in that folder
+> and fails if one would render as a single shapeless paragraph.
 electron-builder builds the NSIS installer, generates `latest.yml` + a blockmap,
 and uploads them to a release tagged `v<version>` on `Scarmonit/scarmvoice`.
 That single step is the whole release: installed apps pick it up through the
