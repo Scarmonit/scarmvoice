@@ -344,7 +344,10 @@ describe('the account panel', () => {
         // Every mode carries its colour, which is the thing being chosen.
         const dots = [...menu.querySelectorAll('.ctx-dot')].map((d) => d.className);
         expect(dots.length).toBe(4);
-        expect(dots[1]).toContain('away');
+        // 'idle', not 'away'. The presence table still SAYS away — it is shared
+        // with the website and cannot be renamed — but that word is translated
+        // once on the way in, and no class or label past that point uses it.
+        expect(dots[1]).toContain('idle');
         expect(dots[2]).toContain('dnd');
         expect(dots[3]).toContain('invisible');
 

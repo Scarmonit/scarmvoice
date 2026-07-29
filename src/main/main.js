@@ -1462,11 +1462,16 @@ app.whenReady().then(async () => {
 // and on an update-restart they reliably do not. Main outlives the renderer, so
 // this is the one place that can both know the answer and still be running to
 // send it.
-let voiceRetired = false;
+// The same argument applies to the TEXT presence row, which is what puts you in
+// everybody's member list. It also ages out on its own, but until it does you
+// are shown as here — under Online, with a green dot — by an app that is not
+// running. Retired alongside the voice row, on the same budget, because the two
+// requests are independent and can go out together.
+let presenceRetired = false;
 
-async function retireVoicePresence() {
-    if (voiceRetired) return;
-    voiceRetired = true;
+async function retirePresence() {
+    if (presenceRetired) return;
+    presenceRetired = true;
     const s = store.get();
     // BEFORE the await, always. This defers the quit, and on an update the NSIS
     // installer is already counting down to `taskkill` — so anything still
@@ -1478,8 +1483,25 @@ async function retireVoicePresence() {
         // allows before it starts killing: a lost presence row ages out on its
         // own in twelve seconds, where a process killed mid-quit loses whatever
         // else the quit was going to do.
-        await Promise.race([
-            net.board('voice/presence', {
+        // Both rows at once. They are separate tables and separate requests,
+        // so racing them together costs one budget rather than two — and the
+        // voice one is skipped entirely when there was no call, because a
+        // `leaving` for a row that does not exist is a round trip spent to
+        // change nothing.
+        const going = [
+            net.board('presence', {
+                method: 'POST',
+                body: {
+                    clientId: s.clientId,
+                    name: s.displayName || 'Anonymous',
+                    status: 'online',      // ignored; `leaving` is what this says
+                    custom: s.status || '',
+                    leaving: true
+                }
+            })
+        ];
+        if (voiceState.inVoice) {
+            going.push(net.board('voice/presence', {
                 method: 'POST',
                 body: {
                     clientId: s.clientId,
@@ -1487,7 +1509,10 @@ async function retireVoicePresence() {
                     muted: !!voiceState.muted,
                     leaving: true
                 }
-            }),
+            }));
+        }
+        await Promise.race([
+            Promise.all(going),
             new Promise((resolve) => setTimeout(resolve, 800))
         ]);
     } catch (e) { /* going away regardless */ }
@@ -1500,11 +1525,15 @@ app.on('before-quit', (e) => {
     // at all if something kills the process first. This one costs a single
     // synchronous write and only when a write is actually pending.
     store.flush();
-    if (voiceRetired || !voiceState.inVoice) return;
-    // Deferred, not blocked: quit again once the row is gone. The second pass
+    // Now runs for a signed-in quit, not only a mid-call one: leaving the app
+    // has to take you out of the member list too, and that row exists whether
+    // or not you were ever in a call. No session means no rows to retire and
+    // nothing worth deferring the quit for.
+    if (presenceRetired || !net.hasSession()) return;
+    // Deferred, not blocked: quit again once the rows are gone. The second pass
     // returns above, so this can only ever happen once.
     e.preventDefault();
-    retireVoicePresence().then(() => app.quit(), () => app.quit());
+    retirePresence().then(() => app.quit(), () => app.quit());
 });
 // store.flush() matters here: settings saves are debounced, so the last change
 // before quitting (window geometry, a slider you just released) is still

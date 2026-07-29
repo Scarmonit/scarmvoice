@@ -81,9 +81,17 @@ board session is remembered for 30 days.
   remembered
 
 **Presence**
-- **Members list** — everyone here, not just the call: online / away, their
-  status line, and who's in voice, in one list. People in voice keep the
-  per-person volume controls
+- **Members list** — everyone on the board, not just the call and not just the
+  people who are here: **Online** (green), **Idle** (yellow) and **Do Not
+  Disturb** (red) together at the top, then a separate **Offline** section,
+  faded, for everyone who isn't. Their status line and who's in voice are on the
+  same rows; people in voice keep the per-person volume controls
+- **Four statuses, set both ways** — Idle arrives on its own after five minutes
+  with nothing touched, and closing the app takes you out of the list
+  immediately. Or choose for yourself from the me-bar: Online, Idle, Do Not
+  Disturb or Invisible, and the choice outranks the clock
+- **Status in a conversation** — the profile beside a direct message says
+  whether that person is there, on their face and again in words
 - **Custom status** — set a status beside your name, shared with the website
 - **Moderation** (admins) — from the person popover: **Remove from voice**, which
   ends their call on every device they have open, and **Ban**, which signs them
@@ -951,6 +959,57 @@ toy and a microphone is not, so a broken mixer must cost you the toy.
 
 The clip is also connected to `ctx.destination`, so you hear what you played —
 without that second tap the presser is the only person in the room who can't.
+
+### Offline is the absence of a row, which is why it needed a second source
+
+The presence table can only ever answer *who is here*. Somebody offline has no
+row in it — that is what offline means — so the member list had no way to show
+them at all, and simply didn't. The answer has to come from the other
+direction: the **account directory** (`account/users`) minus whoever is
+currently present. That list changes when somebody registers, which is a handful
+of times a year against a presence poll every twenty seconds, so it is loaded
+once at startup and refreshed on the same five-minute sweep the avatars use.
+
+Two rules keep it honest. A **banned** account is in neither list. And **you**
+are never listed as offline to yourself: Invisible works by retiring your
+presence row, so your own client would otherwise find you in the directory,
+find you nowhere in presence, and file you under Offline — the setting working,
+rendered as the app being broken.
+
+Grouping follows the reference: Idle and Do Not Disturb sit *inside* Online,
+told apart by the colour of their dot. They are here, just busy or away from the
+keyboard. Only Offline is separated out, and only Offline is faded — dimming
+somebody idle said the opposite of what their yellow dot said.
+
+### The wire says `away`. Everything else says Idle.
+
+The presence table is **shared with the website**: both clients write it and
+both read each other's rows, so renaming the value would split one member list
+into two that disagree about the same person. It stays `away` forever.
+
+So the translation happens in exactly one place — `statusFromWire()`, on the way
+in — and nothing past it uses the old word: not a label, not a class name, not a
+sort key. `test/offline-status.test.js` pins the boundary from both sides, and
+the assertion that matters is the negative one: nothing the member list renders
+may contain the string "Away".
+
+### What you chose, and what you are
+
+They differ in exactly one case: you chose Online and the idle rule has since
+fired. Auto-idle went out on the heartbeat long before this — so everyone
+*else's* copy of you turned yellow while your own dot stayed green, which is the
+app disagreeing with itself about the same fact two inches apart.
+
+`effectivePresenceMode()` is what the me-bar and the popover's status row draw
+now. The **picker** still checks `presenceMode()`, because that is what a choice
+is. And since the idle threshold crosses on a clock with no event behind it, the
+presence heartbeat is what notices: it compares the effective mode against the
+last one it published and repaints your own dot in the same pass that tells
+everybody else.
+
+Closing the app retires the presence row explicitly rather than waiting for it
+to age out — `retirePresence()` in main.js, which now runs for any signed-in
+quit rather than only a mid-call one, and sends both rows on one budget.
 
 ### A kick is two halves
 

@@ -1276,7 +1276,14 @@
             // enterApp(), so each sign-in cycle left another five-minute board
             // call running from behind the login card for the life of the app.
             clearInterval(avatarTimer);
-            avatarTimer = setInterval(refreshAvatars, 5 * 60 * 1000);
+            // The account directory rides along: it feeds the member list's
+            // Offline section, and it changes about as often as somebody's
+            // haircut for exactly the same reason the avatars do.
+            avatarTimer = setInterval(() => { refreshAvatars(); loadRoster(); }, 5 * 60 * 1000);
+            // Not awaited, and after the first render on purpose: the people
+            // who are HERE are the ones worth drawing first, and the absent
+            // ones can arrive a round trip later without anything moving.
+            loadRoster();
 
             if (settings.autoJoinVoice) joinVoice();
             // Measured: the very first join paid 1389ms in sdk.init against
@@ -4536,6 +4543,10 @@
         $('voice-timer').hidden = !inCall;
         renderVoiceUsers(merged, inCall);
         renderMembers(merged, inCall);
+        // The open conversation's profile reads the same presence table, so it
+        // has to move when the table does — otherwise it says "Online" for the
+        // rest of the session after they have gone.
+        paintDmProfileStatus();
     }
 
     // Who is in the call, listed under the voice channel in the sidebar. Rows
@@ -4621,6 +4632,40 @@
     // Everyone present, grouped online / away like Discord's members sidebar.
     // People in the call sort to the top of their group and keep the per-person
     // volume controls.
+    // ---------- one vocabulary for "what is this person right now" ----------
+    //
+    // The presence table says `away`. This app — and the client it is modelled
+    // on — calls that Idle. The WIRE VALUE CANNOT CHANGE: that table is shared
+    // with the website, both clients write it and both clients read each
+    // other's rows, so renaming it here would split one member list into two
+    // that disagree. So the translation happens in exactly one place, on the
+    // way in, and nothing past it ever sees `away` again — not a label, not a
+    // class name, not a sort key.
+    //
+    // `offline` has no wire value at all, in either direction: being offline is
+    // the ABSENCE of a row, which is also why an invisible user is genuinely
+    // indistinguishable from an absent one (see sendTextPresence).
+    function statusFromWire(s) {
+        if (s === 'away') return 'idle';
+        if (s === 'dnd') return 'dnd';
+        return 'online';
+    }
+    const STATUS_LABEL = {
+        online: 'Online', idle: 'Idle', dnd: 'Do Not Disturb', offline: 'Offline'
+    };
+    // Green, yellow, red, grey. `online` is the bare class because that is the
+    // dot's resting colour.
+    const statusDot = (s) => (s === 'online' ? '' : ' ' + s);
+
+    // What the presence table currently says about one ACCOUNT. Anyone it has
+    // never heard of is offline — which is the same answer for somebody who
+    // signed out an hour ago and somebody who has never opened the app.
+    function statusForUser(uid) {
+        if (!uid) return 'offline';
+        const m = members.find((x) => x.user_id === uid);
+        return m ? statusFromWire(m.status) : 'offline';
+    }
+
     function renderMembers(voiceList, inCall) {
         const ul = $('members-list');
         // Key by ACCOUNT where we know it: the same person signed in on the
@@ -4650,7 +4695,7 @@
                 id: m.client_id,
                 uid: m.user_id || null,
                 name: m.name || 'Anonymous',
-                status: (m.status === 'away' || m.status === 'dnd') ? m.status : 'online',
+                status: statusFromWire(m.status),
                 custom: m.custom || '',
                 voice: inVoice.get(key) || (m.client_id ? inVoice.get('c' + m.client_id) : null) || null
             });
@@ -4665,11 +4710,37 @@
             rows.push({ id: p.id, uid: p.uid || null, name: p.name, status: 'online', custom: '', voice: p });
         });
 
+        // Everyone with an account who is NOT in the presence table. That is
+        // what offline means here — there is no offline row to read, so the
+        // answer has to come from the other direction: the account directory
+        // minus whoever is currently present.
+        //
+        // Names are checked as well as ids because a presence row written by an
+        // older client can arrive with no user_id, and keying on the id alone
+        // would then list that person twice — once present, once offline.
+        const seenNames = new Set(rows.map((r) => r.name));
+        roster.forEach((u) => {
+            if (u.banned) return;
+            // You are never offline to yourself. Invisible keeps you out of the
+            // presence table on purpose, and this is the one list where that
+            // would read as an error rather than as the setting working.
+            if (account && u.id === account.id) return;
+            if (seen.has('u' + u.id) || seenNames.has(u.username)) return;
+            rows.push({
+                id: null, uid: u.id, name: u.username,
+                status: 'offline', custom: '', voice: null
+            });
+        });
+
         // Within a group, whoever is in the call comes first, then alphabetical.
         const byPresence = (a, b) =>
             (a.voice ? 0 : 1) - (b.voice ? 0 : 1) || a.name.localeCompare(b.name);
-        const online = rows.filter((r) => r.status !== 'away').sort(byPresence);
-        const away = rows.filter((r) => r.status === 'away').sort(byPresence);
+        // Idle and Do Not Disturb sit in ONLINE, told apart by the colour of
+        // their dot — they are here, they are just busy or away from the
+        // keyboard. Only offline gets its own section.
+        const here = rows.filter((r) => r.status !== 'offline').sort(byPresence);
+        const offline = rows.filter((r) => r.status === 'offline')
+            .sort((a, b) => a.name.localeCompare(b.name));
 
         ul.innerHTML = '';
         if (!rows.length) {
@@ -4686,8 +4757,7 @@
             // your other device's id.
             const isMe = r.id === settings.clientId || !!(account && r.uid && r.uid === account.id);
             const li = document.createElement('li');
-            li.className = 'vp' + (isMe ? ' me' : '') +
-                (r.status === 'away' ? ' away' : '') +
+            li.className = 'vp' + (isMe ? ' me' : '') + statusDot(r.status) +
                 (p && speaking[p.id] ? ' speaking' : '');
             li.dataset.cid = r.id;
 
@@ -4704,10 +4774,15 @@
             // Being in the call is the most interesting thing a row can say, so
             // it takes the second line rather than being squeezed into an icon
             // at the far right where it reads as a decoration.
+            // An offline row says nothing under the name but the person's own
+            // custom status: the section heading above it has already said
+            // "Offline", and repeating it on every row is the sort of noise
+            // that made the list read as a wall rather than as people.
             const sub = blocked ? 'Blocked'
                 : (p ? 'In voice'
-                    : (r.custom || (r.status === 'away' ? 'Away' : (r.status === 'dnd' ? 'Do not disturb' : ''))));
-            const dotClass = r.status === 'away' ? ' away' : (r.status === 'dnd' ? ' dnd' : '');
+                    : (r.custom || (r.status === 'online' || r.status === 'offline'
+                        ? '' : STATUS_LABEL[r.status])));
+            const dotClass = statusDot(r.status);
             li.innerHTML =
                 '<span class="av-wrap">' +
                 `<span class="av${avatarCls(r.uid)}" style="${avatarStyle(r.name)}">${esc(initials(r.name))}${avatarImgHtml(r.uid)}</span>` +
@@ -4745,8 +4820,8 @@
             ul.appendChild(head);
             list.forEach((r) => ul.appendChild(memberRow(r)));
         };
-        group('Online', online);
-        group('Away', away);
+        group('Online', here);
+        group('Offline', offline);
     }
 
     // ---------- per-participant popover -----------------------------------
@@ -4799,12 +4874,13 @@
 
         // The custom status lives in the presence list, not the SFU roster.
         const m = members.find((x) => x.client_id === p.id);
-        const away = !!(m && m.status === 'away');
-        const sub = (m && m.custom) || (p.muted ? 'Microphone muted' : (away ? 'Away' : ''));
+        const status = m ? statusFromWire(m.status) : 'online';
+        const sub = (m && m.custom) || (p.muted ? 'Microphone muted'
+            : (status === 'online' ? '' : STATUS_LABEL[status]));
         const st = $('pop-status');
         st.textContent = sub;
         st.hidden = !sub;
-        $('pop-presence').className = 'pop-presence' + (away ? ' away' : '');
+        $('pop-presence').className = 'pop-presence' + statusDot(status);
 
         const vol = settings.localVolumes && settings.localVolumes[p.id] !== undefined
             ? Number(settings.localVolumes[p.id]) : 1;
@@ -4930,6 +5006,27 @@
     let textPresenceTimer = null;
     let lastActivity = Date.now();
 
+    // Every account on the board, present or not. The member list needs it to
+    // work out who is OFFLINE, which the presence table cannot answer — it only
+    // knows who is here.
+    //
+    // Deliberately NOT on the presence cadence. This changes when somebody
+    // registers, which is a handful of times a year, against a poll every
+    // twenty seconds; it is loaded once at startup and refreshed on the same
+    // five-minute sweep the avatars use.
+    let roster = [];
+
+    async function loadRoster() {
+        try {
+            const res = await L.board('account/users');
+            if (!res || !res.success || !Array.isArray(res.users)) return;
+            roster = res.users;
+            // The list is already on screen by the time this lands on a cold
+            // start, so it has to ask for a repaint rather than assume one.
+            renderVoiceRoster();
+        } catch (e) { /* the list is still correct, just without the absent */ }
+    }
+
     ['mousemove', 'keydown', 'pointerdown'].forEach((ev) => {
         window.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true });
     });
@@ -5000,9 +5097,23 @@
         if (Date.now() - lastActivity > AWAY_AFTER_MS) return 'away';
         return 'online';
     }
+    // What you ARE right now, as opposed to what you CHOSE. They differ in
+    // exactly one case: you chose Online and the idle rule has since fired.
+    //
+    // Your own dot has to show that. Everyone else's copy of you already does —
+    // it goes out on the heartbeat — so a green dot on your own face while the
+    // member list two inches to the right shows you yellow is the app
+    // disagreeing with itself about the same fact. The status PICKER still
+    // checks the choice, because that is what a choice is.
+    function effectivePresenceMode() {
+        const mode = presenceMode();
+        if (mode !== 'online') return mode;
+        return myPresenceStatus() === 'away' ? 'idle' : 'online';
+    }
+
     // The dot class for a mode, shared by the me-bar, the panel and the menu.
     function presenceDotClass(mode) {
-        if (mode === 'idle') return 'away';
+        if (mode === 'idle') return 'idle';
         if (mode === 'dnd') return 'dnd';
         if (mode === 'invisible') return 'invisible';
         return '';
@@ -5046,7 +5157,19 @@
             members.forEach((m) => addRosterName(m.name));
             renderVoiceRoster();
         }
+
+        // The idle rule crosses on a clock, with no event behind it — nobody
+        // clicks anything to become idle after five minutes. This heartbeat is
+        // the tick that notices, so your own dot turns yellow in the same pass
+        // that tells everyone else, rather than at the next unrelated repaint.
+        const now = effectivePresenceMode();
+        if (now !== lastEffectiveMode) {
+            lastEffectiveMode = now;
+            renderMe();
+            if (mePopoverOpen()) paintMePopover();
+        }
     }
+    let lastEffectiveMode = null;
 
     function startTextPresence() {
         stopTextPresence();
@@ -6022,7 +6145,9 @@
 
     function renderMe() {
         const name = settings.displayName || 'Anonymous';
-        const mode = presenceMode();
+        // Effective, not chosen: auto-idle has to reach your own dot, or it is
+        // a state only other people can see you in.
+        const mode = effectivePresenceMode();
         const label = PRESENCE_LABEL[mode];
         $('me-name-text').textContent = name;
         paintAvatarEl($('me-avatar'), name, myUserId());
@@ -6334,9 +6459,13 @@
         // Tinted from the same hash the avatar is, so the panel is recognisably
         // yours without asking for a second image to upload.
         $('mep-banner').setAttribute('style', bannerStyle(name));
-        $('mep-presence').className = 'mep-presence ' + presenceDotClass(mode);
-        $('mep-status-dot').className = 'presence ' + presenceDotClass(mode);
-        $('mep-status-label').textContent = PRESENCE_LABEL[mode];
+        // The dot and the status ROW report what you are — auto-idle included,
+        // so this panel agrees with the bar it opened from. The picker below it
+        // is the one place that shows the CHOICE, with its check.
+        const now = effectivePresenceMode();
+        $('mep-presence').className = 'mep-presence ' + presenceDotClass(now);
+        $('mep-status-dot').className = 'presence ' + presenceDotClass(now);
+        $('mep-status-label').textContent = PRESENCE_LABEL[now];
         // Empty, it still says something: an invitation is the only way anyone
         // finds out the field is there.
         const custom = $('mep-custom');
@@ -10179,12 +10308,18 @@
         // (The account panel's banner has used bannerStyle since it was written;
         // this one was built with the wrong helper.)
         $('dm-prof-banner').style.cssText = bannerStyle(u.username);
+        // Whether they are there, answered on the face itself and again in
+        // words underneath. The presence table is the only source: it is the
+        // same one the member list reads, so the two can never disagree.
+        const status = statusForUser(u.id);
         $('dm-prof-face').innerHTML =
             `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
-            `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>`;
+            `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>` +
+            `<i class="presence${statusDot(status)}" aria-hidden="true"></i>`;
         wireAvatarFallback($('dm-prof-face'));
         $('dm-prof-name').textContent = u.username;
         $('dm-prof-handle').textContent = '@' + u.username;
+        paintDmProfileStatus();
 
         // Only what we actually know. The reference shows "Member Since" from a
         // creation date we do not carry, and inventing one would be worse than
@@ -10209,6 +10344,29 @@
 
         // The button did nothing at all — it was styled and never wired.
         $('dm-prof-full').onclick = () => openProfileCard(u);
+    }
+
+    // The status half of the panel, on its own so the presence poll can refresh
+    // it every twenty seconds WITHOUT going back through renderDmProfile —
+    // which rewrites the avatar's markup, and would therefore restart the image
+    // load and flash the face three times a minute for as long as a
+    // conversation stayed open.
+    function paintDmProfileStatus() {
+        const panel = $('dm-profile');
+        if (!panel || panel.hidden) return;
+        const others = (dmOpen && dmOpen.members || []).filter((m) => !account || m.id !== account.id);
+        const u = (dmOpen && !dmOpen.isGroup) ? others[0] : null;
+        if (!u) return;
+
+        const status = statusForUser(u.id);
+        // Their custom line rides along when they have set one — it is the
+        // difference between "Online" and "Online — heads down until four".
+        const custom = (members.find((x) => x.user_id === u.id) || {}).custom || '';
+        const faceDot = $('dm-prof-face').querySelector('.presence');
+        if (faceDot) faceDot.className = 'presence' + statusDot(status);
+        $('dm-prof-dot').className = 'presence' + statusDot(status);
+        $('dm-prof-status-text').textContent =
+            STATUS_LABEL[status] + (custom ? ' — ' + custom : '');
     }
 
     // The fuller profile, as a card over the conversation. Everything the panel

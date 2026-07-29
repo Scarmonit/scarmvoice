@@ -51,6 +51,7 @@ export async function bootRenderer(opts = {}) {
     let rtMessage = null;
     let resync = null;
     let winHidden = null;
+    let winFocus = null;
 
     const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
     document.documentElement.innerHTML = html
@@ -116,7 +117,11 @@ export async function bootRenderer(opts = {}) {
         },
         win: {
             minimize: noop, maximize: noop, close: noop,
-            isFocused: vi.fn(async () => true), onFocus: unsub,
+            isFocused: vi.fn(async () => true),
+            // Held: clicking back into the window republishes presence
+            // (refreshPresenceSoon), which is the app's own way of asking the
+            // member list to catch up without waiting for the heartbeat.
+            onFocus: (cb) => { winFocus = cb; return noop; },
             // Held: main.js sends this on the real window events, and it is the
             // only way the renderer can know it is in the tray — document.hidden
             // is frozen at false by backgroundThrottling:false.
@@ -203,7 +208,9 @@ export async function bootRenderer(opts = {}) {
         // Restore-from-tray, as main.js delivers it.
         resync: () => { if (resync) resync(); },
         // The window went to / came back from the tray.
-        hidden: (h) => { if (winHidden) winHidden(h); }
+        hidden: (h) => { if (winHidden) winHidden(h); },
+        // Focus left or came back.
+        focus: (f) => { if (winFocus) winFocus(f); }
     };
 }
 

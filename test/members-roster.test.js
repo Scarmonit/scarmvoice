@@ -156,11 +156,18 @@ describe('members sidebar', () => {
     });
 
     it('keeps each person in one group, with their real status', () => {
-        // The duplicate was forced to "online", so the same person appeared
-        // under Online AND Away at the same time.
-        expect(groups()).toEqual(['Online — 1', 'Away — 1']);
+        // The duplicate was forced to "online", so the same person was rendered
+        // twice — and the status that survived the merge was the wrong one.
+        //
+        // Idle now sits inside Online, as it does in the reference: being idle
+        // means you are here and have not touched the keyboard, which is a
+        // different claim from being away from the app entirely. The dot
+        // colour carries it, so the assertion moved to the class.
+        expect(groups()).toEqual(['Online — 2']);
         const me = rows().find((li) => li.dataset.cid === 'me');
-        expect(me.classList.contains('away')).toBe(true);
+        expect(me.classList.contains('idle'), 'my row is marked idle').toBe(true);
+        expect(me.querySelector('.presence').classList.contains('idle'),
+            'and so is my dot').toBe(true);
     });
 
     it('still marks a peer as in voice despite the missing account id', () => {
@@ -180,7 +187,7 @@ describe('members sidebar', () => {
         // Nobody else can tell this process about its own microphone.
         const me = rows().find((li) => li.dataset.cid === 'me');
         expect(me.querySelector('.vp-sub.in-voice')).toBeNull();
-        expect(me.querySelector('.vp-sub').textContent.trim()).toBe('Away');
+        expect(me.querySelector('.vp-sub').textContent.trim()).toBe('Idle');
     });
 
     it('does not duplicate when a resync re-delivers uid-less voice rows', async () => {
@@ -189,6 +196,6 @@ describe('members sidebar', () => {
         onResync();
         await settle();
         expect(rows()).toHaveLength(2);
-        expect(groups()).toEqual(['Online — 1', 'Away — 1']);
+        expect(groups()).toEqual(['Online — 2']);
     });
 });

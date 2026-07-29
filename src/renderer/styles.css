@@ -117,6 +117,10 @@
      reporting that a connection is healthy — not a 10px dot on a photograph. */
   --voice-ok:    #67af74;
   --idle:        #dfa32c;
+  /* Offline. A dot in this colour and a dimmed row are the only two things
+     that say somebody is not here — there is no other signal, because an
+     offline person has no presence row to carry one. */
+  --offline:     #80848e;
   /* Was #f2455e, which leans magenta — the same tint correction the rest of
      the ramp got. This is the colour muted and deafened are drawn in. */
   --danger:      #f23f43;
@@ -977,7 +981,8 @@ button { font-family: inherit; }
 }
 /* Inside the sidebar the cutout is punched in the sidebar's colour instead. */
 #voice-users .vp .presence { border-color: var(--side); }
-.vp .presence.away { background: var(--idle); }
+.vp .presence.idle { background: var(--idle); }
+.vp .presence.offline { background: var(--offline); }
 /* Name over status, not name with an icon shoved to the far right: being in
    the call is the most interesting thing a row can say, and at the far edge it
    read as decoration. */
@@ -1003,8 +1008,14 @@ button { font-family: inherit; }
 }
 .vp-sub.in-voice { color: var(--voice-ok); }
 .vp-sub-ico { width: 12px; height: 12px; flex: 0 0 12px; }
-.vp.away .av, .vp.away .av-wrap { opacity: .55; }
-.vp.away .vp-name { color: var(--muted); }
+/* Offline is the only state that fades. Somebody idle is HERE — they have
+   just not touched the keyboard for five minutes — and dimming them said
+   the opposite of what their yellow dot said. The reference fades the
+   absent and nobody else, which is also what lets the Offline section be
+   skimmed past rather than read. */
+.vp.offline .av, .vp.offline .av-wrap { opacity: .32; }
+.vp.offline .vp-name { color: var(--dim); opacity: .72; }
+.vp.offline .vp-sub { opacity: .72; }
 .vp-invoice { flex: 0 0 auto; font-size: 11px; opacity: .9; margin-left: auto; }
 .vp-invoice + .vp-flag { margin-left: 4px; }
 .members-empty { padding: 8px 8px; color: var(--dim); font-size: 12.5px; }
@@ -2569,7 +2580,7 @@ input[readonly] { opacity: .75; cursor: default; }
   width: 12px; height: 12px; border-radius: 50%;
   background: var(--online); border: 3px solid var(--float);
 }
-.pop-presence.away { background: var(--idle); }
+.pop-presence.idle { background: var(--idle); }
 .pop-id { min-width: 0; display: flex; flex-direction: column; }
 .pop-name {
   font-weight: 700; font-size: 14px; color: var(--text);
@@ -2955,6 +2966,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --online:      #1b8e4c;
   --voice-ok:    #2f7a3d;
   --idle:        #a9761a;
+  --offline:     #82868d;
   --danger:      #d32a2e;
   --danger-hi:   #ad2124;
   --danger-soft: rgba(211, 42, 46, .10);
@@ -3311,7 +3323,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   width: 26px; height: 26px; border-radius: 50%;
   background: var(--online); border: 5px solid var(--float);
 }
-.mep-presence.away { background: var(--idle); }
+.mep-presence.idle { background: var(--idle); }
 .mep-presence.dnd { background: var(--danger); }
 .mep-presence.invisible { background: var(--dim); }
 
@@ -3396,7 +3408,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   width: 10px; height: 10px; border: 0; border-radius: 50%;
   background: var(--online);
 }
-.ctx-item .ctx-dot.away,   .mep-status-row .presence.away { background: var(--idle); }
+.ctx-item .ctx-dot.idle,   .mep-status-row .presence.idle { background: var(--idle); }
 .ctx-item .ctx-dot.dnd,    .mep-status-row .presence.dnd  { background: var(--danger); }
 /* Invisible is drawn hollow: it is the absence of a presence, not a colour. */
 .ctx-item .ctx-dot.invisible,
@@ -3406,7 +3418,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   background: transparent; box-shadow: inset 0 0 0 2.5px var(--dim);
 }
 /* The me-bar dot already had online and dnd; these complete the set. */
-.me-presence.away { background: var(--idle); }
+.me-presence.idle { background: var(--idle); }
 
 
 /* ---------- audio panels (the me-bar carets) ---------------------------- */
@@ -4031,9 +4043,36 @@ html.win-hidden .up-bar i {
   width: 68px; height: 68px; border-radius: 50%; font-size: 26px;
   display: grid; place-items: center; font-weight: 800; color: var(--on-accent);
 }
+/* The status dot on the face, cut out of the panel the same way the member
+   list's dots are cut out of the sidebar — scaled up to match an 80px avatar
+   instead of a 32px one. */
+#dm-prof-face .presence {
+  position: absolute; right: 1px; bottom: 1px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--online); border: 5px solid var(--panel);
+}
+#dm-prof-face .presence.idle    { background: var(--idle); }
+#dm-prof-face .presence.dnd     { background: var(--danger); }
+#dm-prof-face .presence.offline { background: var(--offline); }
+
 #dm-prof-body { padding: 34px 16px 16px; display: flex; flex-direction: column; gap: 2px; }
 #dm-prof-name { font-size: 20px; font-weight: 700; color: var(--text-strong); }
 #dm-prof-handle { font-size: 13px; color: var(--muted); }
+/* Named as well as coloured. A dot alone is a convention you have to already
+   know; this panel has the room to just say it. */
+.dm-prof-status {
+  margin-top: 10px; display: flex; align-items: center; gap: 7px;
+  font-size: 13px; color: var(--muted); min-width: 0;
+}
+.dm-prof-status .presence {
+  position: static; flex: 0 0 10px;
+  width: 10px; height: 10px; border: 0; border-radius: 50%;
+  background: var(--online);
+}
+.dm-prof-status .presence.idle    { background: var(--idle); }
+.dm-prof-status .presence.dnd     { background: var(--danger); }
+.dm-prof-status .presence.offline { background: var(--offline); }
+.dm-prof-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #dm-prof-meta { margin-top: 14px; display: flex; flex-direction: column; gap: 4px; }
 #dm-prof-meta .pm-label {
   font-size: 12px; font-weight: 700; color: var(--text-strong);

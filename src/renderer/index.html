@@ -705,10 +705,17 @@
          profile to show. -->
     <aside id="dm-profile" hidden>
       <div id="dm-prof-banner"></div>
+      <!-- The face carries the status dot, the same way every other avatar in
+           the app does — so "are they there?" is answered where you are already
+           looking, and the line below only has to name it. -->
       <div id="dm-prof-face"></div>
       <div id="dm-prof-body">
         <div id="dm-prof-name"></div>
         <div id="dm-prof-handle"></div>
+        <div id="dm-prof-status" class="dm-prof-status">
+          <i class="presence" id="dm-prof-dot" aria-hidden="true"></i>
+          <span id="dm-prof-status-text"></span>
+        </div>
         <div id="dm-prof-meta"></div>
       </div>
       <button type="button" id="dm-prof-full">View Full Profile</button>
