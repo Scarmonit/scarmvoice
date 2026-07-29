@@ -153,10 +153,16 @@
 
             const srcTracks = raw.getAudioTracks();
             let done = false;
-            const cleanup = () => {
+            const origStop = track.stop.bind(track);
+            // Same contract as noise.js: `fromEnded` means the SOURCE died, and
+            // only then may the track we handed out be ended — ending it is what
+            // makes the SDK reacquire, and doing that on a deliberate stop would
+            // reopen a microphone the app had just released.
+            const onSourceEnded = () => cleanup(true);
+            const cleanup = (fromEnded) => {
                 if (done) return;
                 done = true;
-                srcTracks.forEach((t) => { try { t.removeEventListener('ended', cleanup); } catch (e) {} });
+                srcTracks.forEach((t) => { try { t.removeEventListener('ended', onSourceEnded); } catch (e) {} });
                 liveMicGains.delete(gain);
                 try { gain.disconnect(); } catch (e) {}
                 try { src.disconnect(); } catch (e) {}
@@ -167,10 +173,19 @@
                 // The consumer only ever sees the mixed track, so stopping the
                 // real mic here is what releases the device.
                 srcTracks.forEach((t) => { try { t.stop(); } catch (e) {} });
+
+                // A MediaStreamAudioDestinationNode track never ends on its own
+                // — disconnecting its inputs leaves it 'live' and silent — so
+                // without this the consumer went on encoding silence after the
+                // microphone was gone, with nothing on screen to say so.
+                if (fromEnded) {
+                    try { origStop(); } catch (e) {}
+                    try { track.dispatchEvent(new Event('ended')); } catch (e) {}
+                    try { window.dispatchEvent(new CustomEvent('scarm:miclost')); } catch (e) {}
+                }
             };
-            srcTracks.forEach((t) => t.addEventListener('ended', cleanup, { once: true }));
-            const origStop = track.stop.bind(track);
-            track.stop = function () { cleanup(); origStop(); };
+            srcTracks.forEach((t) => t.addEventListener('ended', onSourceEnded, { once: true }));
+            track.stop = function () { cleanup(false); origStop(); };
 
             // Video rides along untouched — a getUserMedia asking for both must
             // not lose its camera to the audio path.

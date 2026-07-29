@@ -78,7 +78,7 @@
     const filter = {
         text: '',
         types: new Set(),           // 'links' | 'images' | 'videos' | 'audio' | 'files'
-        pinned: false,
+        pinned: null,               // true | false | null ("either") — see applyQuery
         mentions: false,
         edited: false,
         // The chosen person as an IDENTITY — { label, names, userIds } — not as
@@ -95,7 +95,10 @@
         after: null
     };
     function filterActive() {
-        return !!(filter.text || filter.types.size || filter.pinned ||
+        // `pinned` is tri-state: null is "either", and BOTH true and false are
+        // a filter — `pinned:false` narrows the list just as much as
+        // `pinned:true` does.
+        return !!(filter.text || filter.types.size || filter.pinned !== null ||
             filter.mentions || filter.edited || filter.from ||
             filter.mentionsNames.length || filter.inChannel || filter.author ||
             filter.before || filter.after);
@@ -1400,8 +1403,13 @@
 
     // Channel name only — the '#' is a separate glyph in the header.
     function setChannelTitle(name) {
-        const box = document.getElementById('ch-search-text');
-        if (box) box.textContent = 'Search ' + (document.querySelector('#server-head .sh-name') || {}).textContent;
+        // `ch-search-text` is a CLASS on #search-input, never an id, so this
+        // looked up null on every switch and the label it exists to write was
+        // never written. It is also an <input>: textContent paints nothing
+        // there, so both halves had to change, not just the selector.
+        const box = $('search-input');
+        const server = document.querySelector('#server-head .sh-name');
+        if (box) box.placeholder = 'Search ' + ((server && server.textContent) || 'ScarmVoice');
         $('chan-title').textContent = name;
         $('composer-input').placeholder = 'Message #' + name;
     }
@@ -1438,6 +1446,11 @@
         following = true;
         seenTopId = 0;
         hasMore = true;
+        // The saved pre-filter offset belongs to the channel being left. Kept,
+        // it gets replayed into the NEXT channel when the filter clears — a
+        // scroll to a position that means nothing in the conversation it lands
+        // in.
+        filterScrollTop = null;
         clearReply();            // the quoted message lives in the old channel
         cancelEdit();            // an editor left open would freeze renderMessages()
         if (threadOpen()) closeThread();
@@ -2003,7 +2016,12 @@
 
     function echoPost(id, body, chan, quoteId, attachment) {
         if (!id) return;
-        const q = quoteId ? posts.find((p) => p.id === quoteId) : null;
+        // `posts` is whatever channel is on screen NOW. An echo for a different
+        // one — a queued message flushing, or an upload that outlived a channel
+        // switch — must not resolve its quote against a conversation it does
+        // not belong to.
+        const mine = chan === channel;
+        const q = (mine && quoteId) ? posts.find((p) => p.id === quoteId) : null;
         selfEchoes.push({
             id,
             channel: chan,
@@ -2022,9 +2040,15 @@
             att_size: (attachment && attachment.size) || 0
         });
         renderMessages();
-        const box = $('messages');
-        box.scrollTop = box.scrollHeight;
-        following = true;
+        // Only jump to the live edge when the echo is for the channel being
+        // read. flushOutbox() replays a queued message under ITS channel, so an
+        // unconditional scroll threw the reader out of their place in a
+        // conversation they had never touched — and pinned `following` there.
+        if (mine) {
+            const box = $('messages');
+            box.scrollTop = box.scrollHeight;
+            following = true;
+        }
         settleScroll();
     }
 
@@ -2289,7 +2313,11 @@
             retry.type = 'button';
             retry.className = 'pending-retry';
             retry.textContent = 'Retry';
-            retry.addEventListener('click', () => { entry.failed = false; entry.rejected = false; flushOutbox(); });
+            // tries goes back to zero: a manual Retry is the user saying "try
+            // properly again", not "have one more of the eight".
+            retry.addEventListener('click', () => {
+                entry.failed = false; entry.rejected = false; entry.tries = 0; flushOutbox();
+            });
             const cancel = document.createElement('button');
             cancel.type = 'button';
             cancel.className = 'pending-retry';
@@ -2480,11 +2508,18 @@
         return el;
     }
 
+    // The one board mutation that used to have no failure branch: a rejected
+    // reaction did nothing and said nothing, and — worse — never called
+    // authGone(), so an expired session kept a dead button being clicked
+    // instead of taking the user back to the sign-in card the way every other
+    // action does.
     async function react(postId, emoji) {
         const res = await L.board('react', {
             method: 'POST', body: { postId, emoji, clientId: settings.clientId }
         });
-        if (res && res.success) loadMessages(false);
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not react', true);
+        loadMessages(false);
     }
 
     // Links open in the system browser. Attachments are saved through the
@@ -2686,6 +2721,11 @@
 
     const OUTBOX_KEY = 'lounge_outbox';
     const OUTBOX_MAX = 50;
+    // Automatic sends before a queued message stops trying by itself. Generous
+    // — a real outage is measured in poll ticks — but finite, so a message the
+    // server chokes on every single time ends up in front of the person who
+    // wrote it instead of looping quietly forever.
+    const OUTBOX_TRIES = 8;
     let outbox = [];
     let outboxSeq = 0;
     let flushingOutbox = false;
@@ -2775,7 +2815,21 @@
                 entry.sending = false;
                 if (res && res.network) {
                     // Still offline — leave the rest queued and try again later.
+                    //
+                    // Bounded, though: net.js now flags an edge 5xx as network
+                    // too (it is transient, and marking it rejected stranded a
+                    // perfectly good message), and a body that deterministically
+                    // makes the Worker throw would otherwise be re-POSTed on
+                    // every poll tick for the rest of the session. After
+                    // OUTBOX_TRIES it becomes the user's decision, with Retry
+                    // and Discard on the row.
                     entry.failed = true;
+                    entry.tries = (entry.tries || 0) + 1;
+                    if (entry.tries >= OUTBOX_TRIES) {
+                        entry.rejected = true;
+                        entry.error = (res && res.error) || 'Could not send — the server is not answering';
+                    }
+                    saveOutbox();
                     renderMessages();
                     return;
                 }
@@ -4813,8 +4867,15 @@
                 (p && p.deafened ? '<span class="vp-flag" title="Deafened">' + I('headset-off') + '</span>' : '');
 
             wireAvatarFallback(li);
-            if (p && !isMe && inCall && !p.remoteOnly) {
-                li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
+            // Gated on the TARGET, not on the viewer. It used to require `inCall`
+            // — i.e. that *I* had joined — which meant an admin who was not in
+            // the call had no way to reach "Remove from voice" at all, on a row
+            // that styles itself as clickable and simply did nothing. The
+            // local-audio half of the popover is what actually needs a live
+            // call, so that is what the last argument turns off.
+            const live = !!(p && inCall && !p.remoteOnly);
+            if (!isMe) {
+                li.addEventListener('click', (e) => openPopover(p || r, e.currentTarget, live));
             } else if (isMe && inCall) {
                 // Your own row here did nothing, while the identical row under
                 // the voice channel opened the mute/deafen/leave menu. Same
@@ -4876,11 +4937,21 @@
         $('pop-vol').style.setProperty('--fill', (pct / 2) + '%');
     }
 
-    function openPopover(p, anchor) {
+    // `audio` is false when this is opened about somebody who is not in the call
+    // with us: the volume slider and "Mute for me" are about a stream that does
+    // not exist, and offering them would be two more controls that do nothing.
+    // Everything else — mention, block, and the admin actions — still applies.
+    function openPopover(p, anchor, audio) {
         const pop = $('popover');
         // Clicking the same person again closes it, like every other toggle.
         if (popFor === p.id && !pop.hidden) { closePopover(); return; }
         popFor = p.id;
+
+        const canAudio = audio !== false;
+        $('pop-mute-row').hidden = !canAudio;
+        $('pop-vol-head').hidden = !canAudio;
+        $('pop-vol').hidden = !canAudio;
+        $('pop-audio-sep').hidden = !canAudio;
 
         paintAvatarEl($('pop-avatar'), p.name, p.uid || uidForClient(p.id));
         $('pop-name').textContent = p.name;
@@ -5261,7 +5332,16 @@
     function hasNotes(s) { return !!(s && s.noteBlocks && s.noteBlocks.length); }
 
     const UPDATE_COPY = {
-        available: (s) => ({
+        // `available` is two different situations wearing one name: an update
+        // whose download is about to start, and one whose download FAILED and
+        // fell back here. Saying "downloading" for the second was a lie the app
+        // told for up to three hours, until the periodic recheck happened to
+        // pick it up again — with the captured error never shown to anyone.
+        available: (s) => (s.stalled ? {
+            title: 'Update download failed',
+            sub: 'ScarmVoice ' + (s.version || '') + (s.error ? ' — ' + s.error : ''),
+            action: 'Try again'
+        } : {
             title: 'Update available',
             sub: 'ScarmVoice ' + (s.version || '') + ' — downloading',
             action: 'Downloading…'
@@ -5322,10 +5402,12 @@
         $('ub-sub').textContent = c.sub;
         $('ub-sub').title = c.sub;
         $('ub-action').textContent = c.action;
-        // Only ever pressable in the one case there is still a decision to make:
-        // an update held back by a call. Everything else is narration.
-        $('ub-action').disabled = updateState.status !== 'ready' ||
-            updateState.waitingFor !== 'call';
+        // Pressable in the two cases where there is still something to do: an
+        // update held back by a call, and one whose download died and needs
+        // starting again. Everything else is narration.
+        const heldByCall = updateState.status === 'ready' && updateState.waitingFor === 'call';
+        const stalled = updateState.status === 'available' && !!updateState.stalled;
+        $('ub-action').disabled = !heldByCall && !stalled;
         $('ub-progress').hidden = updateState.status !== 'downloading';
         if (updateState.status === 'downloading') {
             $('ub-bar').style.width = (updateState.progress || 0) + '%';
@@ -5335,10 +5417,17 @@
     }
 
     function applyUpdateAction() {
-        // The only live button left: "Restart now" on an update a call is
-        // holding back. Everywhere else the app has already restarted itself.
-        if (updateState.status !== 'ready') return;
-        L.update.install();
+        // "Restart now" on an update a call is holding back — everywhere else
+        // the app has already restarted itself.
+        if (updateState.status === 'ready') { L.update.install(); return; }
+        // …and "Download update", which the release-notes modal offers whenever
+        // the state is `available`. That button had no implementation at all:
+        // it closed the modal and returned here, which did nothing, so the one
+        // state it exists for — a download that errored back to `available`
+        // with nothing retrying it for three hours — had a visible, enabled
+        // control that could not start the download the IPC was already wired
+        // for.
+        if (updateState.status === 'available') L.update.download();
     }
 
     $('ub-action').addEventListener('click', applyUpdateAction);
@@ -5903,6 +5992,10 @@
         closeLightbox();
         closeNotes();
         closeDmPicker();
+        // Focus-trapped, a sibling of #app and LATER in the document than
+        // #login — so left open it paints over the sign-in card and its Tab
+        // trap keeps the password field unreachable.
+        closeFiltersModal();
         hideTip();
         // A dialog left open never settles its promise, so whatever was
         // awaiting it is abandoned mid-flight rather than cancelled.
@@ -5988,6 +6081,11 @@
         // own that happened to share the number. (closeDm() has just stashed
         // the open one, so this has to come after it.)
         drafts.clear();
+        // Exactly the same argument for the thread composer, which is a
+        // separate textarea and so was never covered by `drafts`. closeThread()
+        // has already run above and stashed whatever was open, so this is what
+        // actually throws it away.
+        threadDrafts.clear();
         // Same rule as the drafts: remembered pages are somebody's messages,
         // and the next person to sign in on this machine must not open a
         // channel and find them already painted.
@@ -6135,6 +6233,28 @@
         // selector — that would recalc the whole document on every restore,
         // which is a felt interaction spent to save background work.
         document.documentElement.classList.toggle('win-hidden', windowHidden);
+    });
+
+    // The microphone went away mid-capture — unplugged, powered off, revoked.
+    // The wrappers in noise.js/soundboard.js end the published track so the SDK
+    // can reacquire, but the SDK cannot get the device back while you are muted
+    // or on push-to-talk (it only auto-switches an ENABLED track), and it can
+    // never get a DIFFERENT one. Until this, none of that reached the user at
+    // all: the mic button still read unmuted and the room simply stopped
+    // hearing them.
+    let micLostAt = 0;
+    window.addEventListener('scarm:miclost', () => {
+        // One report per incident: the two wrappers are layered, so a single
+        // unplug walks through both.
+        const now = Date.now();
+        if (now - micLostAt < 3000) return;
+        micLostAt = now;
+        L.app.log('microphone lost mid-capture');
+        if (voice && (voice.isJoined() || voice.isJoining())) {
+            toast('Your microphone disconnected — reconnect it, or pick another in Settings and rejoin', true);
+        } else {
+            toast('Your microphone disconnected', true);
+        }
     });
 
     // Restore-from-tray / wake-from-sleep: main verifies the socket (rt.wake)
@@ -6718,7 +6838,11 @@
         // capture was opening would assign the stream AFTER the only thing that
         // could release it had already run, with no handle left to reach it.
         // A blurred window closes this panel, so the window is not a small one.
-        if (gen !== sessionGen || $('mic-pop').hidden) {
+        // `apMeter` is checked for the same reason the mic test checks micTest:
+        // the `if (apMeter) return` guard at the top sits IN FRONT of the await,
+        // so an open/close/open of the panel inside that window opens a second
+        // capture and orphans the first.
+        if (gen !== sessionGen || apMeter || $('mic-pop').hidden) {
             try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             return;
         }
@@ -7118,6 +7242,10 @@
     // ---------- settings modal --------------------------------------------
 
     let recordingPtt = false;
+    // Set while a hotkey recorder is armed; see bindKeyRecorder. Held here so
+    // closeSettings() can call it — an armed recorder outliving the sheet it
+    // belongs to swallows the next keystroke anywhere in the app.
+    let cancelKeyRecorder = null;
 
     async function openSettings() {
         settings = await L.settings.get();
@@ -7196,6 +7324,11 @@
     // Closing has to stop the mic test, whichever way it happens.
     function closeSettings() {
         stopMicTest();
+        // A hotkey recorder is armed on the sheet, so it dies with the sheet.
+        // Deliberately floating: finish(null,false) writes no setting, it only
+        // detaches the two window capture listeners and repaints a button that
+        // is about to be hidden anyway.
+        if (cancelKeyRecorder) cancelKeyRecorder();
         releaseFocus($('settings'));
         $('settings').hidden = true;
     }
@@ -7397,6 +7530,16 @@
         toast('Two-factor authentication is on — you\'ll need your app to sign in');
     });
     $('btn-acct-2fa-cancel').addEventListener('click', () => { $('acct-2fa-setup').hidden = true; });
+    // Enter submits, like the identical 6-digit box on the login card. A TOTP
+    // code expires in thirty seconds, so making someone read the digits, type
+    // them, and then go and find the mouse is a real way to miss the window and
+    // be told a correct code is wrong.
+    $('acct-2fa-code').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        e.stopPropagation();
+        $('btn-acct-2fa-confirm').click();
+    });
 
     // ---- board account (username + role on top of the shared password) ----
 
@@ -7613,6 +7756,13 @@
         rebindRealtime();
         loadDmThreads();
         toast('Account verified — signed in as ' + account.username);
+    });
+    // Same gesture as its twin on the login card (#login-code).
+    $('acct-code').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        e.stopPropagation();
+        $('btn-acct-verify').click();
     });
     $('btn-acct-resend').addEventListener('click', async () => {
         const res = await L.account.resend(pendingVerifyUser);
@@ -7975,7 +8125,16 @@
         // Same race as startRecording(): teardown's stopMicTest() is a no-op
         // while micTest is still null, so a session ending during the permission
         // prompt would leave this stream open behind the login gate.
-        if (gen !== sessionGen) {
+        //
+        // `micTest` is in the condition for the same reason, one step nearer
+        // home: the leading stopMicTest() also does nothing while micTest is
+        // null, so two clicks inside the device-open window (100-500ms — well
+        // within a double click) opened two captures and the second overwrote
+        // the handle to the first. Nothing could then release it, not Stop
+        // Test, not closing Settings, not signing out — the microphone-in-use
+        // light stayed on until the app was quit. Whichever capture loses the
+        // race is stopped here.
+        if (gen !== sessionGen || micTest) {
             try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             return;
         }
@@ -8364,7 +8523,17 @@
         await saveSettings({ noiseSuppressionAI: false });   // also re-pushes to voice.js
         window.ScarmNoise.setEnabled(false);
         $('set-nsai').checked = false;
-        toast('AI noise suppression could not start — using standard noise suppression instead', true);
+        // …but only for the NEXT capture. The microphone in a call that is
+        // already running was acquired with the browser's suppressor switched
+        // off ("RNNoise owns it"), and nothing re-acquires it — so promising a
+        // fallback that has not happened yet left the user believing their fan
+        // and keyboard were being filtered when neither filter was running.
+        // Every sibling control that changes this chain says "rejoin"; this one
+        // has more reason to than any of them.
+        const live = !!(voice && (voice.isJoined() || voice.isJoining()));
+        toast(live
+            ? 'AI noise suppression could not start — rejoin voice to use standard noise suppression'
+            : 'AI noise suppression could not start — using standard noise suppression instead', true);
     }
     $('set-font-size').addEventListener('change', async (e) => {
         await saveSettings({ chatFontSize: e.target.value });
@@ -8462,6 +8631,9 @@
 
             const finish = async (binding, clear) => {
                 recordingPtt = false;
+                // Nulled first, so a cancel that arrives while this is running
+                // (closeSettings during teardown, say) cannot re-enter.
+                cancelKeyRecorder = null;
                 btn.classList.remove('recording');
                 window.removeEventListener('keydown', onKey, true);
                 window.removeEventListener('mousedown', onMouse, true);
@@ -8498,6 +8670,14 @@
             };
             window.addEventListener('keydown', onKey, true);
             window.addEventListener('mousedown', onMouse, true);
+            // Escape cancels, but only if you are still looking at the sheet.
+            // Closing Settings with the recorder armed used to leave both
+            // capture listeners attached: push-to-talk was dead until the next
+            // keystroke ANYWHERE, and that keystroke was then swallowed and
+            // saved as the binding — a character vanishing out of a message and
+            // a global hotkey silently rebound, with nothing on screen to
+            // explain either. Cancel is exactly the Escape path.
+            cancelKeyRecorder = () => finish(null, false);
         });
     }
     bindKeyRecorder('set-ptt', 'pttBinding', refreshPttHint);
@@ -9640,11 +9820,12 @@
             };
         }
 
-        // `pinned:` with no value, or pinned:true, means pinned. pinned:false
-        // is the one way to say "and not pinned", which the boolean cannot
-        // express — so it clears rather than sets.
+        // `pinned:` with no value, or pinned:true, means pinned; pinned:false
+        // means "and NOT pinned"; absent means either. Three answers, so three
+        // values — as a boolean the third and the second were the same thing,
+        // and "Anything but pinned" in the form was a control with no effect.
         const pin = ops.pinned ? String(ops.pinned[0]).toLowerCase() : null;
-        filter.pinned = pin !== null && pin !== 'false' && pin !== 'no';
+        filter.pinned = pin === null ? null : !(pin === 'false' || pin === 'no');
 
         const before = ops.before ? dayStart(ops.before[0]) : null;
         const after = ops.after ? dayStart(ops.after[0]) : null;
@@ -9661,7 +9842,8 @@
         searchInput().value = '';
         filter.text = '';
         filter.types.clear();
-        filter.pinned = filter.mentions = filter.edited = false;
+        filter.pinned = null;       // "either", not "not pinned"
+        filter.mentions = filter.edited = false;
         filter.from = filter.fromName = null;
         filter.mentionsNames = [];
         filter.inChannel = null;
@@ -10057,8 +10239,20 @@
         // Only the newest query gets to render — a slow reply must not overwrite
         // results for what's now in the box.
         const seq = ++searchSeq;
+        // `in:` is the one operator the archive CAN answer, and it was the one
+        // being dropped: the request always named the current channel, so
+        // `in:random` searched #general while the loaded-message half — which
+        // only ever holds one channel — matched nothing. Asked here, it means
+        // what it says. Naming a channel also pins the scope to it; "in this
+        // one, across all of them" is not a question.
+        const inChan = filter.inChannel || null;
         const res = await L.board('search', {
-            query: { q, channel, scope: searchScope, limit: 40 }
+            query: {
+                q,
+                channel: inChan || channel,
+                scope: inChan ? 'channel' : searchScope,
+                limit: 40
+            }
         });
         if (seq !== searchSeq) return;
         if (authGone(res)) return;
@@ -10124,9 +10318,13 @@
             it.appendChild(bd);
             it.addEventListener('click', () => {
                 hideSearchResults();
-                searchInput().value = '';
-                $('search-clear').hidden = true;
-                filter.text = '';
+                // clearSearch(), not a hand-blank of filter.text: the operators
+                // (from:, has:, author:, the dates) are separate fields, and
+                // clearing only the text left them narrowing the channel list
+                // behind an EMPTY search box — a filtered conversation with
+                // nothing on screen to say why, and no obvious way back.
+                // jumpToPost already did this; the thread branch did not.
+                clearSearch();
                 // A reply lives in its thread, not the main list.
                 if (r.thread_root_id) openThread(r.thread_root_id, r.channel);
                 else jumpToPost(r);
@@ -10187,6 +10385,13 @@
     let threadPosts = [];
     let threadTimer = null;
     let threadSig = '';
+    // The thread composer is a second, never-moved textarea, so it was never
+    // covered by the main composer's per-surface drafts — and nothing cleared
+    // it. An unsent reply survived closing the panel, switching channels and
+    // signing out, and the next thread opened started pre-filled with it, one
+    // Enter away from posting under a different root or a different account.
+    // Same contract as `drafts`: keyed by the surface it was typed into.
+    const threadDrafts = new Map();
 
     async function openThread(rootId, chan) {
         if (!rootId) return;
@@ -10201,6 +10406,11 @@
         if (dmPanelOpen()) closeDm();
 
         threadRootId = rootId;
+        // AFTER the switchChannel above: that runs resetChannelView ->
+        // closeThread(), which stashes and blanks the box, so restoring any
+        // earlier would be undone by it.
+        $('thread-input').value = threadDrafts.get(rootId) || '';
+        threadDrafts.delete(rootId);
         threadSig = '';
         threadPosts = [];
         $('thread-panel').hidden = false;
@@ -10219,6 +10429,15 @@
     }
 
     function closeThread() {
+        // Stash before blanking, so closing a thread you were mid-reply to and
+        // coming back gives the text back — to the root it was written for, and
+        // to no other.
+        if (threadRootId) {
+            const draft = $('thread-input').value;
+            if (draft.trim()) threadDrafts.set(threadRootId, draft);
+            else threadDrafts.delete(threadRootId);
+        }
+        $('thread-input').value = '';
         threadRootId = 0;
         threadPosts = [];
         if (threadTimer) { clearInterval(threadTimer); threadTimer = null; }
@@ -10417,6 +10636,12 @@
     let dmFilter = '';
     let dmOpen = null;                // { id, username } of the open conversation
     let dmMsgs = [];
+    // dm/list has always paged — it takes `before` and answers `hasMore` — and
+    // the client never asked. Anything past the newest fifty messages was
+    // simply unreachable, in the only place they can be read at all, and the
+    // intro block cheerfully announced itself as the beginning of the history.
+    let dmHasMore = false;
+    let dmPaging = false;
     let dmTimer = null;
     // Whether the profile column is showing, as a CHOICE rather than as
     // whatever the last render happened to leave behind. renderDmProfile() runs
@@ -10549,6 +10774,7 @@
         moveComposer(true);
         closeThread();
         dmMsgs = [];
+        dmHasMore = false;
         loadDmMessages.lastSig = null;    // the last conversation's payload isn't this one's
         $('dm-messages').innerHTML = '<div class="thread-loading">Loading…</div>';
         await loadDmMessages(true);
@@ -10875,14 +11101,62 @@
             return;
         }
         const sig = JSON.stringify(res.messages || []);
+        // Recorded even when the payload is unchanged: it describes the
+        // conversation, not this page, and the poll must not keep resetting it.
+        dmHasMore = !!res.hasMore;
         if (!force && sig === loadDmMessages.lastSig) return;
-        dmMsgs = res.messages || [];
+        // The poll fetches the NEWEST page. Anything older that has been paged
+        // in stays: assigning the page outright would throw the history away
+        // again the moment somebody sent a message, which is the same bug in a
+        // slower disguise.
+        const page = res.messages || [];
+        const oldest = page.length ? page[0].id : 0;
+        const kept = oldest ? dmMsgs.filter((m) => m.id < oldest) : [];
+        dmMsgs = kept.concat(page);
         // Only claim this payload as rendered if it actually rendered. Stamping
         // the signature up front meant a renderDmMessages() that bailed for an
         // open editor recorded messages it never painted, and the poll then
         // skipped them for as long as nothing else changed.
         if (renderDmMessages()) loadDmMessages.lastSig = sig;
     }
+
+    // One page further back, the way the channel list already does it. Scroll
+    // position is restored by height difference rather than by index: the
+    // prepended page changes scrollHeight, and without this the view jumps to
+    // wherever the old offset now points.
+    async function loadOlderDms() {
+        if (dmPaging || !dmHasMore || !dmOpen || !dmMsgs.length) return;
+        dmPaging = true;
+        const forThread = dmOpen.id;
+        const before = dmMsgs[0].id;
+        const box = $('dm-messages');
+        const wasHeight = box.scrollHeight;
+        const wasTop = box.scrollTop;
+        try {
+            const res = await L.board('dm/list', { query: { thread: forThread, before } });
+            if (!dmOpen || dmOpen.id !== forThread) return;   // switched mid-flight
+            if (authGone(res)) return;
+            if (!res || !res.success) return;
+            const older = res.messages || [];
+            dmHasMore = !!res.hasMore;
+            if (!older.length) return;
+            // Guarded against a double-fetch racing itself into duplicates.
+            const have = new Set(dmMsgs.map((m) => m.id));
+            const fresh = older.filter((m) => !have.has(m.id));
+            if (!fresh.length) return;
+            dmMsgs = fresh.concat(dmMsgs);
+            if (renderDmMessages()) {
+                box.scrollTop = wasTop + (box.scrollHeight - wasHeight);
+            }
+        } finally {
+            dmPaging = false;
+        }
+    }
+
+    // Same trigger as the channel list: near the top, with more behind it.
+    $('dm-messages').addEventListener('scroll', () => {
+        if ($('dm-messages').scrollTop < 60) loadOlderDms();
+    });
 
     // The drawer's "Loading…" placeholder never clears on its own, so a failed
     // first load has to replace it. Only when nothing is rendered yet — wiping a
@@ -10958,6 +11232,9 @@
             name: nameOf(m.from),
             body: m.body,
             created_at: m.created_at,
+            // The shared renderer draws "(edited)" from this. dm/list returns it
+            // now; older servers omit it, which reads as 0 and draws nothing.
+            edited_at: m.edited_at || 0,
             pinned: 0,
             // Lets the shared renderer drop the actions a DM has no backing
             // for. Without it every one of them pointed at the posts table.
@@ -10971,11 +11248,24 @@
             att_size: m.att_size || 0
         });
 
+        // With older messages still on the server this is not the beginning of
+        // anything, so say what it is instead — and give the mouse a way back
+        // that does not depend on noticing that scrolling loads more.
+        if (dmHasMore) {
+            const more = document.createElement('div');
+            more.className = 'dm-empty dm-more';
+            more.innerHTML = '<button type="button" class="keycap dm-load-older">Load earlier messages</button>';
+            more.querySelector('.dm-load-older').addEventListener('click', loadOlderDms);
+            box.appendChild(more);
+        }
+
         // The DM equivalent of the channel welcome block. It is also what pushes
         // the conversation to the bottom of the column (see #dm-messages >
         // .dm-intro), so a short conversation sits above the composer instead of
         // stranded at the top with a screen of nothing under it.
-        const intro = document.createElement('div');
+        // Only when this really IS the start of the history — see above.
+        const intro = dmHasMore ? null : document.createElement('div');
+        if (intro) {
         intro.className = 'chan-intro dm-intro';
         const others = (dmOpen && dmOpen.members || []).filter((u) => !account || u.id !== account.id);
         const who = dmOpen && dmOpen.isGroup ? dmOpen.title : ((others[0] && others[0].username) || dmOpen && dmOpen.title || '');
@@ -11003,6 +11293,7 @@
         box.appendChild(intro);
         wireAvatarFallback(intro);
         if (window.ScarmIcons) window.ScarmIcons.hydrate(intro);
+        }
 
         let lastDay = '';
         let prev = null;
@@ -11116,6 +11407,16 @@
     $('dm-picker-ok').addEventListener('click', async () => {
         const users = [...dmPick.chosen];
         if (!users.length) return;
+        // A group create is not idempotent server-side — dm/create INSERTs a new
+        // thread every time ids.length > 1 — and this button gave no spinner, no
+        // disable and no state change for the ~300ms it was in flight. A second
+        // click made a second identical group and pushed it to everyone in it,
+        // with no way to tell the two apart. (The one-to-one path was always
+        // safe: the server returns the existing thread.)
+        const okBtn = $('dm-picker-ok');
+        if (okBtn.disabled) return;
+        okBtn.disabled = true;
+        try {
         // Adding to a group and starting one are the same choice made in two
         // places, so they share the picker and differ only in where it posts.
         if (dmPick.mode === 'add' && dmPick.thread) {
@@ -11137,10 +11438,14 @@
         }
         closeDmPicker();
         await loadDmThreads();
+
         // The server hands back the thread — including the EXISTING one when a
         // single person was picked, so choosing someone you already talk to
         // reopens that conversation instead of starting a second one beside it.
         if (res.thread) openDm(res.thread);
+        } finally {
+            okBtn.disabled = false;
+        }
     });
 
     // Open the picker. `exclude` keeps people already in the group off the list
@@ -11320,6 +11625,10 @@
             else if (mePopoverOpen()) closeMePopover();
             else if (!$('lightbox').hidden) closeLightbox();
             else if (!$('dialog').hidden) closeDialog(inp_null());
+            // Also a focus-trapped modal over the drawers. Without it here Esc
+            // fell through to dmPanelOpen() and closed the conversation BEHIND
+            // the picker, which stayed up and kept the focus trap.
+            else if (!$('dm-picker').hidden) closeDmPicker();
             else if (threadOpen()) closeThread();
             else if (dmPanelOpen()) closeDm();
             else if (!$('picker').hidden) closePicker();
@@ -11338,6 +11647,15 @@
         // is now the box in the header rather than a row that appeared under it.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !$('app').hidden) {
             e.preventDefault();
+            // The header box belongs to the channel column, and #dm-panel is
+            // painted OVER that column — so in direct messages Ctrl+F focused a
+            // field nobody could see, opened a dropdown nobody could see, and
+            // filtered a channel list nobody was looking at. Search the thing on
+            // screen instead.
+            if (dmMode) {
+                const box = $('dm-search-input');
+                if (box) { box.focus(); box.select(); return; }
+            }
             searchInput().focus();
             searchInput().select();
             openSearchPop();

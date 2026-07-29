@@ -1252,7 +1252,11 @@ button { font-family: inherit; }
    hover actions are revealed, because they're what Enter is about to open. */
 .msg:focus { outline: none; }
 .msg.kb { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
-.msg.kb .msg-actions { opacity: 1; pointer-events: auto; }
+/* `display`, not `opacity`: .msg-actions is hidden with display:none and
+   revealed by .msg:hover, so an opacity override — a leftover from an older
+   opacity-based hide — left the bar invisible to a keyboard user, who is the
+   one person who cannot discover it by moving the mouse. */
+.msg.kb .msg-actions { display: flex; }
 #messages:focus { outline: none; }
 #messages:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
@@ -1967,8 +1971,12 @@ button { font-family: inherit; }
    they moved out of #main entirely and take the whole conversation area, so
    they are no longer listed here. */
 #main:has(> #thread-panel:not([hidden])) { --drawer-shift: var(--drawer-w); }
-#main > #chan-head,
-#main > #filter-bar,
+/* #search-panel is a direct child of #main too, and it was the one missing
+   from this list: its right-aligned controls — the scope toggle and the panel's
+   own ✕ — sat underneath the drawer, focusable and unclickable, which is
+   exactly what this block exists to prevent. (#chan-head lives OUTSIDE #main
+   and #filter-bar does not exist, so both of those selectors were dead.) */
+#main > #search-panel,
 #main > #pinned-panel,
 #main > #stage,
 #main > #camera-stage,
@@ -2978,6 +2986,22 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --danger-soft: rgba(211, 42, 46, .10);
   --danger-line: rgba(211, 42, 46, .34);
 
+  /* The user dock's own type ramp. These were the light theme's one real hole:
+     --panel is #ffffff here, and the dark values (#d2d2d6 / #9c9ca2) are a
+     near-white on it — your own name in the bottom-left dock was drawn at about
+     1.4:1 and simply could not be read. --panel-sub carries every settings
+     hint as well, so it is pinned to the same family as --meta. */
+  --panel-name: #2f3035;
+  --panel-sub:  #6b6c74;
+
+  /* The destructive-but-reversible pair (Sign Out, Disable Account). The dark
+     plate is a white wash, which vanishes on white, and the dark label is a
+     salmon tuned for a dark surface — together they came out as pale text on
+     no button at all. Darkened for both jobs. */
+  --btn-secondary:      rgba(22, 22, 30, .07);
+  --btn-secondary-hover: rgba(22, 22, 30, .12);
+  --danger-label:       #c0242a;
+
   --shadow-sm: 0 2px 8px rgba(16, 18, 24, .10);
   --shadow:    0 6px 18px rgba(16, 18, 24, .14);
   --shadow-lg: 0 16px 44px rgba(16, 18, 24, .20);
@@ -3140,6 +3164,10 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 #dm-messages > .dm-intro { margin-top: auto; }
 .dm-empty { color: var(--muted); text-align: center; margin-top: 24px; }
 .dm-empty .dm-retry { display: block; margin: 10px auto 0; }
+/* Sits at the TOP of the conversation, not in the middle of an empty column,
+   so it does not inherit the empty state's drop. */
+.dm-empty.dm-more { margin: 8px 0 12px; }
+.dm-empty.dm-more .dm-load-older { display: block; margin: 0 auto; }
 
 /* Matched to the channel composer rather than reinvented: it was 21px shorter,
    had a different border, and dropped the attach button, so the same app asked

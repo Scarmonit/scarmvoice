@@ -11,6 +11,7 @@
 // Runs before every `npm run release`. Fails loudly rather than silently
 // clobbering a published artifact.
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const pkg = require(path.join(__dirname, '..', 'package.json'));
@@ -21,6 +22,36 @@ function die(msg) {
     console.error('\n  release preflight failed: ' + msg + '\n');
     process.exit(1);
 }
+
+// The RNNoise worklet is GENERATED — scripts/rnnoise-processor.js concatenated
+// onto the wasm glue — and src/renderer/vendor is gitignored, so the file on
+// disk is whatever the last `npm install` left behind. It used to be built only
+// at postinstall, which meant editing the processor and running `npm run
+// release` shipped the OLD worklet with no warning at all: v0.54.1 went out
+// with a processor that could not report a failed model, so a machine where the
+// wasm would not start ran the microphone with NO noise suppression while the
+// UI said the AI filter was on. `vendor` is part of the build now; this asserts
+// it actually took, because a silent staleness is exactly what went wrong.
+function checkVendoredWorklet() {
+    const processor = path.join(__dirname, 'rnnoise-processor.js');
+    const worklet = path.join(__dirname, '..', 'src', 'renderer', 'vendor', 'rnnoise-worklet.js');
+    let src;
+    let built;
+    try {
+        src = fs.readFileSync(processor, 'utf8');
+        built = fs.readFileSync(worklet, 'utf8');
+    } catch (e) {
+        die('could not read the RNNoise worklet or its source (' + e.message + ').\n' +
+            '  Run `npm run vendor` and try again.');
+    }
+    if (!built.endsWith(src)) {
+        die('src/renderer/vendor/rnnoise-worklet.js is STALE — it does not end with the\n' +
+            '  current scripts/rnnoise-processor.js. Run `npm run vendor` and re-run.');
+    }
+    console.log('  preflight ok — the vendored RNNoise worklet is current');
+}
+
+checkVendoredWorklet();
 
 let body;
 try {

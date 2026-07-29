@@ -431,7 +431,12 @@
         // Author type resolves to the same identity shape `from` uses — a set
         // of accounts and names — so it needs no matching logic of its own.
         if (filter.author && !postFrom(p, filter.author)) return false;
-        if (filter.pinned && !p.pinned) return false;
+        // Tri-state, because the form offers three answers. As a plain boolean
+        // `pinned:false` was indistinguishable from "no pin filter", so the
+        // "Anything but pinned" option wrote an operator into the box and then
+        // changed nothing at all. null/undefined means "either".
+        if (filter.pinned === true && !p.pinned) return false;
+        if (filter.pinned === false && p.pinned) return false;
         if (filter.mentions && !mentionsMe(p.body, displayName)) return false;
         if (filter.edited && !p.edited_at) return false;
 

@@ -220,7 +220,17 @@ function apply() {
 
     // No native hold for PTT — fall back to the press-to-talk/press-to-stop
     // accelerator, and report only what actually registered.
-    const accel = toAccelerator(s.pttBinding) || s.pttKey;
+    //
+    // `s.pttKey` is the app's own default and is shown NOWHERE in the UI, so it
+    // may only stand in when the user has no binding at all (Backspace in the
+    // recorder clears one deliberately). It used to stand in whenever the
+    // recorded key could be carried by neither transport — Pause, the Menu key,
+    // IntlBackslash on an ISO keyboard — and the result was that recording one
+    // of those silently grabbed Ctrl+Shift+Space system-wide, off every other
+    // application, and made it a LATCHING open-mic toggle. Settings went on
+    // printing the key the user actually pressed.
+    const hasBinding = !!(s.pttBinding && s.pttBinding.code);
+    const accel = toAccelerator(s.pttBinding) || (hasBinding ? null : s.pttKey);
     const ok = registerFallback(accel);
     return { mode: ok ? 'toggle' : 'none', bound: ok ? accel : null };
 }

@@ -310,7 +310,12 @@ function showWindow() {
     // prevent — a second launch, or a tray click, would build the whole session
     // behind an update that is still applying. Point at the update screen
     // instead; the app window follows on its own the moment the gate answers.
-    if (updater.gateOpen()) { focusSplash(); return; }
+    // …but the ask has to be REMEMBERED, not just deflected. On a
+    // start-minimized install splashWanted is false, so no splash is ever built
+    // and focusSplash() is a no-op — and startApp() then created the window
+    // hidden. Two deliberate launches, and the user got a tray icon and nothing
+    // else, with nothing anywhere recording that they had asked twice.
+    if (updater.gateOpen()) { showOnStart = true; focusSplash(); return; }
     if (!win || win.isDestroyed()) { createWindow(true); return; }
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
@@ -333,6 +338,11 @@ function showWindow() {
 
 let splash = null;
 let splashWanted = false;        // false for a hidden login-item launch
+// Somebody asked for the window while the gate still had it. Only a genuine
+// second launch can set this — the tray and notifications do not exist yet —
+// so honouring it later cannot defeat the start-minimized rule on an ordinary
+// login-item launch. See showWindow() and startApp().
+let showOnStart = false;
 let gateStep = { phase: 'checking', percent: 0, version: null };
 
 // The window changes underneath the user with no interaction from them, so its
@@ -428,7 +438,16 @@ function buildTrayMenu() {
         },
         {
             label: voiceState.inVoice ? 'Leave voice' : 'Join voice',
-            click: () => win && win.webContents.send('app:command', { cmd: voiceState.inVoice ? 'leaveVoice' : 'joinVoice' })
+            click: () => {
+                // Joining needs a signed-in renderer with a voice engine. Before
+                // that — a fresh launch closed to the tray, or an expired
+                // session — the command reached a null `voice`, threw inside the
+                // renderer's own try/catch and produced absolutely nothing: no
+                // window, no toast, no sound. Show the window first, so at worst
+                // the user lands on the screen that explains why.
+                if (!voiceState.inVoice) showWindow();
+                if (win) win.webContents.send('app:command', { cmd: voiceState.inVoice ? 'leaveVoice' : 'joinVoice' });
+            }
         },
         { type: 'separator' },
         { label: 'Quit', click: () => { quitting = true; app.quit(); } }
@@ -441,7 +460,15 @@ function createTray() {
     tray = new Tray(image);
     tray.setToolTip(trayTooltip());
     tray.setContextMenu(buildTrayMenu());
-    tray.on('click', () => (win && !win.isDestroyed() && win.isVisible() ? win.hide() : showWindow()));
+    // Hide only when the window is genuinely the thing in front of you.
+    // isVisible() alone is true for a window sitting behind a browser AND for a
+    // minimized one (WS_VISIBLE survives minimize on Windows), so clicking the
+    // tray icon to bring ScarmVoice forward put it away instead, and getting it
+    // back took a second click.
+    tray.on('click', () => {
+        const up = win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused();
+        if (up) win.hide(); else showWindow();
+    });
 }
 
 function refreshTray() {
@@ -859,7 +886,18 @@ function registerIpc() {
     async function streamToFile(ref, destPath) {
         const res = await attachmentResponse(ref);
         if (!res.body) { await fsp.writeFile(destPath, Buffer.alloc(0)); return; }
-        await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath));
+        try {
+            await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath));
+        } catch (e) {
+            // pipeline destroys the streams but leaves what it wrote. A
+            // half-transferred file sitting at the name the user chose is worse
+            // than no file: the toast that says it failed is gone in seconds,
+            // and what is left looks exactly like a download that worked. The
+            // no-dialog path even disambiguates the retry to "name (2)", so the
+            // broken one stays as the obvious one.
+            try { await fsp.unlink(destPath); } catch (_) { /* never existed */ }
+            throw e;
+        }
     }
 
     // The clipboard is the one consumer that genuinely needs the bytes in hand.
@@ -1363,7 +1401,10 @@ function startApp() {
     // Deliberately after the update gate resolved 'launch' — a process the
     // installer is about to replace still opens no session.
     net.prefetchSession();
-    createWindow();
+    // forceShow when a launch arrived while the gate held the window back: the
+    // user asked for it, and "start minimized" describes an automatic launch,
+    // not one they performed by hand.
+    createWindow(showOnStart);
     createTray();
 
     // The update screen stays up until the real window is ready to paint, so
@@ -1409,6 +1450,17 @@ app.whenReady().then(async () => {
     // swallow the chat font-size shortcuts (and zooming the whole UI is not what
     // those keys should do here). Clipboard keys are handled natively regardless.
     Menu.setApplicationMenu(null);
+
+    // Windows groups taskbar buttons, jump lists and toast notifications by
+    // AppUserModelID. electron-builder stamps build.appId onto every shortcut
+    // the installer writes, but the RUNNING process was answering to Electron's
+    // default template (electron.app.ScarmVoice) — two different identities for
+    // one app. A pinned shortcut therefore got a second taskbar button beside
+    // it when the app launched, notifications appeared under a name with no
+    // registered shortcut, and the uninstaller cleaned up an id we never used.
+    if (process.platform === 'win32') {
+        try { app.setAppUserModelId('com.scarmonit.scarmvoice'); } catch (e) { /* not fatal */ }
+    }
 
     detectElevation();
     store.init();

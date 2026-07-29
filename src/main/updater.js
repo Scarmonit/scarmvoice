@@ -108,7 +108,18 @@ function load() {
     });
     updater.on('error', (err) => {
         console.error('[update] error:', err && err.message);
-        emit({ status: state.status === 'downloading' ? 'available' : 'error', error: (err && err.message) || 'update failed' });
+        // A download that died falls back to 'available' — but it must be
+        // DISTINGUISHABLE from an available update that is about to download,
+        // or the banner keeps saying "downloading" for something that stopped.
+        // `stalled` is what the renderer reads to say so and to offer a retry;
+        // nothing else was ever going to, because the next automatic attempt is
+        // three hours away.
+        const stalled = state.status === 'downloading';
+        emit({
+            status: stalled ? 'available' : 'error',
+            stalled,
+            error: (err && err.message) || 'update failed'
+        });
         // An update we cannot fetch must never be a launch we cannot make.
         gateSettle('launch', 'update error: ' + ((err && err.message) || 'unknown'));
     });

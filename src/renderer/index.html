@@ -1319,7 +1319,10 @@
 
   <div class="pop-sep"></div>
 
-  <label class="pop-row">
+  <!-- Local audio. Only meaningful about somebody whose voice is actually
+       reaching this machine, so the whole block hides when the popover is
+       opened about a person who is not in the call with us. -->
+  <label class="pop-row" id="pop-mute-row">
     <span class="pop-label">Mute for me</span>
     <span class="switch">
       <input type="checkbox" id="pop-mute">
@@ -1327,14 +1330,14 @@
     </span>
   </label>
 
-  <div class="pop-row pop-vol-head">
+  <div class="pop-row pop-vol-head" id="pop-vol-head">
     <span class="pop-label">Volume</span>
     <output id="pop-vol-val" for="pop-vol">100%</output>
   </div>
   <input type="range" id="pop-vol" class="pop-slider" min="0" max="200" step="1"
          aria-label="Volume for this person">
 
-  <div class="pop-sep"></div>
+  <div class="pop-sep" id="pop-audio-sep"></div>
 
   <button type="button" class="pop-action" id="pop-mention">
     <span class="ico" data-icon="at"></span><span>Mention in chat</span>

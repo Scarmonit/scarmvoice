@@ -319,6 +319,46 @@ describe('login', () => {
         expect(r.rateLimited).toBe(true);
         expect(r.error).toMatch(/42/);
     });
+
+    it('still says the password is wrong when the gate says so', async () => {
+        const { net } = await load({ session: null });
+        stubFetch(() => jsonRes({ success: false }, { status: 401 }));
+
+        const r = await net.login('wrong');
+
+        expect(r.error).toMatch(/incorrect password/i);
+        expect(r.network).toBeFalsy();
+    });
+
+    // Every non-429 failure used to be reported as a wrong password, so a
+    // Worker mid-deploy, a WAF block or a maintenance page sent people off to
+    // reset a password that had never been wrong — with nothing in the UI
+    // hinting the problem was not theirs.
+    it('blames the server, not the password, for a 5xx', async () => {
+        const { net } = await load({ session: null });
+        stubFetch(() => new Response('<html>503</html>', {
+            status: 503, headers: { 'content-type': 'text/html' }
+        }));
+
+        const r = await net.login('hunter2');
+
+        expect(r.success).toBe(false);
+        expect(r.network).toBe(true);
+        expect(r.error).not.toMatch(/incorrect password/i);
+        expect(r.error).toMatch(/503/);
+    });
+
+    it('does the same for a non-JSON body behind any failing status', async () => {
+        const { net } = await load({ session: null });
+        stubFetch(() => new Response('<html>blocked by the WAF</html>', {
+            status: 403, headers: { 'content-type': 'text/html' }
+        }));
+
+        const r = await net.login('hunter2');
+
+        expect(r.network).toBe(true);
+        expect(r.error).not.toMatch(/incorrect password/i);
+    });
 });
 
 describe('transient retry', () => {
@@ -369,6 +409,39 @@ describe('transient retry', () => {
         expect(r.success).toBe(false);
         expect(r.network).toBe(true);
         expect(calls).toHaveLength(1);
+    });
+
+    // Cloudflare's edge answers a 502/503/504 (and a Worker exception) with an
+    // HTML page, so res.json() throws and the result used to be a bare
+    // `Bad response (502)` with no flag at all. The renderer reads `network` to
+    // decide whether a message is worth queueing — so an edge blip was reported
+    // as the SERVER REJECTING the message: a fresh send got a cryptic toast
+    // instead of the outbox, and one already queued was marked permanently
+    // rejected and skipped by every later flush.
+    it('flags an unreadable edge 5xx as transient so a write can be queued', async () => {
+        const { net } = await load();
+        stubFetch(() => new Response('<html>error 502</html>', {
+            status: 502, headers: { 'content-type': 'text/html' }
+        }));
+
+        const r = await net.board('post', { method: 'POST', body: { body: 'hi' } });
+
+        expect(r.success).toBe(false);
+        expect(r.network).toBe(true);
+        expect(String(r.error)).toMatch(/502/);
+        expect(calls).toHaveLength(1);      // still never retried internally
+    });
+
+    it('does NOT flag an unreadable 4xx, which will not resolve itself', async () => {
+        const { net } = await load();
+        stubFetch(() => new Response('<html>bad request</html>', {
+            status: 400, headers: { 'content-type': 'text/html' }
+        }));
+
+        const r = await net.board('post', { method: 'POST', body: { body: 'hi' } });
+
+        expect(r.success).toBe(false);
+        expect(r.network).toBeFalsy();
     });
 
     it('does not retry a 4xx, which will not resolve itself', async () => {

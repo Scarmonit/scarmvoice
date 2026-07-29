@@ -34,6 +34,15 @@
         try { if (failureCb) failureCb(why || 'unknown'); } catch (e) {}
     }
 
+    // "The microphone went away underneath us." Announced as a plain window
+    // event rather than through a callback registry because two different
+    // wrappers (this one and soundboard.js) can be the layer that notices, and
+    // whoever is listening should not have to know which. Nothing in the audio
+    // graph depends on it, so a listener that throws cannot break a teardown.
+    function announceMicLost() {
+        try { window.dispatchEvent(new CustomEvent('scarm:miclost')); } catch (e) {}
+    }
+
     // An AudioContext holds a real audio device open, so it must not be left
     // RUNNING between calls — it kept the render thread (and on some drivers the
     // device itself) awake for the rest of the session.
@@ -110,13 +119,25 @@
             const srcTracks = raw.getAudioTracks();
             let done = false;
             active++;
-            const cleanup = () => {
+            // Hoisted above cleanup: the upstream-death path below calls it.
+            const origStop = track.stop.bind(track);
+            // Named, because it is what gets REMOVED further down — an inline
+            // arrow would be a different identity every time and the listeners
+            // would pile up one set per acquisition.
+            const onSourceEnded = () => cleanup(true);
+            // `fromEnded` distinguishes "the microphone died" from "the consumer
+            // asked us to stop". It is load-bearing: the death path ends the
+            // track we handed out, and the SDK responds to that by RE-OPENING
+            // the microphone. Firing it on a deliberate stop would reacquire a
+            // device the app had just released — a hot mic behind the login
+            // gate, which is the thing voice.js's join guards exist to prevent.
+            const cleanup = (fromEnded) => {
                 if (done) return;
                 done = true;
                 // When the teardown came from track.stop() rather than from an
                 // 'ended' event, {once} never fired and these would otherwise
                 // pile up one set per mic acquisition.
-                srcTracks.forEach((t) => { try { t.removeEventListener('ended', cleanup); } catch (e) {} });
+                srcTracks.forEach((t) => { try { t.removeEventListener('ended', onSourceEnded); } catch (e) {} });
                 try { node.port.postMessage('close'); } catch (e) {}
                 try { src.disconnect(); } catch (e) {}
                 try { node.disconnect(); } catch (e) {}
@@ -128,13 +149,29 @@
                 // still-in-use video track stopped along with the mic.
                 raw.getAudioTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
                 release();
+
+                // The comment above this used to promise exactly this and not
+                // do it. A MediaStreamAudioDestinationNode track does not end,
+                // mute or fire anything when its inputs are disconnected — it
+                // stays 'live' forever — so the consumer went on encoding
+                // perfect silence with nothing anywhere reporting it: everyone
+                // stopped hearing you, the mic button still said unmuted, and
+                // only leaving and rejoining fixed it. End the track we handed
+                // out and say so, so the layer above (and the SDK's own
+                // device-recovery) can act.
+                if (fromEnded) {
+                    try { origStop(); } catch (e) {}
+                    // stop() deliberately does not fire 'ended'; the listener is
+                    // the only thing that can reacquire, so tell it by hand.
+                    try { track.dispatchEvent(new Event('ended')); } catch (e) {}
+                    announceMicLost();
+                }
             };
 
-            const origStop = track.stop.bind(track);
-            track.stop = () => { origStop(); cleanup(); };
+            track.stop = () => { origStop(); cleanup(false); };
             // Device unplugged / revoked upstream: tear down rather than
             // feeding the call eternal silence from a dead graph.
-            srcTracks.forEach((t) => t.addEventListener('ended', cleanup, { once: true }));
+            srcTracks.forEach((t) => t.addEventListener('ended', onSourceEnded, { once: true }));
 
             // The processor reports whether the wasm actually came up. Logging
             // "active" merely because the graph was built meant a suppression

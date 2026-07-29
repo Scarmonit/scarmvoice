@@ -419,6 +419,7 @@
         let settings = {};
         const audioEls = {};        // cid -> HTMLAudioElement
         const shareAudioEls = {};   // cid -> HTMLAudioElement carrying that share's audio
+        const shareAudioIds = {};   // cid -> the track id currently attached to it
         const gainNodes = {};       // cid -> { ctx, src, gain, dest } for >100% boost
         const analysers = {};       // cid -> { ctx, analyser, data, raf, speaking, until }
         let sink = null;
@@ -540,10 +541,14 @@
             }
         }
 
+        // '' is the VALID sinkId for "the system default output" — it is what
+        // both the speaker popover and the Settings dropdown write for
+        // "Windows Default". Skipping on a falsy id left every <audio> pinned
+        // to whichever device had been chosen before, with no way back short of
+        // picking a different explicit one.
         function applySinkId(el) {
-            const id = settings.speakerDeviceId;
-            if (!id || typeof el.setSinkId !== 'function') return;
-            el.setSinkId(id).catch(() => {});
+            if (typeof el.setSinkId !== 'function') return;
+            el.setSinkId(settings.speakerDeviceId || '').catch(() => {});
         }
 
         // Screen-share audio rides its own element rather than the on-screen
@@ -573,12 +578,25 @@
                 shareAudioEls[cid] = el;
                 applySinkId(el);
             }
+            // Guarded on track identity for the same reason attachAudio is: the
+            // SDK re-fires screenShareUpdate for unrelated reasons, and the
+            // video half already reuses its stream on an unchanged signature.
+            // Rebuilding srcObject and re-play()ing on every one of those is an
+            // audible drop in the presenter's audio for every listener, while
+            // the picture stays perfectly smooth — which is why it read as a
+            // network problem rather than a bug here.
+            if (shareAudioIds[cid] === track.id) { applyShareAudio(cid); return; }
             try { el.srcObject = new MediaStream([track]); } catch (e) { return; }
+            shareAudioIds[cid] = track.id;
             applyShareAudio(cid);
             el.play().catch(() => {});
         }
 
         function detachShareAudio(cid) {
+            // Cleared even when there is no element, so a share that stops and
+            // restarts on the same track id still rebuilds — see attachAudio's
+            // matching delete for why a stale id is worse than none.
+            delete shareAudioIds[cid];
             const el = shareAudioEls[cid];
             if (!el) return;
             try { el.srcObject = null; el.remove(); } catch (e) {}

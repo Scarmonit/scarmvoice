@@ -129,7 +129,9 @@ const MAX_REDIRECTS = 3;
 //
 // Following by hand means every hop is re-checked against the allow-list, and
 // both credential decisions key off the origin that is actually being talked to.
-async function request(pathname, { method = 'GET', body, headers = {}, query, timeout } = {}) {
+// `streamBody` says "the caller is going to READ this response as a stream, and
+// owns it for as long as that takes". See the deadline note below.
+async function request(pathname, { method = 'GET', body, headers = {}, query, timeout, streamBody } = {}) {
     widenKeepAlive();
     const base = baseUrl();
     let url = base + pathname;
@@ -152,13 +154,36 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
 
     // One deadline for the whole chain rather than a fresh one per hop, so a
     // redirect loop can't multiply the timeout the caller asked for.
-    const signal = AbortSignal.timeout(timeout || TIMEOUT_MS);
+    //
+    // Its own controller rather than AbortSignal.timeout, because a `streamBody`
+    // caller has to be able to DISARM it. A fetch signal aborts the response
+    // BODY as well as the header exchange, and it fires on a wall clock that
+    // knows nothing about progress — so a 20 second deadline was killing every
+    // attachment that takes longer than 20 seconds to transfer, which at the
+    // advertised 1 GB ceiling is most of them. The deadline covers getting the
+    // headers; the gigabyte behind them belongs to whoever is reading it, and a
+    // genuinely dead socket still rejects on undici's own inactivity timeouts.
+    //
+    // The reason must be a TimeoutError DOMException: login(), board(), upload()
+    // and main.js all branch on `e.name === 'TimeoutError'` to say "timed out"
+    // rather than something generic.
+    const ac = new AbortController();
+    const signal = ac.signal;
+    let deadline = setTimeout(
+        () => ac.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
+        timeout || TIMEOUT_MS
+    );
+    // AbortSignal.timeout's timer is unref'd; keep that, or every in-flight
+    // request holds the event loop open at quit.
+    if (deadline && typeof deadline.unref === 'function') deadline.unref();
+    const disarm = () => { if (deadline) { clearTimeout(deadline); deadline = null; } };
     const streamed = typeof ReadableStream !== 'undefined' && body instanceof ReadableStream;
 
     let verb = method;
     let payload = body;
     let hdrs = Object.assign({}, headers);
 
+    try {
     for (let hop = 0; ; hop++) {
         const authed = trusted(url);
         if (!authed) console.warn('[net] withholding credentials from untrusted origin: ' + url);
@@ -213,7 +238,12 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
 
         const location = (res.status >= 300 && res.status <= 399)
             ? res.headers.get('location') : null;
-        if (!location) return res;
+        if (!location) {
+            // Only HERE, never on a redirect hop — a chain has to stay inside
+            // the budget the caller asked for.
+            if (streamBody) disarm();
+            return res;
+        }
 
         // Everything past here abandons this response; an unconsumed body pins
         // its keep-alive connection until GC.
@@ -249,6 +279,13 @@ async function request(pathname, { method = 'GET', body, headers = {}, query, ti
         }
         url = next;
     }
+    } catch (e) {
+        // Nothing is going to read this response, so the deadline has no job
+        // left — and an armed timer past the end of the request is a stray
+        // abort waiting to fire.
+        disarm();
+        throw e;
+    }
 }
 
 // ---- auth ----------------------------------------------------------------
@@ -275,7 +312,11 @@ async function login(password) {
     }
 
     let data = {};
-    try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
+    // Whether the body was JSON AT ALL is the tell that separates "the gate
+    // answered and said no" from "something in front of the gate answered
+    // instead" — an edge error page, a WAF block, a maintenance page.
+    let spokeJson = false;
+    try { data = await res.json(); spokeJson = true; } catch (e) { /* non-JSON error page */ }
 
     if (res.ok && data && data.success) {
         if (!cookie) {
@@ -287,6 +328,19 @@ async function login(password) {
     if (res.status === 429) {
         const retry = res.headers.get('retry-after');
         return { success: false, error: `Too many attempts. Try again in ${retry || 60}s.`, rateLimited: true };
+    }
+    // Only the statuses that actually MEAN a bad password may say so. A 5xx
+    // from the edge, a WAF block, or a maintenance page used to come back as
+    // "Incorrect password." — so a server having a bad minute sent people off
+    // to reset a password that was never wrong, with nothing suggesting the
+    // problem was not theirs. `network` gets it the same treatment the offline
+    // case already has on the login screen.
+    if (res.status >= 500 || !spokeJson) {
+        return {
+            success: false,
+            error: `The server is not answering right now (${res.status}). Try again in a moment.`,
+            network: true
+        };
     }
     return { success: false, error: 'Incorrect password.' };
 }
@@ -384,7 +438,15 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
 
     const headers = {};
     // (The account token is attached in request() for every /api/board/ call.)
-    if (pathname === 'list' || pathname === 'thread') {
+    //
+    // `pins` belongs here for the same reason list and thread do: it reads
+    // through boardDb() and is therefore replica-routed, and it is fetched
+    // immediately after the pin POST that changes it. Without the bookmark the
+    // Pinned panel repainted from a replica that had not caught up — the
+    // message you just pinned missing from it, or the one you just unpinned
+    // still there. forcePrimary was being set by that write and then spent on
+    // whichever poll happened to fire next.
+    if (pathname === 'list' || pathname === 'thread' || pathname === 'pins') {
         // `primary` is an explicit ask for a primary read, for a caller that
         // knows it is racing a write it cannot see. Startup uses it: the first
         // `list` now leaves alongside the channels POST rather than behind it,
@@ -500,7 +562,18 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     try {
         data = await res.json();
     } catch (e) {
-        return { success: false, error: `Bad response (${res.status})` };
+        // An unreadable body on a retriable status is Cloudflare's edge, not
+        // our Worker — an HTML 502/503/504 or a 1101 exception page. Writes are
+        // never retried internally (that would post the message twice), so
+        // without a flag here the renderer could not tell an outage from the
+        // server rejecting the message: a send during an edge blip was toasted
+        // as a hard error, and one already queued was marked permanently
+        // rejected. `network` is what the outbox reads to mean "keep it".
+        return {
+            success: false,
+            error: `Bad response (${res.status})`,
+            network: retriable(res.status)
+        };
     }
     if (method !== 'GET' && data && data.success) forcePrimary = true;
     return data;
@@ -661,8 +734,15 @@ async function takePreflight() {
 }
 
 // Attachment bytes, proxied so the renderer can display them without the cookie.
+//
+// streamBody, because every consumer of this READS the body: the lounge://
+// protocol handler streaming an <img>/<video>/<audio>, streamToFile() for Save
+// and Download, imageBytes() for Copy image. The request's 20 second deadline
+// covers reaching the server, not transferring what is behind it — attachments
+// go up to a gigabyte, and the timeout used to abort the body mid-stream, which
+// made anything above about fifty megabytes impossible to download at all.
 async function fileStream(key) {
-    return request('/api/board/file', { query: { key } });
+    return request('/api/board/file', { query: { key }, streamBody: true });
 }
 
 // Store an attachment in R2. Deliberately identical to what the website's

@@ -326,6 +326,41 @@ describe('stale sockets', () => {
     });
 });
 
+// The window's own 'show' handler calls rt.wake(), which connects — and that
+// happens before the renderer has finished booting and asked for a socket, so
+// the one setConnected(true) fires while `emit` is still rt.js's no-op default.
+// setConnected short-circuits on equality afterwards, so the subscriber that
+// arrives second used to hear nothing at all: the app polled at the ACTIVE
+// cadence for the rest of the session over a healthy connection, and the
+// titlebar dot never lit. Reliably reachable whenever the board cookie outlives
+// the account token, because the account step then sits on screen for as long as
+// it takes somebody to type a password.
+describe('a subscriber that arrives after the socket', () => {
+    it('is told the current state instead of nothing', () => {
+        boot();
+        socket().acceptConnection();
+        expect(statuses().at(-1)).toBe('connected');
+
+        // A second start(), as enterApp() makes — the socket already exists, so
+        // connect() is a no-op and this is the only chance to say anything.
+        const late = [];
+        rt.start((type, payload) => late.push({ type, payload }));
+
+        expect(late).toEqual([{ type: 'status', payload: { connected: true, state: 'connected' } }]);
+        expect(sockets().length).toBe(1);        // and it did NOT open a second one
+    });
+
+    it('reports reconnecting rather than connected while the socket is still opening', () => {
+        boot();                                   // socket exists, never accepted
+
+        const late = [];
+        rt.start((type, payload) => late.push({ type, payload }));
+
+        expect(late.at(-1).payload.connected).toBe(false);
+        expect(late.at(-1).payload.state).toBe('reconnecting');
+    });
+});
+
 describe('stop', () => {
     it('terminates the socket and schedules no reconnect', () => {
         boot();

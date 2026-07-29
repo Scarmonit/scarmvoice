@@ -62,9 +62,13 @@
     // this, per-user volume boosts (which have to go through a GainNode, because
     // HTMLMediaElement.volume caps at 1) ignored the speaker selection entirely
     // and came out of the system default.
+    // '' is a REAL sinkId — it means "the system default device" — and it is
+    // exactly what "Windows Default" writes. Treating it as "nothing to do"
+    // meant that once a specific device had been picked there was no way back:
+    // the context stayed pinned to it while the UI claimed otherwise.
     function applySink() {
-        if (!ctx || !sinkId || typeof ctx.setSinkId !== 'function') return;
-        Promise.resolve(ctx.setSinkId(sinkId)).catch((e) => {
+        if (!ctx || typeof ctx.setSinkId !== 'function') return;
+        Promise.resolve(ctx.setSinkId(sinkId || '')).catch((e) => {
             console.warn('[audio] setSinkId failed:', e && e.message);
         });
     }

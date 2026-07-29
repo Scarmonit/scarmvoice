@@ -185,7 +185,20 @@ function start(emitter) {
     if (emitter) emit = emitter;
     manualClose = false;
     backoff = BACKOFF_START;
-    if (!ws) connect();
+    if (!ws) { connect(); return; }
+    // A socket can already exist because the window's own 'show' handler calls
+    // wake() — which connects — before the renderer has ever asked for one, and
+    // at that point `emit` is still the module's no-op. That socket fires
+    // setConnected(true) exactly once and every later call short-circuits on
+    // equality, so whoever subscribes afterwards hears nothing at all: the app
+    // keeps polling at the ACTIVE cadence and the titlebar dot never lights,
+    // over a connection that is perfectly healthy. Usually the renderer wins
+    // that race by a wide margin; it loses it reliably when the board cookie
+    // outlives the account token, because then the account step is on screen
+    // for as long as it takes somebody to type a password. Replaying the
+    // current state to a new subscriber costs one event and removes the race.
+    emitStatus(connected ? 'connected'
+        : (attempts >= OFFLINE_AFTER ? 'disconnected' : 'reconnecting'));
 }
 
 function stop() {

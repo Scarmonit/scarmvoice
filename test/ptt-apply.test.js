@@ -129,4 +129,27 @@ describe('apply() when the hook loads but fails to start', () => {
         expect(ptt.apply()).toEqual({ mode: 'none', bound: null });
         expect(registered).toEqual(['CommandOrControl+Shift+M']);
     });
+
+    // A key that neither transport can carry — Pause, the Menu key,
+    // IntlBackslash on an ISO keyboard — used to fall through to `pttKey`, the
+    // never-user-visible default. The result was that recording one of those
+    // silently registered Ctrl+Shift+Space system-wide, took it off every other
+    // application, and made it a LATCHING open-mic toggle, while Settings went
+    // on printing the key the user had actually pressed.
+    it('registers nothing when the recorded key fits neither transport', () => {
+        const ptt = loadPtt({
+            pttBinding: { type: 'key', code: 'Pause' },
+            pttKey: 'CommandOrControl+Shift+Space'
+        });
+        expect(ptt.apply()).toEqual({ mode: 'none', bound: null });
+        expect(registered).toEqual([]);
+    });
+
+    it('still falls back to the default key when there is no binding at all', () => {
+        // Backspace in the recorder CLEARS the binding on purpose, and that is
+        // the one case the default is allowed to stand in for.
+        const ptt = loadPtt({ pttBinding: null, pttKey: 'CommandOrControl+Shift+Space' });
+        expect(ptt.apply()).toEqual({ mode: 'toggle', bound: 'CommandOrControl+Shift+Space' });
+        expect(registered).toEqual(['CommandOrControl+Shift+Space']);
+    });
 });
