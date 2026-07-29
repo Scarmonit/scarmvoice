@@ -113,17 +113,178 @@ describe('the filters dropdown', () => {
         ]);
     });
 
-    it('opens onto dates and the rest under More filters', async () => {
+    it('opens the filters form, rather than growing into one', async () => {
+        await focusBox();
+        expect($('filters-modal').hidden).toBe(true);
+        rowNamed('More filters').click();
+        await settle(6);
+
+        // The dropdown gets out of the way; the form takes over.
+        expect(popOpen()).toBe(false);
+        expect($('filters-modal').hidden).toBe(false);
+        expect(document.querySelector('#filters-modal h2').textContent).toBe('Filters');
+    });
+});
+
+describe('the filters form', () => {
+    const field = (id) => $(id);
+    const open = async () => {
         await focusBox();
         rowNamed('More filters').click();
+        await settle(6);
+    };
+
+    it('names every field, and says what each one does', async () => {
+        await open();
+        const labels = [...document.querySelectorAll('#filters-modal .fm-label')].map((e) => e.textContent);
+        expect(labels).toEqual(['From', 'In', 'Has', 'Mentions', 'Date', 'Author Type', 'Pinned']);
+        const hints = [...document.querySelectorAll('#filters-modal .fm-hint')].map((e) => e.textContent);
+        expect(hints).toEqual([
+            'Sent by any of the selected users',
+            'Sent in any of the selected channels',
+            'Includes any of the selected types of data',
+            'Mentions any of the selected users',
+            'When the message was sent',
+            'Sent by any of the selected types of author',
+            'If the message is pinned or not'
+        ]);
+        $('fm-cancel').click();
         await settle(4);
-        const titles = rowTitles();
-        expect(titles).toContain('In a specific channel');
-        expect(titles).toContain('Pinned messages');
-        expect(titles).toContain('Before a date');
-        expect(titles).toContain('After a date');
-        expect(titles).toContain('On a specific day');
-        expect(titles).not.toContain('More filters');
+    });
+
+    it('offers the real people and the real channels', async () => {
+        await open();
+        expect([...field('fm-from').options].map((o) => o.textContent))
+            .toEqual(['Anyone', 'Me', 'Parker', 'Teebob', 'XIAIX']);
+        expect([...field('fm-in').options].map((o) => o.textContent))
+            .toEqual(['Any channel', '#general', '#design']);
+        // Has defaults to the reference's wording for "no filter".
+        expect(field('fm-has').options[0].textContent).toBe('Any content');
+        $('fm-cancel').click();
+        await settle(4);
+    });
+
+    it('starts the date as a button, not an empty field', async () => {
+        await open();
+        expect($('fm-date-add').hidden).toBe(false);
+        expect($('fm-date-row').hidden).toBe(true);
+        $('fm-date-add').click();
+        await settle(2);
+        expect($('fm-date-row').hidden).toBe(false);
+        $('fm-cancel').click();
+        await settle(4);
+    });
+
+    it('reads the operators already in the box', async () => {
+        await type('from:Parker in:design has:link pinned:true lunch');
+        await open();
+        expect(field('fm-from').value).toBe('Parker');
+        expect(field('fm-in').value).toBe('design');
+        expect(field('fm-has').value).toBe('link');
+        expect(field('fm-pinned').value).toBe('true');
+        $('fm-cancel').click();
+        await settle(4);
+        // Cancel changed nothing.
+        expect(box().value).toBe('from:Parker in:design has:link pinned:true lunch');
+    });
+
+    it('writes them back on apply, and combines them', async () => {
+        await type('');
+        await open();
+        field('fm-from').value = 'Parker';
+        field('fm-has').value = 'link';
+        $('fm-apply').click();
+        await settle(10);
+
+        expect($('filters-modal').hidden).toBe(true);
+        // The box IS the state — applying the form types into it.
+        expect(box().value).toContain('from:Parker');
+        expect(box().value).toContain('has:link');
+        expect(shown(), 'both criteria at once').toBe(1);
+        expect($('messages').textContent).toContain('the logo');
+    });
+
+    it('keeps the words being searched for', async () => {
+        // The form owns the operators; it does not own the query. Applying it
+        // must not eat the thing you were actually looking for.
+        //
+        // The words go LAST here on purpose: with the caret inside `from:Parker`
+        // the dropdown is showing people, not the filter list, which is correct
+        // and means there is no "More filters" row to click.
+        await type('from:Parker logo');
+        await open();
+        field('fm-has').value = 'link';
+        $('fm-apply').click();
+        await settle(10);
+
+        expect(box().value).toContain('logo');
+        expect(box().value).toContain('has:link');
+        // The From the form was opened with is still applied — it was read out
+        // of the box and written straight back.
+        expect(box().value).toContain('from:Parker');
+        expect(shown()).toBe(1);
+    });
+
+    it('applies a date, with On meaning the whole of that day', async () => {
+        await type('');
+        await open();
+        $('fm-date-add').click();
+        const d = new Date(NOW - 4000);
+        const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+            '-' + String(d.getDate()).padStart(2, '0');
+        field('fm-date-mode').value = 'during';
+        field('fm-date-value').value = iso;
+        $('fm-apply').click();
+        await settle(10);
+
+        expect(box().value).toContain('during:' + iso);
+        expect(shown()).toBe(2);
+    });
+
+    it('Clear Filters empties the fields without touching the search', async () => {
+        await type('from:Parker logo');
+        await open();
+        expect(field('fm-from').value).toBe('Parker');
+
+        $('fm-clear').click();
+        await settle(2);
+        expect(field('fm-from').value).toBe('');
+        // Nothing is applied until Apply is pressed, so the search is untouched
+        // and Cancel still leaves it exactly as it was.
+        expect(box().value).toBe('from:Parker logo');
+
+        $('fm-cancel').click();
+        await settle(4);
+        expect(box().value).toBe('from:Parker logo');
+    });
+
+    it('leaves the caret where the filter list is still reachable', async () => {
+        // Apply keeps the trailing space writeOp leaves, and that is the whole
+        // reason you can open the form twice. Trimmed, the caret lands INSIDE
+        // `from:Parker`, the dropdown quite correctly offers people instead of
+        // filters, and there is no "More filters" row to click — no way back
+        // without typing a space nobody would think to type.
+        await type('');
+        await open();
+        field('fm-from').value = 'Parker';
+        $('fm-apply').click();
+        await settle(10);
+
+        box().setSelectionRange(box().value.length, box().value.length);
+        await focusBox();
+        expect(rowTitles(), 'the filter list, not the people list')
+            .toContain('More filters');
+    });
+
+    it('Clear then Apply really does clear the search', async () => {
+        await type('from:Parker logo');
+        await open();
+        $('fm-clear').click();
+        $('fm-apply').click();
+        await settle(10);
+        // The words stay — Clear Filters clears FILTERS — and Parker does not.
+        expect(box().value).toBe('logo');
+        expect(shown()).toBe(1);
     });
 });
 

@@ -4221,3 +4221,70 @@ html.win-hidden .up-bar i {
   border-radius: 50%; border: 2px solid var(--online);
   pointer-events: none;
 }
+
+/* ---------- the filters form -------------------------------------------- */
+
+/* "More filters" opens this rather than growing the dropdown into it. The
+   extra criteria are a different shape of question — a date, a role, a
+   channel — and a menu that answers by adding eight more rows is a list you
+   scroll past rather than a thing you fill in. */
+.fm-modal { max-width: 470px; max-height: 78vh; }
+.fm-body { padding: 4px 18px 8px; }
+
+/* Label, then what it means, then the control. The description is not
+   decoration: "Sent by any of the selected users" is the difference between a
+   field you understand at a glance and one you have to try. */
+.fm-field { padding: 14px 0; }
+.fm-field + .fm-field { border-top: 1px solid var(--line); }
+.fm-label {
+  display: block; font-size: 13px; font-weight: 700; color: var(--text-strong);
+}
+.fm-hint { margin: 2px 0 9px; font-size: 12.5px; color: var(--muted); }
+.fm-input {
+  width: 100%; height: 38px; padding: 0 11px; border-radius: 6px;
+  background: var(--input); border: 1px solid transparent; outline: none;
+  color: var(--text); font: inherit; font-size: 13.5px;
+}
+.fm-input:focus-visible { border-color: var(--accent-line); }
+select.fm-input { cursor: pointer; }
+
+/* The date starts as a button because most searches do not have one, and an
+   empty date field reads as a question you have to answer. */
+.fm-add {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; height: 38px; border-radius: 6px; cursor: pointer;
+  background: var(--input); border: 1px solid transparent;
+  color: var(--text); font: inherit; font-size: 13.5px; font-weight: 500;
+}
+.fm-add:hover { background: var(--elev); }
+.fm-add .ico { width: 15px; height: 15px; }
+.fm-date-row { display: flex; align-items: center; gap: 8px; }
+.fm-date-row[hidden] { display: none; }
+#fm-date-mode { flex: 0 0 110px; }
+#fm-date-value { flex: 1; min-width: 0; }
+/* Chromium's own calendar glyph, which is black on a dark field otherwise. */
+#fm-date-value::-webkit-calendar-picker-indicator { filter: invert(.7); cursor: pointer; }
+
+.fm-foot {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; box-shadow: 0 -1px 0 var(--line);
+}
+/* A link, not a button: clearing is the reversible one of the three, and it
+   should not compete with Apply for the eye. */
+.fm-link {
+  margin-right: auto; padding: 6px 2px; cursor: pointer;
+  background: none; border: 0; color: var(--accent);
+  font: inherit; font-size: 13px; font-weight: 500;
+}
+.fm-link:hover { text-decoration: underline; }
+.fm-foot button:not(.fm-link) {
+  padding: 9px 18px; border-radius: 6px; cursor: pointer;
+  background: var(--input); border: 0; color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600;
+}
+.fm-foot button:not(.fm-link):hover { background: var(--elev); }
+.fm-apply { background: var(--accent) !important; color: var(--on-accent) !important; }
+.fm-apply:hover { background: var(--accent-hi) !important; }
+.fm-foot button:focus-visible, .fm-link:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}

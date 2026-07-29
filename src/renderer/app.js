@@ -90,13 +90,14 @@
         // in the search box, never held independently of it.
         mentionsNames: [],
         inChannel: null,
+        author: null,
         before: null,
         after: null
     };
     function filterActive() {
         return !!(filter.text || filter.types.size || filter.pinned ||
             filter.mentions || filter.edited || filter.from ||
-            filter.mentionsNames.length || filter.inChannel ||
+            filter.mentionsNames.length || filter.inChannel || filter.author ||
             filter.before || filter.after);
     }
 
@@ -9618,6 +9619,27 @@
         filter.mentionsNames = (ops.mentions || []).slice();
         filter.inChannel = ops.in ? String(ops.in[0]) : null;
 
+        // `author:` resolves to the same identity shape `from` uses, so the
+        // matcher needs no new logic. Roles come from the account directory,
+        // which is the only place they exist.
+        const kind = ops.author ? String(ops.author[0]).toLowerCase() : null;
+        if (!kind) {
+            filter.author = null;
+        } else if (kind === 'me') {
+            filter.author = {
+                label: 'You',
+                names: new Set([settings.displayName || 'Anonymous']),
+                userIds: new Set(account ? [account.id] : [])
+            };
+        } else {
+            const who = roster.filter((u) => (u.role || 'member') === kind);
+            filter.author = {
+                label: kind,
+                names: new Set(who.map((u) => u.username)),
+                userIds: new Set(who.map((u) => u.id))
+            };
+        }
+
         // `pinned:` with no value, or pinned:true, means pinned. pinned:false
         // is the one way to say "and not pinned", which the boolean cannot
         // express — so it clears rather than sets.
@@ -9643,6 +9665,7 @@
         filter.from = filter.fromName = null;
         filter.mentionsNames = [];
         filter.inChannel = null;
+        filter.author = null;
         filter.before = filter.after = null;
         $('search-clear').hidden = true;
         hideSearchResults();
@@ -9674,23 +9697,11 @@
         { icon: 'paperclip', key: 'has', title: 'Includes a specific type of data', hint: 'has: link, embed or file' },
         { icon: 'at', key: 'mentions', title: 'Mentions a specific user', hint: 'mentions: user' }
     ];
-    // What "More filters" opens onto.
-    const MORE_ROWS = [
-        { icon: 'doc', key: 'in', title: 'In a specific channel', hint: 'in: channel' },
-        { icon: 'pin', key: 'pinned', title: 'Pinned messages', hint: 'pinned: true' },
-        // Up is further back in the conversation, down is nearer to now —
-        // which is the direction you scroll to find each of them.
-        { icon: 'arrow-up', key: 'before', title: 'Before a date', hint: 'before: 2026-01-31' },
-        { icon: 'arrow-down', key: 'after', title: 'After a date', hint: 'after: 2026-01-01' },
-        { icon: 'archive', key: 'during', title: 'On a specific day', hint: 'during: 2026-01-15' }
-    ];
     // has: values, in the reference's vocabulary.
     const HAS_ROWS = [
         ['link', 'Links'], ['embed', 'Embeds'], ['file', 'Any file'],
         ['image', 'Images'], ['video', 'Videos'], ['sound', 'Audio']
     ];
-
-    let moreOpen = false;
 
     function openSearchPop() {
         $('search-pop').hidden = false;
@@ -9699,7 +9710,6 @@
     }
     function closeSearchPop() {
         $('search-pop').hidden = true;
-        moreOpen = false;
         searchInput().setAttribute('aria-expanded', 'false');
     }
 
@@ -9796,26 +9806,167 @@
         FILTER_ROWS.forEach((r) => pop.appendChild(popRow(
             Object.assign({}, r, { onPick: () => pickOperator(r.key) }))));
 
-        if (!moreOpen) {
-            pop.appendChild(popRow({
-                icon: 'sliders', title: 'More filters', hint: 'dates, author type, and more',
-                onPick: () => { moreOpen = true; renderSearchPop(); searchInput().focus(); }
-            }));
-        } else {
-            MORE_ROWS.forEach((r) => pop.appendChild(popRow(
-                Object.assign({}, r, { onPick: () => pickOperator(r.key) }))));
-            pop.appendChild(popRow({
-                icon: 'at', title: 'Mentions of me', hint: 'only messages that ping you',
-                on: filter.mentions,
-                onPick: () => { filter.mentions = !filter.mentions; applyFilter(); renderSearchPop(); }
-            }));
-            pop.appendChild(popRow({
-                icon: 'pencil', title: 'Edited', hint: 'only messages that were changed',
-                on: filter.edited,
-                onPick: () => { filter.edited = !filter.edited; applyFilter(); renderSearchPop(); }
-            }));
-        }
+        // "More filters" opens the form, rather than growing this list into one
+        // — the extra criteria are a different shape of question (a date, a
+        // role, a channel) and a menu that answers by adding eight more rows
+        // is a list you scroll rather than a thing you fill in.
+        pop.appendChild(popRow({
+            icon: 'sliders', title: 'More filters', hint: 'dates, author type, and more',
+            onPick: () => { closeSearchPop(); openFiltersModal(); }
+        }));
     }
+
+    // ---------- the filters form ------------------------------------------
+    //
+    // Every field here is one of the operators the box already understands, so
+    // the form READS the box on open and WRITES it on apply. It holds no state
+    // of its own between those two moments, which is what keeps it from ever
+    // disagreeing with what is typed.
+
+    function fillPeopleSelect(sel, chosen) {
+        sel.innerHTML = '';
+        const any = document.createElement('option');
+        any.value = '';
+        any.textContent = 'Anyone';
+        sel.appendChild(any);
+        [...peopleInView().values()]
+            .sort((a, b) => a.label.localeCompare(b.label))
+            .forEach((c) => {
+                const o = document.createElement('option');
+                o.value = c.label;
+                o.textContent = c.label;
+                sel.appendChild(o);
+            });
+        // Somebody named in the box who is not in the list still belongs in it,
+        // or opening the form would silently drop a filter that is applied.
+        if (chosen && ![...sel.options].some((o) => o.value === chosen)) {
+            const o = document.createElement('option');
+            o.value = chosen;
+            o.textContent = chosen;
+            sel.appendChild(o);
+        }
+        sel.value = chosen || '';
+    }
+
+    function fillChannelSelect(sel, chosen) {
+        sel.innerHTML = '';
+        const any = document.createElement('option');
+        any.value = '';
+        any.textContent = 'Any channel';
+        sel.appendChild(any);
+        channels.forEach((c) => {
+            const o = document.createElement('option');
+            o.value = c.name;
+            o.textContent = '#' + c.name;
+            sel.appendChild(o);
+        });
+        if (chosen && ![...sel.options].some((o) => o.value === chosen)) {
+            const o = document.createElement('option');
+            o.value = chosen;
+            o.textContent = '#' + chosen;
+            sel.appendChild(o);
+        }
+        sel.value = chosen || '';
+    }
+
+    function openFiltersModal() {
+        const ops = parseSearchQuery(searchInput().value).ops;
+        const first = (k) => (ops[k] ? String(ops[k][0]) : '');
+
+        fillPeopleSelect($('fm-from'), first('from'));
+        fillPeopleSelect($('fm-mentions'), first('mentions'));
+        fillChannelSelect($('fm-in'), first('in'));
+        $('fm-has').value = first('has');
+        $('fm-author').value = first('author');
+        // A bare `pinned:` means true; the select's blank is "either".
+        const pin = first('pinned');
+        $('fm-pinned').value = pin === '' ? '' : (pin === 'false' || pin === 'no' ? 'false' : 'true');
+
+        // Only one of the three date operators can be in the box at a time —
+        // the form offers a mode, not three fields — so the first one found
+        // wins and the others are dropped on apply.
+        const mode = ['during', 'before', 'after'].find((k) => ops[k]);
+        const hasDate = !!mode;
+        $('fm-date-row').hidden = !hasDate;
+        $('fm-date-add').hidden = hasDate;
+        $('fm-date-mode').value = mode || 'during';
+        $('fm-date-value').value = hasDate ? String(ops[mode][0]) : '';
+
+        $('filters-modal').hidden = false;
+        trapFocus($('filters-modal'), { label: 'Filters', initial: $('fm-from') });
+    }
+
+    function closeFiltersModal() {
+        releaseFocus($('filters-modal'));
+        $('filters-modal').hidden = true;
+    }
+
+    // The form -> the box. Everything the form owns is rewritten; anything else
+    // in the box — the words being searched for, and any operator this form has
+    // no field for — is left exactly where it was.
+    function applyFiltersModal() {
+        const OWNED = ['from', 'mentions', 'in', 'has', 'author', 'pinned', 'before', 'after', 'during'];
+        const parsed = parseSearchQuery(searchInput().value);
+        let text = parsed.text;
+        // Put back the operators this form does not own, so applying it cannot
+        // quietly delete one that was typed.
+        Object.keys(parsed.ops).forEach((k) => {
+            if (OWNED.includes(k)) return;
+            parsed.ops[k].forEach((v) => { text = writeOp(text, k, v, null).text; });
+        });
+
+        const add = (k, v) => { if (v) text = writeOp(text, k, v, null).text; };
+        add('from', $('fm-from').value);
+        add('in', $('fm-in').value);
+        add('has', $('fm-has').value);
+        add('mentions', $('fm-mentions').value);
+        add('author', $('fm-author').value);
+        add('pinned', $('fm-pinned').value);
+        if (!$('fm-date-row').hidden && $('fm-date-value').value) {
+            add($('fm-date-mode').value, $('fm-date-value').value);
+        }
+
+        // The TRAILING space writeOp leaves is kept, and it is load-bearing:
+        // the caret then sits outside the last operator, so clicking back into
+        // the box offers the filter list again. Trimmed, the caret lands inside
+        // `from:Parker` and the dropdown quite correctly offers people instead
+        // — leaving no way back to "More filters" without typing a space.
+        // Only the leading side is trimmed; with no operators applied there is
+        // no trailing space to keep.
+        searchInput().value = text.replace(/^\s+/, '');
+        applyQuery();
+        runSearch();
+        closeFiltersModal();
+    }
+
+    $('fm-close').addEventListener('click', closeFiltersModal);
+    $('fm-cancel').addEventListener('click', closeFiltersModal);
+    $('fm-apply').addEventListener('click', applyFiltersModal);
+    $('filters-modal').addEventListener('mousedown', (e) => {
+        if (e.target === $('filters-modal')) closeFiltersModal();
+    });
+
+    // Clears the FIELDS, not the box — nothing is applied until Apply is
+    // pressed, so Cancel after this still leaves the search as it was.
+    $('fm-clear').addEventListener('click', () => {
+        ['fm-from', 'fm-in', 'fm-has', 'fm-mentions', 'fm-author', 'fm-pinned']
+            .forEach((id) => { $(id).value = ''; });
+        $('fm-date-value').value = '';
+        $('fm-date-mode').value = 'during';
+        $('fm-date-row').hidden = true;
+        $('fm-date-add').hidden = false;
+    });
+
+    $('fm-date-add').addEventListener('click', () => {
+        $('fm-date-row').hidden = false;
+        $('fm-date-add').hidden = true;
+        $('fm-date-value').focus();
+    });
+    $('fm-date-clear').addEventListener('click', () => {
+        $('fm-date-value').value = '';
+        $('fm-date-row').hidden = true;
+        $('fm-date-add').hidden = false;
+    });
 
     // ---------- wiring ------------------------------------------------------
 
@@ -11172,6 +11323,9 @@
             else if (threadOpen()) closeThread();
             else if (dmPanelOpen()) closeDm();
             else if (!$('picker').hidden) closePicker();
+            // Above the dropdown that opened it, and above settings: it is a
+            // focus-trapped modal drawn over both.
+            else if (!$('filters-modal').hidden) closeFiltersModal();
             else if (!$('popover').hidden) closePopover();
             else if (notesOpen()) closeNotes();
             else if (!$('settings').hidden) closeSettings();

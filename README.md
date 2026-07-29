@@ -103,10 +103,12 @@ board session is remembered for 30 days.
 - Channels with unread badges; create, rename, delete
 - Full history with infinite scroll, day separators, and message grouping
 - **Search** — one box in the header (Ctrl+F), with a **filters dropdown** under
-  it: *from:*, *has:*, *mentions:*, and More filters for *in:*, *pinned:*,
-  *before:*, *after:* and *during:*. Every one of them is **typeable as well as
-  clickable** — the menu writes the operator into the box rather than holding a
-  filter beside it. Operators narrow the messages already loaded, instantly;
+  it: *from:*, *has:*, *mentions:*, and **More filters**, which opens a form —
+  From, In, Has, Mentions, Date, Author Type, Pinned, over Clear Filters /
+  Cancel / Apply Filters. Every one of them is **typeable as well as
+  clickable** — the menu and the form both write operators into the box rather
+  than holding filters beside it. Operators narrow the messages already loaded,
+  instantly;
   the free text also goes to `/api/board/search` for the whole archive, scoped
   to this channel or all channels, with the match highlighted and click-to-jump
   (into the thread, if the hit is a reply)
@@ -1002,6 +1004,33 @@ spoken lately" is a reasonable thing to ask.
 day — and the parser takes `YYYY-MM-DD`, `YYYY-MM` or `YYYY`. Anything else is
 ignored rather than guessed at: a filter built from a misreading is worse than
 no filter.
+
+**More filters opens a form, not more menu.** The extra criteria are a
+different shape of question — a date, a role, a channel — and a dropdown that
+answers by growing eight more rows is a list you scroll past rather than a
+thing you fill in. So it opens a centred modal: From, In, Has, Mentions, Date,
+Author Type and Pinned, each with a label and a line saying what it does, over
+a Clear Filters / Cancel / Apply Filters footer.
+
+It holds no state of its own. It **reads the box on open and writes it on
+apply**, which is what stops it from ever disagreeing with what has been typed:
+Apply is a shortcut for typing the operators, exactly as the dropdown rows are.
+Three consequences:
+
+- **Cancel really cancels**, and so does Clear Filters on its own — the fields
+  are just fields until Apply is pressed.
+- **Apply keeps the free text and any operator the form has no field for.**
+  Setting `Has` on `from:alice logo` leaves both of the others where they were.
+- **The trailing space Apply leaves is load-bearing.** Trimmed, the caret lands
+  *inside* `from:alice`, so clicking back into the box offers people rather than
+  the filter list — and there is no way back to More filters without typing a
+  space nobody would think to type.
+
+**Author Type** is the one field that could not be copied. The reference offers
+Bot and User; this board has neither, so it means the distinction that does
+exist here — You, Admins, Members — resolved against the account directory into
+the same identity shape `from:` uses, which is why it needed no matching logic
+of its own.
 
 ### Offline is the absence of a row, which is why it needed a second source
 

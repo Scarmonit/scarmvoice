@@ -1403,6 +1403,91 @@
   </div>
 </div>
 
+<!-- "More filters" — the same operators the dropdown and the box carry, as a
+     form. Apply WRITES THEM INTO THE SEARCH BOX rather than holding them
+     alongside it, so this modal, the dropdown and typing all say the same
+     thing; opening it reads them back out. -->
+<div id="filters-modal" class="overlay" hidden>
+  <div class="modal fm-modal">
+    <header class="modal-head">
+      <h2>Filters</h2>
+      <button class="icon-btn" id="fm-close" title="Close"><span class="ico" data-icon="x"></span></button>
+    </header>
+    <div class="modal-body fm-body">
+      <div class="fm-field">
+        <label class="fm-label" for="fm-from">From</label>
+        <p class="fm-hint">Sent by any of the selected users</p>
+        <select id="fm-from" class="fm-input"></select>
+      </div>
+      <div class="fm-field">
+        <label class="fm-label" for="fm-in">In</label>
+        <p class="fm-hint">Sent in any of the selected channels</p>
+        <select id="fm-in" class="fm-input"></select>
+      </div>
+      <div class="fm-field">
+        <label class="fm-label" for="fm-has">Has</label>
+        <p class="fm-hint">Includes any of the selected types of data</p>
+        <select id="fm-has" class="fm-input">
+          <option value="">Any content</option>
+          <option value="link">Links</option>
+          <option value="embed">Embeds</option>
+          <option value="file">Any file</option>
+          <option value="image">Images</option>
+          <option value="video">Videos</option>
+          <option value="sound">Audio</option>
+        </select>
+      </div>
+      <div class="fm-field">
+        <label class="fm-label" for="fm-mentions">Mentions</label>
+        <p class="fm-hint">Mentions any of the selected users</p>
+        <select id="fm-mentions" class="fm-input"></select>
+      </div>
+      <div class="fm-field">
+        <label class="fm-label">Date</label>
+        <p class="fm-hint">When the message was sent</p>
+        <button type="button" class="fm-add" id="fm-date-add">
+          <span class="ico" data-icon="plus"></span><span>Add date</span>
+        </button>
+        <div class="fm-date-row" id="fm-date-row" hidden>
+          <select id="fm-date-mode" class="fm-input">
+            <option value="during">On</option>
+            <option value="before">Before</option>
+            <option value="after">After</option>
+          </select>
+          <input type="date" id="fm-date-value" class="fm-input">
+          <button type="button" class="icon-btn" id="fm-date-clear" title="Remove date">
+            <span class="ico" data-icon="x"></span>
+          </button>
+        </div>
+      </div>
+      <div class="fm-field">
+        <label class="fm-label" for="fm-author">Author Type</label>
+        <p class="fm-hint">Sent by any of the selected types of author</p>
+        <select id="fm-author" class="fm-input">
+          <option value="">Anyone</option>
+          <option value="me">You</option>
+          <option value="admin">Admins</option>
+          <option value="member">Members</option>
+        </select>
+      </div>
+      <div class="fm-field">
+        <label class="fm-label" for="fm-pinned">Pinned</label>
+        <p class="fm-hint">If the message is pinned or not</p>
+        <select id="fm-pinned" class="fm-input">
+          <option value="">Either</option>
+          <option value="true">True</option>
+          <option value="false">False</option>
+        </select>
+      </div>
+    </div>
+    <footer class="fm-foot">
+      <button type="button" class="fm-link" id="fm-clear">Clear Filters</button>
+      <button type="button" id="fm-cancel">Cancel</button>
+      <button type="button" id="fm-apply" class="fm-apply">Apply Filters</button>
+    </footer>
+  </div>
+</div>
+
 <!-- In-app prompt/confirm. Chromium in Electron has no window.prompt(), and a
      native confirm() blocks the renderer, so we roll our own. -->
 <div id="dialog" class="overlay" hidden>

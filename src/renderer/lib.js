@@ -310,7 +310,11 @@
     // `16:9` searches for itself instead of vanishing into a filter.
     const SEARCH_OPS = {
         from: 'user', mentions: 'user', has: 'kind', 'in': 'channel',
-        before: 'date', after: 'date', during: 'date', pinned: 'bool'
+        before: 'date', after: 'date', during: 'date', pinned: 'bool',
+        // The reference's "Author Type" is Bot vs User. This board has neither
+        // — no bots, no webhooks — so the field means the distinction that DOES
+        // exist here: admins, ordinary members, and you.
+        author: 'kind'
     };
     // `has:` values, as the reference names them. `embed` and `link` are the
     // same thing to this app — an embed IS the preview of a link — and both are
@@ -424,6 +428,9 @@
             : new Set(filter.types || []);
 
         if (filter.from && !postFrom(p, filter.from)) return false;
+        // Author type resolves to the same identity shape `from` uses — a set
+        // of accounts and names — so it needs no matching logic of its own.
+        if (filter.author && !postFrom(p, filter.author)) return false;
         if (filter.pinned && !p.pinned) return false;
         if (filter.mentions && !mentionsMe(p.body, displayName)) return false;
         if (filter.edited && !p.edited_at) return false;
