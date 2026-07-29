@@ -1054,7 +1054,15 @@ button { font-family: inherit; }
 .ch-search .ico { width: 16px; height: 16px; margin-left: auto; }
 .ch-search-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-#messages-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+/* `container-type: inline-size` so the jump banner can drop its label when the
+   column is too narrow to read it — the width that matters is this column's,
+   which no media query knows, because the members sidebar can be toggled. Only
+   the INLINE axis is contained; the block axis still comes from `flex: 1`, so
+   the scroller inside is unaffected. */
+#messages-wrap {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative;
+  container-type: inline-size; container-name: msgcol;
+}
 /* A flex column so the welcome block can push itself to the bottom with an auto
    margin. NOT justify-content: flex-end — in a scroller that overflows,
    Chromium strands the first items above the scroll origin where nothing can
@@ -1068,30 +1076,77 @@ button { font-family: inherit; }
 /* Rows keep their own height rather than stretching to fill what is left. */
 #messages > * { flex: 0 0 auto; }
 
-/* Jump to the newest messages. Fades rather than pops, and stays out of the
-   scrollbar's way. visibility is what keeps it untabbable while hidden. */
+/* "You're Viewing Older Messages" — a banner CENTRED over the bottom of the
+   list, with the jump action attached to its right.
+
+   It replaced a lone right-hand button, which said what it would do but never
+   what state you were in: a channel that had simply stopped following the live
+   edge looked identical to one with nothing new in it.
+
+   Centred with a left/transform pair, so the show/hide slide has to travel in
+   the SAME transform — `transform: none` on .show would re-centre it by
+   throwing the -50% away, and the banner would jump half its own width to the
+   right as it faded in.
+
+   `visibility` (not just opacity) is what keeps the button untabbable while the
+   banner is hidden; it is inherited, so the button goes with it. */
 .jump-latest {
-  position: absolute; right: 24px; bottom: 14px; z-index: 30;
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 7px 14px 7px 11px; border-radius: 999px;
+  position: absolute; left: 50%; bottom: 14px; z-index: 30;
+  display: inline-flex; align-items: center; gap: 10px;
+  /* `width: max-content` is load-bearing, not tidiness. Absolutely positioned
+     with `left: 50%` and no `right`, the shrink-to-fit width is measured from
+     the centre line to the right edge — HALF the column — so the label
+     ellipsised to "You're Viewing Old…" on a window with room to spare. Sizing
+     to the content instead, and capping it, puts the truncation back where it
+     belongs: only when the column really is too narrow. The label ellipsises
+     first, because the button is flex: none. */
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 6px 6px 6px 14px; border-radius: 10px;
   background: var(--float); border: 1px solid var(--line-2);
-  color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600;
-  cursor: pointer; box-shadow: var(--shadow);
-  opacity: 0; visibility: hidden; transform: translateY(6px); pointer-events: none;
+  color: var(--text); font-size: 13px;
+  box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translate(-50%, 6px);
   transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
 }
 .jump-latest.show {
-  opacity: 1; visibility: visible; transform: none; pointer-events: auto;
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: translate(-50%, 0);
   transition: opacity .18s ease, transform .18s ease, visibility 0s;
 }
-.jump-latest:hover { border-color: var(--accent-line); background: var(--elev); }
-.jump-latest .ico { width: 15px; height: 15px; }
+.jump-label {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 500; color: var(--text-body);
+}
+.jump-btn {
+  flex: none;
+  padding: 7px 13px; border: 0; border-radius: 7px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 13px; font-weight: 700; line-height: 1;
+  cursor: pointer;
+  transition: background-color .12s ease;
+}
+/* --accent-hi / --accent-lo are the emphasis directions in BOTH themes (lighter
+   on dark, darker on light), so this reads as a press either way. */
+.jump-btn:hover  { background: var(--accent-hi); }
+.jump-btn:active { background: var(--accent-lo); }
 .jump-count {
+  flex: none;
   display: inline-grid; place-items: center;
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
   background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 800;
 }
 .jump-count[hidden] { display: none; }
+/* Too narrow to say it: the label ellipsises to "You'r…", which is worse than
+   not saying it at all. The button is the part that has to survive, so below
+   this the banner becomes the button it replaced — plus the unread count, which
+   is the one thing the button alone never told you. 420px is measured: it is
+   where the full label stops fitting beside the button at this type size. */
+@container msgcol (max-width: 420px) {
+  .jump-label { display: none; }
+  .jump-latest { padding: 6px; }
+}
 
 /* ---------- messages ---------------------------------------------------- */
 

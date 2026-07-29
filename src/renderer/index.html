@@ -553,11 +553,14 @@
            arrow-key walk that follows from there lives in app.js. -->
       <div id="messages" role="log" aria-live="polite" tabindex="0"
            aria-label="Messages, use the arrow keys to move between them"></div>
-      <button type="button" id="jump-latest" class="jump-latest" aria-hidden="true" title="Jump to the newest messages">
+      <!-- Says what state you are in, and offers the way out of it. The banner
+           itself is not clickable — only the button is — so selecting the text
+           or clicking past it does not throw away your place. -->
+      <div id="jump-latest" class="jump-latest" aria-hidden="true">
         <span class="jump-count" id="jump-count" hidden></span>
-        <span class="ico" data-icon="arrow-down"></span>
-        <span>Jump to present</span>
-      </button>
+        <span class="jump-label">You're Viewing Older Messages</span>
+        <button type="button" id="jump-btn" class="jump-btn" title="Jump to the newest messages">Jump To Present</button>
+      </div>
     </div>
 
     <div id="typing-line"></div>

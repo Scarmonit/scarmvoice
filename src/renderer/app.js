@@ -1902,7 +1902,7 @@
 
     function updateJump() {
         const box = $('messages');
-        const btn = $('jump-latest');
+        const banner = $('jump-latest');
         if (nearBottom()) seenTopId = newestId();       // caught up
         const away = box.scrollHeight - box.scrollTop - box.clientHeight > JUMP_SHOW_PX;
 
@@ -1914,10 +1914,13 @@
             : 0;
         const badge = $('jump-count');
         badge.textContent = n > 99 ? '99+' : String(n);
+        // The number alone is meaningless read aloud beside "You're Viewing
+        // Older Messages" — say what it counts.
+        badge.setAttribute('aria-label', n === 1 ? '1 new message' : n + ' new messages');
         badge.hidden = !n;
 
-        btn.classList.toggle('show', away);
-        btn.setAttribute('aria-hidden', away ? 'false' : 'true');
+        banner.classList.toggle('show', away);
+        banner.setAttribute('aria-hidden', away ? 'false' : 'true');
     }
 
     function jumpToLatest() {
@@ -1929,7 +1932,10 @@
         updateJump();
     }
 
-    $('jump-latest').addEventListener('click', jumpToLatest);
+    // The BUTTON, not the banner. The banner is a label now, and making the
+    // whole thing clickable would mean a stray click while selecting its text
+    // threw the reader back to the live edge.
+    $('jump-btn').addEventListener('click', jumpToLatest);
 
     // Images and link previews have no height until they load, so one finishing
     // above the viewport shifts everything below it. Give the scroll back the

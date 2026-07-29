@@ -127,10 +127,11 @@ board session is remembered for 30 days.
   Save image as… / Download image / Copy image link. The same menu on the inline
   image in chat and on the expanded one, so expanding first is never required;
   right-clicking the text beside an image still gives the message menu
-- **Jump to present** — a floating button appears once you scroll away from the
-  bottom, badged with how many messages arrived while you were up there. New
-  messages never yank your scroll position, including when images and link
-  previews above the viewport finish loading
+- **You're Viewing Older Messages** — a banner centres itself over the bottom of
+  the conversation once you scroll away from the live edge, with **Jump To
+  Present** on its right and a badge for how many messages arrived while you
+  were up there. New messages never yank your scroll position, including when
+  images and link previews above the viewport finish loading
 - **Link actions** on right-click — Open link (in your default browser) and Copy
   link address, on bare URLs in a message and anywhere on a YouTube or Open Graph
   preview card, thumbnail and padding included. Only `http`/`https` is ever
@@ -651,9 +652,30 @@ one finishing above the viewport shifts everything below it. A capture-phase
 appeared — or re-pins to the bottom if the reader was following the live edge.
 
 Auto-scroll happens only when already at the bottom (within 120 px). Past 400 px
-away, the **Jump to present** button fades in, badged with the number of messages
-from other people since the reader was last caught up; past 4000 px it jumps
-instantly rather than animating through thousands of messages.
+away, a banner fades in over the bottom of the column — **You're Viewing Older
+Messages**, with **Jump To Present** attached to its right and a badge for the
+messages from other people since the reader was last caught up. Past 4000 px it
+jumps instantly rather than animating through thousands of messages.
+
+That banner replaced a lone right-hand button, which named the action but never
+the state: a channel you had simply scrolled up in looked identical to one with
+nothing new below. Three things about it are load-bearing:
+
+- **Only the button is clickable.** The banner is a label. Making the whole pill
+  clickable means a stray click while selecting its text throws the reader back
+  to the live edge — exactly what they were avoiding by scrolling up.
+- **It is centred with a `left: 50%` / `transform` pair, so it needs
+  `width: max-content`.** Absolutely positioned with `left` and no `right`, the
+  shrink-to-fit width is measured from the centre line to the right edge — half
+  the column — so the label ellipsised to `You're Viewing Old…` on a window with
+  room to spare. For the same reason `.show` re-states the full transform:
+  `transform: none` would throw the `-50%` away and the banner would jump half
+  its own width as it faded in.
+- **`#messages-wrap` is a size container**, so the label can drop below 420 px
+  and leave the button (and the count) rather than ellipsise to `You'r…`. A
+  media query cannot answer this — the column's width depends on whether the
+  members sidebar is open, which the viewport does not know. Only the inline
+  axis is contained; the scroller's height still comes from `flex: 1`.
 
 Retained history is capped at 400 messages, trimmed **only** while the reader is
 following the live edge with no filter applied — trimming under a reader who has
