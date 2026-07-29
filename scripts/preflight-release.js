@@ -75,8 +75,54 @@ function checkReleaseNotes() {
     console.log(`  preflight ok — release notes for v${pkg.version} ("${notes.title}")`);
 }
 
+// The TAG electron-builder creates has to name the source that was built.
+//
+// It creates the release through the GitHub API, and the API cuts the tag at
+// whatever the default branch's HEAD is AT THAT MOMENT. `npm run release` ran
+// before the commit was pushed, so the tag landed on the PREVIOUS release's
+// commit — v0.55.0, v0.57.0 and v0.58.0 all did it. `git checkout v0.57.0` gave
+// you v0.56.0's code, and the release page counted the release's own commit as
+// "1 commit to main since this release".
+//
+// Nothing downstream notices, which is exactly why it went unnoticed: the feed
+// and the installer are built from the working tree and are correct either way.
+// It is the one thing that says WHICH source shipped, so it is worth a check
+// that costs two git commands.
+function checkCommitted() {
+    const git = (args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    let head;
+    try {
+        // Tracked files only: dist/, and anything else gitignored, is not source.
+        if (git(['status', '--porcelain', '--untracked-files=no'])) {
+            die('the working tree has uncommitted changes.\n' +
+                '  The release tag is cut from the pushed branch, so it would name the\n' +
+                '  PREVIOUS commit and no tag would ever point at what shipped.\n' +
+                '  Commit them and try again.');
+        }
+        head = git(['rev-parse', 'HEAD']);
+        const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+        const remote = git(['ls-remote', 'origin', 'HEAD', `refs/heads/${branch}`]);
+        if (!remote.includes(head)) {
+            die(`HEAD (${head.slice(0, 7)}) is not on origin/${branch}.\n` +
+                '  electron-builder cuts the tag at the remote branch head, so publishing\n' +
+                '  now would tag the previous commit.\n' +
+                `  Run \`git push origin ${branch}\` and try again.`);
+        }
+    } catch (e) {
+        // A missing git, or no remote, is not a reason to refuse to release — but
+        // it is a reason to say the tag will not be trustworthy. (die() exits the
+        // process, so a genuine failure above never reaches here.)
+        console.warn('  preflight warning — could not verify the commit is pushed (' +
+            ((e && e.message) || 'unknown') + ').\n' +
+            '  The release tag may not name the source that was built.');
+        return;
+    }
+    console.log(`  preflight ok — HEAD ${head.slice(0, 7)} is committed and pushed`);
+}
+
 checkReleaseNotes();
 checkVendoredWorklet();
+checkCommitted();
 
 let body;
 try {
