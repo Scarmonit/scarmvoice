@@ -95,6 +95,14 @@
                 // join is the whole question, and it is not answerable from the
                 // join timings alone.
                 try { window.lounge.app.log(line); } catch (e) {}
+                // Park the thread if nothing has acquired audio. Creating the
+                // context is what compiles the module, and a NEW AudioContext
+                // starts running — so warming on a hover over the voice button
+                // left a 48 kHz render thread and an open output device up for
+                // the rest of the session for anyone who then never joined.
+                // release() does exactly this after a real acquisition; warm()
+                // had no equivalent. wrap() resumes, so nothing is lost.
+                if (!active && ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
                 return true;
             }, () => false);
         } catch (e) {

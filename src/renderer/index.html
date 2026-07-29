@@ -567,6 +567,15 @@
         <button type="button" id="reply-chip-cancel" title="Cancel reply"><span class="ico" data-icon="x"></span></button>
       </div>
       <div id="upload-list"></div>
+      <!-- In-flight upload progress. A SEPARATE container from #upload-list on
+           purpose: renderStaged() rebuilds that one from scratch, and these rows
+           outlive the staged cards that started them. Sharing the box meant any
+           re-render during an upload — a video/voice-note's metadata resolving
+           after send, or staging the next file while this one goes up — deleted
+           the progress row, and with it the node failUploadRow() writes into. A
+           failed attachment then reported itself to a detached element and the
+           file vanished with no error anywhere on screen. -->
+      <div id="upload-progress"></div>
       <!-- Voice message recorder; replaces the composer row while recording. -->
       <div id="voice-rec" hidden>
         <span class="vrec-dot" aria-hidden="true"></span>

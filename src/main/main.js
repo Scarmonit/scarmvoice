@@ -173,12 +173,26 @@ function createWindow(forceShow) {
 
     win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
+    // The saved maximised state is applied when the window is REVEALED, never
+    // before — see revealWindow(). Recorded here because createWindow is the
+    // only place that reads it off disk.
+    pendingMaximize = !!store.get().windowMaximized;
+
     win.once('ready-to-show', () => {
         // Stay hidden in the tray if the user asked to start minimized, or if
         // Windows auto-launched us as a hidden login item (--openAsHidden).
         const startHidden = !forceShow &&
             (store.get().startMinimized || process.argv.includes('--openAsHidden'));
-        if (!startHidden) win.show();
+        if (!startHidden) revealWindow();
+        // The four events wired below are TRANSITIONS, and a window that starts
+        // in the tray is never shown — so none of them ever fires and the
+        // renderer spends the entire session believing it is on screen. Every
+        // "skip this while nobody is looking" guard is then inverted for the one
+        // configuration where it matters most: a login-item launch polls at the
+        // hidden-window cadence it should be skipping, keeps repainting panels
+        // nobody is looking at, and reports the window as up. Said once, here,
+        // where the page exists to hear it and the answer is finally known.
+        else sendVisibility();
     });
 
     if (DEV) win.webContents.openDevTools({ mode: 'detach' });
@@ -249,8 +263,6 @@ function createWindow(forceShow) {
     // Flush on the way out so the last drag isn't lost to the debounce.
     win.on('close', () => { clearTimeout(boundsTimer); saveWindowState(); });
 
-    if (store.get().windowMaximized) win.maximize();
-
     // Closing hides to tray while you're in voice (or if configured), so the
     // call doesn't drop because someone hit the X.
     win.on('close', (e) => {
@@ -304,6 +316,32 @@ function saveWindowState() {
     store.set(patch);
 }
 
+// Put the window on screen, restoring the maximised state it was last closed in.
+//
+// win.maximize() ALSO SHOWS a window that is not being displayed — that is
+// documented Electron behaviour, not an accident — which is why the saved state
+// cannot simply be applied while the window is being built. It used to be, right
+// after the constructor, and so it showed the window a beat before
+// 'ready-to-show' got to decide whether it should be shown at all: anyone whose
+// last session ended maximised had "Start minimized to the tray" (and a hidden
+// --openAsHidden login-item launch) silently overruled, and the app they asked
+// to start out of the way opened full-screen across their desktop instead.
+//
+// Applied once, on the first reveal. After that the window's own state is the
+// truth and re-maximising a window the user has since restored would be wrong.
+let pendingMaximize = false;
+
+function revealWindow() {
+    if (!win || win.isDestroyed()) return;
+    if (pendingMaximize) {
+        pendingMaximize = false;
+        win.maximize();          // shows it too
+        if (!win.isVisible()) win.show();   // …unless the platform disagreed
+        return;
+    }
+    win.show();
+}
+
 function showWindow() {
     // While the startup update gate is open there is no app window yet, and
     // creating one here would be exactly the partial startup the gate exists to
@@ -315,10 +353,21 @@ function showWindow() {
     // and focusSplash() is a no-op — and startApp() then created the window
     // hidden. Two deliberate launches, and the user got a tray icon and nothing
     // else, with nothing anywhere recording that they had asked twice.
-    if (updater.gateOpen()) { showOnStart = true; focusSplash(); return; }
+    // …and the same is true AFTER the gate has answered 'installing'. gateOpen()
+    // goes false the instant the gate settles, but this process is then sitting
+    // in the half-second before quitAndInstall replaces it — with no window, no
+    // tray and no session, and a splash on screen that says so. A second launch
+    // in that window walked straight past this guard and built the entire app —
+    // renderer, socket, microphone permissions, board session — for the ~1s
+    // before the NSIS installer force-killed it. `installing` keeps the guard up
+    // for as long as the reason for it lasts.
+    if (installing || updater.gateOpen()) { showOnStart = true; focusSplash(); return; }
     if (!win || win.isDestroyed()) { createWindow(true); return; }
     if (win.isMinimized()) win.restore();
-    if (!win.isVisible()) win.show();
+    // revealWindow, not show(): a launch that started in the tray never applied
+    // the saved maximised state, and the first time the user opens the window is
+    // exactly when it should be applied.
+    if (!win.isVisible()) revealWindow();
     win.focus();
 }
 
@@ -338,6 +387,9 @@ function showWindow() {
 
 let splash = null;
 let splashWanted = false;        // false for a hidden login-item launch
+// The gate answered 'installing': this process is being replaced and must build
+// nothing. See showWindow().
+let installing = false;
 // Somebody asked for the window while the gate still had it. Only a genuine
 // second launch can set this — the tray and notifications do not exist yet —
 // so honouring it later cannot defeat the start-minimized rule on an ordinary
@@ -497,18 +549,40 @@ function registerProtocol() {
                 return new Response('Malformed key', { status: 400 });
             }
             if (!key) return new Response('Missing key', { status: 400 });
-            const upstream = await net.fileStream(key);
-            return new Response(upstream.body, {
-                status: upstream.status,
-                // No Content-Length: fetch already decompressed the body, but
-                // the upstream header still counts the COMPRESSED bytes, so
-                // forwarding it truncates any attachment Cloudflare gzips
-                // (SVG, text). Chromium streams chunked responses fine.
-                headers: {
-                    'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
-                    'Cache-Control': 'private, max-age=3600'
-                }
-            });
+            // The Range travels UP and its answer travels back down.
+            //
+            // Chromium's media loader opens every <video>/<audio> with
+            // `Range: bytes=0-` and issues a fresh range request for each seek;
+            // the scheme is registered `stream: true` precisely so it can. This
+            // handler used to drop the request header and rebuild the response
+            // with two headers of its own, so the server's 206, Content-Range
+            // and Accept-Ranges were all thrown away and every attachment came
+            // back as one opaque 200 from byte zero. A media element with no
+            // seekable range clamps every scrub to the start: a long voice
+            // message or a screen recording could only be played straight
+            // through, in an app that advertises 1 GB attachments.
+            const upstream = await net.fileStream(key, request.headers.get('range'));
+            const headers = {
+                'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
+                'Cache-Control': 'private, max-age=3600',
+                // Says seeking is possible even on the opening 200.
+                'Accept-Ranges': upstream.headers.get('accept-ranges') || 'bytes'
+            };
+            const cr = upstream.headers.get('content-range');
+            if (cr) {
+                headers['Content-Range'] = cr;
+                // DERIVED from the range, never forwarded from upstream: fetch
+                // has already decompressed the body while the upstream
+                // Content-Length still counts the COMPRESSED bytes, which is
+                // what used to truncate every attachment Cloudflare gzips (SVG,
+                // text). The decoded length of a 206 is exactly the number of
+                // resource bytes the range names, compressed in transit or not.
+                // A 416's `bytes */size` deliberately does not match.
+                const m = /bytes\s+(\d+)-(\d+)\//.exec(cr);
+                if (m) headers['Content-Length'] = String(Number(m[2]) - Number(m[1]) + 1);
+            }
+            // Status passed through, so a 206 stays a 206 and a 416 stays a 416.
+            return new Response(upstream.body, { status: upstream.status, headers });
         } catch (e) {
             return new Response('Upstream error: ' + e.message, { status: 502 });
         }
@@ -775,6 +849,11 @@ function registerIpc() {
         if (boardpath.needsAccountBridge(resolved.key)) {
             return { success: false, error: 'use the account bridge' };
         }
+        // Remembered so the quit path knows whether there is anything to retire.
+        // See before-quit: a process that never announced presence has no row to
+        // withdraw, and deferring the quit for one costs the update install the
+        // grace the NSIS installer allows it.
+        if (resolved.key === 'presence') announcedPresence = true;
         return net.board(resolved.path, opts || {});
     });
 
@@ -1504,8 +1583,9 @@ app.whenReady().then(async () => {
 
     // The update is applying and this process is being replaced. Building the
     // app now would open the mic, the socket and the session for the two
-    // seconds before the installer kills us.
-    if (verdict === 'installing') return;
+    // seconds before the installer kills us. The flag keeps showWindow() from
+    // doing it either, for a second launch that arrives in that gap.
+    if (verdict === 'installing') { installing = true; return; }
 
     startApp();
 });
@@ -1529,6 +1609,13 @@ app.whenReady().then(async () => {
 // running. Retired alongside the voice row, on the same budget, because the two
 // requests are independent and can go out together.
 let presenceRetired = false;
+// Did THIS process ever put a presence row on the board? Only the renderer does
+// that, and the renderer only exists once startApp() has run — so a launch that
+// spent its whole life behind the update gate, or one that quit from the splash,
+// has nothing on the server to withdraw. net.hasSession() cannot answer this:
+// net.init() restores the cookie before the gate, so it is true for every
+// signed-in user whether or not anything was ever announced. See before-quit.
+let announcedPresence = false;
 
 async function retirePresence() {
     if (presenceRetired) return;
@@ -1590,7 +1677,13 @@ app.on('before-quit', (e) => {
     // has to take you out of the member list too, and that row exists whether
     // or not you were ever in a call. No session means no rows to retire and
     // nothing worth deferring the quit for.
-    if (presenceRetired || !net.hasSession()) return;
+    // `announcedPresence` as well as the session: a process holding a restored
+    // cookie but no window — quitting from the update splash, or being replaced
+    // by the installer — has no row anywhere and used to defer its own quit by
+    // up to 800ms on a cold HTTPS POST to withdraw one. The installer allows
+    // about a second of grace before it starts killing, so that deferral was
+    // spent out of the budget the flush and the handover need.
+    if (presenceRetired || !announcedPresence || !net.hasSession()) return;
     // Deferred, not blocked: quit again once the rows are gone. The second pass
     // returns above, so this can only ever happen once.
     e.preventDefault();

@@ -32,6 +32,13 @@ function die(msg) {
 // wasm would not start ran the microphone with NO noise suppression while the
 // UI said the AI filter was on. `vendor` is part of the build now; this asserts
 // it actually took, because a silent staleness is exactly what went wrong.
+//
+// AFTER that vendor step, not before it. This used to be the first thing the
+// release script ran — ahead of the `npm run vendor` in the same command — so
+// it judged whatever an earlier run happened to leave on disk and said nothing
+// at all about what this build would package. Editing the processor and running
+// `npm run release` therefore failed the release outright, telling the operator
+// to run the very command that was already queued behind it.
 function checkVendoredWorklet() {
     const processor = path.join(__dirname, 'rnnoise-processor.js');
     const worklet = path.join(__dirname, '..', 'src', 'renderer', 'vendor', 'rnnoise-worklet.js');

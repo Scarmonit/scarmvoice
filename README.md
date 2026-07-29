@@ -259,12 +259,27 @@ Three tiers, each covering what the one below it can't reach:
 
 Bump `version` in package.json, then `GH_TOKEN=$(gh auth token) npm run release`.
 electron-builder builds the NSIS installer, generates `latest.yml` + a blockmap,
-and publishes them to a GitHub release tagged `v<version>` on
-`Scarmonit/scarmvoice`. That single step is the whole release: installed apps
-pick it up through the update feed, and the website's "Download for Windows"
-button (which points at `releases/latest/download/ScarmVoice-Setup.exe`) serves
-it automatically — no site edit needed. The stable asset name is what makes the
-`latest` redirect work, so don't put the version in the NSIS `artifactName`.
+and uploads them to a release tagged `v<version>` on `Scarmonit/scarmvoice`.
+That single step is the whole release: installed apps pick it up through the
+update feed, and the website's "Download for Windows" button (which points at
+`releases/latest/download/ScarmVoice-Setup.exe`) serves it automatically — no
+site edit needed. The stable asset name is what makes the `latest` redirect
+work, so don't put the version in the NSIS `artifactName`.
+
+> **It uploads to a DRAFT, and `scripts/publish-release.js` flips it live as the
+> last step — only once both assets are actually on it.** electron-builder
+> creates the release record on the first upload and streams the bytes
+> afterwards, so publishing straight to a live release meant that for the whole
+> length of an 84 MB upload `releases/latest` resolved to a release with nothing
+> in it: the download button 404'd and every client checking for an update got
+> an error instead of a `latest.yml`. A draft is invisible to both, so a run that
+> dies mid-upload changes nothing for anyone — and `gh api …/releases/tags/<tag>`
+> 404s on a draft, so the tag preflight still passes on the retry and
+> electron-builder reuses the draft it left behind.
+>
+> The order inside the script matters too: `npm run vendor` runs FIRST, so the
+> preflight's stale-worklet assertion judges the file this build will actually
+> package rather than whatever an earlier run left on disk.
 
 > **Installer, not portable.** electron-updater can't self-update a portable
 > exe, so the Windows target is a one-click NSIS installer (per-user, no admin,
@@ -741,6 +756,19 @@ Reads are retried in `net.js` too, twice with backoff, on a dropped connection o
 a 429/502/503/504. **Writes never are**: the failure can happen after the server
 already accepted the post, so a retry would send it twice.
 
+**Being offline does not count against the queue's retry budget**, and that is
+the distinction the feature lives or dies by. A queued message gives up after a
+bounded number of tries, so a body that deterministically makes the Worker throw
+ends up in front of the person who wrote it instead of looping forever — but the
+retry clock is the poll, which runs every four seconds while the socket is down,
+so counting outages spent the whole budget in *thirty-two seconds*. Close a
+laptop lid for half a minute and the queue announced that it had given up. Only
+an ANSWER from the server counts now, and no faster than once every fifteen
+seconds; `net.js` flags a request that never reached anything as `offline` so the
+two can be told apart. A timeout is deliberately not `offline` — the request went
+out and we stopped waiting, which is the one transport failure where retrying
+could duplicate a message.
+
 ### One composer, and the drafts in it
 
 There is a single composer element. Opening a conversation *moves* the node into
@@ -798,6 +826,16 @@ resync; and reconnecting fetches the latest window rather than only resuming liv
 events. The titlebar shows Reconnecting… / Disconnected so the state is never
 silent.
 
+One thing a reconnect has to say again: **that you are in a call**. The Durable
+Object keeps its voice roster per SOCKET, in that socket's attachment, and
+`hello` deliberately carries no voice state — while `sendVoice` only fires from
+the voice engine's `onState`, which runs when the call state *changes*. So every
+reconnect during a call silently took you out of everyone else's realtime voice
+list, while the five-second HTTP heartbeat kept putting you back: clients replace
+their roster from whichever source answered last, so the person flickered in and
+out of the call for as long as it ran. The renderer re-announces on the first
+status event of a fresh connection.
+
 > **Portable-build login item.** The portable exe self-extracts to a random
 > `%TEMP%` dir each launch, so `process.execPath` is a dead target for a startup
 > entry. electron-builder exposes the real path in `PORTABLE_EXECUTABLE_FILE` —
@@ -824,6 +862,20 @@ PDFs, HTML, SVG, archives, unknown — downloads as `application/octet-stream`
 with `attachment` disposition and `X-Content-Type-Options: nosniff`, so an
 uploaded HTML or SVG can never execute in the site's origin. Extensions are
 never trusted for inline rendering.
+
+**Range requests reach the server.** Chromium's media loader opens every
+`<video>`/`<audio>` with `Range: bytes=0-` and issues a fresh range request for
+each seek — the `lounge://` scheme is registered `stream: true` precisely so it
+can. The protocol handler used to drop that header and rebuild the response with
+a content type and a cache header of its own, throwing away the server's 206,
+`Content-Range` and `Accept-Ranges` — so every attachment arrived as one opaque
+200 from byte zero and a media element with no seekable range clamps every scrub
+to the start. A long voice message or a screen recording could only be played
+straight through, in an app that advertises 1 GB attachments. The range now
+travels up and its answer travels back down, with `Content-Length` **derived
+from `Content-Range`** rather than forwarded: fetch has already decompressed the
+body while the upstream header still counts the compressed bytes, which is what
+used to truncate everything Cloudflare gzips.
 
 ### Attachments and drag-and-drop
 
@@ -899,7 +951,10 @@ arms the three-hourly recheck, *unless* the gate gave up without an answer, in
 which case it does ask rather than leaving the app three hours from its next
 look. And `showWindow()` refuses to build the app window while the gate is open,
 because a second launch or a tray click would otherwise conjure the whole session
-out from under an update that is still applying.
+out from under an update that is still applying — and it keeps refusing for the
+half-second after the gate answers `'installing'`, because `gateOpen()` goes
+false the instant the gate settles while this process is still sitting in front
+of `quitAndInstall`, with no window, no tray and no session.
 
 ### Editing
 
@@ -916,6 +971,19 @@ cannot drive real push-to-talk on its own. The app uses the optional native hook
 keydown/keyup. If that module is unavailable it degrades gracefully: the
 accelerator becomes a push-to-talk *toggle*, and hold-to-talk still works
 whenever the window has focus.
+
+**Settings says which of the three actually happened.** `apply()` answers
+`{ mode, bound }` — `'native'` is real hold-to-talk, `'toggle'` means a global
+accelerator was registered instead (a LATCH, and taken off every other
+application while the app runs), `'none'` means neither could be arranged — and
+every call site threw that answer away. The hint underneath the key asked
+`available()` instead, which is only "did the module load", a question ptt.js's
+own comment says is not the same as "does the hook work": `start()` throws when
+the OS refuses the low-level input hook, so a machine that had silently fallen
+back to the latch was told "works system-wide", and one whose binding no
+transport could carry was told the same while nothing was bound at all. The hint
+is painted from the cached result of the last `apply()` now, and names the chord
+it is holding off other apps when it is holding one.
 
 Both paths use **one** matcher (`lib.js`'s `matchesPttBinding`, mirrored by
 `ptt.js`'s hook matcher) so they cannot drift. The in-window path previously
@@ -965,6 +1033,14 @@ toy and a microphone is not, so a broken mixer must cost you the toy.
 
 The clip is also connected to `ctx.destination`, so you hear what you played —
 without that second tap the presser is the only person in the room who can't.
+
+That second tap has a sharp edge, and the tray says so now. Transmission is
+gated by `disableAudio()` rather than by a gain node (see *Voice settings that
+are deliberate*), so while you are muted — or in push-to-talk with the key up —
+the track the mix feeds is genuinely stopped and the clip reaches nobody. The
+local tap still plays it, which made that indistinguishable from a clip the
+whole call heard: the button flashed, the sound played, and nothing went out.
+Pressing a clip while you are not transmitting now says which of the two it was.
 
 ### The search box is the state
 

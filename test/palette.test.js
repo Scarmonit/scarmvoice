@@ -1020,7 +1020,14 @@ describe('voice details', () => {
         // would be a lie about the one thing nobody can check for themselves.
         expect(src()).not.toMatch(/End-to-end encrypted/i);
         expect(src()).toMatch(/Encrypted in transit \(DTLS-SRTP\)/);
-        expect(src()).toMatch(/Encrypted peer-to-peer \(DTLS-SRTP\)/);
+        // …and not peer-to-peer either. This app has one transport, the SFU;
+        // the mesh fallback belongs to the website. The line used to be picked
+        // by `peers > 1`, where `peers` counted RTCPeerConnections rather than
+        // people — mediasoup opens one per direction, so it was 2 in every call
+        // and everybody was told their relayed call was peer-to-peer.
+        // Matched on the STRING LITERAL, not the word: the comment above the
+        // line explains why the claim is wrong and has to be allowed to say so.
+        expect(src()).not.toMatch(/['"`]Encrypted peer-to-peer/i);
     });
 
     it('grows the graph past its floor instead of clipping a spike', () => {

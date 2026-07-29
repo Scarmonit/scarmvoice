@@ -79,6 +79,7 @@
             joinEl = new Audio(JOIN_URL); joinEl.preload = 'auto'; joinEl.volume = VOLUME;
             leaveEl = new Audio(LEAVE_URL); leaveEl.preload = 'auto'; leaveEl.volume = VOLUME;
         } catch (e) {}
+        applySink();
 
         // Fallback unlock, in case the autoplay policy still gates us.
         function unlock() {
@@ -96,7 +97,30 @@
         document.addEventListener('keydown', unlock, true);
     }
 
-    function setSettings(next) { settings = Object.assign({}, next || {}); }
+    // Send the chimes to the speaker the app is set to, like everything else.
+    //
+    // The message chime rides the shared AudioContext, which audio.js routes
+    // with setSinkId, and every voice element in a call is routed by voice.js —
+    // but the join/leave chimes are plain <audio> elements built here and were
+    // never routed at all. So somebody listening on headphones heard the call in
+    // the headphones and everybody's arrivals and departures out of the desktop
+    // speakers, on the same machine, at the same moment.
+    //
+    // '' is the valid sinkId for "Windows Default" and must be SET rather than
+    // skipped — treating it as "nothing to do" is what once made choosing the
+    // default speaker a silent no-op once a specific device had been picked.
+    function applySink() {
+        const id = settings.speakerDeviceId || '';
+        [joinEl, leaveEl, messageEl].forEach((el) => {
+            if (!el || typeof el.setSinkId !== 'function') return;
+            try { Promise.resolve(el.setSinkId(id)).catch(() => {}); } catch (e) {}
+        });
+    }
+
+    function setSettings(next) {
+        settings = Object.assign({}, next || {});
+        applySink();
+    }
 
     function playMessage() {
         if (!notifyEnabled()) return;

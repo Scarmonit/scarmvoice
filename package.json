@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.55.0",
+  "version": "0.56.0",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "test:watch": "vitest",
     "build": "npm run vendor && electron-builder --win --publish never",
     "dist": "npm run vendor && electron-builder --win --publish never",
-    "release": "node scripts/preflight-release.js && npm run vendor && electron-builder --win --publish always",
+    "release": "npm run vendor && node scripts/preflight-release.js && electron-builder --win --publish always && node scripts/publish-release.js",
     "test:e2e": "playwright test",
     "spec:app": "node dev/spec/capture-app.cjs",
     "spec:ref": "node dev/spec/capture-ref.cjs",
@@ -62,8 +62,7 @@
     "publish": {
       "provider": "github",
       "owner": "Scarmonit",
-      "repo": "scarmvoice",
-      "releaseType": "release"
+      "repo": "scarmvoice"
     },
     "asarUnpack": [
       "**/*.node",

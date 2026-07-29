@@ -483,7 +483,22 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
         return {
             success: false,
             error: lastErr.name === 'TimeoutError' ? 'Request timed out' : lastErr.message,
-            network: true
+            network: true,
+            // The request never reached anything: DNS, connect, TLS, a reset.
+            // Distinct from the `network` below, which means the server (or the
+            // edge in front of it) replied and the reply was unusable. The
+            // renderer's outbox needs the difference: a reply is evidence about
+            // the message, and no reply is only evidence about the link. Without
+            // it, being offline for eight poll ticks — thirty-two seconds — was
+            // counted as eight rejections and marked a perfectly good message
+            // permanently failed.
+            //
+            // A TIMEOUT is deliberately NOT `offline`. It means the request went
+            // out and we stopped waiting, so the server may well have committed
+            // it — the one transport failure where retrying can duplicate a
+            // message. It keeps counting against the outbox's retry budget,
+            // which is what stops that repeating indefinitely.
+            offline: lastErr.name !== 'TimeoutError'
         };
     }
 
@@ -551,7 +566,17 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
         if (!verdict.signedOut) {
             console.warn('[net] 401 on ' + pathname + ' NOT confirmed by /auth/status (' +
                 verdict.why + ') — keeping the session');
-            return { success: false, error: msg, transient: true };
+            // `network` as well as `transient`. `transient` was the only flag
+            // on this answer and NOTHING in the renderer ever read it — so a
+            // 401 this module had just gone out of its way to disbelieve came
+            // back looking like a hard rejection: a message being sent was
+            // toasted 'unauthorized' and handed back to the composer instead
+            // of being queued, over a session both ends agree is fine.
+            // `network` is the flag the renderer already reads for 'keep it,
+            // try again'; `transient` stays as the finer-grained label.
+            // Deliberately NOT `offline`: the server answered, so this still
+            // counts against the outbox's retry budget.
+            return { success: false, error: msg, transient: true, network: true };
         }
         console.warn('[net] 401 on ' + pathname + ' confirmed signed out — clearing credentials');
         clearCredentials();
@@ -572,8 +597,30 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
         return {
             success: false,
             error: `Bad response (${res.status})`,
-            network: retriable(res.status)
+            // Every 5xx, not just the three in retriable(). A Worker that throws
+            // is served as a 1101 exception page with status 500 — which this
+            // comment already claimed to cover and did not, because 500 is
+            // deliberately absent from retriable() (a GET that 500s
+            // deterministically must not be re-sent three times). Classifying
+            // the failure and deciding whether to retry a read are two
+            // different questions; they were sharing one answer.
+            network: res.status >= 500 || res.status === 429
         };
+    }
+    // A 5xx that DID carry JSON is still the server having a bad minute, not a
+    // verdict on what was sent. Every board endpoint ends `catch (e) { return
+    // json({ success: false, error: e.message }, 500) }`, so a D1 blip inside
+    // post.js came back as an ordinary rejection with no flag at all — the
+    // outbox read that as "the server refused this message" and stranded it
+    // behind a manual Retry. login() in this same file has always got this
+    // right; board() never did.
+    //
+    // Only >= 500. A 429 with a readable body is a deliberate, user-facing
+    // "slow down" (dm/send, account/login, register, verify, twofactor all
+    // send one) and flagging it transient would auto-repost into a throttle
+    // and replace "Too many attempts" with a generic offline message.
+    if (res.status >= 500 && data && !data.success) {
+        return Object.assign({}, data, { network: true });
     }
     if (method !== 'GET' && data && data.success) forcePrimary = true;
     return data;
@@ -741,8 +788,19 @@ async function takePreflight() {
 // covers reaching the server, not transferring what is behind it — attachments
 // go up to a gigabyte, and the timeout used to abort the body mid-stream, which
 // made anything above about fifty megabytes impossible to download at all.
-async function fileStream(key) {
-    return request('/api/board/file', { query: { key }, streamBody: true });
+// `range` is a raw Range header value, forwarded verbatim. The server honours
+// Range (functions/api/board/file.js answers 206 + Content-Range + Accept-Ranges,
+// and says in its own comment that it exists so a <video> can seek) — but the
+// lounge:// proxy in main.js never asked for one, so every desktop attachment
+// was fetched as a single 200 from byte zero. A media element with no seekable
+// range cannot be scrubbed at all: on a long recording or a screen capture the
+// only way to reach the end was to watch the whole thing.
+async function fileStream(key, range) {
+    return request('/api/board/file', {
+        query: { key },
+        streamBody: true,
+        headers: range ? { Range: String(range) } : {}
+    });
 }
 
 // Store an attachment in R2. Deliberately identical to what the website's
@@ -846,7 +904,7 @@ async function upload(name, type, bytes, onProgress) {
         const verdict = await confirmSignedOut();
         if (!verdict.signedOut) {
             console.warn('[net] 401 on upload NOT confirmed (' + verdict.why + ') — keeping the session');
-            return { success: false, error: (body && body.error) || 'Upload failed', transient: true };
+            return { success: false, error: (body && body.error) || 'Upload failed', transient: true, network: true };
         }
         clearCredentials();
         return { success: false, error: (body && body.error) || 'unauthorized', needsAuth: true };
@@ -937,6 +995,19 @@ async function uploadAttachment(item, onProgress) {
     if (!ticket || !ticket.success || !ticket.url) {
         // A refusal with a reason (too large, demo session) is the answer.
         if (ticket && ticket.error && !ticket.presignUnavailable) {
+            // …but a failure to ASK is not a refusal. board() answers a dropped
+            // connection with { network: true, error: 'fetch failed' }, and
+            // flattening that here turned a Wi-Fi blip into a permanent upload
+            // failure whose message was the raw undici string, printed into the
+            // composer's progress row as if the server had said it.
+            if (ticket.network) {
+                return {
+                    success: false,
+                    error: 'Could not reach the server — try that file again',
+                    network: true,
+                    offline: !!ticket.offline
+                };
+            }
             return { success: false, error: ticket.error };
         }
         // Presigning genuinely unavailable — the old endpoint still works for

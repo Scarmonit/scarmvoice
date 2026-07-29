@@ -1276,8 +1276,7 @@
             startTextPresence();
             loadDmThreads();
             startDmPolling();
-            await L.ptt.apply();
-            refreshPttHint();
+            await applyPtt();
             flushOutbox();
 
             // Somebody else changing their picture is not worth a poll of its
@@ -1454,6 +1453,13 @@
         clearReply();            // the quoted message lives in the old channel
         cancelEdit();            // an editor left open would freeze renderMessages()
         if (threadOpen()) closeThread();
+        // The pinned panel is per-channel too, and nothing ever repainted it on
+        // a switch: its header hard-codes the channel it was drawn for, so it
+        // sat over the new conversation still reading "PINNED IN #GENERAL" and
+        // still listing #general's messages — and clicking one of them yanked
+        // the reader into a channel they had just left. Every caller reassigns
+        // `channel` before getting here, so this redraws under the new name.
+        if (!$('pinned-panel').hidden) renderPinned();
     }
 
     async function switchChannel(name) {
@@ -2316,7 +2322,9 @@
             // tries goes back to zero: a manual Retry is the user saying "try
             // properly again", not "have one more of the eight".
             retry.addEventListener('click', () => {
-                entry.failed = false; entry.rejected = false; entry.tries = 0; flushOutbox();
+                entry.failed = false; entry.rejected = false;
+                entry.tries = 0; entry.lastTryAt = 0;
+                flushOutbox();
             });
             const cancel = document.createElement('button');
             cancel.type = 'button';
@@ -2726,6 +2734,10 @@
     // server chokes on every single time ends up in front of the person who
     // wrote it instead of looping quietly forever.
     const OUTBOX_TRIES = 8;
+    // …and no faster than this. The retry clock is the poll, which runs every
+    // four seconds while the socket is down, so without a floor the whole budget
+    // burns through in half a minute of the edge being unwell.
+    const OUTBOX_TRY_SPACING_MS = 15000;
     let outbox = [];
     let outboxSeq = 0;
     let flushingOutbox = false;
@@ -2823,11 +2835,28 @@
                     // every poll tick for the rest of the session. After
                     // OUTBOX_TRIES it becomes the user's decision, with Retry
                     // and Discard on the row.
+                    //
+                    // What may NOT count against that budget is a request that
+                    // never reached anything (res.offline). The cap exists to
+                    // stop a message the SERVER keeps choking on from looping
+                    // forever, and a link that is down says nothing whatsoever
+                    // about the message. This poll is the retry clock and it
+                    // ticks every four seconds while the socket is down, so
+                    // counting outages spent the entire budget in thirty-two
+                    // seconds: close a laptop lid for half a minute and the
+                    // queue — the whole feature — gave up and demanded the
+                    // message be re-sent by hand. And even a real answer is
+                    // only counted once per TRY_SPACING_MS, so an edge having a
+                    // bad minute is an outage rather than eight verdicts.
                     entry.failed = true;
-                    entry.tries = (entry.tries || 0) + 1;
-                    if (entry.tries >= OUTBOX_TRIES) {
-                        entry.rejected = true;
-                        entry.error = (res && res.error) || 'Could not send — the server is not answering';
+                    const now = Date.now();
+                    if (!res.offline && now - (entry.lastTryAt || 0) >= OUTBOX_TRY_SPACING_MS) {
+                        entry.lastTryAt = now;
+                        entry.tries = (entry.tries || 0) + 1;
+                        if (entry.tries >= OUTBOX_TRIES) {
+                            entry.rejected = true;
+                            entry.error = (res && res.error) || 'Could not send — the server is not answering';
+                        }
                     }
                     saveOutbox();
                     renderMessages();
@@ -2863,7 +2892,10 @@
             `<span class="up-name">${esc(name)}</span>` +
             `<span class="up-size">${esc(fmtSize(size))}</span>` +
             '<span class="up-bar"><i></i></span>';
-        $('upload-list').appendChild(row);
+        // #upload-progress, NOT #upload-list: renderStaged() empties that one,
+        // and these rows have to survive every re-render between the send and
+        // the server's answer. See the comment on the element in index.html.
+        $('upload-progress').appendChild(row);
         return row;
     }
 
@@ -4875,7 +4907,10 @@
             // call, so that is what the last argument turns off.
             const live = !!(p && inCall && !p.remoteOnly);
             if (!isMe) {
-                li.addEventListener('click', (e) => openPopover(p || r, e.currentTarget, live));
+                // r.status is the status this list already worked out, handed
+                // over so the popover does not have to re-derive it from a
+                // presence row an Offline member does not have.
+                li.addEventListener('click', (e) => openPopover(p || r, e.currentTarget, live, r.status));
             } else if (isMe && inCall) {
                 // Your own row here did nothing, while the identical row under
                 // the voice channel opened the mute/deafen/leave menu. Same
@@ -4906,6 +4941,16 @@
     // The ACCOUNT behind the open popover, when one is known — the admin
     // actions act on this, never on popFor (an install id).
     let popUid = null;
+    // WHICH ROW the popover is open about, for the open/close toggle alone.
+    //
+    // The toggle used to compare popFor, the install id, and every member in the
+    // Offline section is built with `id: null` — so `popFor === p.id` was
+    // `null === null` for any offline person while the popover was open about
+    // any other offline person. Clicking Dan while Carla's popover was up read
+    // as clicking Carla again and closed it; Dan needed a second click, every
+    // time. Prefixed so an install id can never collide with an account id.
+    let popKey = null;
+    const popKeyFor = (p) => (p.id ? 'c' + p.id : (p.uid ? 'u' + p.uid : null));
     // Matches --tb and titleBarOverlay's height: the popover is position:fixed,
     // so without this clamp it can slide under the native caption buttons.
     const POP_TITLEBAR = 38;
@@ -4941,10 +4986,16 @@
     // with us: the volume slider and "Mute for me" are about a stream that does
     // not exist, and offering them would be two more controls that do nothing.
     // Everything else — mention, block, and the admin actions — still applies.
-    function openPopover(p, anchor, audio) {
+    // `known` is the status the caller's list has already worked out, used when
+    // the presence rows cannot answer — an Offline row has no install id to
+    // match on, and defaulting to 'online' drew a green dot one pixel from the
+    // grey one on the same person's row behind it.
+    function openPopover(p, anchor, audio, known) {
         const pop = $('popover');
         // Clicking the same person again closes it, like every other toggle.
-        if (popFor === p.id && !pop.hidden) { closePopover(); return; }
+        const key = popKeyFor(p);
+        if (key && popKey === key && !pop.hidden) { closePopover(); return; }
+        popKey = key;
         popFor = p.id;
 
         const canAudio = audio !== false;
@@ -4957,8 +5008,14 @@
         $('pop-name').textContent = p.name;
 
         // The custom status lives in the presence list, not the SFU roster.
-        const m = members.find((x) => x.client_id === p.id);
-        const status = m ? statusFromWire(m.status) : 'online';
+        // Matched on install id and then on ACCOUNT, because an Offline row is
+        // built from the account directory and carries no install id at all.
+        const m = members.find((x) => x.client_id === p.id)
+            || (p.uid ? members.find((x) => x.user_id === p.uid) : null);
+        // `known` rather than a bare 'online': a directory row passes 'offline',
+        // while a voice-roster row that has not heartbeated yet passes nothing
+        // and keeps its green dot.
+        const status = m ? statusFromWire(m.status) : (known || 'online');
         const sub = (m && m.custom) || (p.muted ? 'Microphone muted'
             : (status === 'online' ? '' : STATUS_LABEL[status]));
         const st = $('pop-status');
@@ -4974,6 +5031,14 @@
         $('pop-mute').checked = !!(settings.localMuted && settings.localMuted[p.id]);
 
         const blocked = isBlocked(p.id);
+        // settings.blocked is keyed by INSTALL id — it is what isBlocked() is
+        // asked about everywhere a message, a roster row or a mention is
+        // filtered. A row with no install id therefore has nothing to block, and
+        // the button was doing exactly nothing when pressed: the popover closed,
+        // no confirmation, no entry in Settings > Blocked, and it still said
+        // "Block" next time. Hidden rather than dead, the same way the message
+        // menu already drops Block when there is no client_id.
+        $('pop-block').hidden = !p.id;
         $('pop-block-label').textContent = blocked ? 'Unblock' : 'Block';
         $('pop-block').classList.toggle('danger', !blocked);
 
@@ -4996,7 +5061,7 @@
         placePopover(pop, anchor);
     }
 
-    function closePopover() { $('popover').hidden = true; popFor = null; }
+    function closePopover() { $('popover').hidden = true; popFor = null; popKey = null; }
 
     $('pop-vol').addEventListener('input', async (e) => {
         if (!popFor) return;
@@ -5692,8 +5757,26 @@
         startPolling();
         // A fresh reconnection is exactly when to pull whatever we missed while
         // the socket was down, rather than waiting for the next live event.
-        if (connected && !was) resyncNow();
+        if (connected && !was) { reannounceVoice(); resyncNow(); }
     });
+
+    // Tell the new socket we are in a call, because it has no way to know.
+    //
+    // The Durable Object keeps its voice roster per SOCKET, in that socket's
+    // attachment, and `hello` deliberately carries no voice state. Nothing else
+    // re-sends it either: L.rt.sendVoice fires from the voice engine's onState,
+    // which only runs when the call state CHANGES. So any reconnect during a
+    // call — a laptop lid, a NAT timeout in the tray, the 20s liveness check
+    // terminating a half-open socket — silently took the user out of everyone
+    // else's realtime voice list, while the 5-second HTTP heartbeat kept putting
+    // them back: clients replace their roster from whichever source answered
+    // last, so the person flickered in and out of the call for as long as it ran.
+    function reannounceVoice() {
+        if (!voice) return;
+        const st = voice.state();
+        if (!st || !st.joined) return;
+        L.rt.sendVoice(true, !!st.muted, !!st.deafened);
+    }
 
     // Verify realtime and reload the current view + channel list. Called on
     // reconnect, on window restore/wake, and when the tab becomes visible.
@@ -6418,10 +6501,17 @@
         // call through the SFU is decrypted and re-encrypted there — so it is
         // NOT end-to-end, and saying otherwise would be a lie about the one
         // thing nobody can check for themselves.
-        const mesh = c && c.peers > 1;
-        $('cp-crypt').textContent = mesh
-            ? 'Encrypted peer-to-peer (DTLS-SRTP)'
-            : 'Encrypted in transit (DTLS-SRTP) — relayed through the voice server';
+        //
+        // Unconditional, because this app has exactly one transport: the SFU.
+        // The mesh fallback is the WEBSITE's — voice.js contains no mesh code at
+        // all — so no measurement here could ever justify a peer-to-peer claim.
+        // The branch that used to make one keyed off `peers > 1`, which counted
+        // live RTCPeerConnections rather than people, and mediasoup opens one
+        // transport per direction: it was 2 in every call, so the panel told
+        // everyone their call was peer-to-peer when none of them ever is. That
+        // is precisely the lie the comment above exists to prevent.
+        $('cp-crypt').textContent =
+            'Encrypted in transit (DTLS-SRTP) — relayed through the voice server';
     }
 
     let connTimer = null;
@@ -6467,7 +6557,7 @@
             'version: ' + ($('set-version').textContent || 'unknown'),
             'route: ' + $('cp-route').textContent,
             'codec: ' + (c.codec || 'unknown'),
-            'peers: ' + (c.peers || 0),
+            'peer connections: ' + (c.pcs || 0),
             'last ping: ' + $('cp-last').textContent,
             'average ping: ' + $('cp-avg').textContent + ' over ' + (c.samples || 0) + ' samples',
             'outbound packet loss: ' + $('cp-loss').textContent,
@@ -6981,9 +7071,11 @@
     $('ap-ptt').addEventListener('change', async (e) => {
         await saveSettings({ voiceMode: e.target.checked ? 'ptt' : 'open' });
         $('set-mode').value = settings.voiceMode;
-        $('row-ptt').style.display = settings.voiceMode === 'ptt' ? '' : 'none';
         if (voice) voice.setPttHeld(false);
-        await L.ptt.apply();
+        // Same reason as the #set-mode handler: paintVoicePane owns #row-ptt
+        // and the Push to Talk switch, both of which this used to leave stale.
+        paintVoicePane();
+        await applyPtt();
     });
 
     // To the pane the row names, not to whatever pane opens first.
@@ -7589,9 +7681,23 @@
         if (!fresh) {
             try {
                 const res = await L.account.me();
-                account = (res && res.success && res.user) || null;
+                // An ANSWER is authoritative, including "you have no account".
+                // A failure to ask is not: it used to be written straight into
+                // `account` as null, and nothing asks again for the rest of the
+                // session — this is the only call site. The paths that reach
+                // here with `fresh` false are register, verify and TOTP, so the
+                // account had just been proved moments earlier by the response
+                // that created the session; one timed-out account/me (the
+                // slowest call this app makes) erased it. myUserId() then
+                // answers 0, and "is this me?" is decided by user_id: your own
+                // messages stop being yours, edit and delete disappear from
+                // them, the admin controls go, and the DM list empties — on a
+                // session the server considers perfectly signed in.
+                if (res && res.success) account = res.user || null;
+                else console.warn('[account] could not refresh — keeping what we have:',
+                    (res && res.error) || 'no answer');
             } catch (e) {
-                account = null;
+                console.warn('[account] refresh threw — keeping what we have:', e && e.message);
             }
         }
         renderAccountCard();
@@ -7906,6 +8012,21 @@
                 // reads as a dead button and gets pressed again.
                 b.classList.add('playing');
                 setTimeout(() => b.classList.remove('playing'), 350);
+                // A clip reaches the room by being mixed into the OUTGOING
+                // MICROPHONE — that is the only path to the SFU — so it goes
+                // nowhere at all while the microphone is not being published.
+                // Muted, or push-to-talk with the key up, and disableAudio()
+                // has already stopped the track the mix feeds. The clip still
+                // comes out of the local tap, deliberately (the presser has to
+                // hear what they played), which is exactly what made this
+                // indistinguishable from a clip the whole call heard: the
+                // button flashes, the sound plays, and nobody else gets it.
+                const vst = voice ? voice.state() : null;
+                if (vst && vst.joined && !vst.transmitting) {
+                    toast(vst.muted
+                        ? 'You are muted — nobody else can hear that clip.'
+                        : 'Hold your push-to-talk key to play a clip into the call.', true);
+                }
                 const ok = await window.ScarmBoard.play(s.id);
                 if (!ok) toast('Could not play ' + s.label, true);
             });
@@ -8402,13 +8523,59 @@
         paint();
     }
 
-    function refreshPttHint() {
-        L.ptt.available().then((ok) => {
-            $('ptt-hint').textContent = ok
-                ? 'works system-wide'
-                : 'in-app only while the window is focused';
-        });
+    // What ptt.apply() actually did, remembered — because the hint used to be
+    // derived from a different question entirely.
+    //
+    // apply() returns { mode, bound }: 'native' is real hold-to-talk through the
+    // system hook, 'toggle' means the hook was unavailable and a GLOBAL
+    // ACCELERATOR was registered instead — taken off every other application on
+    // the machine, and a LATCH (press to talk, press again to stop) rather than
+    // a hold — and 'none' means neither could be arranged. All four call sites
+    // threw that answer away, and the hint asked ptt.available() instead, which
+    // is `!!loadHook()`: whether the module LOADED. ptt.js's own comment says
+    // that is not the same question as whether the hook works — start() throws
+    // when the OS refuses the low-level input hook — so a machine that fell back
+    // to the latch was told "works system-wide", and one whose binding no
+    // transport could carry was told the same while nothing was bound at all.
+    let pttState = null;
+
+    async function applyPtt() {
+        try { pttState = await L.ptt.apply(); } catch (e) { pttState = null; }
+        paintPttHint();
+        return pttState;
     }
+
+    function paintPttHint() {
+        const el = $('ptt-hint');
+        if (!el) return;
+        if (!pttState) {
+            // Before the first apply() of the session. `available()` is the best
+            // guess there is at that point, and it is only ever a guess.
+            L.ptt.available().then((ok) => {
+                if (pttState) return;                    // a real answer landed meanwhile
+                el.textContent = ok ? 'works system-wide' : 'in-app only while the window is focused';
+            });
+            return;
+        }
+        if (pttState.mode === 'native') { el.textContent = 'works system-wide'; return; }
+        if (pttState.mode === 'toggle') {
+            el.textContent = 'system-wide, but press once to talk and again to stop' +
+                (pttState.bound ? ' — ' + pttState.bound + ' is taken from other apps while ScarmVoice runs' : '');
+            return;
+        }
+        // 'none'. A mouse button needs the native hook: the in-window handler
+        // matches on event.code and refuses a mouse binding outright, so unlike
+        // a key there is no degraded mode left for it.
+        const b = settings.pttBinding;
+        el.textContent = (b && b.type === 'mouse')
+            ? 'that button needs the system-wide hook, which is unavailable here — pick a key instead'
+            : 'in-app only while the window is focused';
+    }
+
+    // Kept for the callers that only need a repaint. Opening Settings must NOT
+    // re-apply: apply() resets the held state, which would close the microphone
+    // of anyone who opened Settings mid-hold.
+    function refreshPttHint() { paintPttHint(); }
 
     // #set-name is readonly: the display name IS the account username, so there
     // is nothing to listen for. It stays in the sheet because that is where
@@ -8462,9 +8629,19 @@
 
     $('set-mode').addEventListener('change', async (e) => {
         await saveSettings({ voiceMode: e.target.value });
-        $('row-ptt').style.display = e.target.value === 'ptt' ? '' : 'none';
         if (voice) voice.setPttHeld(false);
-        await L.ptt.apply();
+        // The repaint, not a hand-rolled line for the one control this handler
+        // happens to know about. voiceMode has four controls — this select, the
+        // Push to Talk switch a few rows ABOVE it in the same visible pane, the
+        // checkbox in the audio popover, and the in-call button — and each used
+        // to update its own idea of the subset that mattered. Changing the mode
+        // here left the switch drawn in the old position, so the pane showed
+        // "Push to Talk" off directly above "Input mode: Push to talk", and the
+        // next click on the switch appeared to do the opposite of what it read.
+        // paintVoicePane() owns #row-ptt too, so the manual line is gone.
+        paintVoicePane();
+        paintAudioPanels();
+        await applyPtt();
     });
     ['ec', 'ns', 'agc'].forEach((k) => {
         const map = { ec: 'echoCancellation', ns: 'noiseSuppression', agc: 'autoGainControl' };
@@ -8503,6 +8680,10 @@
         if (voice) voice.setSettings(settings);
         $('btn-ptt').classList.toggle('on', next === 'ptt');
         setTip($('btn-ptt'), next === 'ptt' ? 'Push to Talk On' : 'Push to Talk Off');
+        // …and the two controls in Settings and the audio popover that say the
+        // same thing. Changing the mode from the call left both of them stale.
+        paintVoicePane();
+        paintAudioPanels();
     });
 
     $('set-nsai').addEventListener('change', async (e) => {
@@ -8639,7 +8820,7 @@
                 window.removeEventListener('mousedown', onMouse, true);
                 if (binding || clear) {
                     await saveSettings({ [settingKey]: binding });
-                    await L.ptt.apply();
+                    await applyPtt();
                 }
                 btn.textContent = (await L.ptt.describe(settings[settingKey])) || 'Click to set';
                 if (afterSave) afterSave();
@@ -10395,6 +10576,21 @@
 
     async function openThread(rootId, chan) {
         if (!rootId) return;
+        // Opening a thread OVER an open one is a switch, not a fresh open, so
+        // the reply in progress has to be stashed exactly as closing it would.
+        //
+        // closeThread() is the only thing that ever writes threadDrafts, and
+        // this never called it: the drawer only narrows the message column
+        // rather than covering it, so every reply-count chip and every
+        // right-click "Reply in thread" in the main list stays live while a
+        // thread is open — and using one blanked whatever had been typed into
+        // the previous thread, permanently. The cross-channel path was safe only
+        // by accident (switchChannel -> resetChannelView -> closeThread).
+        //
+        // Unconditional: re-clicking the chip of the thread already open must
+        // not blank its box either, and the restore below deletes the map entry
+        // on the way in, so a `rootId !== threadRootId` guard would still lose it.
+        if (threadRootId) closeThread();
         // A result from another channel: switch first so replies post to the
         // right place and closing the thread lands somewhere sensible.
         if (chan && chan !== channel) await switchChannel(chan);
@@ -10453,13 +10649,45 @@
 
     function threadOpen() { return !$('thread-panel').hidden; }
 
+    // Say the thread could not be loaded, and offer the way out.
+    //
+    // loadThread used to `return` on every failure without touching the DOM, so
+    // openThread's "Loading thread…" placeholder was the last thing ever drawn:
+    // one failed request and the drawer sat on that line for the rest of the
+    // session, with the 2.5s poll taking the same silent path (and skipped
+    // entirely while the window is hidden). The DM drawer beside it has had an
+    // explicit error and a Retry for the identical case all along.
+    function threadError(msg) {
+        // Never wipe a thread that IS on screen over one failed poll.
+        if (threadPosts.length) return;
+        const list = $('thread-list');
+        if (list.querySelector('.thread-retry')) return;   // already saying it
+        const box = document.createElement('div');
+        box.className = 'thread-loading';
+        box.append(msg, ' ');
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'keycap thread-retry';
+        retry.textContent = 'Retry';
+        retry.addEventListener('click', () => {
+            list.innerHTML = '<div class="thread-loading">Loading thread…</div>';
+            loadThread(true);
+        });
+        box.appendChild(retry);
+        list.innerHTML = '';
+        list.appendChild(box);
+    }
+
     async function loadThread(force) {
         if (!threadRootId) return;
         const root = threadRootId;
         const res = await L.board('thread', { query: { root } });
         if (root !== threadRootId) return;               // switched while in flight
         if (authGone(res)) return;
-        if (!res || !res.success) return;
+        if (!res || !res.success) {
+            threadError((res && res.error) || 'Could not load this thread.');
+            return;
+        }
 
         threadPosts = res.posts || [];
         if (!threadPosts.length) { closeThread(); return; }   // root was deleted
@@ -11453,25 +11681,43 @@
     // would have to reject, and one the reader should never be shown.
     async function openDmPicker(mode, thread, exclude) {
         if (!account) { openSettings(); return; }
-        const res = await L.board('account/users');
-        if (!res || !res.success) return toast((res && res.error) || 'Could not load the member directory', true);
-        (res.users || []).forEach((u) => { dmDirectory[u.id] = u; });
-        const skip = new Set([account.id, ...(exclude || [])]);
-        const others = (res.users || []).filter((u) => !skip.has(u.id));
-        if (!others.length) {
-            return toast(mode === 'add'
-                ? 'Everyone with an account is already in this group'
-                : 'No one else has a board account yet — DMs need one on both ends');
-        }
-        dmPick.all = others;
+        // ON SCREEN FIRST, then fetch. This used to await the whole member
+        // directory before the modal existed, so "New message" and "Add people"
+        // did nothing visible at all for a full round trip — and because the
+        // reveal was also where re-entry became detectable, a second click
+        // during that window ran the whole function again and its
+        // `dmPick.chosen.clear()` wiped whatever the first one had produced.
+        if (!$('dm-picker').hidden) return;
+        dmPick.all = [];
         dmPick.chosen.clear();
         dmPick.mode = mode;
         dmPick.thread = thread || 0;
         $('dm-picker-search').value = '';
         $('dm-picker').querySelector('h2').textContent = mode === 'add' ? 'Add people' : 'New message';
-        renderDmPicker();
+        $('dm-picker-ok').disabled = true;
+        $('dm-picker-list').innerHTML = '<div class="hint dm-picker-empty">Loading members…</div>';
         $('dm-picker').hidden = false;
         trapFocus($('dm-picker'), { label: mode === 'add' ? 'Add people' : 'New message', initial: $('dm-picker-search') });
+
+        const res = await L.board('account/users');
+        // Closed while the directory was in flight — nothing left to fill in.
+        if ($('dm-picker').hidden) return;
+        if (!res || !res.success) {
+            closeDmPicker();
+            return toast((res && res.error) || 'Could not load the member directory', true);
+        }
+        (res.users || []).forEach((u) => { dmDirectory[u.id] = u; });
+        const skip = new Set([account.id, ...(exclude || [])]);
+        const others = (res.users || []).filter((u) => !skip.has(u.id));
+        if (!others.length) {
+            // The modal is already up, so take it back down before saying why.
+            closeDmPicker();
+            return toast(mode === 'add'
+                ? 'Everyone with an account is already in this group'
+                : 'No one else has a board account yet — DMs need one on both ends');
+        }
+        dmPick.all = others;
+        renderDmPicker();
     }
 
     $('btn-new-dm').addEventListener('click', () => openDmPicker('create', 0, []));
@@ -11584,7 +11830,15 @@
             if (!dmMsgs.some((x) => x.id === m.id)) {
                 dmMsgs.push({
                     id: m.id, body: m.body, created_at: m.created_at,
-                    fromMe: false, from: m.from.id
+                    fromMe: false, from: m.from.id,
+                    // The attachment, which the event carries now. Without it a
+                    // file sent with no caption drew a row with a name, an
+                    // avatar, a timestamp and nothing else — blank until the
+                    // 12-second poll replaced the list. The `|| ''` defaults
+                    // mean this client against a server that predates the change
+                    // degrades to exactly the old behaviour rather than throwing.
+                    att_key: m.att_key || '', att_name: m.att_name || '',
+                    att_type: m.att_type || '', att_size: m.att_size || 0
                 });
                 renderDmMessages();
             }
@@ -11607,7 +11861,9 @@
                 const title = m.isGroup && m.title
                     ? `${m.from.username} — ${m.title}`
                     : `${m.from.username} (DM)`;
-                L.app.notify({ title, body: (m.body || '').slice(0, 140) });
+                // A file sent with no caption names itself rather than raising
+                // a notification with an empty body.
+                L.app.notify({ title, body: (m.body || m.att_name || '').slice(0, 140) });
             }
         }
     }
@@ -11629,8 +11885,6 @@
             // fell through to dmPanelOpen() and closed the conversation BEHIND
             // the picker, which stayed up and kept the focus trap.
             else if (!$('dm-picker').hidden) closeDmPicker();
-            else if (threadOpen()) closeThread();
-            else if (dmPanelOpen()) closeDm();
             else if (!$('picker').hidden) closePicker();
             // Above the dropdown that opened it, and above settings: it is a
             // focus-trapped modal drawn over both.
@@ -11638,6 +11892,16 @@
             else if (!$('popover').hidden) closePopover();
             else if (notesOpen()) closeNotes();
             else if (!$('settings').hidden) closeSettings();
+            // The thread and DM drawers sit BELOW every modal above, and the
+            // rule at the top of this chain — innermost first — has to hold for
+            // all of them, not just the three it was originally written for.
+            // Settings, the share picker, the filters form and the release
+            // notes are all focus-trapped surfaces drawn over the drawers, and
+            // they were ranked underneath: with a thread open, opening Settings
+            // and pressing Escape left Settings on screen and quietly closed the
+            // thread behind it — including whatever reply was half-typed in it.
+            else if (threadOpen()) closeThread();
+            else if (dmPanelOpen()) closeDm();
             else if (searchOpen()) closeSearchPop();
             else if (!$('search-panel').hidden) hideSearchResults();
             else if (filterActive()) clearSearch();
@@ -11646,6 +11910,16 @@
         // Ctrl+F goes to the search box, like every other chat client — which
         // is now the box in the header rather than a row that appeared under it.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !$('app').hidden) {
+            // Never out of a modal. Every focus-trapped surface registers itself
+            // with trapFocus, so this asks the trap rather than keeping a list
+            // of element ids beside it that would drift out of date. Without it
+            // Ctrl+F in Settings, a confirm dialog, the filters form, the share
+            // picker or the release notes broke straight out of the trap: the
+            // caret landed in the header search box behind the scrim, a dropdown
+            // opened behind the scrim, and every keystroke filtered a message
+            // list nobody could see — with Tab still confined to the modal, so
+            // there was no way back to the box that now had the focus.
+            if (trapped.size) return;
             e.preventDefault();
             // The header box belongs to the channel column, and #dm-panel is
             // painted OVER that column — so in direct messages Ctrl+F focused a

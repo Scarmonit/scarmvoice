@@ -304,14 +304,19 @@
             protocol: null,       // udp / tcp
             remote: null,         // the address media is actually going to
             codec: null,
-            peers: 0
+            // How many RTCPeerConnections are live — NOT how many people are in
+            // the call. mediasoup opens one transport per direction, so this is
+            // 2 for a call with one other person in it and 2 for a call with
+            // eight. Named for what it counts, because it used to be read as a
+            // participant count and used to decide a security claim.
+            pcs: 0
         };
         for (const pc of PCS) {
             if (!pc || typeof pc.getStats !== 'function') continue;
             if (pc.connectionState === 'closed' || pc.connectionState === 'failed') continue;
             let stats;
             try { stats = await pc.getStats(); } catch (e) { continue; }
-            out.peers++;
+            out.pcs++;
 
             const byId = new Map();
             const pairs = new Map();
@@ -1164,8 +1169,40 @@
                 on.onError('screen sharing is unavailable — join voice first');
                 return Promise.resolve(false);
             }
-            return Promise.resolve(meeting.self.enableScreenShare())
-                .then(() => true)
+            // Held across the await: leaving the call nulls `meeting`, and
+            // reading meeting.self afterwards would throw into the catch below
+            // and put a raw TypeError in front of the user.
+            const self = meeting.self;
+            return Promise.resolve(self.enableScreenShare())
+                .then(() => {
+                    // A RESOLVED PROMISE IS NOT A STARTED SHARE.
+                    //
+                    // The SDK's LocalMediaHandler.enableScreenShare wraps
+                    // getScreenShareTracks in `try { … } catch (i) {}` — an
+                    // empty catch — so a denied or failed getDisplayMedia is
+                    // swallowed whole. Self.enableScreenShare then guards its
+                    // own work on `screenShareTracks.audio || …video`, so with
+                    // no capture it skips the transport, skips the
+                    // screenShareUpdate emit, and returns normally. The .catch
+                    // below was therefore dead code for the exact case its
+                    // comment described: startShare answered `true`, nothing
+                    // was ever shared, localSharing stayed false (only the
+                    // screenShareUpdate handler sets it) and the user got no
+                    // picture, no error and no explanation.
+                    //
+                    // The same silent path covers a source that has since
+                    // closed (main.js answers the request with `{}`) and a
+                    // RealtimeKit preset whose canProduceScreenshare is
+                    // NotAllowed. Ask the SDK what actually happened instead —
+                    // this is the same test it gates its own emit on.
+                    const t = self.screenShareTracks || {};
+                    const ok = !!(self.screenShareEnabled || t.video || t.audio);
+                    if (!ok) {
+                        console.warn('[share] enableScreenShare resolved without a capture');
+                        on.onError('could not start sharing — the screen capture did not start');
+                    }
+                    return ok;
+                })
                 .catch((e) => {
                     const msg = (e && e.message) || String(e);
                     // A cancelled picker isn't an error worth shouting about.
@@ -1784,7 +1821,7 @@
                     protocol: conn ? conn.protocol : null,
                     remote: conn ? conn.remote : null,
                     codec: conn ? conn.codec : null,
-                    peers: conn ? conn.peers : 0,
+                    pcs: conn ? conn.pcs : 0,
                     joined
                 };
             },

@@ -1657,8 +1657,8 @@ button { font-family: inherit; }
 
 /* ---------- staged attachments + uploads -------------------------------- */
 
-#upload-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-#upload-list:empty { display: none; }
+#upload-list, #upload-progress { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+#upload-list:empty, #upload-progress:empty { display: none; }
 
 .stage-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .stage-card {

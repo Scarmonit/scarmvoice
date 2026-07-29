@@ -22,6 +22,9 @@ let file = null;
 let stream = null;
 let bytes = 0;
 let installed = false;
+// `stream` being null means three different things; these say which. See write().
+let rotating = false;    // mid-swap, back in a moment
+let closed = false;      // quitting — never reopen
 
 function logDir() {
     return dir;
@@ -55,6 +58,12 @@ function rotate() {
     bytes = 0;
     const s = stream;
     stream = null;   // lines during the swap are dropped; that beats a giant log
+    // …and dropped is what they must stay. write() reopens a stream that has
+    // gone away (see the note there), and this is the one case where `stream`
+    // being null is deliberate and temporary — without the flag a line arriving
+    // mid-rotation would open a second handle on the file the rename is waiting
+    // to move, and finish() would then open a third.
+    rotating = true;
     // Guarded because both paths below can reach it: if s.end() throws we call
     // finish() synchronously, and the 'close' listener can still fire after.
     // Running twice would open a second write stream and orphan the first fd.
@@ -67,6 +76,7 @@ function rotate() {
             try { fs.unlinkSync(old); } catch (e) { /* no previous generation */ }
             fs.renameSync(file, old);
         } catch (e) { /* rotation is best effort — keep logging either way */ }
+        rotating = false;
         open();
     };
     if (s) {
@@ -88,8 +98,36 @@ function open() {
     }
 }
 
+// A dead stream is retried, not accepted for the rest of the process.
+//
+// open()'s error handler drops the stream on any write failure, and the only
+// other caller of open() is install() (once) and rotate() (reachable only from a
+// SUCCESSFUL write). So one transient error — a virus scanner holding the file
+// for a moment, a full disk that is emptied a minute later, a OneDrive sync
+// touching userData — silently ended logging for the entire session, in an app
+// whose stated diagnostic route for an installed build is that very file (there
+// are no devtools in the packaged app; the fuses turn them off).
+//
+// Bounded so a genuinely unwritable path costs one createWriteStream a minute
+// rather than one per console line.
+const REOPEN_COOLDOWN_MS = 60000;
+let reopenAt = 0;
+
 function write(line) {
-    if (!stream) return;
+    if (!stream) {
+        // close() means "we are quitting" and rotate() means "back in a moment";
+        // a late line must not resurrect the handle in either case.
+        if (closed || rotating || !file) return;
+        const now = Date.now();
+        if (now < reopenAt) return;
+        reopenAt = now + REOPEN_COOLDOWN_MS;
+        // Re-stat: the size stopped being tracked while the stream was gone.
+        // Reopening in append mode with a stale count would put rotation off
+        // until long past MAX_BYTES.
+        try { bytes = fs.statSync(file).size; } catch (e) { bytes = 0; }
+        open();
+        if (!stream) return;
+    }
     try {
         stream.write(line);
         bytes += Buffer.byteLength(line);
@@ -180,6 +218,8 @@ function openFolder() {
 }
 
 function close() {
+    // Before the null, so write()'s reopen can never race the shutdown.
+    closed = true;
     try { if (stream) stream.end(); } catch (e) {}
     stream = null;
 }
