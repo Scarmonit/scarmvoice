@@ -32,6 +32,8 @@ let pingTimer = null;
 let isAlive = true;             // set true by any inbound frame or pong
 let attempts = 0;              // consecutive failed connects (for the status label)
 let emit = () => {};            // set by start()
+// Did the live socket present an account token when it opened? See start().
+let openedWithAccount = false;
 
 // Outstanding wake() probes. They used to share `isAlive`, so two window-focus
 // events three seconds apart meant the first probe's timer read the second
@@ -131,6 +133,9 @@ function connect() {
         // the handshake, emits 'error' + 'close', and reconnect proceeds.
         sock = new WebSocket(wsUrl(), { headers: net.socketHeaders(), handshakeTimeout: 15000 });
         ws = sock;
+        // Recorded at the moment the headers are built, because that is the only
+        // point at which this socket's identity is decided. See start().
+        openedWithAccount = net.hasAccount();
     } catch (e) {
         ws = null;
         scheduleReconnect();
@@ -186,6 +191,38 @@ function start(emitter) {
     manualClose = false;
     backoff = BACKOFF_START;
     if (!ws) { connect(); return; }
+    // A socket that opened WITHOUT the account token has no identity, and this
+    // is the one call that can notice.
+    //
+    // socketHeaders() sends `x-account-token` because the server resolves who a
+    // socket belongs to from a real credential — there is no other way for a
+    // native client to say. connect() only ever gated on net.hasSession(), i.e.
+    // the shared BOARD cookie, so any path that connects while the account step
+    // is still on screen opens an anonymous socket: the window's own
+    // 'show'/'focus' handler calls wake() -> connect(), and it fires before the
+    // renderer has signed in. That happens on any launch that still holds the
+    // board cookie but no account token — after Settings -> Sign out, after the
+    // 90-day token expiry, after an admin resets a password, or simply when
+    // somebody alt-tabs to their password manager during the account step.
+    //
+    // enterApp() then calls start(), which used to no-op on the `ws` guard
+    // above, so the identity-less socket stayed for the whole session. Every
+    // server-side unicast is addressed by ACCOUNT — DM delivery, DM thread
+    // events, and an admin's "end this person's call" all go through
+    // realtime/index.js's uid routing — so all three silently went nowhere, and
+    // voice takeover could no longer evict this device from a call. DMs only
+    // appeared on the 12s poll, with no chime and no notification.
+    //
+    // Replacing it here rather than at the call sites keeps the invariant where
+    // it belongs: whoever connects, a socket that could not identify itself is
+    // reopened as soon as the credential it was missing exists.
+    if (!openedWithAccount && net.hasAccount()) {
+        console.info('[rt] reopening — the socket was opened before the account existed');
+        stop();
+        manualClose = false;
+        connect();
+        return;
+    }
     // A socket can already exist because the window's own 'show' handler calls
     // wake() — which connects — before the renderer has ever asked for one, and
     // at that point `emit` is still the module's no-op. That socket fires
@@ -269,12 +306,17 @@ module.exports = {
     start, stop, send, reconnectNow, wake,
     isConnected: () => connected,
     // Convenience wrappers matching the website's boardRT surface.
-    notifyPosted: (channel, mentions) => send({
+    notifyPosted: (channel, mentions, kind) => send({
         t: 'posted', channel: channel || 'general',
         // Names this message @-mentions, so a reader with the channel on
         // mentions-only can tell an @you from ordinary chatter without the
         // body ever going over the wire. Omitted when there are none.
-        mentions: Array.isArray(mentions) && mentions.length ? mentions.slice(0, 16) : undefined
+        mentions: Array.isArray(mentions) && mentions.length ? mentions.slice(0, 16) : undefined,
+        // 'refresh' when this nudge is only asking peers to refetch (an edit, a
+        // delete, a reaction, a pin). Without it a peer reading another channel
+        // treated every one of those as a new message: an unread badge, and a
+        // desktop notification saying "New message" for a message nobody wrote.
+        kind: kind === 'refresh' ? 'refresh' : undefined
     }),
     sendTyping: (channel, stop_) => send({
         t: 'typing', channel: channel || 'general',

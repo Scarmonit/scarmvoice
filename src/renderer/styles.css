@@ -2076,6 +2076,10 @@ button { font-family: inherit; }
 .set-name-hint { margin: -6px 0 14px; }
 input[readonly] { opacity: .75; cursor: default; }
 .login-error { color: var(--danger-hi); font-size: 12.5px; min-height: 16px; margin-top: 10px; }
+/* The archive panel with no results in it — a failed search's Try again, and the
+   settings rail's "nothing matches". Centred so it reads as a state rather than
+   as a row that belongs to a list. */
+.search-empty { display: flex; justify-content: center; padding: 10px 12px; }
 .linkish { background: none; border: 0; color: var(--dim); font-size: 12px; cursor: pointer; margin-top: 8px; text-decoration: underline; }
 .linkish:hover { color: var(--muted); }
 #login-advanced-box { margin-top: 8px; text-align: left; }
@@ -2185,6 +2189,9 @@ input[readonly] { opacity: .75; cursor: default; }
 }
 .set-nav-in > .set-nav-head:first-of-type { margin-top: 0; border-top: 0; }
 .set-nav-head[hidden] { display: none; }
+/* "No settings match …" — the rail's answer when a search hides every row. */
+.set-nav-empty { padding: 10px; font-size: 12px; color: var(--dim); }
+.set-nav-empty[hidden] { display: none; }
 .set-nav-in { display: flex; flex-direction: column; gap: 2px; }
 
 .set-nav-item {
@@ -2271,6 +2278,9 @@ input[readonly] { opacity: .75; cursor: default; }
 .row input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; flex: 0 0 16px; }
 .row output { width: 44px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .hint { color: var(--dim); font-size: 12px; font-style: normal; }
+/* A hint that is reporting a hotkey the OS would not give us. Same amber the
+   titlebar uses for "something is not right but nothing is broken". */
+.hint.warn { color: var(--idle); }
 .keycap {
   padding: 7px 13px; border-radius: 6px; cursor: pointer;
   background: var(--input); border: 1px solid transparent; color: var(--text);

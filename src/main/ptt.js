@@ -209,13 +209,23 @@ function apply() {
 
     // Anything the hook can't carry (no hook at all, or a binding it couldn't
     // resolve) becomes a plain accelerator instead.
+    //
+    // …and a mute/deafen key that NEITHER transport can carry used to be dropped
+    // here without a word. toAccelerator() returns null for a bare key with no
+    // modifier and for anything outside its table (Pause, Menu, IntlBackslash),
+    // and registerAccel can also lose the race to another app that already owns
+    // the combination. Settings went on printing the key the user pressed, next
+    // to a hint asserting it "works system-wide", for a hotkey that did nothing
+    // at all — the same lie the PTT fallback below was fixed for. Report which
+    // actions came up unbound so the UI can say so.
+    const unbound = [];
     wanted.forEach((t) => {
         if (hookUsable && resolveBinding(t.raw)) return;
-        registerAccel(toAccelerator(t.raw), () => actionListener(t.action));
+        if (!registerAccel(toAccelerator(t.raw), () => actionListener(t.action))) unbound.push(t.action);
     });
 
     if (hookUsable && binding) {
-        return { mode: 'native', bound: describe(s.pttBinding) };
+        return { mode: 'native', bound: describe(s.pttBinding), unbound };
     }
 
     // No native hold for PTT — fall back to the press-to-talk/press-to-stop
@@ -232,7 +242,7 @@ function apply() {
     const hasBinding = !!(s.pttBinding && s.pttBinding.code);
     const accel = toAccelerator(s.pttBinding) || (hasBinding ? null : s.pttKey);
     const ok = registerFallback(accel);
-    return { mode: ok ? 'toggle' : 'none', bound: ok ? accel : null };
+    return { mode: ok ? 'toggle' : 'none', bound: ok ? accel : null, unbound };
 }
 
 function describe(b) {

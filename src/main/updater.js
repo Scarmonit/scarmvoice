@@ -30,6 +30,10 @@ const store = require('./store');
 
 let updater = null;       // the electron-updater autoUpdater (lazy-required)
 let send = () => {};      // renderer bridge, set by init()
+// An update is on disk and armed. Kept OUTSIDE `state.status`, because status is
+// a single field that every later event overwrites — and "we already have the
+// bytes" is a fact, not a phase. See the checking/error handlers.
+let downloaded = false;
 let state = {             // last-known state, replayed to a late-subscribing UI
     status: 'idle',       // idle|checking|available|downloading|ready|none|error
     version: null,
@@ -68,10 +72,20 @@ function load() {
     updater.autoDownload = true;
     updater.autoInstallOnAppQuit = true;
     updater.allowDowngrade = false;
-    updater.on('checking-for-update', () => emit({ status: 'checking', error: null }));
+    // A check does not un-download anything. This used to write 'checking' over
+    // a 'ready' state, and scheduleAutoRestart() refuses to act unless the status
+    // is exactly 'ready' — so an update that had downloaded and was being held
+    // for the end of a call was permanently disarmed by anyone pressing "Check
+    // for updates" in Settings while the call was still running. The promise the
+    // banner had already made ("it will install when your call ends") then went
+    // unkept until the next quit.
+    updater.on('checking-for-update', () => emit({ status: downloaded ? 'ready' : 'checking', error: null }));
     updater.on('update-available', (info) => {
         const n = parseNotes(info.releaseNotes);
         checkedAtStartup = true;
+        // A genuinely newer build invalidates the one already on disk; the same
+        // version being re-announced does not.
+        if (info && info.version && info.version !== state.version) downloaded = false;
         emit({ status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks });
         // The check is answered, so the gate stops timing THAT and starts timing
         // the download instead.
@@ -94,6 +108,7 @@ function load() {
         // Usually already captured from update-available; re-parse in case this
         // is the only event that carried them.
         const n = parseNotes(info.releaseNotes);
+        downloaded = true;
         emit({
             status: 'ready', version: info.version, progress: 100,
             notes: n.text || state.notes,
@@ -116,7 +131,11 @@ function load() {
         // three hours away.
         const stalled = state.status === 'downloading';
         emit({
-            status: stalled ? 'available' : 'error',
+            // …and an error on a LATER check does not un-download the update we
+            // already have. Reporting 'error' over 'ready' both hid a finished
+            // update from the banner and stopped scheduleAutoRestart() ever
+            // installing it, for a failure that had nothing to do with it.
+            status: stalled ? 'available' : (downloaded ? 'ready' : 'error'),
             stalled,
             error: (err && err.message) || 'update failed'
         });

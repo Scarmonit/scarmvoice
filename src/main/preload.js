@@ -81,7 +81,10 @@ contextBridge.exposeInMainWorld('lounge', {
         stop: () => ipcRenderer.invoke('rt:stop'),
         wake: () => ipcRenderer.invoke('rt:wake'),
         send: (obj) => ipcRenderer.invoke('rt:send', obj),
-        notifyPosted: (channel, mentions) => ipcRenderer.invoke('rt:posted', { channel, mentions }),
+        // `kind` is 'refresh' when the nudge only asks peers to refetch — an edit,
+        // a delete, a reaction, a pin — rather than announcing a new message. A
+        // peer reading another channel must not badge or notify for those.
+        notifyPosted: (channel, mentions, kind) => ipcRenderer.invoke('rt:posted', { channel, mentions, kind }),
         sendTyping: (channel, stop) => ipcRenderer.invoke('rt:typing', { channel, stop }),
         sendVoice: (inVoice, muted, deafened) => ipcRenderer.invoke('rt:voice', { inVoice, muted, deafened }),
         onMessage: (cb) => sub('rt:message', cb),

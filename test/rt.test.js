@@ -425,3 +425,69 @@ describe('messages', () => {
         expect(rt.send({ t: 'ping' })).toBe(false);
     });
 });
+
+// The socket's identity is decided ONCE, by the headers it opens with.
+//
+// socketHeaders() sends x-account-token because the server has no other way to
+// learn which ACCOUNT a native socket belongs to, and every unicast it sends —
+// DM delivery, DM thread events, an admin's "end this person's call" — is
+// addressed by account. connect() only ever gated on hasSession(), i.e. the
+// shared board cookie, so any path that connected while the account step was
+// still on screen opened an anonymous socket: the window's own 'show'/'focus'
+// handler calls wake(), and that fires before the renderer has signed in.
+// enterApp()'s rt.start() then no-op'd on the existing socket, so it stayed
+// identity-less for the whole session and all three features silently did
+// nothing — with DMs only appearing on the 12-second poll, no chime, no
+// notification.
+describe('a socket opened before the account existed', () => {
+    it('is reopened with the credential once start() has one', () => {
+        const { store, net } = boot();                 // board cookie, no account token
+        const first = socket();
+        first.acceptConnection();
+        expect(first.options.headers['x-account-token']).toBeUndefined();
+
+        // What enterApp() does after refreshAccount(): the token now exists.
+        store.writeAccountToken('ACCT456');
+        net.init();
+        rt.start();
+
+        expect(sockets().length).toBe(2);
+        const second = socket();
+        expect(second).not.toBe(first);
+        expect(second.options.headers['x-account-token']).toBe('ACCT456');
+        // …and the anonymous one is gone rather than left running beside it.
+        expect(first.terminated).toBe(true);
+    });
+
+    it('leaves a socket that already carried the account alone', () => {
+        resetMainModules();
+        const store = loadMain('store.js');
+        store.init();
+        store.set({ baseUrl: 'https://scarmonit.com', room: 'lounge', displayName: 'Scarm', clientId: 'c123' });
+        store.writeSession('SESSION123');
+        store.writeAccountToken('ACCT456');
+        const net = loadMain('net.js');
+        net.init();
+        rt = loadMain('rt.js');
+        events = [];
+        rt.start((type, payload) => events.push({ type, payload }));
+
+        const first = socket();
+        first.acceptConnection();
+        expect(first.options.headers['x-account-token']).toBe('ACCT456');
+
+        rt.start();                                    // a second start(), as enterApp() makes
+        expect(sockets().length).toBe(1);               // nothing to fix, nothing reopened
+        expect(first.terminated).toBe(false);
+    });
+
+    it('does not reopen when there is still no account', () => {
+        boot();
+        const first = socket();
+        first.acceptConnection();
+
+        rt.start();
+        expect(sockets().length).toBe(1);
+        expect(first.terminated).toBe(false);
+    });
+});

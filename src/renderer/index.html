@@ -1070,11 +1070,12 @@
           <label class="row">
             <span>Mute hotkey</span>
             <button type="button" id="set-mute-key" class="keycap">Click to set</button>
-            <span class="hint">— works system-wide; Backspace while recording clears it</span>
+            <span class="hint" id="mute-hint">— works system-wide; Backspace while recording clears it</span>
           </label>
           <label class="row">
             <span>Deafen hotkey</span>
             <button type="button" id="set-deafen-key" class="keycap">Click to set</button>
+            <span class="hint" id="deafen-hint"></span>
           </label>
           <label class="row check">
             <input type="checkbox" id="set-ec"><span>Echo cancellation</span>
@@ -1555,7 +1556,13 @@
 <div id="ctx-menu" class="ctx-menu" hidden></div>
 
 <div id="audio-sink" hidden></div>
-<div id="toast" class="toast" hidden></div>
+<!-- A live region, because this element is the app's ONLY channel for "that
+     worked", "that failed" and "copied" — a couple of dozen messages including
+     every error the composer, the uploader, the voice engine and the settings
+     sheet can produce. Without it a screen-reader user gets silence for all of
+     them: the text is inserted into a node that is never focused and never read.
+     aria-atomic so the whole sentence is announced rather than the diff. -->
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
 <!-- voice.js MUST load before the SDK: it patches RTCPeerConnection and
      getDisplayMedia, and the SDK captures those references when it evaluates.

@@ -79,7 +79,7 @@ afterEach(() => {
 describe('apply() with a working native hook', () => {
     it('reports native mode and registers no accelerators', () => {
         const ptt = loadPtt({ pttBinding: CTRL_V, muteBinding: CTRL_SHIFT_M, deafenBinding: CTRL_SHIFT_D });
-        expect(ptt.apply()).toEqual({ mode: 'native', bound: 'Ctrl + V' });
+        expect(ptt.apply()).toEqual({ mode: 'native', bound: 'Ctrl + V', unbound: [] });
         expect(hookState.started).toBe(true);
         // Everything rides the hook, so none of it may also be swallowed
         // globally by an accelerator.
@@ -94,7 +94,7 @@ describe('apply() when the hook loads but fails to start', () => {
         const ptt = loadPtt({ pttBinding: CTRL_V });
         // Not 'native': there is no hook to hold the key down with, and saying
         // so is what makes Settings show the toggle wording.
-        expect(ptt.apply()).toEqual({ mode: 'toggle', bound: 'CommandOrControl+V' });
+        expect(ptt.apply()).toEqual({ mode: 'toggle', bound: 'CommandOrControl+V', unbound: [] });
         expect(registered).toContain('CommandOrControl+V');
     });
 
@@ -126,7 +126,7 @@ describe('apply() when the hook loads but fails to start', () => {
         // a mode of 'none' has to mean nothing registered for PTT — not that
         // apply() gave up partway.
         const ptt = loadPtt({ pttBinding: null, pttKey: '', muteBinding: CTRL_SHIFT_M });
-        expect(ptt.apply()).toEqual({ mode: 'none', bound: null });
+        expect(ptt.apply()).toEqual({ mode: 'none', bound: null, unbound: [] });
         expect(registered).toEqual(['CommandOrControl+Shift+M']);
     });
 
@@ -141,15 +141,44 @@ describe('apply() when the hook loads but fails to start', () => {
             pttBinding: { type: 'key', code: 'Pause' },
             pttKey: 'CommandOrControl+Shift+Space'
         });
-        expect(ptt.apply()).toEqual({ mode: 'none', bound: null });
+        expect(ptt.apply()).toEqual({ mode: 'none', bound: null, unbound: [] });
         expect(registered).toEqual([]);
+    });
+
+    // A mute/deafen key neither transport can carry used to be dropped in
+    // silence, while Settings went on printing it beside a hint asserting it
+    // "works system-wide" — the same lie the PTT fallback above was fixed for.
+    // apply() reports which actions came up unbound so the UI can say so.
+    it('reports a mute hotkey that neither transport could carry', () => {
+        const ptt = loadPtt({
+            pttBinding: CTRL_V,
+            muteBinding: { type: 'key', code: 'Pause' },      // not in toAccelerator's table
+            deafenBinding: CTRL_SHIFT_D
+        });
+        expect(ptt.apply()).toEqual({
+            mode: 'toggle', bound: 'CommandOrControl+V', unbound: ['toggleMute']
+        });
+        // The deafen key still registered — one dead binding must not take the
+        // other down with it.
+        expect(registered).toContain('CommandOrControl+Shift+D');
+    });
+
+    it('reports a hotkey another application already owns', () => {
+        // globalShortcut.register returns false when the combination is taken.
+        globalShortcut.register = (accel, fn) => {
+            if (accel === 'CommandOrControl+Shift+M') return false;
+            registered.push(accel); handlers.set(accel, fn); return true;
+        };
+        const ptt = loadPtt({ pttBinding: CTRL_V, muteBinding: CTRL_SHIFT_M, deafenBinding: CTRL_SHIFT_D });
+        expect(ptt.apply().unbound).toEqual(['toggleMute']);
+        expect(registered).not.toContain('CommandOrControl+Shift+M');
     });
 
     it('still falls back to the default key when there is no binding at all', () => {
         // Backspace in the recorder CLEARS the binding on purpose, and that is
         // the one case the default is allowed to stand in for.
         const ptt = loadPtt({ pttBinding: null, pttKey: 'CommandOrControl+Shift+Space' });
-        expect(ptt.apply()).toEqual({ mode: 'toggle', bound: 'CommandOrControl+Shift+Space' });
+        expect(ptt.apply()).toEqual({ mode: 'toggle', bound: 'CommandOrControl+Shift+Space', unbound: [] });
         expect(registered).toEqual(['CommandOrControl+Shift+Space']);
     });
 });

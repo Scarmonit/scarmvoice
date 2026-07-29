@@ -414,6 +414,12 @@
         let deafened = false;
         let mutedBeforeDeafen = false;
         let lastTransmit = null;
+        // What the SDK has actually been TOLD, as opposed to lastTransmit, which
+        // is what we want. null = never told. See applyTransmit.
+        let txSent = null;
+        // enableAudio/disableAudio share one lock in the SDK and it is not a
+        // queue — see applyTransmit. Everything goes through this chain instead.
+        let txChain = Promise.resolve();
 
         let localSharing = false;
         // Every live presenter, keyed by participant id. The SFU happily carries
@@ -1256,36 +1262,57 @@
             return true;
         }
 
+        // The one place the microphone is opened and closed.
+        //
+        // SERIALISED, and that is the whole point. meeting.self.enableAudio and
+        // meeting.self.disableAudio share a single lock in the SDK
+        // ("Self.toggleAudio"), and that lock is NOT a queue: a second call while
+        // the first is outstanding throws UnsupportedConcurrentMethodExecution
+        // SYNCHRONOUSLY, and the lock is held until the first one's promise
+        // settles — through the real getUserMedia, the RNNoise worklet, the
+        // soundboard mix and the publish to the SFU. That is hundreds of
+        // milliseconds on the first acquisition of a session.
+        //
+        // A push-to-talk TAP is shorter than that. The press called enableAudio;
+        // the release called disableAudio inside the lock window, the throw was
+        // swallowed by the bare try/catch this used to have, and lastTransmit had
+        // already been set to false — so the gate believed the microphone was
+        // closed, refused every later attempt on the equality guard, and the mic
+        // stayed OPEN and transmitting for the rest of the call under an idle
+        // microphone icon. Pressing Mute in that same window failed the same way.
+        //
+        // So: one chain, and each step re-reads the CURRENT intent rather than
+        // the one that queued it, so a release always runs after the acquisition
+        // it is cancelling and a stale queued call is dropped instead of undoing
+        // a newer decision. txSent tracks what the engine was actually told, so
+        // nothing is sent twice.
         function applyTransmit() {
             const want = !muted && modeAllowsTransmit();
             if (want === lastTransmit) return;
             lastTransmit = want;
-            try {
-                if (meeting && meeting.self) {
-                    const fn = want ? meeting.self.enableAudio : meeting.self.disableAudio;
-                    if (fn) {
-                        // These return promises. A bare try/catch only sees a
-                        // synchronous throw, so a failure became an unhandled
-                        // rejection while lastTransmit had ALREADY been set to
-                        // the state we only hoped for, and the equality guard
-                        // above then blocked every retry.
-                        //
-                        // Both directions can fail, and they fail into opposite
-                        // states: acquiring the mic (device unplugged,
-                        // permission revoked) leaves us silent, while failing to
-                        // release it leaves audio still going out. Reporting
-                        // "idle" for the second one put a calm microphone icon
-                        // over a live mic.
-                        Promise.resolve(fn.call(meeting.self)).catch((e) => {
-                            // Either value differs from `want`, so the retry is
-                            // unblocked as well.
-                            if (lastTransmit === want) lastTransmit = want ? null : true;
-                            fail('microphone', e);
-                            pushState();
-                        });
-                    }
-                }
-            } catch (e) { /* SDK will re-sync on the next state event */ }
+            txChain = txChain.then(() => {
+                if (!meeting || !meeting.self) return null;
+                const target = lastTransmit;
+                // Not a boolean means an earlier call failed and the real state is
+                // unknown; the next deliberate change drives it.
+                if (typeof target !== 'boolean' || target === txSent) return null;
+                const fn = target ? meeting.self.enableAudio : meeting.self.disableAudio;
+                if (!fn) return null;
+                // Called INSIDE the then-callback, so a synchronous throw rejects
+                // the chain and reaches the recovery below instead of escaping to
+                // a catch that could only ignore it.
+                return Promise.resolve(fn.call(meeting.self)).then(() => { txSent = target; });
+            }).catch((e) => {
+                // Both directions can fail, and they fail into opposite states:
+                // acquiring the mic (device unplugged, permission revoked) leaves
+                // us silent, while failing to release it leaves audio still going
+                // out. Reporting "idle" for the second one put a calm microphone
+                // icon over a live mic. Either value below differs from `want`, so
+                // the equality guard no longer blocks the retry.
+                if (lastTransmit === want) lastTransmit = want ? null : true;
+                fail('microphone', e);
+                pushState();
+            });
             pushState();
         }
 
@@ -1480,6 +1507,7 @@
                 joining = false;
                 muted = false;
                 lastTransmit = null;
+                txSent = null;              // a new engine has been told nothing
 
                 // YOU ARE IN THE CALL HERE. Audio is flowing, so the UI is told
                 // now — everything below is tuning, and none of it changes that.
@@ -1667,6 +1695,7 @@
             mutedBeforeDeafen = false;
             pttHeld = false;
             lastTransmit = null;
+            txSent = null;
             localSharing = false;
             sharers.clear();
             camStreams.clear();

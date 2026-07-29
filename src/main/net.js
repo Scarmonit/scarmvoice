@@ -888,7 +888,16 @@ async function upload(name, type, bytes, onProgress) {
             });
         }
     } catch (e) {
-        return { success: false, error: e.name === 'TimeoutError' ? 'Upload timed out' : e.message, network: true };
+        // Same reasoning as the presigned PUT below: e.message here is undici's
+        // "fetch failed" for anything that dropped mid-transfer, and it is shown
+        // to the user in place of the file name. Logged rather than discarded, so
+        // the real message is still in the log file this replaced it on screen for.
+        console.warn('[net] upload failed:', e && e.message);
+        return {
+            success: false,
+            error: e.name === 'TimeoutError' ? 'Upload timed out' : 'Could not reach the server — try that file again',
+            network: true
+        };
     }
 
     if (res.status === 401) {
@@ -944,7 +953,16 @@ function presignHostOk(url) {
 // A web ReadableStream over a file on disk that reports how much has been handed
 // to the socket. Same "sent, not acknowledged" caveat as progressStream above.
 function fileProgressStream(filePath, total, onProgress) {
-    const nodeStream = fs.createReadStream(filePath, { highWaterMark: 256 * 1024 });
+    // Bounded to the length that was MEASURED and declared. Content-Length is
+    // pinned to the stat'd size, so a file that is still growing while it uploads
+    // — an active screen recording, a download in progress, a log — would stream
+    // past that length and R2 rejects the whole PUT for a body longer than it was
+    // promised. Reading exactly the measured prefix uploads the file as it was
+    // when the user picked it, which is the honest answer and the only one the
+    // ticket was priced for. (`end` is inclusive; a zero-length file never gets
+    // here — uploadAttachment rejects it earlier.)
+    const range = total > 0 ? { start: 0, end: total - 1 } : {};
+    const nodeStream = fs.createReadStream(filePath, { highWaterMark: 256 * 1024, ...range });
     const reader = Readable.toWeb(nodeStream).getReader();
     let sent = 0;
     return new ReadableStream({
@@ -1051,7 +1069,20 @@ async function uploadAttachment(item, onProgress) {
             return { success: false, error: `Storage rejected the upload (${res.status})` };
         }
     } catch (e) {
-        return { success: false, error: e.message || 'Upload failed', network: true };
+        // undici's message for a dropped connection is the bare string "fetch
+        // failed", and this one goes straight into the upload row in the
+        // composer, where it replaces the file's name. Somebody whose Wi-Fi
+        // blinked during a large upload was told "fetch failed" about a file
+        // they could no longer identify. Say what happened instead, the same way
+        // the ticket request a few lines up already does.
+        console.warn('[net] presigned PUT failed:', e && e.message);
+        return {
+            success: false,
+            error: e && e.name === 'TimeoutError'
+                ? 'Upload timed out'
+                : 'Could not reach storage — try that file again',
+            network: true
+        };
     }
 
     if (onProgress) { try { onProgress(size, size); } catch (e) {} }

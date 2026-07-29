@@ -119,9 +119,15 @@
     let toastTimer = null;
     function toast(msg, isError) {
         const el = $('toast');
-        el.textContent = msg;
         el.classList.toggle('err', !!isError);
+        // An error is worth interrupting for; a confirmation is not.
+        el.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+        // UNHIDDEN FIRST, then written. A mutation made while the element is still
+        // hidden is not reliably announced — the live region is not being observed
+        // yet — so writing the text before revealing it loses the announcement,
+        // which is the whole reason the region exists (see index.html).
         el.hidden = false;
+        el.textContent = msg;
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => { el.hidden = true; }, isError ? 5200 : 2600);
     }
@@ -387,6 +393,13 @@
         renderVoiceRoster();
         renderMe();
         renderAccountCard();
+        // The face at the top of the settings RAIL, which is a separate element
+        // from the one on the account card and was the only one this function did
+        // not know about. Changing your profile picture therefore left the two
+        // sitting next to each other showing different pictures until Settings was
+        // closed and reopened — and the five-minute refreshAvatars() sweep, which
+        // exists to notice everyone ELSE's changes, never updated it either.
+        paintSettingsMe();
         if (threadOpen()) renderThread();
     }
     async function refreshAvatars() {
@@ -865,15 +878,39 @@
     let accountJustFetched = false;
 
     async function accountGate() {
+        let res = null;
         try {
-            const res = await L.account.me();
+            res = await L.account.me();
             if (res && res.success && res.user) {
                 account = res.user;
                 accountJustFetched = true;
                 return true;
             }
-        } catch (e) { /* fall through to the step */ }
+        } catch (e) { /* handled below, same as a returned failure */ }
+
+        // "I could not ASK" is not "you have no account".
+        //
+        // board() answers a Worker exception page, an edge 502 or a 20-second
+        // deadline with { success: false, network: true } rather than throwing, and
+        // that fell into the same branch as a genuinely missing account: the sign-in
+        // panel, with its error line deliberately BLANKED by showAccountStep(). So a
+        // transient edge hiccup put someone in front of an empty username field with
+        // no indication anything had failed, for an account whose token was still on
+        // disk and still valid — and if it had 2FA they needed a code as well. Anyone
+        // who no longer remembered that password was locked out of an app they were
+        // signed into, with nothing on screen to suggest that quitting and
+        // relaunching in a minute was the answer.
+        //
+        // The sign-in panel is still offered — it is a real way forward if the
+        // outage lasts — but the copy says which of the two situations this is, and
+        // the error line is written AFTER showAccountStep(), which blanks it.
         showAccountStep();
+        if (!res || res.network || res.offline) {
+            $('login-sub').textContent = 'Could not reach the server';
+            $('login-error').textContent =
+                'Your sign-in is still saved — quitting and reopening in a moment should be enough. ' +
+                'Signing in below also works.';
+        }
         return false;
     }
 
@@ -1190,6 +1227,47 @@
     // the mic indicator stays lit behind the login gate.
     let sessionGen = 0;
 
+    // Unread watermarks — "the newest message id I have seen in each channel".
+    //
+    // Stored PER ACCOUNT. They used to live under one unkeyed localStorage entry
+    // per machine, and localStorage is per-origin, not per-user, so on a shared
+    // computer the second person to sign in inherited the first person's
+    // watermarks: every channel the first had read showed nothing new, and every
+    // channel they had NOT read counted from wherever that person left off. Both
+    // directions are wrong, and the badge is the only thing that says where to
+    // look.
+    //
+    // The legacy unkeyed value is adopted ONCE, by the first account to sign in
+    // after this shipped, and then removed — that account is overwhelmingly the
+    // person whose watermarks they are, and leaving the value behind would hand a
+    // copy to everyone else who signs in afterwards.
+    const READS_LEGACY_KEY = 'lounge_reads';
+    function readsKey() {
+        return 'lounge_reads:' + ((account && account.id) || 0);
+    }
+
+    function loadReads() {
+        const key = readsKey();
+        let raw = null;
+        try { raw = localStorage.getItem(key); } catch (e) { /* storage unavailable */ }
+        if (raw == null) {
+            try {
+                const legacy = localStorage.getItem(READS_LEGACY_KEY);
+                if (legacy != null) {
+                    raw = legacy;
+                    localStorage.setItem(key, legacy);
+                    localStorage.removeItem(READS_LEGACY_KEY);
+                }
+            } catch (e) { /* nothing to adopt */ }
+        }
+        try { reads = JSON.parse(raw || '{}'); } catch (e) { reads = {}; }
+        if (!reads || typeof reads !== 'object') reads = {};
+    }
+
+    function saveReads() {
+        try { localStorage.setItem(readsKey(), JSON.stringify(reads)); } catch (e) {}
+    }
+
     async function enterApp() {
         if (entered) return;
         entered = true;
@@ -1204,7 +1282,7 @@
             $('btn-send').disabled = true;
 
             channel = settings.channel || 'general';
-            try { reads = JSON.parse(localStorage.getItem('lounge_reads') || '{}'); } catch (e) { reads = {}; }
+            loadReads();
             // Anything left queued by a previous session goes out as soon as the
             // first successful poll proves we're online.
             loadOutbox();
@@ -1352,10 +1430,7 @@
                 `<span class="chan-act" role="button" tabindex="0" data-act="alerts" data-tip="Notification Settings">${I('bell')}</span>` +
                 (isAdmin() ? `<span class="chan-act" role="button" tabindex="0" data-act="edit" data-tip="Edit Channel">${I('gear')}</span>` : '') +
                 '</span>';
-            b.addEventListener('click', (e) => {
-                const act = e.target.closest && e.target.closest('.chan-act');
-                if (!act) return switchChannel(c.name);
-                e.stopPropagation();
+            const runAct = (act) => {
                 const r = act.getBoundingClientRect();
                 if (act.dataset.act === 'edit') {
                     // Straight to the rename, which is what "edit channel" means
@@ -1364,6 +1439,26 @@
                     return;
                 }
                 openChannelMenu(c.name, r.left, r.bottom + 4);
+            };
+            b.addEventListener('click', (e) => {
+                const act = e.target.closest && e.target.closest('.chan-act');
+                if (!act) return switchChannel(c.name);
+                e.stopPropagation();
+                runAct(act);
+            });
+            // The bell and the gear declare themselves focusable and say they are
+            // buttons, and then had no key handler at all — so tabbing to one and
+            // pressing Enter or Space did nothing, which is worse than not being
+            // reachable: the focus ring promises an action that isn't there. A
+            // <span role="button"> gets no implicit key activation; only a real
+            // <button> does, and one cannot be nested inside the row's button.
+            b.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                const act = e.target.closest && e.target.closest('.chan-act');
+                if (!act) return;                    // the row itself is a real button
+                e.preventDefault();
+                e.stopPropagation();
+                runAct(act);
             });
             list.appendChild(b);
         });
@@ -1445,6 +1540,15 @@
         following = true;
         seenTopId = 0;
         hasMore = true;
+        // Typing belongs to the channel being LEFT. The poll used to overwrite
+        // this set wholesale with an answer scoped to the new channel, so it was
+        // cleared as a side effect; now that the socket's live set is authoritative
+        // (see loadMessagesOnce) nothing else would drop it, and someone still
+        // typing in the old channel would appear to be typing in this one until
+        // their expiry timer ran out.
+        typingUsers.forEach((t) => clearTypingExpiry(t.client_id));
+        typingUsers = [];
+        renderTyping();          // in this frame, not when the fetch lands
         // The saved pre-filter offset belongs to the channel being left. Kept,
         // it gets replayed into the NEXT channel when the filter clears — a
         // scroll to a position that means nothing in the conversation it lands
@@ -1791,13 +1895,21 @@
 
         // Names seen in history feed @mention matching and autocomplete.
         posts.forEach((p) => addRosterName(p.name));
-        typingUsers = (res.typing || []).filter((t) => t.client_id !== settings.clientId);
-        typingUsers.forEach((t) => addRosterName(t.name));
+        // The socket's typing events are authoritative when it is up: they carry a
+        // stop, and each entry gets an expiry timer. The poll's answer is a
+        // six-second-old snapshot with neither, so overwriting the live set with it
+        // resurrects people the socket has already retired — most visibly the
+        // person whose message just arrived, since the refetch that message
+        // triggers races the row's own expiry. Names are still learned from it
+        // either way, so @mention autocomplete loses nothing.
+        const polledTyping = (res.typing || []).filter((t) => t.client_id !== settings.clientId);
+        if (!rtConnected) typingUsers = polledTyping;
+        polledTyping.forEach((t) => addRosterName(t.name));
         voicePresence = keepKnownUids(res.voice || []);
 
         if (res.maxId) {
             reads[channel] = res.maxId;
-            try { localStorage.setItem('lounge_reads', JSON.stringify(reads)); } catch (e) {}
+            saveReads();
         }
 
         const box = $('messages');
@@ -1881,7 +1993,19 @@
             e.preventDefault();
             const r = current.getBoundingClientRect();
             const p = posts.find((x) => String(x.id) === current.dataset.id);
-            if (p) openCtxMenu(messageMenuItems(p, current), r.left + 24, r.top + 12);
+            // `true`: opened by keyboard, so the menu takes focus and can be walked
+            // with the arrows. Without it, Enter produced a menu that could only be
+            // dismissed — every item in it was unreachable by the keyboard that had
+            // just asked for them, which is the entire point of this handler.
+            if (p) openCtxMenu(messageMenuItems(p, current), r.left + 24, r.top + 12, true);
+        } else if (e.key === 'Escape' && !$('ctx-menu').hidden) {
+            // The menu first: it was opened from this list and closing it is what
+            // Escape means while it is up. Without this the key went past it to the
+            // document handler, which closed the thread panel instead and left the
+            // menu on screen.
+            e.preventDefault();
+            e.stopPropagation();
+            closeCtxMenu();
         } else if (e.key === 'Escape') {
             // Stopped here so the document-level Escape handler doesn't also
             // close the thread panel on the way past.
@@ -2438,7 +2562,11 @@
         parts.push('<div class="msg-actions">' +
             (dm ? '' : '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>') +
             (dm ? '' : '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>') +
-            (dm ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
+            // Pinning somebody ELSE's message is admin-only server-side
+            // (mayModifyPost, via pin.js), so offering the button to a member
+            // produced a 403 toast on every message but their own. Gated exactly
+            // the way edit and delete already are.
+            (dm || !mayPin(p) ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
             '<button class="msg-act" data-act="copy" title="Copy text">' + I('copy') + '</button>' +
             (mine ? '<button class="msg-act" data-act="edit" title="Edit message">' + I('pencil') + '</button>' : '') +
             (mine ? '<button class="msg-act danger" data-act="delete" title="Delete message">' + I('trash') + '</button>' : '') +
@@ -2640,7 +2768,23 @@
         // Typing indicators belong to a channel; a DM has no channel to
         // broadcast into, and sending one told everyone you were typing in
         // whatever channel happened to be selected behind the conversation.
-        if (!forDm) L.rt.sendTyping(channel, true);
+        //
+        // BOTH transports, because the start goes out on both. Only the socket
+        // stop was sent, so the server's `typing` row survived the send — and the
+        // refetch this post triggers on every peer overwrites typingUsers from
+        // the poll's answer, which still returns that row for its six-second
+        // lifetime. The result was "Alice is typing…" reappearing UNDER Alice's
+        // delivered message, with no expiry timer behind it, until the next
+        // loadMessages — up to a minute later in a quiet channel.
+        if (!forDm) {
+            L.rt.sendTyping(channel, true);
+            // typing.js deletes by client_id alone, so no channel is needed.
+            L.board('typing', { method: 'POST', body: { clientId: settings.clientId, stop: true } });
+            // …and the 3s throttle has to forget the send it just made, or the
+            // NEXT keystroke is swallowed and someone firing off two quick
+            // messages shows as typing for neither.
+            typingSentAt = 0;
+        }
 
         // With attachments, the text becomes the first one's caption so a
         // "here's the thing" message stays attached to the thing.
@@ -2650,12 +2794,36 @@
             // silently lost the typed text.
             let ok = 0;
             let bodyPosted = false;
+            const failed = [];
             for (let i = 0; i < attachments.length; i++) {
                 const carryBody = !bodyPosted;
                 if (await uploadOne(attachments[i], carryBody ? body : '', carryBody ? quoteId : null, forChannel, forDm)) {
                     ok++;
                     if (carryBody) bodyPosted = true;
+                } else {
+                    failed.push(attachments[i]);
                 }
+            }
+            // A file whose upload failed comes BACK, the same way the caption does
+            // a few lines down. clearStaged() runs at submit time — before any
+            // upload has been attempted — so a dropped connection halfway through
+            // simply destroyed the staged item: a toast, and the file gone from the
+            // composer with nothing to press again. For a picked file that means
+            // finding it in Explorer a second time; for a pasted screenshot or a
+            // voice recording the bytes were the only copy there was.
+            //
+            // Pushed rather than assigned, because more files can be staged while a
+            // long upload is in flight, and prepareStage is re-run because
+            // clearStaged already revoked the object URL behind the thumbnail.
+            if (failed.length) {
+                failed.forEach((it) => {
+                    it.url = '';
+                    it.prepared = false;
+                    staged.push(it);
+                    prepareStage(it);        // repaints itself when it finishes
+                });
+                renderStaged();
+                updateSendEnabled();
             }
             if (ok) {
                 if (forDm) {
@@ -2742,11 +2910,35 @@
     let outboxSeq = 0;
     let flushingOutbox = false;
 
+    // A queued message belongs to WHOEVER WROTE IT, and only they may send it.
+    //
+    // The queue is persisted per machine, and flushOutbox() sends whatever is in
+    // it with the credential that happens to be current. So a message that was
+    // still queued when its author signed out — an outage they gave up on, or a
+    // run of 5xx from the edge, both of which leave an entry sitting — went out
+    // under the NEXT person to sign in on that computer: their name, their
+    // user_id, someone else's words, published to a channel with nobody told.
+    // On a shared machine that is somebody's private line in another person's
+    // mouth.
+    //
+    // Stamping the author and dropping foreign entries on load keeps the whole
+    // point of the feature — a message survives a crash and a restart for the
+    // person who wrote it — while making it impossible to send under an identity
+    // that never typed it. Entries written before this existed carry no userId
+    // and are kept for their owner's next launch, since dropping them would eat
+    // exactly the message the queue was built to protect.
     function loadOutbox() {
         try {
             const raw = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
             outbox = Array.isArray(raw) ? raw.slice(-OUTBOX_MAX) : [];
         } catch (e) { outbox = []; }
+        const me = (account && account.id) || 0;
+        const before = outbox.length;
+        outbox = outbox.filter((o) => !o || o.userId == null || o.userId === me);
+        if (outbox.length !== before) {
+            console.info(`[outbox] dropped ${before - outbox.length} queued message(s) belonging to another account`);
+            saveOutbox();
+        }
         outbox.forEach((o) => { outboxSeq = Math.max(outboxSeq, Number(o.seq) || 0); });
     }
 
@@ -2761,6 +2953,9 @@
             channel: chan || channel,
             body,
             quoteId: quoteId || null,
+            // Who wrote it — see loadOutbox. Without this the queue is a message
+            // waiting for any credential at all, rather than for its author's.
+            userId: (account && account.id) || 0,
             created_at: Date.now(),
             sending: false,
             failed: false
@@ -3634,7 +3829,16 @@
         const gen = sessionGen;
         let stream;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // The microphone the user CHOSE, not whatever Windows calls the
+            // default. `{ audio: true }` ignored settings.micDeviceId, so someone
+            // with a headset selected in Settings recorded every voice message on
+            // their webcam mic — distant and hollow, and auto-sent with nothing on
+            // screen naming the device. voice.micTestConstraints() is the same
+            // expression the mic test and the call itself use, so this also lines
+            // the clip's processing up with how the person sounds in voice.
+            stream = await navigator.mediaDevices.getUserMedia(
+                voice ? voice.micTestConstraints()
+                      : { audio: settings.micDeviceId ? { deviceId: { exact: settings.micDeviceId } } : true });
         } catch (e) {
             toast(e && e.name === 'NotAllowedError'
                 ? 'Microphone access is needed to record a voice message'
@@ -3647,7 +3851,17 @@
         // could end mid-prompt and we would then open the microphone anyway,
         // start a MediaRecorder nobody can see, and arm a five-minute timer that
         // tries to SEND the clip with the credential already gone.
-        if (gen !== sessionGen) {
+        //
+        // `mediaRec` covers the same window from the other side: recording() is
+        // still false for the whole of the await above and showRecBar(true) is
+        // below it, so NOTHING on screen changes while the device opens — 100-500ms
+        // for the first acquisition, more with a cold RNNoise worklet. An impatient
+        // or accidental second click therefore started a second acquisition, and
+        // whichever landed first had its stream, its MediaRecorder and its 250ms
+        // interval overwritten and orphaned: the OS microphone indicator stayed
+        // lit for the session, the shared AudioContext never released, and even
+        // signing out could not reach them.
+        if (gen !== sessionGen || mediaRec) {
             try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             return;
         }
@@ -4684,7 +4898,7 @@
 
             wireAvatarFallback(li);
             if (!isMe && inCall && !p.remoteOnly) {
-                li.addEventListener('click', (e) => openPopover(p, e.currentTarget));
+                makeRowActivatable(li, (el, kb) => openPopover(p, el, undefined, undefined, kb));
             } else if (isMe && inCall) {
                 // Your own row did nothing at all. Everyone else's opens a
                 // popover of things to do to them, so the one row that is you
@@ -4692,9 +4906,30 @@
                 // out of the call was the small hang-up glyph in the panel
                 // below, which is not where anyone looks after clicking their
                 // own name.
-                li.addEventListener('click', (e) => openSelfVoiceMenu(e.currentTarget));
+                makeRowActivatable(li, (el) => openSelfVoiceMenu(el));
             }
             ul.appendChild(li);
+        });
+    }
+
+    // Make a roster <li> a real control.
+    //
+    // The member list and the voice roster are <li> elements with a click handler
+    // and a hover style, and nothing else: no role, no tabindex, no key handler.
+    // So per-person volume, "Mute for me" and an admin's "Remove from voice" —
+    // which live only inside the popover those rows open — had no keyboard path at
+    // all. There is no other route to them anywhere in the app.
+    //
+    // `keyboard` is passed through so the popover can take focus when it was opened
+    // by a key, and leave the pointer alone when it was not.
+    function makeRowActivatable(li, open) {
+        li.tabIndex = 0;
+        li.setAttribute('role', 'button');
+        li.addEventListener('click', () => open(li, false));
+        li.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();          // Space would scroll the list
+            open(li, true);
         });
     }
 
@@ -4910,13 +5145,13 @@
                 // r.status is the status this list already worked out, handed
                 // over so the popover does not have to re-derive it from a
                 // presence row an Offline member does not have.
-                li.addEventListener('click', (e) => openPopover(p || r, e.currentTarget, live, r.status));
+                makeRowActivatable(li, (el, kb) => openPopover(p || r, el, live, r.status, kb));
             } else if (isMe && inCall) {
                 // Your own row here did nothing, while the identical row under
                 // the voice channel opened the mute/deafen/leave menu. Same
                 // person, same call, two different answers depending on which
                 // list you happened to click them in.
-                li.addEventListener('click', (e) => openSelfVoiceMenu(e.currentTarget));
+                makeRowActivatable(li, (el) => openSelfVoiceMenu(el));
             }
             return li;
         };
@@ -4990,7 +5225,11 @@
     // the presence rows cannot answer — an Offline row has no install id to
     // match on, and defaulting to 'online' drew a green dot one pixel from the
     // grey one on the same person's row behind it.
-    function openPopover(p, anchor, audio, known) {
+    // `keyboard` = opened by Enter/Space rather than a click, in which case the
+    // panel has to take focus: it holds real controls (the volume slider, Mute for
+    // me, the admin actions) and leaving focus on the row behind it would put them
+    // out of reach of the very interaction that just asked for them.
+    function openPopover(p, anchor, audio, known, keyboard) {
         const pop = $('popover');
         // Clicking the same person again closes it, like every other toggle.
         const key = popKeyFor(p);
@@ -5067,9 +5306,28 @@
 
         pop.hidden = false;              // shown before measuring, so it has a size
         placePopover(pop, anchor);
+        if (keyboard) {
+            popReturnFocus = anchor || null;
+            const first = pop.querySelector('button:not([hidden]), input:not([hidden])');
+            if (first) first.focus();
+        }
     }
 
-    function closePopover() { $('popover').hidden = true; popFor = null; popKey = null; }
+    // The row the popover was opened FROM, when it was opened by keyboard. Closing
+    // has to hand focus back, or the caret is left on a hidden node and the next
+    // Tab starts again from the top of the document.
+    let popReturnFocus = null;
+
+    function closePopover() {
+        $('popover').hidden = true;
+        popFor = null;
+        popKey = null;
+        if (popReturnFocus) {
+            const back = popReturnFocus;
+            popReturnFocus = null;
+            try { if (back.isConnected) back.focus(); } catch (e) {}
+        }
+    }
 
     $('pop-vol').addEventListener('input', async (e) => {
         if (!popFor) return;
@@ -5837,6 +6095,13 @@
                     // Coalesced: several people posting at once (or one person
                     // pasting a few lines) is one refetch, not one per event.
                     scheduleRefresh(nearBottom());
+                } else if (m.kind === 'refresh') {
+                    // Somebody reacted, edited, deleted or pinned in a channel we
+                    // are not reading. There is nothing new to announce: badging
+                    // it counts a message that does not exist, and the desktop
+                    // notification it used to fire — titled "#channel / New
+                    // message" — cannot be taken back. The channel poll picks the
+                    // change up whenever we next look at it.
                 } else if (!isBlocked(m.cid)) {
                     // Blocking hides someone's messages from the list, so it has
                     // to keep them out of the badge and the notification too —
@@ -6191,6 +6456,13 @@
         // and the next person to sign in on this machine must not open a
         // channel and find them already painted.
         channelCache.clear();
+        // Same rule again, for the two things that are keyed by ACCOUNT rather
+        // than merely cached: the unread watermarks and the send queue. Both are
+        // re-read from storage by enterApp() under the account that is signing in,
+        // but a request still in flight when this ran could otherwise write the
+        // outgoing person's state back out under the incoming person's key.
+        reads = {};
+        outbox = [];
         restoredFromCache = false;
         composerSurface = 'channel';
         stopDmPolling();
@@ -7451,6 +7723,11 @@
     });
 
     // ---- account card ----
+    // Which account the card was last drawn for, so an ordinary repaint can be
+    // told apart from a sign-in, a sign-out or a switch. -1 rather than 0: 0 is
+    // "nobody signed in", which is a real state the card is drawn in.
+    let lastCardAccountId = -1;
+
     function renderAccountCard() {
         const name = settings.displayName || 'Anonymous';
         paintAvatarEl($('set-avatar'), name, myUserId());
@@ -7467,9 +7744,22 @@
         // Both sub-panels belong to a state that has just ended: a stray verify
         // form under a signed-in account, or — worse — the PREVIOUS account's
         // TOTP secret still on screen for the next person who signs in.
-        $('acct-verify').hidden = true;
-        $('acct-2fa-setup').hidden = true;
-        $('acct-2fa-secret').textContent = '';
+        //
+        // Only when the account has actually CHANGED, though. This function is
+        // also the ordinary repaint — the custom-status field calls it on change,
+        // and so does every avatar refresh through repaintAvatars() — so it used
+        // to destroy a 2FA enrolment in progress: scan the QR with your phone,
+        // then touch anything else in the same pane before typing the six digits,
+        // and the QR, the manual key and the code box all vanished without a word.
+        // Worse than a re-click, because the server mints a NEW secret on every
+        // setup, so the entry already sitting in the authenticator app is dead and
+        // has to be deleted by hand.
+        if (lastCardAccountId !== myUserId()) {
+            lastCardAccountId = myUserId();
+            $('acct-verify').hidden = true;
+            $('acct-2fa-setup').hidden = true;
+            $('acct-2fa-secret').textContent = '';
+        }
         if (account) {
             $('acct-user').textContent = account.username;
             $('acct-role').textContent = (account.role === 'admin' ? '(admin)' : '') +
@@ -7669,6 +7959,12 @@
     // separate "Delete (admin)" entry on anything that isn't theirs.)
     function ownsPost(p) {
         return !!(p && p.user_id && account && p.user_id === account.id);
+    }
+
+    // Pinning is the same rule as editing and deleting — admins anything, members
+    // only their own — and pin.js enforces it. See the pin button in renderMessage.
+    function mayPin(p) {
+        return isAdmin() || ownsPost(p);
     }
 
     // "Did I write this?" — the cosmetic question, as opposed to ownsPost's
@@ -8446,6 +8742,15 @@
             if (target === settingsPaneByTitle('About')) loadReleaseHistory(false);
         }
 
+        // A query that matches nothing hides every row in the rail, and an empty
+        // column beside a settings pane reads as the app having broken rather than
+        // as an answer. Every other list in here — the emoji picker, the member
+        // list, the pinned panel — says so; this one said nothing at all.
+        const navEmpty = document.createElement('div');
+        navEmpty.className = 'set-nav-empty';
+        navEmpty.hidden = true;
+        inner.appendChild(navEmpty);
+
         search.addEventListener('input', () => {
             const q = search.value.trim().toLowerCase();
             let first = null;
@@ -8459,6 +8764,9 @@
             });
             // A divider with nothing under it is worse than no divider.
             heads.forEach((h) => { h.head.hidden = !h.mine.some((it) => !it.b.hidden); });
+            navEmpty.hidden = !q || !!first;
+            if (navEmpty.hidden) navEmpty.textContent = '';
+            else navEmpty.textContent = 'No settings match “' + search.value.trim() + '”';
             if (q && first) showPane(first.g);
         });
         // Esc inside the box clears the filter; only an empty box closes the
@@ -8560,7 +8868,38 @@
     async function applyPtt() {
         try { pttState = await L.ptt.apply(); } catch (e) { pttState = null; }
         paintPttHint();
+        paintToggleHints();
         return pttState;
+    }
+
+    // The mute and deafen hotkeys have the same problem the PTT hint above was
+    // fixed for, and it went unnoticed because their hint was a STATIC line of
+    // HTML asserting "works system-wide" whatever happened.
+    //
+    // apply() carries a key that neither transport can accept — a bare letter
+    // with no modifier, Pause, the Menu key, IntlBackslash on an ISO keyboard —
+    // or one another application already owns system-wide, and in both cases it
+    // simply dropped it. The keycap went on showing the key the user pressed,
+    // beside a promise it kept, for a hotkey that had never been registered. The
+    // only way to find out was to press it and notice nothing happened.
+    const TOGGLE_HINTS = [
+        { action: 'toggleMute', el: 'mute-hint', ok: '— works system-wide; Backspace while recording clears it' },
+        { action: 'toggleDeafen', el: 'deafen-hint', ok: '' }
+    ];
+
+    function paintToggleHints() {
+        const unbound = (pttState && Array.isArray(pttState.unbound)) ? pttState.unbound : [];
+        TOGGLE_HINTS.forEach((h) => {
+            const el = $(h.el);
+            if (!el) return;
+            if (unbound.includes(h.action)) {
+                el.textContent = '— that key could not be registered; try one with Ctrl, Alt or Shift';
+                el.classList.add('warn');
+            } else {
+                el.textContent = h.ok;
+                el.classList.remove('warn');
+            }
+        });
     }
 
     function paintPttHint() {
@@ -8593,7 +8932,7 @@
     // Kept for the callers that only need a repaint. Opening Settings must NOT
     // re-apply: apply() resets the held state, which would close the microphone
     // of anyone who opened Settings mid-hold.
-    function refreshPttHint() { paintPttHint(); }
+    function refreshPttHint() { paintPttHint(); paintToggleHints(); }
 
     // #set-name is readonly: the display name IS the account username, so there
     // is nothing to listen for. It stays in the sheet because that is where
@@ -8665,6 +9004,16 @@
         const map = { ec: 'echoCancellation', ns: 'noiseSuppression', agc: 'autoGainControl' };
         $('set-' + k).addEventListener('change', async (e) => {
             await saveSettings({ [map[k]]: e.target.checked });
+            // The Input Profile radios above are DERIVED from these checkboxes,
+            // and nothing repainted them — so unticking "Noise suppression" from
+            // Studio moved the real profile to Custom while the Studio radio
+            // stayed selected. Clicking Studio to put it back then did nothing at
+            // all, because the input was already .checked and no change event
+            // fires: a dead control over a pane that was describing a state it
+            // was not in. setInputProfile() and the mode toggle already repaint
+            // for exactly this reason.
+            paintVoicePane();
+            paintAudioPanels();
             if (voice.isJoined()) toast('Rejoin voice to apply audio processing changes');
         });
     });
@@ -8677,6 +9026,10 @@
         window.ScarmNoise.setEnabled(next);
         $('btn-nsai').classList.toggle('on', next);
         setTip($('btn-nsai'), next ? 'Noise Suppression On' : 'Noise Suppression Off');
+        // …and the Input Profile radios in Settings, which are derived from this.
+        // Changing it from the call left them describing the previous state.
+        paintVoicePane();
+        paintAudioPanels();
         if (voice.isJoined()) toast('Rejoin voice to apply AI noise suppression');
     });
 
@@ -8707,6 +9060,12 @@
     $('set-nsai').addEventListener('change', async (e) => {
         await saveSettings({ noiseSuppressionAI: e.target.checked });
         window.ScarmNoise.setEnabled(e.target.checked);
+        // Same reason as the ec/ns/agc handler above: this checkbox is one of the
+        // inputs the Input Profile radios are computed from, and leaving them
+        // unpainted left "Clear Voice" selected with RNNoise off — and unclickable,
+        // since an already-checked radio fires no change event.
+        paintVoicePane();
+        paintAudioPanels();
         if (voice.isJoined()) toast('Rejoin voice to apply AI noise suppression');
     });
 
@@ -8722,6 +9081,8 @@
         await saveSettings({ noiseSuppressionAI: false });   // also re-pushes to voice.js
         window.ScarmNoise.setEnabled(false);
         $('set-nsai').checked = false;
+        paintVoicePane();          // the profile radios are derived from it
+        paintAudioPanels();
         // …but only for the NEXT capture. The microphone in a call that is
         // already running was acquired with the browser's suppressor switched
         // off ("RNNoise owns it"), and nothing re-acquires it — so promising a
@@ -9035,14 +9396,31 @@
 
     // ---------- context menu ----------------------------------------------
 
-    function closeCtxMenu() { $('ctx-menu').hidden = true; }
+    // Where focus was when a keyboard-opened menu appeared, so closing it hands the
+    // caret back instead of leaving it on a hidden button.
+    let ctxReturnFocus = null;
+
+    function closeCtxMenu() {
+        $('ctx-menu').hidden = true;
+        if (!ctxReturnFocus) return;
+        const back = ctxReturnFocus;
+        ctxReturnFocus = null;
+        try { if (back.isConnected) back.focus(); } catch (e) {}
+    }
 
     // Where the last menu was opened, so an action that opens a popup of its own
     // (React…) can anchor it at the cursor after the menu has closed.
     let lastMenuAt = { x: 0, y: 0 };
 
     // items: [{ label, icon, danger, disabled, onClick } | 'sep']
-    function openCtxMenu(items, x, y) {
+    // `keyboard` = summoned by a key rather than the pointer. Then, and only then,
+    // the menu takes focus and the arrows walk it: a menu opened from the message
+    // list's Enter handler used to appear with focus still on the message behind
+    // it, so the only key that did anything was Escape — the items were reachable
+    // exclusively by mouse, from a handler that exists to avoid needing one. Left
+    // alone for a right-click, because Cut/Copy/Paste act on whatever was focused
+    // when the menu opened.
+    function openCtxMenu(items, x, y, keyboard) {
         lastMenuAt = { x, y };
         const menu = $('ctx-menu');
         menu.innerHTML = '';
@@ -9095,7 +9473,38 @@
         const w = menu.offsetWidth, h = menu.offsetHeight;
         menu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
         menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';
+
+        if (keyboard) {
+            ctxReturnFocus = document.activeElement;
+            const first = menu.querySelector('.ctx-item:not([disabled])');
+            if (first) first.focus();
+        }
     }
+
+    // Arrow-key navigation, for a menu that was opened by keyboard. Bound once on
+    // the container rather than per item, so it covers every menu this function
+    // builds. Home/End because the menus are long enough for it to matter.
+    $('ctx-menu').addEventListener('keydown', (e) => {
+        const items = Array.from($('ctx-menu').querySelectorAll('.ctx-item:not([disabled])'));
+        if (!items.length) return;
+        const idx = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const step = e.key === 'ArrowDown' ? 1 : -1;
+            // Wraps, the way a native menu does — the list is short and there is
+            // nothing past either end to fall through to.
+            const next = idx === -1 ? (step > 0 ? 0 : items.length - 1)
+                : (idx + step + items.length) % items.length;
+            items[next].focus();
+        } else if (e.key === 'Home' || e.key === 'End') {
+            e.preventDefault();
+            (e.key === 'Home' ? items[0] : items[items.length - 1]).focus();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCtxMenu();
+        }
+    });
 
     document.addEventListener('mousedown', (e) => {
         if (!$('ctx-menu').hidden && !e.target.closest('#ctx-menu')) closeCtxMenu();
@@ -9148,7 +9557,8 @@
             !dm && 'sep',
             { label: 'Copy text', icon: 'copy', onClick: () => copyMessage(p) },
             p.att_key && { label: 'Save attachment…', icon: 'download', onClick: () => saveAttachment(p.att_key, p.att_name) },
-            !dm && { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p.id, !p.pinned) },
+            // Admins anything, members only their own — see mayPin.
+            !dm && mayPin(p) && { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p.id, !p.pinned) },
             mine && 'sep',
             mine && { label: 'Edit message', icon: 'pencil', onClick: () => startEdit(p, el) },
             mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
@@ -9714,7 +10124,10 @@
             // The server stamps edited_at, so reload rather than guessing — that
             // makes the "(edited)" marker reflect real server state.
             await loadMessages(false);
-            L.rt.notifyPosted(channel);
+            // 'refresh': peers should refetch, but nobody wrote anything, so this
+            // must not raise an unread badge or a "New message" notification for
+            // a reader in another channel.
+            L.rt.notifyPosted(channel, null, 'refresh');
             toast('Message edited');
         });
     }
@@ -9756,7 +10169,7 @@
         selfEchoes = selfEchoes.filter((e) => e.id !== p.id);
         renderMessages();
         await loadMessages(false);
-        L.rt.notifyPosted(channel);
+        L.rt.notifyPosted(channel, null, 'refresh');   // a refetch nudge, not a new message
         toast('Message deleted');
     }
 
@@ -9873,10 +10286,27 @@
 
     // Detection order per url: YouTube → direct image → generic OG preview.
     // A message with several links renders each independently.
+    // The prose of a message, with fenced and inline code removed.
+    //
+    // Previews were built from the raw body, so a url inside ```a code fence```
+    // — which the renderer deliberately shows verbatim, as code — still got
+    // unfurled, and a link to an image still rendered the image itself under the
+    // block. Pasting a snippet containing a URL therefore fetched it and drew a
+    // card for it, which is exactly what a code fence says not to do.
+    //
+    // Only the SCAN text is filtered; post.body is untouched everywhere else.
+    function previewScanText(body) {
+        return String(body)
+            .split('```')
+            .filter((_, i) => i % 2 === 0)      // odd segments are inside a fence
+            .join(' ')
+            .replace(/`[^`\n]*`/g, ' ');        // …and inline spans
+    }
+
     function renderPreviews(container, post) {
         if (!container || !post.body) return;
 
-        extractUrls(post.body).forEach((url) => {
+        extractUrls(previewScanText(post.body)).forEach((url) => {
             const vid = youtubeId(url);
 
             if (vid) {
@@ -9888,13 +10318,20 @@
                     container.appendChild(el);
                     return;
                 }
-                if (cached === 'pending') return;
+                // Another message with the same video is already asking. JOIN that
+                // request instead of giving up on it: 'pending' used to mean "no
+                // card here", so with the same link in two messages only the first
+                // ever showed a preview — and the second stayed bare for good,
+                // because the finished answer replaced the marker and nothing
+                // re-rendered the row that had already skipped it.
+                if (cached === 'pending') { joinPreview(youtubeCache, vid, post, url, youtubeCard); return; }
 
                 cachePut(youtubeCache, vid, 'pending');
                 L.youtube(vid).then((info) => {
                     cachePut(youtubeCache, vid, info || null);
                     if (info) graft(post, url, () => youtubeCard(info));
-                }).catch(() => cachePut(youtubeCache, vid, null));
+                    flushPreviewWaiters(vid, info || null);
+                }).catch(() => { cachePut(youtubeCache, vid, null); flushPreviewWaiters(vid, null); });
                 return;
             }
 
@@ -9914,7 +10351,9 @@
                 container.appendChild(el);
                 return;
             }
-            if (cached === 'pending') return;
+            // See the YouTube branch: wait for the request already in flight rather
+            // than treating "somebody else is asking" as "there is nothing to show".
+            if (cached === 'pending') { joinPreview(previewCache, url, post, url, linkCard); return; }
 
             cachePut(previewCache, url, 'pending');
             L.unfurl(url).then((res) => {
@@ -9923,8 +10362,35 @@
                 // Graft into the live node instead of re-rendering the list, so
                 // the reader's scroll position is never disturbed.
                 if (preview) graft(post, url, () => linkCard(preview));
-            }).catch(() => cachePut(previewCache, url, null));
+                flushPreviewWaiters(url, preview);
+            }).catch(() => { cachePut(previewCache, url, null); flushPreviewWaiters(url, null); });
         });
+    }
+
+    // Messages waiting on a preview fetch somebody else started, keyed by the same
+    // cache key that fetch will resolve. Each entry grafts its own card when the
+    // answer lands, so two messages with the same link both get one.
+    const previewWaiters = new Map();
+
+    function joinPreview(map, key, post, url, build) {
+        // The answer may have landed between the cache read and this call.
+        const now = map.get(key);
+        if (now && now !== 'pending') { graft(post, url, () => build(now)); return; }
+        if (now === null) return;
+        const list = previewWaiters.get(key) || [];
+        // One waiter per (message, url): renderPreviews runs again on every repaint
+        // of the row, and an unbounded list would grow for as long as the fetch took.
+        if (list.some((w) => w.post.id === post.id && w.post.isDm === post.isDm && w.url === url)) return;
+        list.push({ post, url, build });
+        previewWaiters.set(key, list);
+    }
+
+    function flushPreviewWaiters(key, value) {
+        const list = previewWaiters.get(key);
+        if (!list) return;
+        previewWaiters.delete(key);
+        if (!value) return;                     // nothing to show; the plain link stands
+        list.forEach((w) => { try { graft(w.post, w.url, () => w.build(value)); } catch (e) {} });
     }
 
     // ---------- search ----------------------------------------------------
@@ -10275,6 +10741,10 @@
         sel.value = chosen || '';
     }
 
+    // The date operator's value exactly as it was in the box, which <input
+    // type="date"> cannot always hold. See openFiltersModal.
+    let fmDateRaw = '';
+
     function openFiltersModal() {
         const ops = parseSearchQuery(searchInput().value).ops;
         const first = (k) => (ops[k] ? String(ops[k][0]) : '');
@@ -10282,7 +10752,13 @@
         fillPeopleSelect($('fm-from'), first('from'));
         fillPeopleSelect($('fm-mentions'), first('mentions'));
         fillChannelSelect($('fm-in'), first('in'));
-        $('fm-has').value = first('has');
+        // `has:audio` and `has:sound` mean the same thing to the parser (see
+        // lib.js HAS_KINDS), but only "sound" is an <option> — so a box reading
+        // `has:audio` loaded a select with no matching value, which HTML resolves
+        // to the blank "Any content", and pressing Apply then deleted the filter.
+        // `embed` is the same shape and is normalised for the same reason.
+        const has = first('has');
+        $('fm-has').value = has === 'audio' ? 'sound' : (has === 'embed' ? 'link' : has);
         $('fm-author').value = first('author');
         // A bare `pinned:` means true; the select's blank is "either".
         const pin = first('pinned');
@@ -10296,7 +10772,16 @@
         $('fm-date-row').hidden = !hasDate;
         $('fm-date-add').hidden = hasDate;
         $('fm-date-mode').value = mode || 'during';
-        $('fm-date-value').value = hasDate ? String(ops[mode][0]) : '';
+        // Kept verbatim as well as assigned, because #fm-date-value is <input
+        // type="date"> and that element silently REFUSES anything that is not a
+        // full YYYY-MM-DD. The query parser accepts `before:2026` and
+        // `after:2026-03` — a year or a month is a perfectly good bound — so
+        // opening "More filters" over one of those loaded an empty date box, and
+        // pressing Apply then deleted a filter the user had typed and never
+        // touched. Falling back to the original on apply makes the round trip
+        // lossless while leaving the picker to handle the ordinary full dates.
+        fmDateRaw = hasDate ? String(ops[mode][0]) : '';
+        $('fm-date-value').value = fmDateRaw;
 
         $('filters-modal').hidden = false;
         trapFocus($('filters-modal'), { label: 'Filters', initial: $('fm-from') });
@@ -10328,8 +10813,11 @@
         add('mentions', $('fm-mentions').value);
         add('author', $('fm-author').value);
         add('pinned', $('fm-pinned').value);
-        if (!$('fm-date-row').hidden && $('fm-date-value').value) {
-            add($('fm-date-mode').value, $('fm-date-value').value);
+        if (!$('fm-date-row').hidden) {
+            // The picker's value when it has one; otherwise whatever was in the box
+            // before this form opened — a year or a month the date input could not
+            // display. See openFiltersModal.
+            add($('fm-date-mode').value, $('fm-date-value').value || fmDateRaw);
         }
 
         // The TRAILING space writeOp leaves is kept, and it is load-bearing:
@@ -10370,6 +10858,7 @@
     });
     $('fm-date-clear').addEventListener('click', () => {
         $('fm-date-value').value = '';
+        fmDateRaw = '';                 // …including the un-displayable original
         $('fm-date-row').hidden = true;
         $('fm-date-add').hidden = false;
     });
@@ -10429,6 +10918,9 @@
 
     let searchScope = 'channel';
     let searchSeq = 0;
+    // How many hits one request asks for. Named because renderSearchResults has to
+    // know it to tell a complete answer from a truncated one.
+    const SEARCH_LIMIT = 40;
 
     // Closes the archive results without touching the box: the operators are
     // still narrowing the loaded messages, and clearing those is what the X in
@@ -10475,13 +10967,37 @@
                 q,
                 channel: inChan || channel,
                 scope: inChan ? 'channel' : searchScope,
-                limit: 40
+                limit: SEARCH_LIMIT
             }
         });
         if (seq !== searchSeq) return;
         if (authGone(res)) return;
-        if (!res || !res.success) { hideSearchResults(); return; }
+        // A FAILED search is not an empty one, and hiding the panel made the two
+        // indistinguishable: an offline box, an edge 502 or a Worker exception all
+        // looked exactly like "nothing matched", so the honest conclusion was
+        // "there is nothing in the archive about that" — for a question the server
+        // never answered. Say so, keep the panel open, and offer the retry, the way
+        // the thread panel and the DM list already do.
+        if (!res || !res.success) { searchError(res, q); return; }
         renderSearchResults(res.results || [], q);
+    }
+
+    function searchError(res, q) {
+        $('search-panel').hidden = false;
+        $('search-results').innerHTML = '';
+        const sum = $('search-summary');
+        sum.textContent = (res && res.error) ||
+            (res && res.network ? 'Could not reach the archive' : 'Could not search the archive');
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'linkish';
+        retry.textContent = 'Try again';
+        retry.addEventListener('click', () => runSearch());
+        const wrap = document.createElement('div');
+        wrap.className = 'search-empty';
+        wrap.appendChild(retry);
+        $('search-results').appendChild(wrap);
+        console.warn('[search] archive search failed for', JSON.stringify(q), res);
     }
 
     function searchTime(ts) {
@@ -10510,9 +11026,15 @@
 
         // The summary lives in the panel's own head now, beside the scope
         // toggle it belongs with, rather than as the first row of the results.
-        $('search-summary').textContent = list.length
-            ? `${list.length} result${list.length === 1 ? '' : 's'} in the archive`
-            : 'Nothing in the archive matches that';
+        // "40 results in the archive" was a claim the response could not support:
+        // the request asks for limit: 40, so a full page means "at least 40" and
+        // there is no way from here to see the rest. A truthful count when the page
+        // is short, and an honest description when it is full.
+        $('search-summary').textContent = list.length >= SEARCH_LIMIT
+            ? `Showing the newest ${SEARCH_LIMIT} matches`
+            : (list.length
+                ? `${list.length} result${list.length === 1 ? '' : 's'} in the archive`
+                : 'Nothing in the archive matches that');
 
         list.forEach((r) => {
             const it = document.createElement('button');
@@ -10814,6 +11336,16 @@
     // ---------- pinned ----------------------------------------------------
 
     async function pinPost(id, pinned) {
+        // The buttons are gated (see mayPin), but so is deletePost — a keyboard
+        // shortcut, a stale menu or a repaint that raced a role change all reach
+        // here without passing one, and the answer should be the reason rather
+        // than a bare server 403.
+        // Only when the row is loaded here; a pin from a page we do not hold falls
+        // through to the server, which is the authority either way.
+        const target = posts.find((x) => x.id === id);
+        if (target && !mayPin(target)) {
+            return toast('Only admins can pin other people\'s messages', true);
+        }
         const res = await L.board('pin', { method: 'POST', body: { id, pinned, clientId: settings.clientId } });
         if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not pin', true);
@@ -10874,7 +11406,9 @@
                 '<div class="pinned-top">' +
                 `<span class="pinned-name">${esc(p.name)}</span>` +
                 `<span class="pinned-time">${esc(timeStr(p.created_at))}</span>` +
-                '<button class="pinned-unpin" type="button">Unpin</button>' +
+                // Unpinning is the same admin-or-owner rule as pinning; offering it
+                // to a member on somebody else's message only produced a 403.
+                (mayPin(p) ? '<button class="pinned-unpin" type="button">Unpin</button>' : '') +
                 '</div>' +
                 `<div class="pinned-body">${bodyIcon}${esc(body.slice(0, 240))}</div>`;
             item.addEventListener('click', () => {
@@ -10882,7 +11416,8 @@
                 if (p.thread_root_id) openThread(p.thread_root_id, p.channel);
                 else jumpToPost(p);
             });
-            item.querySelector('.pinned-unpin').addEventListener('click', (e) => {
+            const unpin = item.querySelector('.pinned-unpin');
+            if (unpin) unpin.addEventListener('click', (e) => {
                 e.stopPropagation();
                 pinPost(p.id, false);
             });
@@ -11229,11 +11764,18 @@
     // The fuller profile, as a card over the conversation. Everything the panel
     // shows plus what does not fit in 302px.
     function openProfileCard(u) {
-        const known = dmDirectory[u.id] || {};
+        // dmDirectory is only filled when the new-conversation picker has been
+        // OPENED this session, so on a straight "reply to a DM → View Full
+        // Profile" it is empty — and `known.role === 'admin' ? … : 'Member'`
+        // then reported every admin on the board as an ordinary member. `roster`
+        // holds the same rows from account/users and is loaded at startup, so it
+        // answers this without a round trip; when neither knows, say so rather
+        // than guessing the commoner case.
+        const known = dmDirectory[u.id] || roster.find((r) => r.id === u.id) || {};
         const rows = [
             ['Username', u.username],
             ['Account id', String(u.id)],
-            ['Role', known.role === 'admin' ? 'Admin' : 'Member']
+            ['Role', known.role ? (known.role === 'admin' ? 'Admin' : 'Member') : 'Unknown']
         ];
         openDialog({
             title: u.username,

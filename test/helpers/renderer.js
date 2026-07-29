@@ -72,7 +72,11 @@ export async function bootRenderer(opts = {}) {
             verify: vi.fn(async () => ({ success: false })),
             resend: vi.fn(async () => ({ success: false })),
             removal: vi.fn(async () => ({ success: false })),
-            me: vi.fn(async () => ({ success: true, user }))
+            // opts.accountMe overrides the whole answer, for the specs that are
+            // about a me() that FAILED rather than one that reported no account —
+            // board() returns { success:false, network:true } for an edge 502 or a
+            // Worker exception page, and the two mean very different things.
+            me: vi.fn(opts.accountMe || (async () => ({ success: true, user })))
         },
         board,
         uploadFile: vi.fn(async () => ({ success: true })),

@@ -49,6 +49,13 @@ const POST = {
     id: 7, body: 'hello', name: 'Alice', client_id: 'alice', user_id: THEM.id,
     created_at: 1700000000000, reactions: [], pinned: 0
 };
+// …and one of MY OWN in the same channel. Pinning is admin-or-owner server-side
+// (pin.js via mayModifyPost), so the two rows answer differently and the menu has
+// to as well — see the pin tests below.
+const MY_POST = {
+    id: 8, body: 'mine', name: 'Me', client_id: 'me', user_id: ME.id,
+    created_at: 1700000030000, reactions: [], pinned: 0
+};
 
 // Routes by path the way main.js's board bridge does, so the renderer's own
 // call sites decide what it sees.
@@ -58,7 +65,7 @@ const board = vi.fn(async (p) => {
         return { success: true, thread: THREAD, messages: DM_MESSAGES };
     }
     if (p === 'list') {
-        return { success: true, posts: [POST], typing: [], voice: [], hasMore: false, maxId: 7 };
+        return { success: true, posts: [POST, MY_POST], typing: [], voice: [], hasMore: false, maxId: 8 };
     }
     if (p === 'channels') return { success: true, channels: [{ name: 'general', unread: 0 }] };
     if (p === 'presence') return { success: true, members: [] };
@@ -285,8 +292,23 @@ describe('the same message in a channel', () => {
         expect(labels).toContain('Reply');
         expect(labels).toContain('Reply in thread');
         expect(labels).toContain('React…');
-        expect(labels).toContain('Pin');
         expect(labels.some((l) => l.startsWith('Block'))).toBe(true);
+    });
+
+    // Pinning is admin-or-owner server-side, and the menu used to offer it on
+    // every message to everybody: a member clicking it on somebody else's post got
+    // "Only admins can pin other people's messages" from the server, every time.
+    // An action that cannot succeed is not an action.
+    it('does not offer a member Pin on somebody else\'s message', () => {
+        rightClick(rowFor($('messages'), 7));
+        expect(menuLabels()).not.toContain('Pin');
+        expect(rowFor($('messages'), 7).querySelector('[data-act="pin"]')).toBeNull();
+    });
+
+    it('still offers Pin on your own message', () => {
+        rightClick(rowFor($('messages'), 8));
+        expect(menuLabels()).toContain('Pin');
+        expect(rowFor($('messages'), 8).querySelector('[data-act="pin"]')).not.toBeNull();
     });
 
     it('announces typing again', async () => {

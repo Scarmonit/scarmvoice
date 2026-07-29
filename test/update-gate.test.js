@@ -216,3 +216,72 @@ describe('a mid-session update is unaffected', () => {
         expect(stub().installs.length).toBe(1);
     });
 });
+
+// A downloaded update is a FACT, not a phase.
+//
+// `state.status` is one field, and every later event overwrote it. So a manual
+// "Check for updates" — or an error from a periodic recheck — wrote 'checking' or
+// 'error' over a 'ready' that meant "the bytes are on disk". scheduleAutoRestart()
+// refuses to act unless the status is exactly 'ready', so an update that had
+// downloaded and was being held for the end of a call was permanently disarmed by
+// anyone pressing that button while the call was still running. The banner's
+// promise — "it will install when your call ends" — then went unkept until the next
+// quit.
+describe('an update that is already downloaded', () => {
+    // Get to "downloaded, held for a call in progress".
+    async function held() {
+        updater.setBusy(true);
+        // startDownload() is what lazily requires electron-updater and registers
+        // the event handlers — the same thing the mid-session specs above rely on.
+        updater.startDownload();
+        fire('update-available', { version: '9.9.9', releaseNotes: 'x' });
+        fire('update-downloaded', { version: '9.9.9', releaseNotes: 'x' });
+        await flush();
+        expect(updater.getState().status).toBe('ready');
+        expect(updater.getState().waitingFor).toBe('call');
+        expect(stub().installs).toHaveLength(0);   // never mid-call
+        return updater;
+    }
+
+    it('survives a manual check while a call is in progress', async () => {
+        await held();
+
+        updater.checkNow();
+        fire('checking-for-update');
+        await flush();
+
+        expect(updater.getState().status).toBe('ready');
+    });
+
+    it('survives an error that has nothing to do with it', async () => {
+        await held();
+
+        fire('error', new Error('getaddrinfo ENOTFOUND'));
+        await flush();
+
+        expect(updater.getState().status).toBe('ready');
+    });
+
+    it('still installs when the call ends', async () => {
+        await held();
+        fire('checking-for-update');
+        fire('error', new Error('feed unreachable'));
+        await flush();
+
+        updater.setBusy(false);
+        await flush();
+
+        expect(stub().installs).toHaveLength(1);
+    });
+
+    it('is invalidated by a genuinely newer build', async () => {
+        await held();
+
+        // A different version means the file on disk is not the update on offer.
+        fire('update-available', { version: '9.9.10', releaseNotes: 'y' });
+        fire('checking-for-update');
+        await flush();
+
+        expect(updater.getState().status).not.toBe('ready');
+    });
+});

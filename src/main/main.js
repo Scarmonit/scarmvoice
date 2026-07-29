@@ -310,7 +310,14 @@ function openExternal(url) {
 // un-maximising later would snap the window to full-screen size.
 function saveWindowState() {
     if (!win || win.isDestroyed() || win.isMinimized()) return;
-    const maximized = win.isMaximized();
+    // `pendingMaximize` is the saved state waiting to be applied on the first
+    // reveal, and until then the window has never been maximised — it has never
+    // been SHOWN. A session started hidden ("Start minimized to the tray", or the
+    // --openAsHidden login item) and lived out entirely in the tray therefore
+    // closed with isMaximized() false and overwrote the preference with it. The
+    // next launch opened un-maximised, and the setting had quietly erased itself
+    // for anyone whose two habits were "start in the tray" and "run maximised".
+    const maximized = pendingMaximize || win.isMaximized();
     const patch = { windowMaximized: maximized };
     if (!maximized) patch.windowBounds = win.getNormalBounds();
     store.set(patch);
@@ -1195,7 +1202,7 @@ function registerIpc() {
     handle('rt:posted', (_e, arg) => {
         // Older renderers passed the channel as a bare string; the object form
         // carries the @mention hint alongside it.
-        if (arg && typeof arg === 'object') return rt.notifyPosted(arg.channel, arg.mentions);
+        if (arg && typeof arg === 'object') return rt.notifyPosted(arg.channel, arg.mentions, arg.kind);
         return rt.notifyPosted(arg);
     });
     handle('rt:typing', (_e, { channel, stop }) => rt.sendTyping(channel, stop));
