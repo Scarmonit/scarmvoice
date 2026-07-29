@@ -629,19 +629,35 @@ function prefetchSession() {
     // there is nothing to warm and no bearer token to put on the wire.
     if (!cookie) return;
     const at = Date.now();
-    const p = status()
-        .then(async (st) => ({ st, me: st && st.authed ? await accountMe().catch(() => null) : null }))
+
+    // TWO promises, not one. `me` is chained on the status ANSWER — it needs to
+    // know we are authed before sending a bearer token — but it is held
+    // SEPARATELY, because the renderer asks these two questions separately and
+    // must not be made to wait for the slow one to hear the fast one.
+    //
+    // They were one combined promise, and it cost exactly what you would
+    // expect: `auth:status` did not resolve until account/me had, and
+    // account/me is the slowest call this app makes — 750ms to 1700ms here on
+    // an ordinary day, and long enough to trip the 20s timeout on a bad one.
+    // The startup measurement that missed this timed when each request LEFT
+    // rather than when the renderer got its answer.
+    const st = status();
+    const me = st
+        .then((s) => (s && s.authed ? accountMe() : null))
         .catch(() => null);
+
     // Held rather than awaited; nothing here may reject into the app's startup.
-    p.catch(() => {});
-    preflight = { at, p };
+    st.catch(() => {});
+    me.catch(() => {});
+    preflight = { at, st, me };
 }
 
+// Returns { st, me } — two promises, each awaited by the handler that wants it.
 async function takePreflight() {
     const pre = preflight;
     preflight = null;
     if (!pre || Date.now() - pre.at > PREFLIGHT_MAX_AGE_MS) return null;
-    return pre.p;      // may still be in flight — awaiting it coalesces
+    return pre;
 }
 
 // Attachment bytes, proxied so the renderer can display them without the cookie.

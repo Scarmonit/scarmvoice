@@ -727,11 +727,16 @@ function registerIpc() {
     // One shot each: `pendingMe` is nulled on read and the preflight slot is
     // emptied by takePreflight, so a re-login or any later refresh is always a
     // real request.
+    // A PROMISE, not an answer: account:me awaits it when it is asked, so a
+    // slow account/me delays only the question it is the answer to.
     let pendingMe = null;
     handle('auth:status', async () => {
         const pre = await net.takePreflight();
-        if (pre && pre.st) { pendingMe = pre.me; return pre.st; }
-        return net.status();
+        if (!pre) return net.status();
+        const st = await pre.st;
+        if (!st) return net.status();
+        pendingMe = pre.me;
+        return st;
     });
 
     handle('board:call', async (_e, { path: p, opts }) => {
@@ -761,8 +766,12 @@ function registerIpc() {
     });
     handle('account:logout', async () => net.accountLogout());
     handle('account:me', async () => {
-        const me = pendingMe;
+        const p = pendingMe;
         pendingMe = null;
+        if (!p) return net.accountMe();
+        // Still in flight is the normal case — the renderer asks for this
+        // within a millisecond of asking for the status.
+        const me = await p;
         return me || net.accountMe();
     });
     handle('account:removal', async (_e, { action, password, code }) => net.accountRemoval(action, password, code));

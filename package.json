@@ -1,7 +1,7 @@
 {
   "name": "scarmvoice",
   "productName": "ScarmVoice",
-  "version": "0.54.0",
+  "version": "0.54.1",
   "description": "Desktop voice chat + message board client for scarmonit.com/messageboard",
   "author": "Scarmonit",
   "license": "MIT",
