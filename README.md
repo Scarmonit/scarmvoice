@@ -997,11 +997,36 @@ in older builds.
 
 ### Screen sharing
 
-Electron on Windows has no system picker, so the app shows its own: screens and
-windows with live thumbnails, plus a system-audio toggle (Windows loopback).
+Electron on Windows has no system picker, so the app shows its own, and because
+it is the *only* chooser it is built like one rather than like a dialog:
+
+- **The categories are the top row** — Applications and Entire Screen, as a
+  segmented control. There is no title bar and no X; Cancel, Escape and a click
+  on the backdrop are the three ways out, and `trapFocus()` supplies the
+  dialog's accessible name.
+- **A grid of the sources themselves**, each labelled underneath with the app's
+  own Windows icon (`fetchWindowIcons`) and its window title. The tile *is* the
+  picture: no plate, no padding, no resting border — a frame around every
+  thumbnail turned a grid of screens into a grid of boxes, and the thing being
+  chosen is what is inside them. A source that returns no thumbnail (a minimised
+  window, a capture Windows refuses) gets a box of its own saying so, because an
+  `<img>` with no `src` is drawn as a *broken* image.
+- **A selection belongs to the category it was made in.** Switching tabs clears
+  it. Carried across, Share could send a window while the grid showed screens,
+  with nothing on screen saying which one was armed.
+
 The source is registered with the main process *before* the SDK is told to
 share, because `enableScreenShare()` calls `getDisplayMedia()` immediately and
 the display-media handler needs an answer ready.
+
+**SD and HD are deliberately not symmetrical.** SD always writes 720p, but HD
+only raises a *720p* setting to 1080p and otherwise leaves the value alone —
+because the app also supports 1440p, which two buttons cannot express, and
+writing 1080p unconditionally would quietly downgrade anyone running at 1440p
+every time they pressed the tier they were already on. The gear beside them is
+where 1440p and sharp/smooth live; it closes the picker rather than stacking a
+second modal on it, because two focus traps deep, Escape unwinds them in the
+wrong order.
 
 That handler reads exactly one field off the source — its `id` — but it was
 asking `desktopCapturer` for the default thumbnail of every screen and every

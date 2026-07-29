@@ -2261,49 +2261,131 @@ input[readonly] { opacity: .75; cursor: default; }
 
 /* ---------- screen-share picker ---------------------------------------- */
 
-.picker-modal { max-width: 780px; }
-.picker-tabs { flex: 0 0 auto; display: flex; gap: 4px; padding: 12px 18px 0; }
-.picker-tab {
-  padding: 7px 14px; border-radius: 6px 6px 0 0; cursor: pointer;
-  background: none; border: 0; border-bottom: 2px solid transparent;
-  color: var(--dim); font-size: 13px; font-weight: 600;
-}
-.picker-tab:hover { color: var(--text); }
-.picker-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* Wider and taller than the other modals on purpose: this one is a chooser,
+   and choosing between a dozen windows by their pictures needs the pictures to
+   be big enough to recognise. min-height keeps the footer from jumping up under
+   a one-source list and back down under a full one. */
+.picker-modal { max-width: 920px; max-height: 88vh; min-height: 460px; }
+/* The body absorbs the slack, so the footer sits ON the bottom edge rather than
+   directly under the last row with the min-height's leftover space below it —
+   which is what a two-screen list looked like. */
+.picker-modal .modal-body { flex: 1; }
 
-.picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding-top: 12px; }
-.pick {
-  background: var(--rail); border: 2px solid transparent; border-radius: 8px;
-  padding: 6px; cursor: pointer; text-align: left; overflow: hidden;
+/* The categories are the top row — a SEGMENTED control, not underlined tabs.
+   Each takes an equal share of the width so the row reads as one control
+   rather than as three loose buttons. */
+.picker-tabs {
+  flex: 0 0 auto; display: flex; gap: 4px;
+  margin: 14px 16px 2px; padding: 4px;
+  background: var(--sunk); border-radius: 9px;
 }
-.pick:hover { border-color: var(--line-2); }
-.pick.sel { border-color: var(--accent); background: rgba(var(--accent-rgb), .07); }
-.pick img { width: 100%; height: 104px; object-fit: contain; background: #000; border-radius: 5px; display: block; }
+.picker-tab {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 9px 12px; border-radius: 6px; cursor: pointer;
+  background: none; border: 1px solid transparent;
+  color: var(--dim); font-size: 13.5px; font-weight: 600;
+}
+.picker-tab .ico { width: 17px; height: 17px; flex: 0 0 17px; }
+.picker-tab > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-tab:hover { color: var(--text); }
+/* The raised plate is what says "this one" — colour alone was too quiet once
+   the tabs sat inside a filled track. */
+.picker-tab.active {
+  color: var(--text-strong); background: var(--float-2);
+  border-color: var(--line-2); box-shadow: var(--shadow-sm);
+}
+
+.picker-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 16px; padding-top: 14px;
+}
+/* The tile IS the picture. No plate, no padding, no border in the resting
+   state — a frame around every thumbnail turned a grid of screens into a grid
+   of boxes, and the thing being chosen is what is inside them. */
+.pick {
+  background: none; border: 0; padding: 0;
+  cursor: pointer; text-align: left; overflow: hidden;
+}
+.pick img {
+  width: 100%; aspect-ratio: 16 / 9; height: auto;
+  object-fit: contain; background: #000; display: block;
+  border-radius: 8px; border: 2px solid transparent;
+}
+/* Same box as a thumbnail, for a source that could not produce one. */
+.pick-blank {
+  width: 100%; aspect-ratio: 16 / 9;
+  display: grid; place-items: center;
+  background: #000; border-radius: 8px; border: 2px solid transparent;
+  font-size: 12px; color: var(--dim);
+}
+.pick:hover img, .pick:hover .pick-blank { border-color: var(--line-2); }
+.pick.sel img, .pick.sel .pick-blank { border-color: var(--accent); }
 .pick-name {
-  display: flex; align-items: center; gap: 6px;
-  margin-top: 6px; font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 9px; font-size: 13px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pick.sel .pick-name { color: var(--text); }
-.pick-name img { width: 14px; height: 14px; flex: 0 0 14px; background: none; border-radius: 0; }
+.pick.sel .pick-name { color: var(--text-strong); }
+/* The app's own icon, as Windows reports it — not one of ours, so it keeps its
+   colours and must not inherit the thumbnail's black backdrop or its radius. */
+.pick-name img {
+  width: 16px; height: 16px; flex: 0 0 16px;
+  aspect-ratio: auto; background: none; border: 0; border-radius: 0;
+}
+.pick-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .picker-foot {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 12px;
-  padding: 13px 18px; box-shadow: 0 -1px 0 var(--line);
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 18px; box-shadow: 0 -1px 0 var(--line);
 }
+.pf-row { display: flex; align-items: center; gap: 12px; }
+/* min-width:0 so a long window title ellipsises instead of shoving the quality
+   control off the end of the row. */
+.pf-chosen { min-width: 0; display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
+.pf-name {
+  font-size: 14px; font-weight: 700; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pf-name.none { font-weight: 500; color: var(--dim); }
+.pf-sub { font-size: 12px; color: var(--muted); }
+
+/* SD / HD, on the same segmented-plate idea as the categories above. */
+.pf-quality { flex: none; display: flex; gap: 3px; padding: 3px; background: var(--sunk); border-radius: 8px; }
+.pq {
+  padding: 6px 15px; border-radius: 6px; cursor: pointer;
+  background: none; border: 1px solid transparent;
+  color: var(--dim); font-size: 12.5px; font-weight: 700;
+}
+.pq:hover { color: var(--text); }
+.pq.active {
+  color: var(--text-strong); background: var(--float-2);
+  border-color: var(--line-2); box-shadow: var(--shadow-sm);
+}
+
 .pick-audio { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
 .pick-audio input { accent-color: var(--accent); width: 16px; height: 16px; }
-.picker-foot-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.picker-foot button {
-  padding: 9px 18px; border-radius: 6px; cursor: pointer;
+.pf-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.pf-actions button {
+  padding: 9px 20px; border-radius: 6px; cursor: pointer;
   font-size: 13px; font-weight: 600;
   background: var(--input); border: 0; color: var(--text);
 }
-.picker-foot button:hover { background: var(--elev); }
+.pf-actions button:hover { background: var(--elev); }
 #picker-go { background: var(--accent); border: 0; color: var(--on-accent); }
 #picker-go:hover { background: var(--accent-hi); }
 #picker-go:disabled { opacity: .4; cursor: default; background: var(--accent); }
+
+/* Keyboard focus, in the app's own colour rather than Chromium's default ring
+   — which lands on the active category the moment the picker opens, because
+   that is where trapFocus() puts the caret. Offset outward on a tile so it
+   does not sit on top of the selection border. */
+.picker-tab:focus-visible,
+.pq:focus-visible,
+.pf-actions button:focus-visible,
+#picker-settings:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
 
 /* ---------- image lightbox --------------------------------------------- */
 

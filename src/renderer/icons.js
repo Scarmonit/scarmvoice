@@ -149,6 +149,12 @@
         screen: '<g class="mon-frame"><rect x="2.2" y="4" width="19.6" height="13" rx="2.2"/>' +
             '<path d="M8 21h8M12 17v4"/></g>' +
             '<g class="mon-arrow"><path d="M12 13.6V8M9.4 10.6L12 8l2.6 2.6"/></g>',
+        // The same monitor WITHOUT the outbound arrow. `screen` means "send this
+        // screen outward" — it is the share button — and beside the words
+        // "Entire Screen" in the picker's category row that arrow reads as a
+        // second verb where a noun belongs.
+        monitor: '<rect x="2.2" y="4" width="19.6" height="13" rx="2.2"/>' +
+            '<path d="M8 21h8M12 17v4"/>',
         upload: '<path d="M12 16.4V4.2"/><path d="M6.4 9.8L12 4.2l5.6 5.6"/><path d="M3.6 19.8h16.8"/>',
 
         // ---- navigation + generic actions -------------------------------

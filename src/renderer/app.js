@@ -4137,18 +4137,24 @@
     $('btn-cam').addEventListener('click', () => { if (voice) voice.toggleCam(); });
 
     let pickerSources = [];
-    let pickerTab = 'screen';
+    // Opens on Applications, like the client this is modelled on: picking a
+    // single window is the common case, and "share my whole screen" is the
+    // deliberate one.
+    let pickerTab = 'window';
     let pickerSelected = null;
 
     async function openPicker() {
         pickerSelected = null;
-        pickerTab = 'screen';
+        pickerTab = 'window';
         $('picker-go').disabled = true;
         $('picker-audio').checked = settings.shareAudio !== false;
-        $('picker-quality-hint').textContent =
-            `${settings.shareQuality || '1080p'} · ${settings.shareMotion === 'smooth' ? 'smooth' : 'sharp'}`;
+        paintPickerChoice();
+        paintPickerQuality();
         $('picker').hidden = false;
-        trapFocus($('picker'), { label: 'Share your screen', initial: $('picker-close') });
+        trapFocus($('picker'), {
+            label: 'Share your screen',
+            initial: document.querySelector('.picker-tab.active')
+        });
         $('picker-grid').innerHTML = '<div class="empty-state">Looking for screens and windows…</div>';
 
         try {
@@ -4163,9 +4169,64 @@
 
     function renderPickerTabs() {
         document.querySelectorAll('.picker-tab').forEach((t) => {
-            t.classList.toggle('active', t.dataset.tab === pickerTab);
+            const on = t.dataset.tab === pickerTab;
+            t.classList.toggle('active', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
         });
     }
+
+    // The footer's left half: what is about to be shared, and what it will look
+    // like at the other end.
+    function paintPickerChoice() {
+        const s = pickerSources.find((x) => x.id === pickerSelected);
+        const name = $('picker-chosen-name');
+        name.textContent = s ? s.name : 'Nothing selected';
+        name.classList.toggle('none', !s);
+
+        const q = settings.shareQuality || '1080p';
+        const smooth = settings.shareMotion === 'smooth';
+        $('picker-chosen-sub').textContent =
+            `${smooth ? 'Smoother video' : 'Sharper text'} · ${q} · ${smooth ? 60 : 30}fps`;
+    }
+
+    // SD is 720p. HD is everything above it — which is why the buttons are not
+    // symmetrical: SD always sets 720p, but HD only raises a 720p setting to
+    // 1080p and otherwise leaves it alone. Writing 1080p unconditionally would
+    // quietly DOWNGRADE somebody running at 1440p every time they opened the
+    // picker and pressed the tier they were already on. The gear is where 1440p
+    // and the motion setting live.
+    function paintPickerQuality() {
+        const sd = (settings.shareQuality || '1080p') === '720p';
+        $('pq-sd').classList.toggle('active', sd);
+        $('pq-hd').classList.toggle('active', !sd);
+        $('pq-sd').setAttribute('aria-pressed', String(sd));
+        $('pq-hd').setAttribute('aria-pressed', String(!sd));
+    }
+
+    async function setPickerQuality(tier) {
+        const now = settings.shareQuality || '1080p';
+        const next = tier === 'sd' ? '720p' : (now === '720p' ? '1080p' : now);
+        if (next !== now) {
+            await saveSettings({ shareQuality: next });
+            // Takes effect on a share already running, not only the next one.
+            if (voice && voice.isSharing()) voice.setShareQuality(next);
+        }
+        paintPickerQuality();
+        paintPickerChoice();
+    }
+
+    $('pq-sd').addEventListener('click', () => setPickerQuality('sd'));
+    $('pq-hd').addEventListener('click', () => setPickerQuality('hd'));
+
+    // Everything SD/HD cannot say: 1440p, and sharp vs smooth. Closes the
+    // picker rather than stacking a second modal on top of it — two focus traps
+    // deep, Escape would unwind them in the wrong order.
+    $('picker-settings').addEventListener('click', () => {
+        closePicker();
+        openSettings().then(() => {
+            if (showSettingsPane) showSettingsPane(settingsPaneByTitle('Screen share'));
+        });
+    });
 
     function renderPicker() {
         const grid = $('picker-grid');
@@ -4179,8 +4240,15 @@
             const b = document.createElement('button');
             b.className = 'pick' + (pickerSelected === s.id ? ' sel' : '');
             b.type = 'button';
+            b.setAttribute('aria-pressed', String(pickerSelected === s.id));
+            // A source can come back without a thumbnail (a minimised window, a
+            // capture Windows refuses). An <img> with no src is drawn as a
+            // BROKEN image — a torn-page glyph and a stray outline — so the
+            // empty case gets its own box that says what happened.
             b.innerHTML =
-                (s.thumbnail ? `<img src="${esc(s.thumbnail)}" alt="">` : '<img alt="">') +
+                (s.thumbnail
+                    ? `<img src="${esc(s.thumbnail)}" alt="">`
+                    : '<span class="pick-blank">No preview</span>') +
                 '<span class="pick-name">' +
                 (s.appIcon ? `<img src="${esc(s.appIcon)}" alt="">` : '') +
                 `<span>${esc(s.name)}</span></span>`;
@@ -4188,6 +4256,7 @@
                 pickerSelected = s.id;
                 $('picker-go').disabled = false;
                 renderPicker();
+                paintPickerChoice();
             });
             b.addEventListener('dblclick', startPickedShare);
             grid.appendChild(b);
@@ -4197,8 +4266,14 @@
     document.querySelectorAll('.picker-tab').forEach((t) => {
         t.addEventListener('click', () => {
             pickerTab = t.dataset.tab;
+            // The selection belongs to the category it was made in — carrying it
+            // across meant Share could send a window while the grid showed
+            // screens, with nothing on screen saying which one was armed.
+            pickerSelected = null;
+            $('picker-go').disabled = true;
             renderPickerTabs();
             renderPicker();
+            paintPickerChoice();
         });
     });
 
@@ -4207,7 +4282,9 @@
         $('picker').hidden = true;
         L.share.cancel();
     }
-    $('picker-close').addEventListener('click', closePicker);
+    // No X in the corner any more — the categories own the top row. Cancel,
+    // Escape (the document handler ranks the picker) and a click on the
+    // backdrop are the three ways out.
     $('picker-cancel').addEventListener('click', closePicker);
     $('picker').addEventListener('mousedown', (e) => {
         if (e.target === $('picker')) closePicker();

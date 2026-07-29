@@ -1357,27 +1357,44 @@
      calls getDisplayMedia. -->
 <div id="picker" class="overlay" hidden>
   <div class="modal picker-modal">
-    <header class="modal-head">
-      <h2>Share your screen</h2>
-      <button class="icon-btn" id="picker-close" title="Close"><span class="ico" data-icon="x"></span></button>
-    </header>
-    <div class="picker-tabs">
-      <button class="picker-tab active" data-tab="screen">Screens</button>
-      <button class="picker-tab" data-tab="window">Windows</button>
+    <!-- No title bar: the categories ARE the top row. Nothing is lost by
+         dropping the X — Cancel, Escape and a click on the backdrop all close
+         this, and trapFocus() supplies the dialog's accessible name. -->
+    <div class="picker-tabs" role="tablist" aria-label="What to share">
+      <button class="picker-tab active" role="tab" aria-selected="true" aria-controls="picker-grid" data-tab="window">
+        <span class="ico" data-icon="app"></span><span>Applications</span>
+      </button>
+      <button class="picker-tab" role="tab" aria-selected="false" aria-controls="picker-grid" data-tab="screen">
+        <span class="ico" data-icon="monitor"></span><span>Entire Screen</span>
+      </button>
     </div>
     <div class="modal-body">
-      <div id="picker-grid" class="picker-grid"></div>
+      <div id="picker-grid" class="picker-grid" role="tabpanel"></div>
       <div id="picker-empty" class="empty-state" hidden>Nothing to share here.</div>
     </div>
     <footer class="picker-foot">
-      <label class="pick-audio">
-        <input type="checkbox" id="picker-audio">
-        <span>Share system audio</span>
-      </label>
-      <div class="picker-foot-actions">
-        <span class="hint" id="picker-quality-hint"></span>
-        <button type="button" id="picker-cancel">Cancel</button>
-        <button type="button" id="picker-go" disabled>Share</button>
+      <div class="pf-row">
+        <!-- What you picked, and what it will look like to everyone else. -->
+        <div class="pf-chosen">
+          <span class="pf-name" id="picker-chosen-name">Nothing selected</span>
+          <span class="pf-sub" id="picker-chosen-sub"></span>
+        </div>
+        <div class="pf-quality" role="group" aria-label="Stream quality">
+          <button type="button" class="pq" id="pq-sd" data-q="720p">SD</button>
+          <button type="button" class="pq" id="pq-hd" data-q="1080p">HD</button>
+        </div>
+        <button type="button" class="icon-btn" id="picker-settings"
+                title="More screen share settings"><span class="ico" data-icon="gear"></span></button>
+      </div>
+      <div class="pf-row">
+        <label class="pick-audio">
+          <input type="checkbox" id="picker-audio">
+          <span>Share system audio</span>
+        </label>
+        <div class="pf-actions">
+          <button type="button" id="picker-cancel">Cancel</button>
+          <button type="button" id="picker-go" disabled>Share</button>
+        </div>
       </div>
     </footer>
   </div>
