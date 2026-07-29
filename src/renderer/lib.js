@@ -297,6 +297,95 @@
         return null;
     }
 
+    // ---- search operators --------------------------------------------------
+    //
+    // `from:alice has:link before:2026-01-01 lunch` is one string carrying a
+    // query and four filters, and the string is the source of truth: the
+    // dropdown WRITES operators into the box rather than holding state beside
+    // it. That is what makes them typeable and clickable at once — there is
+    // only one representation, so the two can never disagree.
+
+    // What each operator accepts. Anything not listed here is not an operator,
+    // and stays in the text — so a message about `http://x` or a ratio like
+    // `16:9` searches for itself instead of vanishing into a filter.
+    const SEARCH_OPS = {
+        from: 'user', mentions: 'user', has: 'kind', 'in': 'channel',
+        before: 'date', after: 'date', during: 'date', pinned: 'bool'
+    };
+    // `has:` values, as the reference names them. `embed` and `link` are the
+    // same thing to this app — an embed IS the preview of a link — and both are
+    // accepted so neither vocabulary is wrong.
+    const HAS_KINDS = {
+        link: 'links', embed: 'links', file: 'files', image: 'images',
+        video: 'videos', sound: 'audio', audio: 'audio'
+    };
+
+    // key:value, value optionally "quoted" for names with spaces. The trailing
+    // group is deliberately lazy about the closing quote so a half-typed
+    // `from:"Ali` still parses — the dropdown has to be able to offer
+    // completions while somebody is still typing the thing being completed.
+    const OP_RE = /(^|\s)([a-z]+):("([^"]*)"?|[^\s]*)/gi;
+
+    // -> { text, ops } where ops[key] is an ARRAY of values. Repeats are kept
+    // rather than overwritten: `from:a from:b` reads as "either of them", which
+    // is the only reading that makes repeating one useful.
+    function parseSearchQuery(raw) {
+        const ops = {};
+        let text = String(raw || '');
+        text = text.replace(OP_RE, (m, lead, key, whole, quoted) => {
+            const k = key.toLowerCase();
+            if (!SEARCH_OPS[k]) return m;                 // not an operator; leave it be
+            const value = quoted !== undefined ? quoted : whole;
+            // A bare `from:` is somebody mid-type, not a filter on the empty
+            // string — it must not narrow the list to nothing while they are
+            // still choosing.
+            if (value !== '') (ops[k] = ops[k] || []).push(value);
+            return lead;
+        });
+        return { text: text.replace(/\s+/g, ' ').trim(), ops };
+    }
+
+    // The operator token being typed at the caret, so the dropdown can offer
+    // values for it. Returns { key, value, start, end } or null.
+    //
+    // The tokens are FOUND rather than walked back to, because a quoted value
+    // contains the very whitespace a walk-back would stop at: from:"Ada Lov has
+    // its caret inside a token that a space sits in the middle of.
+    function opAtCaret(raw, caret) {
+        const s = String(raw || '');
+        const pos = Math.max(0, Math.min(caret === undefined ? s.length : caret, s.length));
+        const re = /([a-z]+):("[^"]*"?|[^\s]*)/gi;
+        let m;
+        while ((m = re.exec(s)) !== null) {
+            const start = m.index;
+            const end = start + m[0].length;
+            // A token only counts at a word boundary, or `16:9` inside a
+            // sentence would offer to complete an operator called "16".
+            if (start > 0 && !/\s/.test(s[start - 1])) continue;
+            if (pos < start || pos > end) continue;
+            const key = m[1].toLowerCase();
+            if (!SEARCH_OPS[key]) return null;
+            const value = m[2].startsWith('"') ? m[2].slice(1).replace(/"$/, '') : m[2];
+            return { key, value, start, end };
+        }
+        return null;
+    }
+
+    // Put `key:value` into the string at `at` (from opAtCaret), quoting the
+    // value only when it needs it. Returns { text, caret }.
+    function writeOp(raw, key, value, at) {
+        const s = String(raw || '');
+        const v = /\s/.test(String(value)) ? '"' + value + '"' : String(value);
+        const token = key + ':' + v + ' ';
+        const start = at ? at.start : s.length;
+        const end = at ? at.end : s.length;
+        // A space before, unless we are at the very start or already have one.
+        const head = s.slice(0, start);
+        const lead = (head === '' || /\s$/.test(head)) ? '' : ' ';
+        const text = head + lead + token + s.slice(end).replace(/^\s+/, '');
+        return { text, caret: (head + lead + token).length };
+    }
+
     // ---- filtering ---------------------------------------------------------
 
     // Set-or-array, so a test can pass a plain array.
@@ -338,6 +427,22 @@
         if (filter.pinned && !p.pinned) return false;
         if (filter.mentions && !mentionsMe(p.body, displayName)) return false;
         if (filter.edited && !p.edited_at) return false;
+
+        // `mentions:someone` — the same test the app uses for "did this ping
+        // me", asked about somebody else. Any of the named people counts, so
+        // `mentions:a mentions:b` reads as "either".
+        if (filter.mentionsNames && filter.mentionsNames.length) {
+            const hit = filter.mentionsNames.some((n) => mentionsMe(p.body, n));
+            if (!hit) return false;
+        }
+        // `in:general`. Only meaningful across a multi-channel result set; a
+        // post with no channel on it (a DM row) can never match.
+        if (filter.inChannel && String(p.channel || '') !== filter.inChannel) return false;
+        // before: is exclusive of the day named, after: is exclusive too, and
+        // during: is the whole of that day — which is what the words mean when
+        // a person says them.
+        if (filter.before && !(p.created_at < filter.before)) return false;
+        if (filter.after && !(p.created_at > filter.after)) return false;
         if (filter.text) {
             const hay = ((p.body || '') + ' ' + (p.att_name || '')).toLowerCase();
             if (!hay.includes(String(filter.text).toLowerCase())) return false;
@@ -388,6 +493,7 @@
         attachmentKind, fileIcon,
         extractUrls, isImageUrl, safeHttpUrl, urlFileName, youtubeId,
         postMatchesFilter, postFrom,
+        parseSearchQuery, opAtCaret, writeOp, SEARCH_OPS, HAS_KINDS,
         FONT_SIZES, fontSizeIndex,
         matchesPttBinding,
         URL_RE

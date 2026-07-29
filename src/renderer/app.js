@@ -84,11 +84,20 @@
         // The chosen person as an IDENTITY — { label, names, userIds } — not as
         // a list of install ids. See postFrom() in lib.js.
         from: null,
-        fromName: null
+        fromName: null,
+        // From the operators: `mentions:someone`, `in:channel`, `before:` and
+        // `after:` as timestamps. All of them are derived from the ONE string
+        // in the search box, never held independently of it.
+        mentionsNames: [],
+        inChannel: null,
+        before: null,
+        after: null
     };
     function filterActive() {
         return !!(filter.text || filter.types.size || filter.pinned ||
-            filter.mentions || filter.edited || filter.from);
+            filter.mentions || filter.edited || filter.from ||
+            filter.mentionsNames.length || filter.inChannel ||
+            filter.before || filter.after);
     }
 
     // ---------- utilities -------------------------------------------------
@@ -1779,10 +1788,10 @@
         renderMessages();
         renderTyping();
         renderVoiceRoster();
-        // The "From" list is built from the loaded messages, so paging back —
-        // which the filtered empty state explicitly invites — can reveal people
-        // who were not in the dropdown when it was opened.
-        if (filterOpen()) populateFromSelect();
+        // The dropdown's people list is built from `posts` each time it is
+        // drawn, so paging back — which the filtered empty state explicitly
+        // invites — widens it with no hook needed here.
+        if (searchOpen()) renderSearchPop();
 
         if (before) {
             // Keep the reader anchored where they were when older history loads in.
@@ -2083,7 +2092,10 @@
         const compact = compactMode();
 
         box.classList.toggle('filtering', active);
-        if (active) updateFilterCount(list.length);
+        // The count belongs to the box that produced it now, not to a strip
+        // that no longer exists.
+        $('search-box').dataset.count = active
+            ? (list.length + (list.length === 1 ? ' match' : ' matches')) : '';
 
         // Build the desired sequence of rows: each is a key, a signature, and a
         // factory that is only called when the row has to be (re)built.
@@ -9510,48 +9522,140 @@
         });
     }
 
-    // ---------- filters + search -----------------------------------------
-    // Filters the currently-loaded messages, live. Types (Links/Images/Videos/
-    // Audio/Files) combine as OR; every other criterion (text, from-user,
-    // pinned, mentions, edited) is AND. Clearing returns to the live view at the
-    // same scroll position. Load-more widens the pool a filter searches over.
+    // ---------- search ----------------------------------------------------
+    //
+    // ONE box, in the header, holding ONE string. `from:alice has:link lunch`
+    // is a query and two filters, and the string is the source of truth for
+    // both: the dropdown does not keep filters beside it, it WRITES operators
+    // into it. That is what lets them be typed and clicked at the same time —
+    // there is only one representation, so the two can never disagree.
+    //
+    // It replaced a second search UI, a row under the channel header with its
+    // own input, its own scope toggle and its own filter menu. Two boxes that
+    // filtered the same list in two different ways, and neither knew about the
+    // other.
+    //
+    // What the operators narrow is the messages ALREADY LOADED, live. Text also
+    // goes to the archive endpoint, which is the only part that leaves the
+    // machine — so "images from Alice matching logo" resolves here instantly
+    // and the archive answers underneath it.
 
-    function filterOpen() { return !$('filter-bar').hidden; }
+    const { parseSearchQuery, opAtCaret, writeOp, HAS_KINDS } = window.ScarmLib;
 
-    function toggleFilter(open) {
-        $('filter-bar').hidden = !open;
-        if (open) {
-            $('pinned-panel').hidden = true;
-            populateFromSelect();
-            $('filter-input').focus();
-            $('filter-input').select();
-        } else {
-            clearFilters();
-            $('filter-menu').hidden = true;
-            hideSearchResults();
-        }
+    function searchOpen() { return !$('search-pop').hidden; }
+    const searchInput = () => $('search-input');
+
+    // Everyone who has written something in the loaded messages, keyed by the
+    // label shown. Grouped by display NAME — one person posting from two
+    // devices is still one person — and carrying the ACCOUNT ids seen under
+    // that name, because a client_id is per-install and one person's history
+    // routinely spans several. See postFrom() in lib.js.
+    function peopleInView() {
+        const byLabel = new Map();
+        posts.forEach((p) => {
+            const name = p.name || 'Anonymous';
+            if (!byLabel.has(name)) byLabel.set(name, { label: name, names: new Set(), userIds: new Set() });
+            const e = byLabel.get(name);
+            e.names.add(name);
+            if (p.user_id) e.userIds.add(p.user_id);
+        });
+        // Anyone with an account but nothing on screen belongs in the list too:
+        // "from: somebody who has not spoken lately" is a reasonable thing to
+        // ask, and offering only the recent talkers answers a different question.
+        roster.forEach((u) => {
+            if (u.banned || byLabel.has(u.username)) return;
+            byLabel.set(u.username, {
+                label: u.username, names: new Set([u.username]), userIds: new Set([u.id])
+            });
+        });
+        return byLabel;
     }
 
-    function clearFilters() {
+    // A date operator's value -> a timestamp. Accepts what a person types:
+    // 2026-03-15, 2026-03, 2026. Anything else is ignored rather than guessed
+    // at — a filter built from a misreading is worse than no filter.
+    function dayStart(v) {
+        const m = /^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$/.exec(String(v || '').trim());
+        if (!m) return null;
+        const d = new Date(Number(m[1]), (Number(m[2] || 1) - 1), Number(m[3] || 1));
+        return isNaN(d.getTime()) ? null : d.getTime();
+    }
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    // The box -> the filter. The single place the string becomes state.
+    function applyQuery() {
+        const raw = searchInput().value;
+        const q = parseSearchQuery(raw);
+        const ops = q.ops;
+
+        filter.text = q.text;
+        filter.types.clear();
+        (ops.has || []).forEach((v) => {
+            const t = HAS_KINDS[String(v).toLowerCase()];
+            if (t) filter.types.add(t);
+        });
+
+        // `from:` resolves against the people we know about; an unknown name
+        // still filters, on the name alone, so a typo narrows to nothing rather
+        // than silently matching everyone.
+        const people = peopleInView();
+        const froms = ops.from || [];
+        if (froms.length) {
+            const names = new Set();
+            const userIds = new Set();
+            froms.forEach((v) => {
+                const hit = [...people.values()].find(
+                    (c) => c.label.toLowerCase() === String(v).toLowerCase());
+                if (hit) { hit.names.forEach((n) => names.add(n)); hit.userIds.forEach((i) => userIds.add(i)); }
+                else names.add(v);
+            });
+            filter.from = { label: froms.join(', '), names, userIds };
+            filter.fromName = froms.join(', ');
+        } else {
+            filter.from = filter.fromName = null;
+        }
+
+        filter.mentionsNames = (ops.mentions || []).slice();
+        filter.inChannel = ops.in ? String(ops.in[0]) : null;
+
+        // `pinned:` with no value, or pinned:true, means pinned. pinned:false
+        // is the one way to say "and not pinned", which the boolean cannot
+        // express — so it clears rather than sets.
+        const pin = ops.pinned ? String(ops.pinned[0]).toLowerCase() : null;
+        filter.pinned = pin !== null && pin !== 'false' && pin !== 'no';
+
+        const before = ops.before ? dayStart(ops.before[0]) : null;
+        const after = ops.after ? dayStart(ops.after[0]) : null;
+        const during = ops.during ? dayStart(ops.during[0]) : null;
+        // "during the 15th" is the whole of that day, which is two bounds.
+        filter.before = during !== null ? during + DAY_MS : before;
+        filter.after = during !== null ? during - 1 : after;
+
+        $('search-clear').hidden = raw === '';
+        applyFilter();
+    }
+
+    function clearSearch() {
+        searchInput().value = '';
         filter.text = '';
         filter.types.clear();
         filter.pinned = filter.mentions = filter.edited = false;
         filter.from = filter.fromName = null;
-        $('filter-input').value = '';
-        const fs = $('filter-from'); if (fs) fs.value = '';
+        filter.mentionsNames = [];
+        filter.inChannel = null;
+        filter.before = filter.after = null;
+        $('search-clear').hidden = true;
+        hideSearchResults();
         applyFilter();
     }
 
     // The single entry point for any filter change: re-renders the (filtered)
-    // list, refreshes the chips, and restores scroll when filters go inactive.
+    // list and restores scroll when the filters go inactive.
     function applyFilter() {
         const active = filterActive();
         if (active && filterScrollTop === null) filterScrollTop = $('messages').scrollTop;
-        renderChips();
-        syncMenuButtons();
         renderMessages();
         if (!active) {
-            $('filter-count').textContent = '';
             if (filterScrollTop !== null) {
                 const t = filterScrollTop; filterScrollTop = null;
                 requestAnimationFrame(() => { $('messages').scrollTop = t; settleScroll(); });
@@ -9560,146 +9664,205 @@
         settleScroll();
     }
 
-    function updateFilterCount(n) {
-        $('filter-count').textContent = n + (n === 1 ? ' match' : ' matches');
+    // ---------- the filters dropdown --------------------------------------
+
+    // The four things the reference offers, each an operator with the hint that
+    // says how to type it — because the hint IS the feature: read it once and
+    // you never need the menu again.
+    const FILTER_ROWS = [
+        { icon: 'users', key: 'from', title: 'From a specific user', hint: 'from: user' },
+        { icon: 'paperclip', key: 'has', title: 'Includes a specific type of data', hint: 'has: link, embed or file' },
+        { icon: 'at', key: 'mentions', title: 'Mentions a specific user', hint: 'mentions: user' }
+    ];
+    // What "More filters" opens onto.
+    const MORE_ROWS = [
+        { icon: 'doc', key: 'in', title: 'In a specific channel', hint: 'in: channel' },
+        { icon: 'pin', key: 'pinned', title: 'Pinned messages', hint: 'pinned: true' },
+        // Up is further back in the conversation, down is nearer to now —
+        // which is the direction you scroll to find each of them.
+        { icon: 'arrow-up', key: 'before', title: 'Before a date', hint: 'before: 2026-01-31' },
+        { icon: 'arrow-down', key: 'after', title: 'After a date', hint: 'after: 2026-01-01' },
+        { icon: 'archive', key: 'during', title: 'On a specific day', hint: 'during: 2026-01-15' }
+    ];
+    // has: values, in the reference's vocabulary.
+    const HAS_ROWS = [
+        ['link', 'Links'], ['embed', 'Embeds'], ['file', 'Any file'],
+        ['image', 'Images'], ['video', 'Videos'], ['sound', 'Audio']
+    ];
+
+    let moreOpen = false;
+
+    function openSearchPop() {
+        $('search-pop').hidden = false;
+        searchInput().setAttribute('aria-expanded', 'true');
+        renderSearchPop();
+    }
+    function closeSearchPop() {
+        $('search-pop').hidden = true;
+        moreOpen = false;
+        searchInput().setAttribute('aria-expanded', 'false');
     }
 
-    // [icon name, label] — icons resolve against the one icon set.
-    const TYPE_LABELS = {
-        links: ['link', 'Links'], images: ['image', 'Images'], videos: ['video', 'Videos'],
-        audio: ['music', 'Audio'], files: ['paperclip', 'Files']
-    };
+    // One row. `onPick` writes into the box and re-parses — every row in this
+    // menu is a shortcut for typing, never a second way to hold state.
+    function popRow({ icon, title, hint, onPick, on }) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'sp-row' + (on ? ' on' : '');
+        b.setAttribute('role', 'option');
+        b.innerHTML = I(icon, 'ico sp-ico') +
+            '<span class="sp-text"><span class="sp-title">' + esc(title) + '</span>' +
+            (hint ? '<span class="sp-hint">' + esc(hint) + '</span>' : '') + '</span>';
+        b.addEventListener('mousedown', (e) => e.preventDefault());   // keep the caret
+        b.addEventListener('click', onPick);
+        return b;
+    }
 
-    // Active filters as removable chips, plus a Clear all.
-    function renderChips() {
-        const box = $('filter-chips');
-        box.innerHTML = '';
-        const chips = [];
-        filter.types.forEach((t) => {
-            const d = TYPE_LABELS[t] || ['file', t];
-            chips.push({ icon: d[0], label: d[1], off: () => filter.types.delete(t) });
-        });
-        if (filter.pinned) chips.push({ icon: 'pin', label: 'Pinned', off: () => { filter.pinned = false; } });
-        if (filter.mentions) chips.push({ icon: 'at', label: 'Mentions me', off: () => { filter.mentions = false; } });
-        if (filter.edited) chips.push({ icon: 'pencil', label: 'Edited', off: () => { filter.edited = false; } });
-        if (filter.from) chips.push({ icon: 'users', label: 'From ' + (filter.fromName || 'user'), off: () => { filter.from = filter.fromName = null; const fs = $('filter-from'); if (fs) fs.value = ''; } });
-        if (filter.text) chips.push({ icon: 'search', label: filter.text, off: () => { filter.text = ''; $('filter-input').value = ''; } });
+    function popHead(text) {
+        const h = document.createElement('div');
+        h.className = 'sp-head';
+        h.textContent = text;
+        return h;
+    }
 
-        box.hidden = chips.length === 0;
-        chips.forEach((c) => {
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = 'fb-chip';
-            chip.innerHTML = (c.icon ? I(c.icon, 'ico chip-ico') : '') +
-                '<span>' + esc(c.label) + '</span>' + I('x', 'ico fb-chip-x');
-            chip.addEventListener('click', () => { c.off(); applyFilter(); });
-            box.appendChild(chip);
-        });
-        if (chips.length > 1) {
-            const clr = document.createElement('button');
-            clr.type = 'button';
-            clr.className = 'fb-clear';
-            clr.textContent = 'Clear all';
-            clr.addEventListener('click', () => clearFilters());
-            box.appendChild(clr);
+    // Put `key:value` into the box where the caret is, then re-parse.
+    function pickOperator(key, value) {
+        const el = searchInput();
+        const at = value === undefined ? null : opAtCaret(el.value, el.selectionStart);
+        const out = writeOp(el.value, key, value === undefined ? '' : value, at);
+        // With no value this is "start typing this operator": the trailing space
+        // writeOp adds would end the token before it began.
+        el.value = value === undefined ? out.text.replace(/\s$/, '') : out.text;
+        el.setSelectionRange(el.value.length, el.value.length);
+        el.focus();
+        applyQuery();
+        renderSearchPop();
+        if (value !== undefined) runSearch();
+    }
+
+    function renderSearchPop() {
+        const pop = $('search-pop');
+        pop.innerHTML = '';
+        const el = searchInput();
+        const at = opAtCaret(el.value, el.selectionStart);
+
+        // Mid-operator: offer its VALUES. Offering "from: user" to somebody who
+        // has already typed `from:` is answering a question they have moved past.
+        if (at) {
+            const typed = at.value.toLowerCase();
+            if (at.key === 'from' || at.key === 'mentions') {
+                pop.appendChild(popHead(at.key === 'from' ? 'From' : 'Mentions'));
+                const list = [...peopleInView().values()]
+                    .filter((c) => c.label.toLowerCase().includes(typed))
+                    .sort((a2, b2) => a2.label.localeCompare(b2.label))
+                    .slice(0, 8);
+                if (!list.length) pop.appendChild(popHead('Nobody by that name'));
+                list.forEach((c) => pop.appendChild(popRow({
+                    icon: 'users', title: c.label, hint: '',
+                    onPick: () => pickOperator(at.key, c.label)
+                })));
+            } else if (at.key === 'has') {
+                pop.appendChild(popHead('Has'));
+                HAS_ROWS.filter(([v]) => v.includes(typed)).forEach(([v, label]) =>
+                    pop.appendChild(popRow({
+                        icon: 'paperclip', title: label, hint: 'has: ' + v,
+                        onPick: () => pickOperator('has', v)
+                    })));
+            } else if (at.key === 'in') {
+                pop.appendChild(popHead('In'));
+                channels.filter((c) => c.name.includes(typed)).slice(0, 8).forEach((c) =>
+                    pop.appendChild(popRow({
+                        icon: 'doc', title: '#' + c.name, hint: '',
+                        onPick: () => pickOperator('in', c.name)
+                    })));
+            } else if (at.key === 'pinned') {
+                pop.appendChild(popHead('Pinned'));
+                [['true', 'Only pinned'], ['false', 'Anything but pinned']].forEach(([v, label]) =>
+                    pop.appendChild(popRow({
+                        icon: 'pin', title: label, hint: 'pinned: ' + v,
+                        onPick: () => pickOperator('pinned', v)
+                    })));
+            } else {
+                // A date: there is nothing to list, so say what shape it wants.
+                pop.appendChild(popHead('Date'));
+                pop.appendChild(popRow({
+                    icon: 'archive', title: 'Type a date', hint: 'YYYY-MM-DD, YYYY-MM or YYYY', onPick: () => {}
+                }));
+            }
+            return;
+        }
+
+        pop.appendChild(popHead('Filters'));
+        FILTER_ROWS.forEach((r) => pop.appendChild(popRow(
+            Object.assign({}, r, { onPick: () => pickOperator(r.key) }))));
+
+        if (!moreOpen) {
+            pop.appendChild(popRow({
+                icon: 'sliders', title: 'More filters', hint: 'dates, author type, and more',
+                onPick: () => { moreOpen = true; renderSearchPop(); searchInput().focus(); }
+            }));
+        } else {
+            MORE_ROWS.forEach((r) => pop.appendChild(popRow(
+                Object.assign({}, r, { onPick: () => pickOperator(r.key) }))));
+            pop.appendChild(popRow({
+                icon: 'at', title: 'Mentions of me', hint: 'only messages that ping you',
+                on: filter.mentions,
+                onPick: () => { filter.mentions = !filter.mentions; applyFilter(); renderSearchPop(); }
+            }));
+            pop.appendChild(popRow({
+                icon: 'pencil', title: 'Edited', hint: 'only messages that were changed',
+                on: filter.edited,
+                onPick: () => { filter.edited = !filter.edited; applyFilter(); renderSearchPop(); }
+            }));
         }
     }
 
-    // Reflect active state on the dropdown's toggle buttons.
-    function syncMenuButtons() {
-        document.querySelectorAll('#filter-menu .fb-opt').forEach((b) => {
-            const t = b.dataset.type, f = b.dataset.flag;
-            const on = (t && filter.types.has(t)) || (f && filter[f]);
-            b.classList.toggle('on', !!on);
-        });
-    }
+    // ---------- wiring ------------------------------------------------------
 
-    // Populate the "From" dropdown from everyone seen in the loaded messages.
-    // The people the "From" dropdown offers, keyed by the label it shows.
-    // Rebuilt whenever the dropdown is populated; the SELECTED entry is held on
-    // `filter.from`, so it survives a repopulate.
-    let fromChoices = new Map();
+    searchInput().addEventListener('focus', openSearchPop);
+    searchInput().addEventListener('click', () => { if (!searchOpen()) openSearchPop(); });
 
-    function populateFromSelect() {
-        const sel = $('filter-from');
-        if (!sel) return;
-        // Group by display name — one person posting from two devices is still
-        // one person — and collect the ACCOUNT ids seen under that name. The
-        // option used to carry a list of client_ids instead, which is a list of
-        // installs: it missed the person's other devices, missed rows written
-        // before their install id was rotated, and skipped rows with no install
-        // id at all (`if (!p.client_id) return`). See postFrom() in lib.js.
-        const byLabel = new Map();
-        posts.forEach((p) => {
-            const name = p.name || 'Anonymous';
-            const label = wroteByMe(p) ? 'You' : name;
-            if (!byLabel.has(label)) byLabel.set(label, { label, names: new Set(), userIds: new Set() });
-            const e = byLabel.get(label);
-            e.names.add(name);
-            if (p.user_id) e.userIds.add(p.user_id);
-        });
-        fromChoices = byLabel;
-
-        // Repopulating must not silently drop a filter that is still applied —
-        // the old code compared a joined id list, so one new install id for the
-        // selected person reset the dropdown to "anyone" while the list stayed
-        // filtered. The label is stable, so the selection survives.
-        const cur = filter.from ? filter.from.label : '';
-        sel.innerHTML = '<option value="">anyone</option>';
-        [...byLabel.values()].sort((a, b) => a.label.localeCompare(b.label)).forEach((c) => {
-            const o = document.createElement('option');
-            o.value = c.label;
-            o.textContent = c.label;
-            sel.appendChild(o);
-        });
-        // A selected person whose messages are no longer loaded still belongs in
-        // the list, or the filter and the dropdown disagree.
-        if (cur && !byLabel.has(cur)) {
-            const o = document.createElement('option');
-            o.value = cur;
-            o.textContent = cur;
-            sel.appendChild(o);
-            fromChoices.set(cur, filter.from);
-        }
-        sel.value = cur;
-    }
-
-    $('btn-search').addEventListener('click', () => toggleFilter(!filterOpen()));
-    $('filter-close').addEventListener('click', () => toggleFilter(false));
-
-    $('filter-menu-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        $('filter-menu').hidden = !$('filter-menu').hidden;
-    });
-    document.addEventListener('mousedown', (e) => {
-        if (!$('filter-menu').hidden && !e.target.closest('#filter-menu') && !e.target.closest('#filter-menu-btn')) {
-            $('filter-menu').hidden = true;
-        }
-    });
-
-    document.querySelectorAll('#filter-menu .fb-opt').forEach((b) => {
-        b.addEventListener('click', () => {
-            const t = b.dataset.type, f = b.dataset.flag;
-            if (t) { filter.types.has(t) ? filter.types.delete(t) : filter.types.add(t); }
-            else if (f) { filter[f] = !filter[f]; }
-            applyFilter();
-        });
-    });
-
-    $('filter-from').addEventListener('change', (e) => {
-        const chosen = e.target.value ? fromChoices.get(e.target.value) : null;
-        filter.from = chosen || null;
-        filter.fromName = chosen ? chosen.label : null;
-        applyFilter();
-    });
-
-    $('filter-input').addEventListener('input', () => {
+    searchInput().addEventListener('input', () => {
+        applyQuery();
+        if (!searchOpen()) openSearchPop(); else renderSearchPop();
         clearTimeout(filterTimer);
-        filterTimer = setTimeout(() => {
-            filter.text = $('filter-input').value.trim();
-            applyFilter();
-            runSearch(filter.text);      // the archive, not just what's loaded
-        }, 200);
+        filterTimer = setTimeout(runSearch, 220);
+    });
+
+    // Arrow keys and clicks move the caret, and which operator it sits in is
+    // what the menu is showing — so the menu has to follow it.
+    ['keyup', 'mouseup'].forEach((ev) => searchInput().addEventListener(ev, () => {
+        if (searchOpen()) renderSearchPop();
+    }));
+
+    searchInput().addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (searchOpen() && searchInput().value) closeSearchPop();
+            else { clearSearch(); closeSearchPop(); searchInput().blur(); }
+            return;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            closeSearchPop();
+            runSearch();
+        }
+    });
+
+    $('search-clear').addEventListener('click', () => {
+        clearSearch();
+        searchInput().focus();
+        openSearchPop();
+    });
+
+    // Anywhere else closes it. mousedown rather than click so it closes on the
+    // press, and the rows themselves preventDefault so picking one does not
+    // count as clicking away.
+    document.addEventListener('mousedown', (e) => {
+        if (!searchOpen()) return;
+        if (e.target.closest('#search-pop') || e.target.closest('#search-box')) return;
+        closeSearchPop();
     });
 
     // ---------- archive search --------------------------------------------
@@ -9710,10 +9873,15 @@
     let searchScope = 'channel';
     let searchSeq = 0;
 
-    $('filter-scope').addEventListener('click', () => {
+    // Closes the archive results without touching the box: the operators are
+    // still narrowing the loaded messages, and clearing those is what the X in
+    // the box is for.
+    $('search-close').addEventListener('click', hideSearchResults);
+
+    $('search-scope').addEventListener('click', () => {
         searchScope = searchScope === 'channel' ? 'all' : 'channel';
-        $('filter-scope').textContent = searchScope === 'all' ? 'All channels' : 'This channel';
-        runSearch(filter.text);
+        $('search-scope').textContent = searchScope === 'all' ? 'All channels' : 'This channel';
+        runSearch();
     });
 
     function hideSearchResults() {
@@ -9722,12 +9890,17 @@
         // response passed the staleness check and re-opened the results panel
         // over an empty search.
         searchSeq++;
-        $('search-results').hidden = true;
+        $('search-panel').hidden = true;
         $('search-results').innerHTML = '';
     }
 
-    async function runSearch(q) {
-        q = (q || '').trim();
+    // Always reads the box. The archive only understands free text, so the
+    // OPERATORS stay local — `from:alice logo` asks the server about "logo"
+    // and narrows the loaded messages by Alice, which is the honest split:
+    // the server has no idea who Alice is, and the operators are answerable
+    // here without a round trip.
+    async function runSearch() {
+        const q = parseSearchQuery(searchInput().value).text;
         if (q.length < 2) { hideSearchResults(); return; }
 
         // Only the newest query gets to render — a slow reply must not overwrite
@@ -9766,13 +9939,11 @@
         const box = $('search-results');
         box.innerHTML = '';
 
-        const head = document.createElement('div');
-        head.className = 'sr-head';
-        head.textContent = list.length
-            ? `${list.length} result${list.length === 1 ? '' : 's'} in the archive` +
-              (searchScope === 'all' ? ' (all channels)' : ` (#${channel})`)
+        // The summary lives in the panel's own head now, beside the scope
+        // toggle it belongs with, rather than as the first row of the results.
+        $('search-summary').textContent = list.length
+            ? `${list.length} result${list.length === 1 ? '' : 's'} in the archive`
             : 'Nothing in the archive matches that';
-        box.appendChild(head);
 
         list.forEach((r) => {
             const it = document.createElement('button');
@@ -9802,7 +9973,8 @@
             it.appendChild(bd);
             it.addEventListener('click', () => {
                 hideSearchResults();
-                $('filter-input').value = '';
+                searchInput().value = '';
+                $('search-clear').hidden = true;
                 filter.text = '';
                 // A reply lives in its thread, not the main list.
                 if (r.thread_root_id) openThread(r.thread_root_id, r.channel);
@@ -9811,12 +9983,8 @@
             box.appendChild(it);
         });
 
-        box.hidden = false;
+        $('search-panel').hidden = false;
     }
-    $('filter-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); toggleFilter(false); }
-    });
-
     // In a filtered view, clicking a matching message (not an interactive part)
     // clears the filters and jumps to it among its neighbours — full context.
     $('messages').addEventListener('click', (e) => {
@@ -9831,11 +9999,11 @@
 
     // Walk back through history until the post is loaded, then flash it.
     async function jumpToPost(target) {
-        // Drop any active filters so the message shows among its neighbours, but
-        // keep the filter bar open so the user can refine again. Forget the
-        // saved pre-filter scroll position first: otherwise clearFilters queues
-        // a restore that lands after — and undoes — the scroll to the target.
-        if (filterActive()) { filterScrollTop = null; clearFilters(); }
+        // Drop any active filters so the message shows among its neighbours.
+        // Forget the saved pre-filter scroll position first: otherwise
+        // clearSearch queues a restore that lands after — and undoes — the
+        // scroll to the target.
+        if (filterActive()) { filterScrollTop = null; clearSearch(); }
         if (target.channel && target.channel !== channel) {
             await switchChannel(target.channel);
         }
@@ -10020,7 +10188,7 @@
     function togglePinned(open) {
         const panel = $('pinned-panel');
         panel.hidden = !open;
-        if (open) { toggleFilter(false); renderPinned(); }
+        if (open) { closeSearchPop(); hideSearchResults(); renderPinned(); }
     }
 
     // The same menu the channel row and the right-click open, from the header.
@@ -11007,14 +11175,18 @@
             else if (!$('popover').hidden) closePopover();
             else if (notesOpen()) closeNotes();
             else if (!$('settings').hidden) closeSettings();
-            else if (!$('filter-menu').hidden) $('filter-menu').hidden = true;
-            else if (filterOpen()) toggleFilter(false);
+            else if (searchOpen()) closeSearchPop();
+            else if (!$('search-panel').hidden) hideSearchResults();
+            else if (filterActive()) clearSearch();
             else if (!$('pinned-panel').hidden) togglePinned(false);
         }
-        // Ctrl+F opens the filter/search bar, like every other chat client.
+        // Ctrl+F goes to the search box, like every other chat client — which
+        // is now the box in the header rather than a row that appeared under it.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !$('app').hidden) {
             e.preventDefault();
-            toggleFilter(true);
+            searchInput().focus();
+            searchInput().select();
+            openSearchPop();
         }
 
         // Ctrl +/-/0 resize the chat text. Matching the browser/Discord muscle

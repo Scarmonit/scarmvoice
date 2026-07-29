@@ -791,9 +791,12 @@ describe('the channel header', () => {
     const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
 
     it('groups every action before the search field', () => {
-        const acts = html().slice(html().indexOf('class="chan-actions"'), html().indexOf('id="filter-bar"'));
+        const acts = html().slice(html().indexOf('class="chan-actions"'), html().indexOf('id="search-pop"'));
         const ids = [...acts.matchAll(/id="(btn-[a-z-]+)"/g)].map((m) => m[1]);
-        expect(ids).toEqual(['btn-chan-alerts', 'btn-pinned', 'btn-members', 'btn-search']);
+        // The field itself is no longer one of them: it is an input, and the
+        // only button inside it is the one that clears it.
+        expect(ids).toEqual(['btn-chan-alerts', 'btn-pinned', 'btn-members']);
+        expect(acts).toContain('id="search-input"');
         // Reshaping a channel is not a header action: it lives on the channel,
         // in the menu the row and the right-click both open.
         expect(acts).not.toContain('btn-rename-channel');
@@ -817,9 +820,10 @@ describe('the channel header', () => {
         expect(lum(hex('sunk', dark))).toBeLessThan(lum(hex('chat', dark)));
         // The glyph is last in the markup and pushed right, so the field reads
         // as a sentence you finish rather than a button you press.
-        const search = html().slice(html().indexOf('id="btn-search"'), html().indexOf('</button>', html().indexOf('id="btn-search"')));
+        const at = html().indexOf('id="search-box"');
+        const search = html().slice(at, html().indexOf('</div>', at));
         expect(search.indexOf('ch-search-text')).toBeLessThan(search.indexOf('data-icon="search"'));
-        expect(css).toMatch(/\.ch-search \.ico \{[^}]*margin-left:\s*auto/);
+        expect(css).toMatch(/\.ch-search-ico \{[^}]*margin-left:\s*auto/);
     });
 });
 

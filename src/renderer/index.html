@@ -465,44 +465,40 @@
           <span class="ico" data-icon="users"></span>
         </button>
         <!-- The magnifier trails the placeholder, as the reference has it: the
-             field reads as a sentence you finish rather than a button. -->
-        <button class="ch-search" id="btn-search" title="Ctrl+F" aria-label="Search messages">
-          <span class="ch-search-text" id="ch-search-text">Search</span>
-          <span class="ico" data-icon="search"></span>
-        </button>
+             field reads as a sentence you finish rather than a button.
+             A real input, not a button that opens a bar somewhere else — the
+             operators are typed here, and the dropdown below writes into the
+             same string, so there is only ever one thing holding the query. -->
+        <div class="ch-search" id="search-box">
+          <input type="text" id="search-input" class="ch-search-text"
+                 placeholder="Search" autocomplete="off" spellcheck="false"
+                 title="Ctrl+F" aria-label="Search messages"
+                 aria-expanded="false" aria-haspopup="listbox">
+          <button type="button" class="ch-search-clear icon-btn" id="search-clear"
+                  title="Clear search" hidden><span class="ico" data-icon="x"></span></button>
+          <span class="ico ch-search-ico" data-icon="search"></span>
+        </div>
       </div>
+
+      <!-- Filters, under the box it belongs to. Built by app.js: the rows
+           change with what you have typed, because offering "from: user" when
+           you have already typed `from:` is a worse answer than offering the
+           users. -->
+      <div id="search-pop" class="search-pop" hidden role="listbox" aria-label="Search filters"></div>
   </header>
 
   <main id="main">
-    <!-- Filter + search bar. Filters the loaded messages live; text search runs
-         over them too, so "images from Alice matching 'logo'" all combine. -->
-    <div id="filter-bar" hidden>
-      <div class="fb-top">
-        <span class="ico" data-icon="search"></span>
-        <input type="text" id="filter-input" placeholder="Filter loaded messages, or search the archive…" autocomplete="off">
-        <button type="button" class="fb-menu-btn" id="filter-scope" title="Search the whole archive in this channel, or every channel">This channel</button>
-        <button type="button" class="fb-menu-btn" id="filter-menu-btn">Filters <span class="fb-caret ico" data-icon="chevron"></span></button>
-        <span id="filter-count"></span>
-        <button class="icon-btn" id="filter-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
+    <!-- Archive results, over the whole conversation rather than only what is
+         loaded. Its own strip under the header now: the search bar that drives
+         it lives in the header, and the row this used to sit inside is gone. -->
+    <div id="search-panel" hidden>
+      <div class="sp-head">
+        <span id="search-summary"></span>
+        <button type="button" class="sp-scope" id="search-scope"
+                title="Search this channel, or every channel">This channel</button>
+        <button class="icon-btn" id="search-close" title="Close (Esc)"><span class="ico" data-icon="x"></span></button>
       </div>
-      <!-- Server-side results from /api/board/search, over the whole archive
-           rather than only what's loaded. -->
-      <div id="search-results" hidden></div>
-      <div id="filter-chips" class="fb-chips"></div>
-      <div id="filter-menu" class="fb-menu" hidden>
-        <div class="fb-menu-head">Show only messages with</div>
-        <button class="fb-opt" type="button" data-type="links"><span class="ico" data-icon="link"></span> Links</button>
-        <button class="fb-opt" type="button" data-type="images"><span class="ico" data-icon="image"></span> Images</button>
-        <button class="fb-opt" type="button" data-type="videos"><span class="ico" data-icon="video"></span> Videos</button>
-        <button class="fb-opt" type="button" data-type="audio"><span class="ico" data-icon="music"></span> Audio</button>
-        <button class="fb-opt" type="button" data-type="files"><span class="ico" data-icon="paperclip"></span> Any file</button>
-        <div class="fb-menu-sep"></div>
-        <button class="fb-opt" type="button" data-flag="pinned"><span class="ico" data-icon="pin"></span> Pinned</button>
-        <button class="fb-opt" type="button" data-flag="mentions"><span class="ico" data-icon="at"></span> Mentions of me</button>
-        <button class="fb-opt" type="button" data-flag="edited"><span class="ico" data-icon="pencil"></span> Edited</button>
-        <div class="fb-menu-sep"></div>
-        <label class="fb-from-row">From <select id="filter-from"><option value="">anyone</option></select></label>
-      </div>
+      <div id="search-results"></div>
     </div>
 
     <!-- Pinned messages for this channel. -->

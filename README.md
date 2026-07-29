@@ -102,10 +102,14 @@ board session is remembered for 30 days.
 **Chat**
 - Channels with unread badges; create, rename, delete
 - Full history with infinite scroll, day separators, and message grouping
-- **Search** across the whole archive (Ctrl+F) via `/api/board/search`, scoped to
-  this channel or all channels, with the match highlighted and click-to-jump
-  (into the thread, if the hit is a reply). The same box also filters the
-  messages already loaded by type, sender, pinned, mentions or edited
+- **Search** — one box in the header (Ctrl+F), with a **filters dropdown** under
+  it: *from:*, *has:*, *mentions:*, and More filters for *in:*, *pinned:*,
+  *before:*, *after:* and *during:*. Every one of them is **typeable as well as
+  clickable** — the menu writes the operator into the box rather than holding a
+  filter beside it. Operators narrow the messages already loaded, instantly;
+  the free text also goes to `/api/board/search` for the whole archive, scoped
+  to this channel or all channels, with the match highlighted and click-to-jump
+  (into the thread, if the hit is a reply)
 - **Message formatting** — `**bold**`, `*italic*`, `~~strike~~`, `||spoiler||`,
   `` `code` ``, ```` ```fenced blocks``` ```` with syntax highlighting, lists and
   blockquotes. Same renderer as the website, so a message reads identically in
@@ -959,6 +963,45 @@ toy and a microphone is not, so a broken mixer must cost you the toy.
 
 The clip is also connected to `ctx.destination`, so you hear what you played —
 without that second tap the presser is the only person in the room who can't.
+
+### The search box is the state
+
+There used to be two searches. A field in the header, and a row that dropped in
+under the channel header when you pressed it — with its own input, its own scope
+toggle, its own filter menu and its own chips. Two boxes filtering the same list
+in two different ways, neither aware of the other. The row is gone.
+
+What is left is one string. `from:alice has:link before:2026-01-01 lunch` is a
+query and three filters, and the string is the source of truth for all of them:
+the dropdown does not keep filters beside the box, it **writes operators into
+it**. That is the whole design, and it is what makes "typeable as well as
+selectable" true by construction rather than by being implemented twice — there
+is only one representation, so clicking and typing cannot drift apart.
+
+Three consequences worth knowing:
+
+- **The operator list is closed.** Anything not in it stays in the text, so a
+  message about `http://example.com` or a ratio like `16:9` searches for itself
+  instead of vanishing into a filter nobody asked for.
+- **A bare `from:` is not a filter.** It is somebody mid-type, and narrowing the
+  list to messages from nobody while the dropdown is still offering them a name
+  would be the menu fighting the person using it.
+- **The operators never leave the machine.** `/api/board/search` understands
+  free text and nothing else, so `from:alice logo` asks the server about "logo"
+  and resolves Alice here. That is the honest split: the server has no idea who
+  Alice is, and the answer is available locally without a round trip.
+
+`from:` resolves a person the way everything else does — the ACCOUNT first, the
+display name as the fallback for rows written before accounts existed. A name
+the app has never seen still filters, on the name alone, so a typo narrows to
+nothing rather than silently matching everyone. The people offered come from the
+loaded messages *and* the account directory, because "from: somebody who has not
+spoken lately" is a reasonable thing to ask.
+
+`during:` is two bounds, not one — "during the 15th" means the whole of that
+day — and the parser takes `YYYY-MM-DD`, `YYYY-MM` or `YYYY`. Anything else is
+ignored rather than guessed at: a filter built from a misreading is worse than
+no filter.
 
 ### Offline is the absence of a row, which is why it needed a second source
 
