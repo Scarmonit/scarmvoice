@@ -5051,6 +5051,14 @@
         popUid = p.uid || (m && m.user_id) || null;
         const isMe = p.id === settings.clientId || !!(account && popUid && popUid === account.id);
         const canModerate = isAdmin() && !!popUid && !isMe;
+
+        // Message them. Same account-or-nothing rule as the moderation actions
+        // below, and for the same reason: a DM is addressed to an account, so a
+        // row that resolves to none has nothing to open. Sits above Mention,
+        // because it is the one that takes you somewhere.
+        const canDm = !!(account && popUid && !isMe);
+        $('pop-dm').hidden = !canDm;
+        $('pop-dm-label').textContent = 'Message ' + (p.name || 'them');
         // In voice right now? Only then is there a call to remove them from.
         const inVoice = canModerate && voicePresence.some((v) => v.user_id === popUid);
         $('pop-kick').hidden = !inVoice;
@@ -5080,6 +5088,16 @@
         await saveSettings({ localMuted: muted });
         voice.setLocalMuted(popFor, e.target.checked);
         renderVoiceRoster();
+    });
+
+    // popUid is read before closePopover(), the way kick and ban already do it:
+    // the popover's identity state belongs to whichever row opened it, and
+    // reading it first is what keeps that true if closePopover ever starts
+    // clearing more than popFor.
+    $('pop-dm').addEventListener('click', () => {
+        const uid = popUid;
+        closePopover();
+        if (uid) messageUser(uid);
     });
 
     $('pop-mention').addEventListener('click', () => {
@@ -9100,6 +9118,26 @@
         // (see renderDmMessages), so blocking one filed a key nothing else in
         // the app ever matches.
         const dm = !!p.isDm;
+
+        // ---- the two PERSON actions, as opposed to the message ones ----
+        //
+        // Addressed by ACCOUNT (p.user_id), never by install: a client_id is
+        // published with every message, so acting on one would let anybody name
+        // anybody — and a message written before accounts existed carries no
+        // author at all, which is why this is hidden rather than offered and
+        // then refused.
+        //
+        // Skipped inside a one-to-one conversation, where the only thread it
+        // could open is the one already on screen. A GROUP dm is the opposite
+        // case: taking someone aside from a group is exactly when you want it,
+        // and that is a different conversation.
+        const oneToOne = dm && !!dmOpen && !dmOpen.isGroup;
+        const canDm = !!(account && p.user_id && !wroteByMe(p) && !oneToOne);
+        // Block is keyed by INSTALL id (settings.blocked) — see isBlocked — and
+        // a DM row's client_id is a synthetic 'dm-user-<id>' that nothing else
+        // in the app matches, so it stays out of a conversation entirely.
+        const canBlock = !dm && !mine && !!p.client_id;
+
         return [
             !dm && (inThread
                 ? { label: 'Reply', icon: 'reply', onClick: () => $('thread-input').focus() }
@@ -9118,8 +9156,13 @@
             // an admin acting on someone else's message would be refused.
             !dm && !mine && isAdmin() && 'sep',
             !dm && !mine && isAdmin() && { label: 'Delete (admin)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
-            !dm && !mine && p.client_id && 'sep',
-            !dm && !mine && p.client_id && {
+            // One separator for the person group, whichever of the two it holds.
+            (canDm || canBlock) && 'sep',
+            canDm && {
+                label: 'Message ' + (p.name || 'them'), icon: 'send',
+                onClick: () => messageUser(p.user_id)
+            },
+            canBlock && {
                 label: 'Block ' + (p.name || 'this person'), icon: 'ban', danger: true,
                 onClick: () => blockPerson(p.client_id, p.name)
             }
@@ -11021,6 +11064,47 @@
         renderDmSection();
         setComposerPlaceholder();
         $('composer-input').focus();
+    }
+
+    // "Message this person", from wherever you are looking at them — a message
+    // they wrote, their row in the members list, their tile in the call.
+    //
+    // The server is the authority on WHICH thread that is: dm/create with a
+    // single person returns the one you already have with them rather than
+    // starting a second one beside it. So this asks instead of guessing from
+    // the sidebar, which would be wrong for anyone you have never messaged and
+    // stale for anyone whose thread arrived after the last poll.
+    let startingDm = false;
+    async function messageUser(userId) {
+        const uid = parseInt(userId, 10) || 0;
+        if (!uid) return;
+        // DMs are addressed by ACCOUNT, so there has to be one on this end too.
+        // The picker answers this the same way — there is nothing useful to show
+        // in the conversation view without one.
+        if (!account) {
+            toast('Sign into your board account to send direct messages', true);
+            openSettings();
+            return;
+        }
+        if (uid === account.id) return;      // there is no conversation with yourself
+        // A second click while the first is in flight. dm/create is idempotent
+        // for a pair, so this cannot duplicate a thread — but it can open the
+        // conversation twice and fight over the scroll.
+        if (startingDm) return;
+        startingDm = true;
+        try {
+            const res = await L.board('dm/create', { method: 'POST', body: { users: [uid] } });
+            if (authGone(res)) return;
+            if (!res || !res.success || !res.thread) {
+                return toast((res && res.error) || 'Could not open that conversation', true);
+            }
+            // The sidebar first, so the conversation being opened is already in
+            // the list it highlights.
+            await loadDmThreads();
+            await openDm(res.thread);
+        } finally {
+            startingDm = false;
+        }
     }
 
     // The header carries everything that is true only of a group, so it is one

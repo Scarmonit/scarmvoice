@@ -1348,6 +1348,12 @@
 
   <div class="pop-sep" id="pop-audio-sep"></div>
 
+  <!-- Addressed by account, so it is hidden for anyone this row cannot resolve
+       one for — see openPopover. The label carries the name, because a popover
+       opened from a call tile does not otherwise say who "them" is. -->
+  <button type="button" class="pop-action" id="pop-dm" hidden>
+    <span class="ico" data-icon="send"></span><span id="pop-dm-label">Message</span>
+  </button>
   <button type="button" class="pop-action" id="pop-mention">
     <span class="ico" data-icon="at"></span><span>Mention in chat</span>
   </button>
