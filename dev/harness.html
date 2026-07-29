@@ -95,7 +95,7 @@ window.lounge = {
       noiseSuppression: true, noiseSuppressionAI: true,
       pttBinding: { type: 'key', code: 'Backquote' } })), set: fn({}) },
   ptt: { apply: fn({ mode: 'native' }), available: fn(true), describe: fn('Backquote'), onChange: unsub },
-  win: { minimize: noop, maximize: noop, close: noop, isFocused: fn(true), onFocus: unsub },
+  win: { minimize: noop, maximize: noop, close: noop, isFocused: fn(true), onFocus: unsub, onHidden: unsub },
   app: { version: fn('0.0.0-harness'), isElevated: fn(false), openLogs: fn(true), notify: fn(false),
          setVoiceState: fn({}), setBadge: fn(true), openExternal: fn(true),
          systemTheme: fn({ dark: true }), setTheme: fn(true),

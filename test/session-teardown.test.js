@@ -38,11 +38,15 @@ function router(state, threads) {
     });
 }
 
-// The renderer resyncs when the window becomes visible again, which is the
+// The renderer resyncs when the window comes back from the tray, which is the
 // cheapest deterministic way to make a background board call happen on demand.
-async function expireSession(state) {
+// Driven through app:resync — the event main.js actually sends. It used to be a
+// synthetic visibilitychange, which no longer reaches anything: the app runs
+// with backgroundThrottling off, so Chromium freezes document.hidden at false
+// and never fires that event at all.
+async function expireSession(state, app) {
     state.dead = true;
-    document.dispatchEvent(new window.Event('visibilitychange'));
+    app.resync();
     await settle(20);
 }
 
@@ -70,7 +74,7 @@ describe('a session that ends while the input panel is open', () => {
 
     it('releases the level meter’s microphone', async () => {
         const state = { dead: false };
-        await bootRenderer({ board: router(state) });
+        const app = await bootRenderer({ board: router(state) });
         const media = fakeMedia();
 
         $('btn-mic-menu').click();
@@ -78,7 +82,7 @@ describe('a session that ends while the input panel is open', () => {
         await settle(6);
         expect($('mic-pop').hidden).toBe(false);
 
-        await expireSession(state);
+        await expireSession(state, app);
 
         // The panel is gone AND so is the capture — the OS microphone indicator
         // must not stay lit behind the login card.
@@ -108,12 +112,12 @@ describe('a session that ends with something floating over the app', () => {
 
     it('takes the context menu with it', async () => {
         const state = { dead: false };
-        await bootRenderer({ board: router(state) });
+        const app = await bootRenderer({ board: router(state) });
 
         $('server-menu').click();
         expect($('ctx-menu').hidden).toBe(false);
 
-        await expireSession(state);
+        await expireSession(state, app);
 
         // #ctx-menu is a SIBLING of #app, so hiding #app leaves it drawn over
         // the sign-in form.
@@ -122,10 +126,10 @@ describe('a session that ends with something floating over the app', () => {
 
     it('does not leave the previous account’s conversations in the sidebar', async () => {
         const state = { dead: false };
-        await bootRenderer({ board: router(state, [PAIR]) });
+        const app = await bootRenderer({ board: router(state, [PAIR]) });
         expect($('dm-list').querySelectorAll('.dm-row').length).toBe(1);
 
-        await expireSession(state);
+        await expireSession(state, app);
 
         // dmThreads is per-ACCOUNT. Every deliberate sign-out clears it by hand;
         // the two paths that end a session on their own never did, so the next

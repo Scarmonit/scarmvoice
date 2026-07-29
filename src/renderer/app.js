@@ -57,6 +57,19 @@
     // before it will show a notification, so a stale false can never produce
     // one you shouldn't get. boot() asks for the real answer either way.
     let windowFocused = false;
+    // Is the window in the tray or minimised? `document.hidden` cannot answer
+    // that here: webPreferences.backgroundThrottling is false — deliberately,
+    // so the presence heartbeat and the fallback poll survive the tray — and
+    // the price is that Chromium stops maintaining the visibility API
+    // altogether. It reads `visible` through both a hide and a minimize, and
+    // `visibilitychange` never fires. Verified in this Electron build.
+    //
+    // Every "don't do this while nobody is looking" guard in this file was
+    // written against that flag, so none of them has ever run. main.js watches
+    // the real window events and tells us instead; appHidden() is the one place
+    // the answer comes from so the guards cannot drift apart again.
+    let windowHidden = false;
+    function appHidden() { return windowHidden; }
     let loading = false;
     let lastSoundId = 0;            // watermark so one message chimes exactly once
     let filterTimer = null;
@@ -178,7 +191,7 @@
     // rebuild every message on screen (loadCustomEmoji runs on every Settings
     // open).
     function emojiFingerprint() {
-        return [...customEmoji.values()].map((e) => e.name + ' ' + e.url).sort().join('');
+        return [...customEmoji.values()].map((e) => e.name + '\x00' + e.url).sort().join('\x01');
     }
 
     function bumpEmojiGen() { emojiGen++; }
@@ -520,6 +533,10 @@
         });
     }
 
+    // (lang + text) -> the highlighted markup and class hljs produced for it.
+    // Bounded by cachePut at PREVIEW_CACHE_MAX, like the preview caches.
+    const hlCache = new Map();
+
     // highlight.js is vendored and already loaded, so this is synchronous —
     // unlike the website, which lazy-loads it from a CDN.
     function highlightCodeBlocks(container) {
@@ -538,7 +555,35 @@
         }
         pending.forEach((code) => {
             code.setAttribute('data-hl', '1');
-            try { window.hljs.highlightElement(code); } catch (e) { /* leave it plain */ }
+            // A fence with no language runs auto-detection across the whole
+            // vendored language set, and it is not cheap: measured against this
+            // bundle, 1.2ms for a one-line fence, 2.7ms for a stack trace,
+            // 9.3ms for a 1500-character paste — against 0.06-0.36ms when the
+            // language is named. That was paid again every time the row was
+            // rebuilt: an edit, a reaction, a channel switch back, a resync.
+            //
+            // hljs is deterministic for a given (text, language), so the answer
+            // is worth keeping. Bounded by the same cachePut the preview caches
+            // use.
+            const lang = (/(?:^|\s)language-([\w+#._-]+)/.exec(code.className) || ['', ''])[1];
+            // A newline separates them safely: the language token is matched as
+            // [\w+#._-]+, so it can never contain one.
+            const key = lang + '\n' + code.textContent;
+            const hit = hlCache.get(key);
+            if (hit) {
+                // The CLASS matters as much as the markup: highlightElement
+                // adds `hljs`, and the theme hangs entirely off that class —
+                // restoring the HTML alone gives an unstyled, unpadded,
+                // transparent block. Restoring both makes a cache hit
+                // byte-identical to a miss.
+                code.className = hit.cls;
+                code.innerHTML = hit.html;
+                return;
+            }
+            try {
+                window.hljs.highlightElement(code);
+                cachePut(hlCache, key, { html: code.innerHTML, cls: code.className });
+            } catch (e) { /* leave it plain */ }
         });
     }
 
@@ -769,7 +814,24 @@
         settings = await L.settings.get();
         $('set-version').textContent = 'ScarmVoice v' + (await L.app.version());
 
+        // The card is hidden in markup so a launch that is already signed in
+        // never paints a sign-in screen it is about to discard. It must not be
+        // withheld for the length of a request that is never going to answer,
+        // though: net.js gives up after twenty seconds, and a captive portal or
+        // a half-connected VPN would otherwise leave a blank window for all of
+        // it. Past this deadline the card is the honest thing to show — and if
+        // the check then comes back authed, enterApp() hides it again, which is
+        // exactly what happened on every launch before this change.
+        //
+        // focusLogin() rather than focus(), so a late deadline cannot pull the
+        // caret out of a field somebody has already started typing in.
+        const cardDeadline = setTimeout(() => {
+            $('login').hidden = false;
+            focusLogin('login-pw');
+        }, 400);
         const st = await L.auth.status();
+        clearTimeout(cardDeadline);
+
         if (st.authed) {
             if (await accountGate()) enterApp();
         } else {
@@ -784,10 +846,19 @@
     // requires a personal account, so every message, DM and moderation action
     // has a real identity behind it. A stored token skips the step.
 
+    // Set when the answer in `account` came from a real account/me that landed
+    // moments ago, so enterApp() does not immediately ask the same question
+    // again. Consumed exactly once — see refreshAccount().
+    let accountJustFetched = false;
+
     async function accountGate() {
         try {
             const res = await L.account.me();
-            if (res && res.success && res.user) { account = res.user; return true; }
+            if (res && res.success && res.user) {
+                account = res.user;
+                accountJustFetched = true;
+                return true;
+            }
         } catch (e) { /* fall through to the step */ }
         showAccountStep();
         return false;
@@ -1156,6 +1227,26 @@
             const avatarsReady = loadAvatars();
             const channelsReady = loadChannels();
 
+            // The first page of messages belongs in that burst too. It depends
+            // on none of the three — only its RENDER does, and that still
+            // happens below, after they have landed. Waiting to ASK cost a
+            // whole extra round trip in front of the one thing the user is
+            // actually here to see.
+            //
+            // `primary` keeps the read-your-writes freshness that the old
+            // ordering got by accident: loadChannels() is a POST, and running
+            // after it meant this read was served by the primary. Issued
+            // alongside it, that no longer happens for free, so it is asked
+            // for. The channel travels WITH the request — a switch during the
+            // burst must not merge this page into a different channel.
+            const firstPage = {
+                channel,
+                res: L.board('list', { query: { channel, limit: PAGE, before: null }, primary: true })
+            };
+            // Awaited at loadMessages() below; held here only so a rejection
+            // that beats it cannot surface as an unhandled rejection.
+            firstPage.res.catch(() => {});
+
             // Still awaited before the first render, exactly as before: a
             // message drawn without the emoji set shows `:shrug:` as text, and a
             // face drawn without the avatar map falls back to initials.
@@ -1167,7 +1258,7 @@
             renderMe();
             renderAccountCard();
             await channelsReady;
-            await loadMessages(true);
+            await loadMessages(true, null, firstPage);
             startPolling();
             startTextPresence();
             loadDmThreads();
@@ -1303,6 +1394,28 @@
     // `channel`, which left the old channel's posts in `posts` — and since post
     // ids are global, the refresh merge kept every one of them that was older
     // than the new channel's newest page, rendering them inline as ghosts.
+    // channel name -> { posts, hasMore } as it was when you left it, so going
+    // back paints immediately instead of showing an empty column for a round
+    // trip. Never the source of truth: the fetch always runs and always wins.
+    //
+    // Bounded, and by insertion order — a Map iterates oldest-first, so
+    // deleting the first key is a least-recently-touched eviction. Five pages
+    // of at most PAGE posts each is a few hundred KB in the worst case.
+    const CHANNEL_CACHE_MAX = 5;
+    const channelCache = new Map();
+    // Set for exactly one loadMessagesOnce: the page it is about to merge is
+    // one the reader has already seen, so it must not chime for it.
+    let restoredFromCache = false;
+
+    function rememberChannel(name, list, more) {
+        if (!name || !list || !list.length) return;
+        channelCache.delete(name);
+        channelCache.set(name, { posts: list, hasMore: more });
+        if (channelCache.size > CHANNEL_CACHE_MAX) {
+            channelCache.delete(channelCache.keys().next().value);
+        }
+    }
+
     function resetChannelView() {
         posts = [];
         following = true;
@@ -1326,12 +1439,38 @@
             if (leavingDm) { setChannelTitle(name); renderChannels(); }
             return;
         }
+        // Stash what is leaving BEFORE anything reassigns `channel`, so coming
+        // straight back to it is instant.
+        rememberChannel(channel, posts, hasMore);
+
         channel = name;
-        await saveSettings({ channel: name });
         setChannelTitle(name);
         resetChannelView();
+
+        // A channel you have already opened this session paints from what you
+        // last saw, in this frame, instead of showing an empty column for a
+        // round trip. The fetch below still runs and the view still converges
+        // on the server's answer within the same time it used to take to show
+        // anything at all — this only fills the gap.
+        const hit = channelCache.get(name);
+        if (hit) {
+            channelCache.delete(name);              // re-insert = LRU touch
+            channelCache.set(name, hit);
+            posts = hit.posts;
+            hasMore = hit.hasMore;
+            restoredFromCache = true;
+        }
         renderMessages();
         renderChannels();
+        // renderMessages() never touches scrollTop — the only scroll-to-bottom
+        // lives in loadMessagesOnce. Painting the cached list without this
+        // leaves it at the PREVIOUS channel's offset and then jumps when the
+        // fetch lands, which is worse than the blank it replaces.
+        if (hit) { const box = $('messages'); box.scrollTop = box.scrollHeight; }
+
+        // Moved below the paint: this is an IPC round trip, and nothing on
+        // screen depends on it having finished.
+        await saveSettings({ channel: name });
         await loadMessages(true);
     }
 
@@ -1404,6 +1543,8 @@
             method: 'POST', body: { rename: name, from: channel, clientId: settings.clientId, reads }
         });
         if (!res || !res.success) return toast((res && res.error) || 'Rename failed', true);
+        // The remembered page is filed under a name that no longer exists.
+        channelCache.delete(channel);
         channels = res.channels || channels;
         channel = res.channel || channelAddedBy(before, name) || channel;
         // Persisted, or a restart reopens a channel name that no longer exists.
@@ -1431,6 +1572,8 @@
             method: 'POST', body: { remove: gone, clientId: settings.clientId, reads }
         });
         if (!res || !res.success) return toast((res && res.error) || 'Delete failed', true);
+        // Its messages are gone from the server; do not keep painting them.
+        channelCache.delete(gone);
         channels = res.channels || [];
         channel = 'general';
         await saveSettings({ channel });
@@ -1469,7 +1612,10 @@
         }, REFRESH_COALESCE_MS);
     }
 
-    async function loadMessages(scrollToEnd, before) {
+    // `pre`, when given, is a page already asked for: { channel, res }. Only
+    // enterApp() passes one, so it can put the request on the wire alongside the
+    // rest of the startup burst instead of behind it.
+    async function loadMessages(scrollToEnd, before, pre) {
         // Pinned at entry: a `before` cursor is an id from THIS channel's
         // history. If the user switches channels while we wait for the slot,
         // running the stale cursor against the new channel would splice an
@@ -1492,7 +1638,7 @@
         }
         loading = true;
         try {
-            await loadMessagesOnce(scrollToEnd, before);
+            await loadMessagesOnce(scrollToEnd, before, pre);
         } finally {
             loading = false;
         }
@@ -1505,13 +1651,18 @@
         }
     }
 
-    async function loadMessagesOnce(scrollToEnd, before) {
+    async function loadMessagesOnce(scrollToEnd, before, pre) {
         // Pin the channel this request is FOR. The user can switch channels
         // while the request is in flight; merging the response then would
         // interleave the old channel's posts into the new one and stamp the
         // wrong channel's read watermark.
-        const forChannel = channel;
-        const res = await L.board('list', {
+        //
+        // With a pre-fetched page that channel is the one the request was
+        // ISSUED with, not whichever is live now — reading `channel` here would
+        // reintroduce exactly the interleaving this guard exists to stop, for a
+        // switch made during the startup burst.
+        const forChannel = pre ? pre.channel : channel;
+        const res = pre ? await pre.res : await L.board('list', {
             query: { channel: forChannel, limit: PAGE, before: before || null }
         });
         if (forChannel !== channel) return;   // stale — a switch happened mid-flight
@@ -1559,7 +1710,17 @@
 
         // Chime + notify for messages from other people, exactly where the
         // website does it. prevMax > 0 skips the very first load of a channel.
-        if (!before && prevMax > 0) {
+        //
+        // `restoredFromCache` is the other case that has to be skipped, and it
+        // exists because of the cache above. Painting a remembered page makes
+        // `prevMax` the id of a message the reader has ALREADY seen, so every
+        // message that arrived in that channel while they were elsewhere would
+        // look fresh to this block and announce itself the moment they came
+        // back. Before the cache, prevMax was 0 here and none of it ran — this
+        // keeps exactly that behaviour.
+        const wasRestored = restoredFromCache;
+        if (!before) restoredFromCache = false;
+        if (!before && prevMax > 0 && !wasRestored) {
             // Blocked authors chime and notify for a message that is never
             // drawn, which is the opposite of what blocking promises.
             const fresh = posts.filter((p) => p.id > prevMax &&
@@ -4745,8 +4906,13 @@
         // other client treats it as away, and this one already has a real idle
         // rule underneath.
         //
-        // document.hidden stays, and means what it says here: minimised, or
-        // hidden in the tray. That IS the window put away.
+        // This line has never fired. document.hidden is frozen at false by
+        // backgroundThrottling:false (see appHidden), so "the window is put
+        // away" has in practice always been decided by the idle rule below.
+        // Left exactly as it is ON PURPOSE: appHidden() would make it work, and
+        // making it work means minimising now publishes you as away to
+        // everyone — a visible change to what other people see, which belongs
+        // in its own change and not in a performance pass.
         if (document.hidden) return 'away';
         if (Date.now() - lastActivity > AWAY_AFTER_MS) return 'away';
         return 'online';
@@ -5478,7 +5644,7 @@
             // A session that ended between ticks takes its timer with it, in
             // case anything ever arms one behind teardown again.
             if (!entered || gen !== sessionGen) { stopPolling(); return; }
-            if (document.hidden && rtConnected) return;
+            if (appHidden() && rtConnected) return;
             const stick = nearBottom();
             await loadMessages(stick);
             await loadChannels();
@@ -5603,6 +5769,11 @@
         // own that happened to share the number. (closeDm() has just stashed
         // the open one, so this has to come after it.)
         drafts.clear();
+        // Same rule as the drafts: remembered pages are somebody's messages,
+        // and the next person to sign in on this machine must not open a
+        // channel and find them already painted.
+        channelCache.clear();
+        restoredFromCache = false;
         composerSurface = 'channel';
         stopDmPolling();
         stopPolling();
@@ -5729,21 +5900,34 @@
         if (focused && !was) refreshPresenceSoon();
     });
 
+    // The window went to the tray / got minimised, or came back. Sent by
+    // main.js on the real window events, because the renderer cannot see this
+    // for itself — see appHidden().
+    L.win.onHidden((hidden) => {
+        windowHidden = !!hidden;
+        // Stops the shared 20Hz meter tick (speaking dots, mic-test bar) while
+        // there is nothing to draw it on. Its own document.hidden check has
+        // never fired, so a call left in the tray kept running one 512-sample
+        // RMS loop per participant.
+        if (window.ScarmAudio && window.ScarmAudio.setHidden) window.ScarmAudio.setHidden(windowHidden);
+        // Pauses the decorative infinite animations (voice signal bars, the
+        // live-share dot, the recording pulse). Mid-cycle, so nothing pops when
+        // it comes back. An explicit list in styles.css, not a universal
+        // selector — that would recalc the whole document on every restore,
+        // which is a felt interaction spent to save background work.
+        document.documentElement.classList.toggle('win-hidden', windowHidden);
+    });
+
     // Restore-from-tray / wake-from-sleep: main verifies the socket (rt.wake)
     // and fires this so we pull anything missed while hidden.
-    L.app.onResync(() => resyncNow());
-
-    // The renderer's own view of visibility. When the tab/window becomes visible
-    // again, nudge the socket and resync — belt-and-braces alongside the main
-    // process 'restore'/'show' wiring.
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) return;
-        L.rt.wake();
+    //
+    // The panel refreshes used to live in a `visibilitychange` listener here,
+    // which has never once run (see appHidden). This is the event that actually
+    // fires on restore/show/focus, so they belong on it: the thread and DM
+    // polls skip their ticks while the window is away, and coming back is
+    // exactly when whatever they skipped needs to land.
+    L.app.onResync(() => {
         resyncNow();
-        refreshPresenceSoon();
-        // The thread and DM polls skip their ticks while hidden, so refresh
-        // whichever panels are open now rather than leaving them stale until
-        // their next interval.
         if (threadOpen()) loadThread(true);
         if (account) {
             loadDmThreads();
@@ -6763,7 +6947,6 @@
         // one since this client booted, and Settings is where you'd look.
         loadCustomEmoji().then(renderEmojiAdmin);
 
-        await populateDevices();
         refreshPttHint();
         if ($('set-search').value) {
             $('set-search').value = '';
@@ -6774,6 +6957,15 @@
         if (showSettingsPane) showSettingsPane(null);
         $('settings').hidden = false;
         trapFocus($('settings'), { label: 'Settings', initial: $('settings-close') });
+
+        // AFTER the reveal, deliberately. Cold, enumerateDevices() is a trip
+        // through Chromium's audio service — measured at 268-356ms on this
+        // machine's fifteen endpoints — and it was awaited in front of the
+        // panel appearing. Nothing above reads a device, and the selects it
+        // fills live in Voice & Audio, which is not the pane that opens. So the
+        // gear now opens the panel and the dropdowns fill in behind it, which
+        // is the rule the mic/speaker popovers already follow.
+        populateDevices();
     }
 
     // Closing has to stop the mic test, whichever way it happens.
@@ -7014,11 +7206,25 @@
     }
 
     async function refreshAccount() {
-        try {
-            const res = await L.account.me();
-            account = (res && res.success && res.user) || null;
-        } catch (e) {
-            account = null;
+        // The account gate asks account/me and keeps the answer. Coming from
+        // there, this call was a second trip to Cloudflare — same endpoint,
+        // same clientId, milliseconds later, necessarily the same row — and
+        // everything else in enterApp() waited behind it. Measured at ~50ms
+        // from here, in front of the socket, the channel list and the first
+        // message. The renders below still run; only the question is skipped.
+        //
+        // One pass, not a cache: the register / verify / TOTP paths never set
+        // the flag, so they still make the real call that binds this install to
+        // the account.
+        const fresh = accountJustFetched;
+        accountJustFetched = false;
+        if (!fresh) {
+            try {
+                const res = await L.account.me();
+                account = (res && res.success && res.user) || null;
+            } catch (e) {
+                account = null;
+            }
         }
         renderAccountCard();
         renderDmSection();
@@ -7780,12 +7986,9 @@
 
     async function populateDevices() {
         // Labels are only populated once mic permission has been granted.
-        let devices = [];
-        try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
-
         const fill = (sel, kind, current) => {
             sel.innerHTML = '<option value="">System default</option>';
-            devices.filter((d) => d.kind === kind).forEach((d) => {
+            deviceCache.filter((d) => d.kind === kind).forEach((d) => {
                 const o = document.createElement('option');
                 o.value = d.deviceId;
                 o.textContent = d.label || `${kind === 'audioinput' ? 'Microphone' : 'Speaker'} ${sel.length}`;
@@ -7793,8 +7996,26 @@
             });
             sel.value = current || '';
         };
-        fill($('set-mic'), 'audioinput', settings.micDeviceId);
-        fill($('set-speaker'), 'audiooutput', settings.speakerDeviceId);
+        const paint = () => {
+            fill($('set-mic'), 'audioinput', settings.micDeviceId);
+            fill($('set-speaker'), 'audiooutput', settings.speakerDeviceId);
+        };
+
+        // Shares the list the audio popovers already keep, instead of opening a
+        // second enumeration of its own. A cold enumerateDevices() is a few
+        // hundred milliseconds through the audio service, and this used to pay
+        // it separately every time Settings opened. Painted from the cache
+        // first when there is one, so a reopen fills the dropdowns in the same
+        // frame; the refresh below still lands and re-applies the saved value,
+        // so a device plugged in since is picked up.
+        if (deviceCache.length) paint();
+        await refreshDeviceCache();
+        // Nothing to say. enumerateDevices threw, or this machine genuinely has
+        // no audio endpoints — either way the old code returned without
+        // touching the selects, and blanking them down to "System default"
+        // would be a worse answer than leaving what is there.
+        if (!deviceCache.length) return;
+        paint();
     }
 
     function refreshPttHint() {
@@ -9461,7 +9682,7 @@
         // rate for as long as the panel was left open — 24 requests a minute
         // into the tray.
         threadTimer = setInterval(() => {
-            if (document.hidden) return;
+            if (appHidden()) return;
             loadThread(false);
         }, THREAD_POLL_MS);
     }
@@ -9761,7 +9982,7 @@
             // DMs arrive over the socket ('dm' events), so while it is healthy
             // this poll is a safety net — and a hidden window has nothing to
             // repaint. ($('app').hidden is the login gate, not window visibility.)
-            if (document.hidden && rtConnected) return;
+            if (appHidden() && rtConnected) return;
             loadDmThreads();
             if (dmOpen) loadDmMessages(false);
         }, DM_POLL_MS);

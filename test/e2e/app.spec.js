@@ -116,6 +116,14 @@ test('exposes the whole preload bridge to the renderer', async () => {
     expect(shape.app).toContain('openLogs');
 
     expect(shape.auth).toEqual(['login', 'logout', 'status']);
+    // `onHidden` is the renderer's ONLY way to know the window has gone to the
+    // tray: backgroundThrottling is off, so Chromium freezes document.hidden at
+    // false and never fires visibilitychange. Lose this channel and every
+    // "pause while nobody is looking" guard silently reverts to running all the
+    // time — the thread poll every 2.5s, the DM poll every 12s, the 20Hz meter
+    // tick and the decorative animations, all against a window in the tray.
+    // That is precisely the state it was in before, and nothing looked wrong.
+    expect(shape.win).toEqual(['close', 'isFocused', 'maximize', 'minimize', 'onFocus', 'onHidden']);
     expect(shape.settings).toEqual(['get', 'set']);
     expect(shape.rt).toEqual([
         'notifyPosted', 'onMessage', 'onStatus', 'send', 'sendTyping', 'sendVoice',

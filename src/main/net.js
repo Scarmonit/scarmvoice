@@ -18,6 +18,40 @@ const TIMEOUT_MS = 20000;
 let cookie = '';          // the raw sb_auth value, not the whole header
 let accountToken = '';    // board account session (x-account-token)
 
+// ---- connection reuse -----------------------------------------------------
+//
+// undici (the fetch under Node, and so under the main process) destroys an idle
+// socket 4 seconds after the last response — its Agent default — and Cloudflare
+// sends no `Keep-Alive: timeout=` hint that would raise it. EVERY cadence in
+// this app is longer than four seconds: the idle poll is 60s, the DM poll 12s,
+// the thread poll 2.5s, and anything the user does by hand is minutes apart. So
+// essentially nothing was ever reused, and every request re-paid TCP + TLS —
+// two extra round trips in front of the one that carries the answer.
+//
+// Measured in the shipped runtime (Electron 33.4.11) against the real origin,
+// after a >4s idle gap: 117-140ms on the default dispatcher against 36-47ms
+// with the timeout widened. That is ~75ms off every channel switch, thread
+// open, search, send and attachment fetch.
+//
+// Node builds the global dispatcher LAZILY, so this cannot live in init() —
+// the symbol is still empty there and the swap would silently do nothing (it
+// was written there first, and shipped no benefit at all). Attempting it on
+// each request is free once it has taken, and the failure mode is exactly
+// today's behaviour.
+const DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+let keepAliveWidened = false;
+function widenKeepAlive() {
+    if (keepAliveWidened) return;
+    try {
+        const cur = globalThis[DISPATCHER];
+        if (!cur || !cur.constructor) return;   // not built yet — retry next call
+        keepAliveWidened = true;
+        globalThis[DISPATCHER] = new cur.constructor({ keepAliveTimeout: 30000 });
+    } catch (e) {
+        keepAliveWidened = true;                // keep the default dispatcher
+    }
+}
+
 function init() {
     cookie = store.readSession() || '';
     accountToken = store.readAccountToken() || '';
@@ -96,6 +130,7 @@ const MAX_REDIRECTS = 3;
 // Following by hand means every hop is re-checked against the allow-list, and
 // both credential decisions key off the origin that is actually being talked to.
 async function request(pathname, { method = 'GET', body, headers = {}, query, timeout } = {}) {
+    widenKeepAlive();
     const base = baseUrl();
     let url = base + pathname;
     // baseUrl() is a bare origin, so the concatenation above can only produce a
@@ -344,13 +379,19 @@ function retriable(status) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function board(pathname, { method = 'GET', body, query } = {}) {
+async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
     const headers = {};
     // (The account token is attached in request() for every /api/board/ call.)
     if (pathname === 'list' || pathname === 'thread') {
-        headers['x-d1-bookmark'] = forcePrimary ? 'first-primary' : (bookmark || 'first-unconstrained');
+        // `primary` is an explicit ask for a primary read, for a caller that
+        // knows it is racing a write it cannot see. Startup uses it: the first
+        // `list` now leaves alongside the channels POST rather than behind it,
+        // and without this it could be answered by a replica that had not yet
+        // caught up with that POST — freshness today's ordering gets by
+        // accident, spent deliberately instead.
+        headers['x-d1-bookmark'] = (primary || forcePrimary) ? 'first-primary' : (bookmark || 'first-unconstrained');
         forcePrimary = false;
     }
 
@@ -562,6 +603,45 @@ async function accountMe() {
 
 function hasAccount() {
     return !!accountToken;
+}
+
+// ---- startup preflight ----------------------------------------------------
+//
+// The renderer cannot ask us anything for ~280ms after the window is created:
+// process spawn, Blink and CSS bring-up, and first paint. (Not script parse —
+// that measured at 8ms.) Nothing was on the wire for any of it, and then boot()
+// made two round trips in a row before the app could show a single message.
+//
+// So the two calls it is *going* to make are started here instead, while that
+// warm-up happens. Both are exactly the calls boot() makes, run through the
+// same functions with the same side effects — the credential clearing, the
+// clientId adoption, the token drop on a dead token — so nothing about the
+// session's behaviour changes. Only when it happens does.
+//
+// Strictly ONE shot, consumed by the first asker: signing in again, or any
+// later refresh, must always reach the server rather than replay a stale
+// snapshot. Anything older than the guard below is dropped for the same reason.
+const PREFLIGHT_MAX_AGE_MS = 30000;
+let preflight = null;
+
+function prefetchSession() {
+    // No cookie means status() answers `{authed:false}` without a request, so
+    // there is nothing to warm and no bearer token to put on the wire.
+    if (!cookie) return;
+    const at = Date.now();
+    const p = status()
+        .then(async (st) => ({ st, me: st && st.authed ? await accountMe().catch(() => null) : null }))
+        .catch(() => null);
+    // Held rather than awaited; nothing here may reject into the app's startup.
+    p.catch(() => {});
+    preflight = { at, p };
+}
+
+async function takePreflight() {
+    const pre = preflight;
+    preflight = null;
+    if (!pre || Date.now() - pre.at > PREFLIGHT_MAX_AGE_MS) return null;
+    return pre.p;      // may still be in flight — awaiting it coalesces
 }
 
 // Attachment bytes, proxied so the renderer can display them without the cookie.
@@ -814,6 +894,6 @@ async function uploadAttachment(item, onProgress) {
 module.exports = {
     init, login, logout, status, board, request, fileStream, upload, uploadAttachment,
     accountRegister, accountLogin, accountLogout, accountMe, accountRemoval, hasAccount,
-    accountVerify, accountResend,
+    accountVerify, accountResend, prefetchSession, takePreflight,
     hasSession, cookieHeader, socketHeaders, baseUrl, MAX_UPLOAD
 };

@@ -194,6 +194,25 @@ function createWindow(forceShow) {
     });
     win.on('hide', () => store.flush());
 
+    // Whether the window is actually on screen — which the RENDERER cannot work
+    // out for itself. `backgroundThrottling: false` (above) keeps its timers
+    // running at full rate in the tray, and the price of that is that Chromium
+    // also stops updating `document.hidden`: it reads `false` through both a
+    // hide to the tray and a minimize, and `visibilitychange` never fires at
+    // all. Every "skip this while nobody is looking" guard in the renderer was
+    // written against that flag and so has never once run. Verified in this
+    // Electron build, both ways.
+    //
+    // Sent separately from the resume wiring below, which is rate-limited to
+    // one event per 5s: a fast hide/show/hide/show would otherwise leave the
+    // renderer believing it is still put away during a call the user is
+    // watching.
+    const sendVisibility = () => {
+        if (!win || win.isDestroyed()) return;
+        win.webContents.send('win:hidden', !win.isVisible() || win.isMinimized());
+    };
+    ['hide', 'show', 'minimize', 'restore'].forEach((e) => win.on(e, sendVisibility));
+
     // Coming back from the tray / a minimize is exactly when a socket that died
     // while hidden needs to be checked and revived — verify the connection and
     // tell the renderer to resync any messages it missed while it was away.
@@ -510,7 +529,20 @@ function configurePermissions() {
         }
 
         try {
-            const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
+            const sources = await desktopCapturer.getSources({
+                types: ['screen', 'window'],
+                // Only `s.id` is read below, and the object handed to callback()
+                // carries no image. The default here captures a thumbnail of
+                // every screen and every open window — measured at ~150ms on
+                // the share's critical path — and throws all of them away. The
+                // picker (share:sources) still asks for real thumbnails,
+                // because it actually draws them.
+                thumbnailSize: { width: 0, height: 0 }
+            });
+            // Still looked up rather than reconstructed from pending.id: a
+            // selection can be a minute old (SHARE_PICK_TTL_MS), and this is
+            // what turns "the window you picked has since closed" into a clean
+            // denial instead of Chromium capturing a dead HWND.
             const source = sources.find((s) => s.id === pending.id);
             if (!source) { callback({}); return; }
             // 'loopback' captures system audio on Windows so shared video/music
@@ -689,7 +721,18 @@ function registerIpc() {
         return net.logout();
     });
 
-    handle('auth:status', async () => net.status());
+    // startApp() put these two on the wire while the window was still being
+    // built (see net.prefetchSession). If that answer is here, hand it over
+    // instead of asking again — it is the same call, made by the same code.
+    // One shot each: `pendingMe` is nulled on read and the preflight slot is
+    // emptied by takePreflight, so a re-login or any later refresh is always a
+    // real request.
+    let pendingMe = null;
+    handle('auth:status', async () => {
+        const pre = await net.takePreflight();
+        if (pre && pre.st) { pendingMe = pre.me; return pre.st; }
+        return net.status();
+    });
 
     handle('board:call', async (_e, { path: p, opts }) => {
         // register/login/verify responses all carry the account token, so the
@@ -717,7 +760,11 @@ function registerIpc() {
         return net.accountResend(String(username || ''));
     });
     handle('account:logout', async () => net.accountLogout());
-    handle('account:me', async () => net.accountMe());
+    handle('account:me', async () => {
+        const me = pendingMe;
+        pendingMe = null;
+        return me || net.accountMe();
+    });
     handle('account:removal', async (_e, { action, password, code }) => net.accountRemoval(action, password, code));
 
     handle('voice:token', async (_e, payload) => {
@@ -1300,6 +1347,13 @@ const SPLASH_AFTER_MS = 700;
 
 // Everything the app is, once the gate has agreed it may exist.
 function startApp() {
+    // BEFORE createWindow, not after: creating the window is synchronous store
+    // reads plus BrowserWindow construction, and the renderer then spends about
+    // 280ms coming up before it can ask us anything. Both of the calls it opens
+    // with go out during that, so the answers are already here when it asks.
+    // Deliberately after the update gate resolved 'launch' — a process the
+    // installer is about to replace still opens no session.
+    net.prefetchSession();
     createWindow();
     createTray();
 

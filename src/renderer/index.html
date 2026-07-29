@@ -723,7 +723,19 @@
 </div>
 
 <!-- ---------- login ---------- -->
-<div id="login" class="overlay">
+<!-- Hidden in markup, unlike every other overlay, because the one thing this
+     window must not paint first is a sign-in screen it is about to throw away.
+     A launch that already holds a session spends a round trip in boot() finding
+     that out, and for all of it the card was the only thing on screen — a
+     blurred scrim and a caret in a password field nobody needed to touch,
+     replaced a moment later by the app.
+
+     Every path that WANTS the card unhides it by hand (boot's no-session
+     branch, showLoginStep, enterApp's unwind, relogin, signOutEverything), and
+     each of those focuses its own field, which is why losing `autofocus` here
+     costs nothing. boot() also holds a deadline so the card can never be
+     withheld for the length of a request that never answers. -->
+<div id="login" class="overlay" hidden>
   <form class="login-card" id="login-form">
     <img class="login-mark" src="logo.png" alt="" aria-hidden="true">
     <h1 class="login-title">ScarmVoice</h1>
@@ -732,7 +744,9 @@
          two password fields in this flow are for different things, and reading
          "Password" twice is what made people try their account password. -->
     <p class="login-sub" id="login-sub">Step 1 of 2 — the shared password for ScarmVoice itself</p>
-    <input type="password" id="login-pw" placeholder="Board password" autocomplete="off" autofocus>
+    <!-- No `autofocus`: it does not fire inside a hidden subtree, and every
+         path that shows this card focuses the right field itself. -->
+    <input type="password" id="login-pw" placeholder="Board password" autocomplete="off">
     <p class="login-hint" id="login-pw-hint">This is the password that unlocks the app for everyone.
       You'll sign into your own account next.</p>
     <button type="submit" id="login-btn">Connect</button>

@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS = {
 
 // opts.board     — the /api/board/* router (a vi.fn)
 // opts.user      — who account.me() reports
+// opts.authStatus — override auth.status(), e.g. a promise that never settles
 // opts.settings  — merged over DEFAULT_SETTINGS
 // opts.voice     — merged over the inert voice double, for the specs that are
 //                  about what the renderer TELLS the voice engine
@@ -48,6 +49,8 @@ export async function bootRenderer(opts = {}) {
     const board = opts.board || vi.fn(async () => ({ success: true }));
     const settings = Object.assign({}, DEFAULT_SETTINGS, opts.settings || {});
     let rtMessage = null;
+    let resync = null;
+    let winHidden = null;
 
     const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
     document.documentElement.innerHTML = html
@@ -57,7 +60,7 @@ export async function bootRenderer(opts = {}) {
 
     const lounge = {
         auth: {
-            status: vi.fn(async () => ({ authed: true })),
+            status: vi.fn(opts.authStatus || (async () => ({ authed: true }))),
             login: vi.fn(async () => ({ success: true })),
             logout: vi.fn(async () => ({ success: true }))
         },
@@ -113,7 +116,11 @@ export async function bootRenderer(opts = {}) {
         },
         win: {
             minimize: noop, maximize: noop, close: noop,
-            isFocused: vi.fn(async () => true), onFocus: unsub
+            isFocused: vi.fn(async () => true), onFocus: unsub,
+            // Held: main.js sends this on the real window events, and it is the
+            // only way the renderer can know it is in the tray — document.hidden
+            // is frozen at false by backgroundThrottling:false.
+            onHidden: (cb) => { winHidden = cb; return noop; }
         },
         app: {
             version: vi.fn(async () => '0.0.0-test'), isElevated: vi.fn(async () => false),
@@ -121,7 +128,14 @@ export async function bootRenderer(opts = {}) {
             setVoiceState: vi.fn(async () => ({})), setBadge: vi.fn(async () => true),
             openExternal: vi.fn(async () => true), systemTheme: vi.fn(async () => ({ dark: true })),
             setTheme: vi.fn(async () => true), onThemeChange: unsub,
-            onCommand: unsub, onResync: unsub
+            onCommand: unsub,
+            // Captured, not discarded: this is the callback main.js fires on
+            // restore-from-tray / wake, and it is now the only way a test can
+            // make the renderer resync on demand. The visibilitychange event it
+            // used to dispatch never fires in production (backgroundThrottling
+            // is off, so document.hidden is frozen) — driving the app through it
+            // was exercising a path the app never takes.
+            onResync: (cb) => { resync = cb; return noop; }
         },
         startup: {
             get: vi.fn(async () => ({ openAtLogin: false, openAsHidden: false })),
@@ -185,7 +199,11 @@ export async function bootRenderer(opts = {}) {
     // `rt(msg)` delivers one realtime frame, exactly as main.js relays it.
     return {
         $, board, lounge, settings, voice: voiceDouble,
-        rt: (msg) => { if (rtMessage) rtMessage(msg); }
+        rt: (msg) => { if (rtMessage) rtMessage(msg); },
+        // Restore-from-tray, as main.js delivers it.
+        resync: () => { if (resync) resync(); },
+        // The window went to / came back from the tray.
+        hidden: (h) => { if (winHidden) winHidden(h); }
     };
 }
 

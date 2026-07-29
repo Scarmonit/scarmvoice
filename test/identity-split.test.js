@@ -37,6 +37,7 @@ const THEM_UID = 3;
 
 let rtOnMessage = null;          // the renderer's socket handler
 let winOnFocus = null;           // main's focus/blur bridge
+let onResync = null;             // main's restore-from-tray bridge
 let voiceApi = null;             // the fake engine, so a test can drive it
 let voiceOpts = null;            // the callbacks app.js hands the engine
 let peerMuted = false;           // what the SFU says about THEIR microphone
@@ -129,14 +130,21 @@ beforeAll(async () => {
         win: {
             minimize: noop, maximize: noop, close: noop,
             isFocused: vi.fn(async () => true),
-            onFocus: (cb) => { winOnFocus = cb; return noop; }
+            onFocus: (cb) => { winOnFocus = cb; return noop; },
+            onHidden: () => noop
         },
         app: {
             version: vi.fn(async () => '0.0.0-test'), isElevated: vi.fn(async () => false),
             openLogs: vi.fn(async () => true), notify: vi.fn(async () => false),
             setVoiceState: vi.fn(async () => ({})), setBadge: vi.fn(async () => true),
             openExternal: vi.fn(async () => true), systemTheme: vi.fn(async () => ({ dark: true })),
-            setTheme: vi.fn(async () => true), onThemeChange: unsub, onCommand: unsub, onResync: unsub
+            setTheme: vi.fn(async () => true), onThemeChange: unsub, onCommand: unsub,
+            // Held: app:resync is the event main.js fires on restore-from-tray,
+            // and the one that now drives a background refresh. The synthetic
+            // visibilitychange these specs used to dispatch never reaches the
+            // app — backgroundThrottling is off, so Chromium freezes
+            // document.hidden at false and never fires it.
+            onResync: (cb) => { onResync = cb; return noop; }
         },
         startup: {
             get: vi.fn(async () => ({ openAtLogin: false, openAsHidden: false })),
@@ -335,7 +343,7 @@ describe('the typing line', () => {
         // the id they post with, THEN the socket's under the substitute. A test
         // that only fires one of them passes with the bug still in.
         typingRows = [{ client_id: REAL, name: 'XIAIX' }];
-        document.dispatchEvent(new window.Event('visibilitychange'));
+        onResync();
         await settle();
         rtOnMessage({ t: 'typing', channel: 'general', cid: RT, name: 'XIAIX' });
         await settle(2);
@@ -347,7 +355,7 @@ describe('the typing line', () => {
         // A poll first, so this starts from the list the server actually
         // reports rather than from the previous test's leftovers.
         typingRows = [{ client_id: 'some-other-install-of-mine', name: 'Scarmonit' }];
-        document.dispatchEvent(new window.Event('visibilitychange'));
+        onResync();
         await settle();
         // …and the socket's copy of me, under a third id.
         rtOnMessage({ t: 'typing', channel: 'general', cid: 'another', name: 'Scarmonit' });
@@ -471,7 +479,7 @@ describe('sending a message', () => {
             id: 991, body: 'does this show up', name: 'Scarmonit', client_id: 'me',
             user_id: ME.id, created_at: Date.now(), reactions: [], pinned: 0
         }];
-        document.dispatchEvent(new window.Event('visibilitychange'));
+        onResync();
         await settle();
 
         const hits = Array.from($('messages').querySelectorAll('.msg'))

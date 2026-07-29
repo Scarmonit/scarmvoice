@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer');
 
 const noop = () => {};
+let onResync = null;
 const unsub = () => noop;
 
 // Two people in the voice list. Text presence knows their accounts; the voice
@@ -98,13 +99,19 @@ beforeAll(async () => {
             set: vi.fn(async (p) => p)
         },
         ptt: { apply: vi.fn(async () => ({ mode: 'native' })), available: vi.fn(async () => true), describe: vi.fn(async () => 'Backquote'), onChange: unsub },
-        win: { minimize: noop, maximize: noop, close: noop, isFocused: vi.fn(async () => true), onFocus: unsub },
+        win: { minimize: noop, maximize: noop, close: noop, isFocused: vi.fn(async () => true), onFocus: unsub, onHidden: unsub },
         app: {
             version: vi.fn(async () => '0.0.0-test'), isElevated: vi.fn(async () => false),
             openLogs: vi.fn(async () => true), notify: vi.fn(async () => false),
             setVoiceState: vi.fn(async () => ({})), setBadge: vi.fn(async () => true),
             openExternal: vi.fn(async () => true), systemTheme: vi.fn(async () => ({ dark: true })),
-            setTheme: vi.fn(async () => true), onThemeChange: unsub, onCommand: unsub, onResync: unsub
+            setTheme: vi.fn(async () => true), onThemeChange: unsub, onCommand: unsub,
+            // Held: app:resync is what main.js fires on restore-from-tray, and
+            // it is the event that now drives a background refresh. The
+            // synthetic visibilitychange this spec used to dispatch never
+            // reaches the app — backgroundThrottling is off, so Chromium
+            // freezes document.hidden at false and never fires it.
+            onResync: (cb) => { onResync = cb; return noop; }
         },
         startup: { get: vi.fn(async () => ({ openAtLogin: false, openAsHidden: false })), set: vi.fn(async () => ({ openAtLogin: false, openAsHidden: false })) },
         update: { getState: vi.fn(async () => ({ status: 'idle', noteBlocks: [] })), check: noop, download: noop, install: noop, setAuto: noop, onState: unsub },
@@ -177,9 +184,9 @@ describe('members sidebar', () => {
     });
 
     it('does not duplicate when a resync re-delivers uid-less voice rows', async () => {
-        // Focus/visibility resync is what re-fetched `list` and overwrote the
-        // voice roster with the uid-less shape.
-        document.dispatchEvent(new Event('visibilitychange'));
+        // The restore-from-tray resync is what re-fetched `list` and overwrote
+        // the voice roster with the uid-less shape.
+        onResync();
         await settle();
         expect(rows()).toHaveLength(2);
         expect(groups()).toEqual(['Online — 1', 'Away — 1']);

@@ -128,7 +128,8 @@ beforeAll(async () => {
         win: {
             minimize: noop, maximize: noop, close: noop,
             isFocused: vi.fn(async () => true),
-            onFocus: (cb) => { winOnFocus = cb; return noop; }
+            onFocus: (cb) => { winOnFocus = cb; return noop; },
+            onHidden: () => noop
         },
         app: {
             version: vi.fn(async () => '0.0.0-test'), isElevated: vi.fn(async () => false),

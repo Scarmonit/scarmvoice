@@ -91,8 +91,22 @@
     // analysers — a 512-sample RMS loop each — to animate indicators on a window
     // nobody is looking at. Suspending while hidden is free: the first tick
     // after the window comes back re-reads live levels within 50 ms.
+    //
+    // That was written against `document.hidden`, which NEVER BECOMES TRUE in
+    // this app: backgroundThrottling:false freezes it at false through both a
+    // tray hide and a minimize, and visibilitychange never fires (verified in
+    // this Electron build). So the loop above has been running the whole time.
+    // The main process is the only thing that knows, and it now says so —
+    // app.js forwards win:hidden here.
+    let hidden = false;
+
     function shouldRun() {
-        return (meters.size || tickers.size) && !document.hidden;
+        return (meters.size || tickers.size) && !hidden;
+    }
+
+    function setHidden(h) {
+        hidden = !!h;
+        if (hidden) stopTimer(); else ensureTimer();
     }
 
     function ensureTimer() {
@@ -105,10 +119,6 @@
             if (!shouldRun()) stopTimer();
         }, TICK_MS);
     }
-
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) stopTimer(); else ensureTimer();
-    });
 
     function stopTimer() {
         if (!timer) return;
@@ -232,5 +242,5 @@
         };
     }
 
-    window.ScarmAudio = { context, resume, setSinkId, createMeter, createGain, onTick, stats, TICK_MS };
+    window.ScarmAudio = { context, resume, setSinkId, createMeter, createGain, onTick, setHidden, stats, TICK_MS };
 })();

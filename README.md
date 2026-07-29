@@ -320,6 +320,120 @@ under a CSP that blocks remote script, and is granted only the microphone and
 notification permissions. Every `ipcMain` handler also checks that the call came
 from our own top frame before running.
 
+### The connection is kept, not rebuilt
+
+`fetch` in the main process is undici, and undici destroys an idle socket four
+seconds after the last response — its `Agent` default. Cloudflare sends no
+`Keep-Alive: timeout=` hint that would raise it, and **every** cadence in this
+app is longer than four seconds: the idle poll is 60 s, the DM poll 12 s, the
+thread poll 2.5 s, and anything a person does by hand is minutes apart. So
+essentially nothing was ever reused, and every request paid a fresh TCP
+handshake and TLS negotiation — two extra round trips in front of the one
+carrying the answer.
+
+Measured in the shipped runtime against the real origin, four requests at a
+six-second cadence:
+
+| | per request | connections opened |
+| --- | --- | --- |
+| default dispatcher | 224, 114, 119, 125 ms | **4** |
+| `keepAliveTimeout: 30000` | 123, 40, 43, 43 ms | **1** |
+
+The connection count is the causal evidence; the timings are its consequence.
+That is ~75 ms off every channel switch, thread open, search, send and
+attachment fetch.
+
+The swap cannot live in `net.init()`. Node builds the global dispatcher
+**lazily**, so the well-known symbol is still `undefined` at that point — code
+placed there reads nothing, does nothing, and ships no benefit while looking
+entirely correct. It is attempted on each request instead, which is free once it
+has taken, and whose worst case is exactly the behaviour it replaces.
+
+### Nothing waits for an answer it already has
+
+Startup used to make five round trips in a row before it could draw a message,
+and two of them were avoidable:
+
+- **`account/me` was asked twice.** The account gate asks it and keeps the
+  answer; `enterApp()` then asked the identical question again — same endpoint,
+  same install id, milliseconds later — and the socket, the channel list and the
+  first page of messages all waited behind it.
+- **The first `list` waited behind the emoji/avatar/channel burst.** It depends
+  on none of them. Only its *render* does, and that still happens after they
+  land, so a message is never drawn as `:shrug:` text or as initials that later
+  swap to a face. Moving the request meant asking for a primary read
+  explicitly — running after the channels POST used to get that for free.
+
+And the two calls the renderer opens with now go out **during window creation**
+(`net.prefetchSession`), because the renderer cannot ask for anything for the
+~280 ms it spends coming up, and nothing was on the wire for any of it. They are
+the same calls made by the same functions, with the same side effects; only the
+timing moves. Strictly one shot, so a re-login always reaches the server.
+
+Measured on this machine, two runs each, from process start:
+
+| | v0.48.0 | now |
+| --- | --- | --- |
+| `/auth/status` leaves | 421 ms | **151 ms** |
+| `account/me` calls | 2 | **1** |
+| `list` leaves | 192 ms after the burst | **with the burst** |
+| first messages on screen | ~1380 ms | **~1040 ms** |
+
+The window no longer opens on the sign-in card either. It was visible in markup
+and only hidden once the session check came back, so every launch painted a
+blurred scrim and a password field for a couple of hundred milliseconds before
+throwing them away. It is hidden in markup now and every path that wants it
+unhides it by hand — with a 400 ms deadline in `boot()`, because withholding it
+is only acceptable while an answer is plausibly coming, and `net.js` waits
+twenty seconds before giving up.
+
+### The renderer cannot see whether the window is on screen
+
+`backgroundThrottling: false` is deliberate — it keeps the presence heartbeat
+and the fallback poll alive in the tray, which is what fixed the "messages stop
+after an hour minimised" bug. The price, which nothing in the code accounted
+for, is that Chromium then stops maintaining the visibility API too:
+`document.hidden` reads `false` through **both** a hide to the tray and a
+minimize, and `visibilitychange` never fires at all. Verified in this Electron
+build, both ways, and again in the running app.
+
+Five guards were written against that flag, so not one of them had ever run. The
+thread poll kept asking every 2.5 s, the DM poll every 12 s, the shared 20 Hz
+meter tick kept running a 512-sample RMS loop per call participant, and the
+decorative animations kept repainting — all for a window nobody could see.
+
+`main.js` watches the real window events and sends `win:hidden`; `appHidden()`
+in the renderer is the single place the answer comes from, so the guards cannot
+drift apart again. Coming back is the half that makes skipping safe: the panel
+refreshes moved onto `app:resync`, which main really does send on
+restore/show/focus.
+
+The CSS side is an **explicit list** of the animations to pause, not
+`html.win-hidden *` — a universal selector invalidates the computed style of
+every element on both hide and show, and the show side lands exactly on
+restore-from-tray, spending a felt interaction to save background work.
+`animation-play-state: paused` rather than `animation: none`, so they resume
+mid-cycle and nothing pops.
+
+The one place `document.hidden` is still read is the presence rule, left exactly
+as it is on purpose: making it work means minimising would publish you as away
+to everyone, which is a change to what other people see and belongs in its own
+commit.
+
+### The gear opens the panel, then fills it in
+
+Settings awaited `enumerateDevices()` before revealing the sheet. That call is a
+trip through Chromium's audio service and it is slow cold — **312 ms** on this
+machine's fifteen endpoints — so the gear sat there doing nothing for a third of
+a second, to populate two dropdowns that live in Voice & Audio, which is not
+even the pane that opens. It runs after the reveal now (click to visible:
+16.5 ms), which is the rule the mic and speaker popovers already followed, and
+it shares the device list those popovers keep rather than opening a second
+enumeration of its own — so a reopen fills the selects in the same frame. The
+refresh still lands and re-applies the saved value, so a device plugged in since
+is picked up; if it comes back empty the selects are left alone rather than
+blanked to *System default*.
+
 ### The account token never crosses into the renderer
 
 Board accounts add a second credential (`x-account-token`) alongside the gate
@@ -432,6 +546,17 @@ the npm package (core plus the same "common" language set, read out of
 copies the same atom-one-dark theme. That keeps highlighting identical to the
 website with no network at runtime.
 
+A fence with **no language** runs auto-detection across that whole set, and it
+is not cheap: measured against this bundle, 1.2 ms for a one-line fence, 2.7 ms
+for a stack trace and 9.3 ms for a 1500-character paste, against 0.06–0.36 ms
+when the language is named. That was paid again on every rebuild of the row — an
+edit, a reaction, a channel switch back, a resync. hljs is deterministic for a
+given (text, language), so the result is memoised in a bounded map, and the
+cache stores the **class name as well as the markup**: `highlightElement` adds
+`hljs`, and the entire theme hangs off that class, so replaying the HTML alone
+gives an unstyled, unpadded, transparent block. Narrowing the language set would
+also make detection faster, and is not done — that trades quality for speed.
+
 ### The camera and the screen share are different tracks
 
 `forceScreenQuality()` pins the outgoing share to the active tier's bitrate,
@@ -535,6 +660,33 @@ following the live edge with no filter applied — trimming under a reader who h
 deliberately paged back, or who is filtering across that history, would take away
 exactly what they asked for. `hasMore` is re-armed when it trims, so the trimmed
 page is immediately reachable again via *Load earlier*.
+
+### Going back to a channel you were just in
+
+Switching channels blanked the message column and then waited a full round trip
+— the app's single most repeated navigation, and for the whole of it the only
+thing on screen was a stray *Load earlier messages* button. What you last saw in
+a channel is kept now (five channels, least-recently-used), so the switch paints
+in the next frame and the fetch fills in behind it.
+
+The cache is never the source of truth. The request still runs, the merge is
+untouched, and the server's answer always replaces what was painted — including
+when messages were deleted while you were away. Three things it must not break,
+each of which has a test:
+
+- **Scroll.** `renderMessages()` never touches `scrollTop`; the only
+  scroll-to-bottom lives in `loadMessagesOnce`. Painting a remembered page
+  without re-pinning leaves it at the *previous* channel's offset and then jumps
+  when the fetch lands, which is worse than the blank it replaces.
+- **The chime.** The alert block asks "which of these are newer than the newest
+  id I held before this merge?" A restored page moves that from 0 to a real id,
+  so every message that arrived while you were elsewhere would look fresh and
+  announce itself the moment you came back. One flag suppresses exactly the
+  restored merge and nothing after it.
+- **Whose messages they are.** The cache is cleared by `teardownSession()`
+  alongside the drafts, for the same reason: the next person to sign in on this
+  machine must not open a channel and find a stranger's conversation already
+  painted. Rename and delete drop their entry too.
 
 ### Messages typed while offline
 
@@ -828,6 +980,15 @@ windows with live thumbnails, plus a system-audio toggle (Windows loopback).
 The source is registered with the main process *before* the SDK is told to
 share, because `enableScreenShare()` calls `getDisplayMedia()` immediately and
 the display-media handler needs an answer ready.
+
+That handler reads exactly one field off the source — its `id` — but it was
+asking `desktopCapturer` for the default thumbnail of every screen and every
+open window, ~150 ms on the share's critical path, and throwing all of them
+away. It asks for `thumbnailSize: { width: 0, height: 0 }` now. The picker still
+requests real thumbnails, because it actually draws them. The lookup itself
+stays: a selection can be a minute old (`SHARE_PICK_TTL_MS`), and it is what
+turns "the window you picked has since closed" into a clean denial rather than
+Chromium capturing a dead handle.
 
 Quality uses the same tiers as the website — 720p/1080p/1440p × sharp/smooth —
 and the same encoder-pinning trick: RealtimeKit exposes no screen-share bitrate

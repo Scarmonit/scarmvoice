@@ -114,7 +114,11 @@ contextBridge.exposeInMainWorld('lounge', {
         maximize: () => ipcRenderer.invoke('win:maximize'),
         close: () => ipcRenderer.invoke('win:close'),
         isFocused: () => ipcRenderer.invoke('win:focused'),
-        onFocus: (cb) => sub('win:focus', cb)
+        onFocus: (cb) => sub('win:focus', cb),
+        // "The window is in the tray or minimised." document.hidden cannot
+        // answer this — backgroundThrottling:false freezes it at false — so the
+        // main process is the only thing that knows. See main.js.
+        onHidden: (cb) => sub('win:hidden', cb)
     },
 
     app: {

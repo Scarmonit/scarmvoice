@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer');
 
 const noop = () => {};
+let onResync = null;
 const unsub = () => noop;
 const $ = (id) => document.getElementById(id);
 
@@ -65,10 +66,10 @@ async function settle(n = 14) {
 }
 
 // What the DM poll does to the view, without waiting twelve real seconds for
-// it: the visibility handler runs the same loadDmMessages() -> renderDmHead() /
+// it: the resync handler runs the same loadDmMessages() -> renderDmHead() /
 // renderDmMessages() pass.
 async function poll() {
-    document.dispatchEvent(new window.Event('visibilitychange'));
+    if (onResync) onResync();
     await settle();
 }
 
@@ -145,14 +146,20 @@ beforeAll(async () => {
         },
         win: {
             minimize: noop, maximize: noop, close: noop,
-            isFocused: vi.fn(async () => true), onFocus: unsub
+            isFocused: vi.fn(async () => true), onFocus: unsub, onHidden: unsub
         },
         app: {
             version: vi.fn(async () => '0.0.0-test'), isElevated: vi.fn(async () => false),
             openLogs: vi.fn(async () => true), notify: vi.fn(async () => false),
             setVoiceState: vi.fn(async () => ({})), setBadge: vi.fn(async () => true),
             openExternal: vi.fn(async () => true), systemTheme: vi.fn(async () => ({ dark: true })),
-            setTheme: vi.fn(async () => true), onThemeChange: unsub, onCommand: unsub, onResync: unsub
+            setTheme: vi.fn(async () => true), onThemeChange: unsub, onCommand: unsub,
+            // Held: app:resync is what main.js fires on restore-from-tray, and
+            // it is the event that now drives a background refresh. The
+            // synthetic visibilitychange this spec used to dispatch never
+            // reaches the app — backgroundThrottling is off, so Chromium
+            // freezes document.hidden at false and never fires it.
+            onResync: (cb) => { onResync = cb; return noop; }
         },
         startup: {
             get: vi.fn(async () => ({ openAtLogin: false, openAsHidden: false })),

@@ -29,6 +29,7 @@ const SOMEONE_ELSE = 'c-someone-else';
 // The list endpoint's answer, swapped between assertions.
 let listPosts = [];
 let notify = null;
+let onResync = null;
 
 function post(id, userId, clientId, name) {
     return {
@@ -40,6 +41,8 @@ function post(id, userId, clientId, name) {
 
 function stubBridge() {
     const noop = () => {};
+    // eslint-disable-next-line no-undef
+
     const unsub = () => noop;
     notify = vi.fn(async () => true);
     return {
@@ -111,7 +114,7 @@ function stubBridge() {
         },
         win: {
             minimize: noop, maximize: noop, close: noop,
-            isFocused: vi.fn(async () => false), onFocus: unsub
+            isFocused: vi.fn(async () => false), onFocus: unsub, onHidden: unsub
         },
         app: {
             version: vi.fn(async () => '0.0.0-test'),
@@ -123,7 +126,13 @@ function stubBridge() {
             openExternal: vi.fn(async () => true),
             systemTheme: vi.fn(async () => ({ dark: true })),
             setTheme: vi.fn(async () => true),
-            onThemeChange: unsub, onCommand: unsub, onResync: unsub
+            onThemeChange: unsub, onCommand: unsub,
+            // Held: app:resync is what main.js fires on restore-from-tray, and
+            // it is the event that now drives a background refresh. The
+            // synthetic visibilitychange this spec used to dispatch never
+            // reaches the app — backgroundThrottling is off, so Chromium
+            // freezes document.hidden at false and never fires it.
+            onResync: (cb) => { onResync = cb; return noop; }
         },
         startup: {
             get: vi.fn(async () => ({ openAtLogin: false, openAsHidden: false })),
@@ -150,8 +159,8 @@ async function deliver(posts) {
     listPosts = posts;
     document.getElementById('messages').dispatchEvent(new Event('scroll'));
     window.lounge.board.mockClear();
-    // The visibility handler is what the app itself uses to force a refresh.
-    document.dispatchEvent(new Event('visibilitychange'));
+    // app:resync is what the app itself uses to force a refresh.
+    if (onResync) onResync();
     for (let i = 0; i < 12; i++) await settle();
 }
 

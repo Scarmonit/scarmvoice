@@ -3724,6 +3724,39 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .btn-danger-solid:active { background: var(--danger-solid-hover); }
 .btn-danger-soft:disabled, .btn-danger-solid:disabled { opacity: .5; cursor: default; }
 
+/* ---------- nothing animates at a window nobody can see ------------------ */
+
+/* `backgroundThrottling: false` on the window (main.js) keeps the renderer's
+   timers alive in the tray, which is what the presence heartbeat and the
+   fallback poll depend on. The side effect is that Chromium does not slow the
+   compositor down either, so these decorative loops kept repainting a window
+   sitting in the tray for the whole of a call — measured at roughly 2% of one
+   core across the renderer and GPU processes.
+
+   main.js sends win:hidden on the real window events and app.js puts this class
+   on <html>; document.hidden cannot be used, it is frozen at false here.
+
+   An EXPLICIT list, not `html.win-hidden *`. The universal selector
+   invalidates the computed style of every element in the document on both hide
+   AND show, and the show side lands exactly on restore-from-tray — a full
+   recalc over a 400-message list, spending a felt interaction to save
+   background work. The two hover-driven loops (#btn-soundboard:hover .wv,
+   #btn-share:hover .mon-arrow) cannot run while the window is away, so this is
+   the complete set.
+
+   `animation-play-state: paused` rather than `animation: none`: it resumes
+   mid-cycle, so nothing jumps or restarts when the window comes back. */
+html.win-hidden #voice-live .vl-signal rect,
+html.win-hidden #btn-share.on .mon-frame,
+html.win-hidden #btn-cam.on .cam-rec,
+html.win-hidden #btn-mic.recording .rec-dot,
+html.win-hidden .vrec-dot,
+html.win-hidden .stage-live,
+html.win-hidden .tb-dot.warn,
+html.win-hidden .up-bar i {
+  animation-play-state: paused;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .btn-danger-soft, .btn-danger-solid { transition: none; }
 }

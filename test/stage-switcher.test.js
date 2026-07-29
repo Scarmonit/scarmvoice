@@ -93,7 +93,7 @@ beforeAll(async () => {
             set: vi.fn(async (p) => p)
         },
         ptt: { apply: vi.fn(async () => ({ mode: 'native' })), available: vi.fn(async () => true), describe: vi.fn(async () => 'Backquote'), onChange: unsub },
-        win: { minimize: noop, maximize: noop, close: noop, isFocused: vi.fn(async () => true), onFocus: unsub },
+        win: { minimize: noop, maximize: noop, close: noop, isFocused: vi.fn(async () => true), onFocus: unsub, onHidden: unsub },
         app: {
             version: vi.fn(async () => '0.0.0-test'), isElevated: vi.fn(async () => false),
             openLogs: vi.fn(async () => true), notify: vi.fn(async () => false),
