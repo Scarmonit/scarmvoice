@@ -60,6 +60,13 @@ const DEFAULTS = {
 
     // Shell layout
     showMembers: true,           // right-hand members sidebar
+    // Panel widths, in CSS pixels, both draggable by their inner edge. Clamped by
+    // the renderer against the window's actual width as well as against these
+    // constants, so neither can be dragged over the message column — see
+    // SIDEBAR_MIN/MAX in app.js. Defaults match the values the stylesheet shipped
+    // with, so an existing profile looks identical until somebody drags something.
+    sidebarWidth: 300,
+    membersWidth: 264,
     catTextOpen: true,           // "Text Channels" category expanded
     catDmsOpen: true,            // "Direct Messages" category expanded
     catVoiceOpen: true,          // "Voice Channels" category expanded

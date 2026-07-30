@@ -468,6 +468,8 @@ button { font-family: inherit; }
   background: var(--side);
   display: flex; flex-direction: column;
   min-height: 0;
+  /* Positioning context for .pane-resize, which straddles the right edge. */
+  position: relative;
 }
 
 #server-head {
@@ -952,6 +954,7 @@ button { font-family: inherit; }
    is more separation than the reference uses and it is the third place we had
    done it; the rail and the popover's row cards were the other two. */
 #members-panel {
+  position: relative;      /* see .pane-resize */
   width: var(--w-members);
   background: var(--chat);
   box-shadow: inset 1px 0 0 var(--line);
@@ -1246,6 +1249,11 @@ button { font-family: inherit; }
 .msg-text a { color: var(--accent); text-decoration: none; }
 .msg-text a:hover { text-decoration: underline; }
 .msg-edited { font-size: 0.68em; color: var(--dim); margin-left: 4px; }
+/* An edit made by somebody OTHER than the author. It names them, so it is
+   longer than "(edited)" and worth a shade more contrast: it is a statement
+   about who changed the message rather than a footnote on the author's own
+   correction. */
+.msg-edited.by-mod { color: var(--muted); font-style: italic; }
 
 /* Keyboard cursor in the message list. Focus rings on the message itself would
    be lost against the hover background, so this is an explicit marker — and the
@@ -2548,6 +2556,53 @@ input[readonly] { opacity: .75; cursor: default; }
 .ctx-item.strong .ctx-label { font-weight: 600; color: var(--text); }
 .ctx-item.strong:hover .ctx-label { color: inherit; }
 .ctx-sep { height: 1px; margin: 5px 6px; background: var(--line); }
+
+/* ---------- resizable panels ------------------------------------------- */
+/* The grab strip on a panel's inner edge. HORIZONTAL ONLY — the cursor says so
+   and the handler only ever reads clientX, so there is no vertical drag to
+   accidentally start.
+
+   Straddles the edge rather than sitting inside it: 8px of hit area centred on
+   the boundary is what makes it findable with a mouse, while the visible line is
+   1px until you are on it. It is absolutely positioned inside the panel so it
+   needs no grid track, cannot shift the layout, and disappears with the panel. */
+.pane-resize {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 8px;
+  z-index: 6;
+  cursor: col-resize;
+  /* No background of its own — the ::after below is the whole visual. */
+  background: none; border: 0; padding: 0;
+  /* Keeps the strip out of the way of a click meant for the panel behind it:
+     only the 8px band responds, and nothing inside it is a drop target. */
+  touch-action: none;
+}
+.pane-resize-right { right: -4px; }
+.pane-resize-left { left: -4px; }
+/* The indicator. Invisible at rest so the app looks the way it did; a clear
+   accent line the moment the pointer is over the band, which is the "you can drag
+   this" the panel needs. Also shown while a drag is in progress even if the
+   pointer has wandered off the strip, and on keyboard focus. */
+.pane-resize::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 3px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.pane-resize:hover::after,
+.pane-resize:focus-visible::after,
+.pane-resize.dragging::after { opacity: 1; }
+.pane-resize:focus { outline: none; }        /* the line above IS the focus ring */
+/* While dragging, the col-resize cursor has to win everywhere — over the message
+   list, over the composer — or it flickers back to a text caret the moment the
+   pointer leaves the 8px strip. Selection is killed for the same reason: a drag
+   across the message list would otherwise highlight it. */
+body.resizing-pane, body.resizing-pane * { cursor: col-resize !important; }
+body.resizing-pane { user-select: none; }
 
 /* ---------- dialog ----------------------------------------------------- */
 
@@ -4160,6 +4215,7 @@ html.win-hidden .up-bar i {
   grid-area: side;
   display: flex; flex-direction: column; min-height: 0;
   background: var(--side);
+  position: relative;      /* see .pane-resize */
 }
 #dm-sidebar[hidden] { display: none; }
 #dm-side-head { flex: none; padding: 10px 10px 6px; }

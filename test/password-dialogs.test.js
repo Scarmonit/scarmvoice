@@ -21,7 +21,10 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { bootRenderer, settle, $ } from './helpers/renderer.js';
 
-const ME = { id: 1, username: 'Me', role: 'admin', totp: false };
+// OWNER, not admin: resetting another member's password is an owner-only
+// capability now. An admin has content moderation and the channel list and
+// nothing that touches an account, so this panel is not drawn for one at all.
+const ME = { id: 1, username: 'Me', role: 'owner', totp: false };
 const OTHER = { id: 2, username: 'Alice', role: 'member' };
 
 // bcrypt stops reading at 72 bytes, which is the cap the account-removal dialog
@@ -110,7 +113,7 @@ describe('turning two-factor off', () => {
     });
 });
 
-describe('an admin resetting a member password', () => {
+describe('the owner resetting a member password', () => {
     it('does not put the new password on screen', async () => {
         const row = Array.from($('member-admin-list').querySelectorAll('.ma-row'))
             .find((r) => r.textContent.includes(OTHER.username));

@@ -835,7 +835,9 @@ describe('an empty channel', () => {
         expect(src()).toMatch(/Welcome to #\$\{esc\(channel\)\}!/);
         expect(src()).toMatch(/This is the start of the #\$\{esc\(channel\)\} channel\./);
         // Only offered to somebody who can act on it.
-        expect(src()).toMatch(/if \(isAdmin\(\)\) \{[\s\S]{0,300}Edit Channel/);
+        // Renaming is admin-and-above, checked through the capability table that
+        // mirrors the server's — not a bare role comparison.
+        expect(src()).toMatch(/if \(can\('channel\.rename'\)\) \{[\s\S]{0,300}Edit Channel/);
         // Left-aligned: it is the top of a history, not a centred notice.
         expect(css).not.toMatch(/\.chan-intro \{[^}]*text-align:\s*center/);
     });

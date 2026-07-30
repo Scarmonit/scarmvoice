@@ -93,11 +93,29 @@ board session is remembered for 30 days.
 - **Status in a conversation** — the profile beside a direct message says
   whether that person is there, on their face and again in words
 - **Custom status** — set a status beside your name, shared with the website
-- **Moderation** (admins) — from the person popover: **Remove from voice**, which
-  ends their call on every device they have open, and **Ban**, which signs them
-  out everywhere and keeps them out. Deleting anyone's message and the full
-  member list (roles, ban/unban, password reset, 2FA reset, delete) are in
-  Settings → Members. See [A kick is two halves](#a-kick-is-two-halves)
+- **Three roles — Owner, Admin, Member** — with a hard line between moderating
+  CONTENT and touching an ACCOUNT. An admin edits, deletes and pins anyone's
+  messages and creates and renames channels; only the Owner bans, resets
+  passwords, clears 2FA, deletes accounts, changes roles or deletes a channel. The
+  Owner cannot be demoted, banned or removed by anybody. Every rule is enforced on
+  the server, not merely hidden in the UI. See
+  [Roles and permissions](#roles-and-permissions)
+- **Role changes apply instantly** — a promotion or demotion takes effect on the
+  affected person's screen with no sign-out and no restart, and tells them what
+  happened with a dialog they dismiss
+- **Moderation** — from the person popover: **Remove from voice** (admins), which
+  ends their call on every device they have open, and **Ban** (Owner), which signs
+  them out everywhere and keeps them out. The member list — roles, ban/unban,
+  password reset, 2FA reset, delete — is in Settings → Members, for the Owner. See
+  [A kick is two halves](#a-kick-is-two-halves)
+- **Edits are attributed** — a message a moderator edited says *"edited by
+  <name>"* with the time, rather than the bare *(edited)* an author's own
+  correction gets. The byline still shows the author, so the two must be tellable
+  apart
+- **Resizable side panels** — drag the inner edge of the channel list or the
+  member list to set its width. Horizontal only, with limits that keep both usable
+  and stop either crowding the messages, and the width is remembered between
+  sessions. Double-click a handle to reset it; the arrow keys work too
 
 **Chat**
 - Channels with unread badges; create, rename, delete
@@ -121,7 +139,7 @@ board session is remembered for 30 days.
 - **Custom emoji** — upload an image under a name and use it as `:name:` in any
   message or as a reaction. Stored on the server, so the website and the phone
   app see the same set; add and remove them in Settings → Custom emoji. Anyone
-  can add one, you can remove your own, and an admin can remove any
+  can add one, you can remove your own, and a moderator can remove any
 - **Replies and threads** — reply to quote a message above your own, or open a
   thread panel to read and post replies in place. Reply counts on the message
   open the thread
@@ -986,6 +1004,102 @@ The inline editor has to survive the background poll — `renderMessages()` rebu
 the whole list, which would rip a half-typed edit out from under you, so it
 returns early while an edit is open and resyncs when the edit finishes. A failed
 save keeps the editor open with your text intact rather than discarding it.
+
+### Roles and permissions
+
+Three tiers, and **one table** that decides everything:
+
+| | Member | Admin | Owner |
+| --- | :-: | :-: | :-: |
+| Edit / delete **your own** messages | ✓ | ✓ | ✓ |
+| Edit / delete / pin **anyone's** messages | | ✓ | ✓ |
+| Create a channel | | ✓ | ✓ |
+| Rename a channel | | ✓ | ✓ |
+| Remove someone from a call · remove anyone's custom emoji | | ✓ | ✓ |
+| **Delete** a channel | | | ✓ |
+| Ban · reset a password · clear 2FA · delete an account | | | ✓ |
+| Change roles | | | ✓ |
+
+The shape of it: **Admin moderates content and the channel list; Owner is the only
+role that touches an account.** Deleting a channel sits with the owner-only powers
+rather than the moderation ones because it destroys every message in the channel,
+their reactions and their attachments, and cannot be undone.
+
+Four things were wrong before this, and they are worth naming because three of
+them were invisible:
+
+- **An admin could demote the Owner.** `/account/manage` was gated on `isAdmin` as
+  a whole, so promoting somebody handed them ban, password-reset, 2FA-clear,
+  account-delete and role-change over everybody — including the person who set the
+  board up, with no way back short of editing the database by hand. The Owner is
+  now untouchable by anyone (`mayManage`), and none of those actions is an admin's
+  at all.
+- **Creating a channel had no role check whatsoever**, server-side or client-side.
+- **A moderator could delete somebody else's message but not edit one.** The server
+  always allowed it; the hover bar and the right-click menu both gated edit on
+  ownership, so the ability existed and could not be reached.
+- **Role checks were bare `role === 'admin'` comparisons** spread across the
+  Functions and a 12,000-line renderer. "What can an admin do" was not answerable
+  by reading anything; it was answerable by grepping and hoping. There is now one
+  `CAPABILITIES` table on the server, and a deliberate mirror of it in each client.
+
+> The mirror decides what to **draw**. The server's copy decides what is
+> **allowed**, and it is checked on every request — hiding a button is not a
+> permission check, and anyone can call the endpoint directly.
+
+The Owner role is established **once**, when the board's first account is created,
+and there is no in-app action that grants it. That is what makes it safe: there is
+nothing to escalate to. It also means the Owner cannot close their own account —
+doing so would leave a board nobody could ever administer.
+
+#### A role change with no restart
+
+A role used to take effect only after the affected person signed out and back in,
+or restarted the app, because every client reads its role exactly once — from
+`account/me` at startup — and nothing ever asked again. Being promoted and then
+having to quit the app to use it is a promotion that has not happened yet.
+
+So `setRole` pushes the change down the realtime socket, addressed by **account**
+(the same unicast DMs and voice-kicks use, so every device that person has open
+gets it). The client refetches `account/me` — the authoritative answer; the push is
+only a trigger — repaints every surface a role decides, and shows a dialog with one
+button saying what changed and who changed it.
+
+Two things that had to be got right:
+
+- The message list is diffed by signature, so the viewer's **role is part of each
+  row's signature**. Without it the repaint after a promotion appeared to do
+  nothing at all: every row on screen kept the buttons it was originally drawn
+  with.
+- If they are offline, nothing is pushed and the next launch reads the new role
+  anyway — which is exactly the old behaviour, and therefore a safe floor.
+
+### Resizable side panels
+
+Both side panels are dragged by their inner edge. The width lands in the CSS custom
+property the `#app` grid already uses for its column track, so nothing is
+re-laid-out by hand.
+
+**Horizontal only** — the handler reads `clientX` and nothing else, so there is no
+vertical drag to start by accident. The handle straddles the edge (8px of hit area,
+a 1px indicator until the pointer is on it), is absolutely positioned inside the
+panel so it needs no grid track of its own, and disappears with the panel.
+
+The limits are **two**, and the second is the one that matters:
+
+- a static floor and ceiling per panel, so neither can be made unusable or
+  overwhelming (`180–480` for the channel list, `160–420` for the members list);
+- a **dynamic** clamp that guarantees the message column keeps 420px whatever the
+  window size. A static maximum cannot deliver that on its own — 480 + 420 is
+  comfortable at 1900px wide and swallows the entire conversation at 1100px — so
+  the clamp reads `window.innerWidth`, and is re-applied on window resize because
+  shrinking the window is the other way to reach that state.
+
+Written to settings at the **end** of a drag rather than on every frame: a drag
+produces one move event per frame and `settings.set` is an IPC round trip plus a
+debounced whole-file write. Double-click resets a panel; the arrow keys move it too
+(the handle is a focusable `role="separator"`, so a focus ring that did nothing
+would be worse than none).
 
 ### Spellcheck
 

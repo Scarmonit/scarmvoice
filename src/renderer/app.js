@@ -725,7 +725,7 @@
     }
 
     function openDialog({ title, message, value, ok, danger, withInput, label2, value2, placeholder,
-                          inputType, maxLength, placeholder2, maxLength2 }) {
+                          inputType, maxLength, placeholder2, maxLength2, noCancel }) {
         return new Promise((resolve) => {
             // A second dialog opening over the first used to overwrite
             // dialogDone, so the first promise never settled and whatever was
@@ -761,6 +761,11 @@
             inp2.maxLength = maxLength2 || 80;
             $('dialog-ok').textContent = ok || 'OK';
             $('dialog-ok').classList.toggle('danger', !!danger);
+            // `noCancel` is for a dialog that ANNOUNCES rather than asks — the
+            // role-change notice, where there is nothing to decline and a Cancel
+            // button would imply the change had not already happened. Reset every
+            // time, because this element is shared by every dialog.
+            $('dialog-cancel').hidden = !!noCancel;
             $('dialog').hidden = false;
             trapFocus($('dialog'), {
                 label: title,
@@ -795,6 +800,11 @@
     // Resolves true/false.
     function askConfirm(title, message, ok, danger) {
         return openDialog({ title, message, ok, danger, withInput: false });
+    }
+    // Tell the user something, with one button to dismiss it. No Cancel: there is
+    // nothing to decline, because whatever it describes has already happened.
+    function tellUser(title, message, ok) {
+        return openDialog({ title, message, ok: ok || 'OK', withInput: false, noCancel: true });
     }
 
     $('dialog-form').addEventListener('submit', (e) => {
@@ -1092,7 +1102,7 @@
             account = res.user;
             pendingVerifyUser = null;
             await adoptAccountName();
-            if (account.role === 'admin') toast('Account verified — you are the board admin');
+            if (account.role === 'owner') toast('Account verified — you are the board owner');
             else toast('Account verified — welcome, ' + account.username);
             hideAccountStep();
             $('login').hidden = true;
@@ -1152,8 +1162,8 @@
             $('login-acct-pw').value = '';
             $('login-new-pw').value = '';
             await adoptAccountName();
-            if (register && account.role === 'admin') {
-                toast('Account created — you are the board admin');
+            if (register && account.role === 'owner') {
+                toast('Account created — you are the board owner');
             }
             hideAccountStep();
             $('login').hidden = true;
@@ -1289,6 +1299,7 @@
 
             applyChatFontSize(settings.chatFontSize);
             applyChrome();
+            initPaneResizing();
             setChannelTitle(channel);
             warnIfElevated();
             window.loungeSounds.init(settings);
@@ -1428,7 +1439,7 @@
                 (unread ? `<span class="unread">${unread > 99 ? '99+' : unread}</span>` : '') +
                 '<span class="chan-acts">' +
                 `<span class="chan-act" role="button" tabindex="0" data-act="alerts" data-tip="Notification Settings">${I('bell')}</span>` +
-                (isAdmin() ? `<span class="chan-act" role="button" tabindex="0" data-act="edit" data-tip="Edit Channel">${I('gear')}</span>` : '') +
+                (can('channel.rename') ? `<span class="chan-act" role="button" tabindex="0" data-act="edit" data-tip="Edit Channel">${I('gear')}</span>` : '') +
                 '</span>';
             const runAct = (act) => {
                 const r = act.getBoundingClientRect();
@@ -2209,7 +2220,7 @@
     // itself changing.
     function messageSig(p, grouped, compact) {
         return JSON.stringify([
-            p.id, p.body, p.edited_at, p.pinned, p.reply_count, p.name,
+            p.id, p.body, p.edited_at, p.edited_by, p.pinned, p.reply_count, p.name,
             avatarSrc(p.user_id),
             p.att_key, p.att_name, p.att_size, p.created_at,
             p.quote ? [p.quote.name, p.quote.body, p.quote.att_name, p.quote.missing] : 0,
@@ -2218,6 +2229,13 @@
             // both the body and the reaction chips resolve `:name:` against the
             // custom-emoji map. See emojiGen.
             emojiGen,
+            // Nor is this, and it is here for the same reason. The action bar is
+            // built from the viewer's ROLE — edit, delete and pin on somebody
+            // else's message all depend on it — and the list is diffed by
+            // signature, so a role that changed mid-session left every row on
+            // screen with the buttons it was drawn with. The message repaint after
+            // a promotion appeared to do nothing at all.
+            account ? account.role : '',
             grouped, compact
         ]);
     }
@@ -2274,16 +2292,16 @@
         // first message forever rather than vanishing the moment one arrives.
         if (!hasMore && !active) {
             rows.push({
-                key: 'intro', sig: channel + '|' + String(isAdmin()), make: () => {
+                key: 'intro', sig: channel + '|' + String(can('channel.rename')), make: () => {
                     const e = document.createElement('div');
                     e.className = 'chan-intro';
                     e.innerHTML =
                         '<span class="ci-mark" aria-hidden="true">#</span>' +
                         `<h2 class="ci-title">Welcome to #${esc(channel)}!</h2>` +
                         `<p class="ci-sub">This is the start of the #${esc(channel)} channel.</p>`;
-                    // Only offered to somebody who can actually do it: reshaping
-                    // a channel is admin-only server-side.
-                    if (isAdmin()) {
+                    // Only offered to somebody who can actually do it: renaming
+                    // a channel is admin-and-above, enforced server-side.
+                    if (can('channel.rename')) {
                         const b = document.createElement('button');
                         b.type = 'button';
                         b.className = 'ci-btn';
@@ -2568,7 +2586,16 @@
             // the way edit and delete already are.
             (dm || !mayPin(p) ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
             '<button class="msg-act" data-act="copy" title="Copy text">' + I('copy') + '</button>' +
-            (mine ? '<button class="msg-act" data-act="edit" title="Edit message">' + I('pencil') + '</button>' : '') +
+            // Editing somebody ELSE's message is a real ability the server has
+            // always allowed a moderator (mayModifyPost) and the UI never offered:
+            // the hover bar and the right-click menu both gated edit on `mine`, so
+            // an admin could DELETE another person's message but not correct it.
+            // Titled differently, because rewriting what somebody else said in
+            // their name is not the same gesture as fixing your own typo — and it
+            // is now recorded on the message itself (see edited_by).
+            ((mine || (!dm && can('message.moderate')))
+                ? `<button class="msg-act" data-act="edit" title="${mine ? 'Edit message' : 'Edit as moderator'}">` + I('pencil') + '</button>'
+                : '') +
             (mine ? '<button class="msg-act danger" data-act="delete" title="Delete message">' + I('trash') + '</button>' : '') +
             '</div>');
 
@@ -2593,7 +2620,23 @@
             if (p.edited_at) {
                 const ed = document.createElement('span');
                 ed.className = 'msg-edited';
-                ed.textContent = '(edited)';
+                // WHO edited it, when it was not the author.
+                //
+                // A moderator editing somebody else's message left it marked only
+                // "(edited)" — indistinguishable from the author changing their own
+                // words, while posts.name still shows the author underneath. One of
+                // those is a correction and the other is somebody rewriting what
+                // you said in your name, so the marker says which. edited_by is set
+                // by the server only for a moderator edit and cleared when the
+                // author edits their own message afterwards (see edit.js).
+                ed.textContent = p.edited_by
+                    ? `(edited by ${p.edited_by} · ${editedStamp(p.edited_at)})`
+                    : '(edited)';
+                // The exact moment on hover either way — the inline stamp is
+                // deliberately short, and for your own edit there is no room for one.
+                ed.title = 'Edited ' + new Date(p.edited_at).toLocaleString() +
+                    (p.edited_by ? ' by ' + p.edited_by : '');
+                if (p.edited_by) ed.classList.add('by-mod');
                 textEl.appendChild(ed);
             }
             highlightCodeBlocks(textEl);
@@ -5337,7 +5380,13 @@
         // buttons stay hidden rather than offering a request that must 400.
         popUid = p.uid || (m && m.user_id) || null;
         const isMe = p.id === settings.clientId || !!(account && popUid && popUid === account.id);
-        const canModerate = isAdmin() && !!popUid && !isMe;
+        // Two different tiers now, so two different answers. Removing somebody from
+        // a call is moderation (admin and above); banning them is an account action
+        // and belongs to the owner alone.
+        const hasTarget = !!popUid && !isMe;
+        const canKick = can('voice.kick') && hasTarget;
+        const canBan = can('member.ban') && hasTarget;
+        const canModerate = canKick || canBan;
 
         // Message them. Same account-or-nothing rule as the moderation actions
         // below, and for the same reason: a DM is addressed to an account, so a
@@ -5347,10 +5396,10 @@
         $('pop-dm').hidden = !canDm;
         $('pop-dm-label').textContent = 'Message ' + (p.name || 'them');
         // In voice right now? Only then is there a call to remove them from.
-        const inVoice = canModerate && voicePresence.some((v) => v.user_id === popUid);
+        const inVoice = canKick && voicePresence.some((v) => v.user_id === popUid);
         $('pop-kick').hidden = !inVoice;
-        $('pop-ban').hidden = !canModerate;
-        $('pop-admin-sep').hidden = !canModerate;
+        $('pop-ban').hidden = !canBan;
+        $('pop-admin-sep').hidden = !(inVoice || canBan);
 
         pop.hidden = false;              // shown before measuring, so it has a size
         placePopover(pop, anchor);
@@ -5459,7 +5508,7 @@
         if (!res || !res.success) return toast((res && res.error) || 'Could not ban them', true);
         toast('Banned ' + who);
         // Keep the Settings → Members list honest if it happens to be open.
-        if (isAdmin()) renderMemberAdmin();
+        if (can('member.setRole')) renderMemberAdmin();
     }
 
     document.addEventListener('mousedown', (e) => {
@@ -6171,6 +6220,17 @@
                     leaveVoice();
                     toast(m.by ? m.by + ' removed you from the call' : 'An admin removed you from the call', true);
                 }
+                break;
+            // The owner changed our role. Unicast by account, so every device this
+            // person has open picks it up at once.
+            //
+            // A role used to take effect only after the affected person logged out
+            // and back in, or restarted the app — because every client reads its
+            // role exactly once, from account/me at startup, and nothing ever asked
+            // again. Being promoted and then having to quit the app to use it is a
+            // promotion that has not happened yet.
+            case 'role':
+                applyRoleChange(m);
                 break;
             case 'typing':
                 if (m.channel && m.channel !== channel) break;
@@ -7426,10 +7486,180 @@
     $('ap-output-settings').addEventListener('click', toVoiceSettings);
 
 
+    // ---------- resizable panels -------------------------------------------
+    //
+    // Both side panels are draggable by their inner edge, HORIZONTALLY ONLY: the
+    // handler reads clientX and nothing else, so there is no vertical drag to start
+    // by accident. The width lands in a CSS custom property that the #app grid
+    // already uses for its column track, so nothing has to be re-laid-out by hand.
+    //
+    // THE LIMITS ARE TWO. A static floor and ceiling per panel stop either from
+    // being dragged to a width it cannot be used at, or so wide it dominates the
+    // window. On top of that a DYNAMIC clamp guarantees the message column keeps
+    // MAIN_MIN pixels whatever the window size — that is the requirement that a
+    // panel must never crowd out the text area, and a static maximum alone cannot
+    // deliver it: 480 + 420 is comfortable at 1900px wide and covers the entire
+    // conversation at 1100px. Re-applied on window resize for the same reason,
+    // because shrinking the window is the other way to reach that state.
+    const SIDEBAR_MIN = 180, SIDEBAR_MAX = 480;
+    const MEMBERS_MIN = 160, MEMBERS_MAX = 420;
+    const MAIN_MIN = 420;                 // the message column's guaranteed width
+    const RAIL_W = 72;                    // the fixed far-left rail
+
+    // The room actually available to a panel, given the window and its opposite
+    // number. `other` is the width the panel on the far side is currently taking —
+    // 0 when the member list is hidden, which is when the sidebar may be widest.
+    function roomFor(other) {
+        return Math.max(0, window.innerWidth - RAIL_W - other - MAIN_MIN);
+    }
+
+    function membersWidthNow() {
+        return $('members-panel').hidden ? 0 : clampMembers(settings.membersWidth, 0);
+    }
+
+    function clampSidebar(px, othersWidth) {
+        const room = roomFor(othersWidth === undefined ? membersWidthNow() : othersWidth);
+        const max = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, room));
+        return Math.round(Math.min(max, Math.max(SIDEBAR_MIN, Number(px) || SIDEBAR_MIN)));
+    }
+
+    function clampMembers(px, othersWidth) {
+        const room = roomFor(othersWidth === undefined ? clampSidebar(settings.sidebarWidth, 0) : othersWidth);
+        const max = Math.min(MEMBERS_MAX, Math.max(MEMBERS_MIN, room));
+        return Math.round(Math.min(max, Math.max(MEMBERS_MIN, Number(px) || MEMBERS_MIN)));
+    }
+
+    // Write both widths to the properties the grid reads. Called on boot, on every
+    // drag frame, and on window resize.
+    function applyPaneWidths() {
+        const root = document.documentElement;
+        const members = $('members-panel').hidden ? 0 : clampMembers(settings.membersWidth, 0);
+        const side = clampSidebar(settings.sidebarWidth, members);
+        root.style.setProperty('--w-side', side + 'px');
+        // Left as the stylesheet's value when the panel is hidden: the track is
+        // `auto` and the panel is display:none, so the number is unused — and
+        // writing 0 would make a later reveal flash at zero width.
+        if (!$('members-panel').hidden) root.style.setProperty('--w-members', members + 'px');
+        [$('sidebar-resize'), $('dm-sidebar-resize')].forEach((h) => {
+            if (h) h.setAttribute('aria-valuenow', String(side));
+        });
+        const mh = $('members-resize');
+        if (mh) mh.setAttribute('aria-valuenow', String(members));
+    }
+
+    // One drag, whichever handle started it.
+    //
+    // Pointer events rather than mouse: they capture, so a drag that leaves the
+    // window or crosses an iframe-less overlay still delivers its moves and its up,
+    // which a mousemove listener on document does not reliably do once the pointer
+    // is outside the window.
+    //
+    // `dir` is +1 when dragging the handle right widens the panel (the left-hand
+    // sidebar) and -1 when it narrows it (the right-hand member list).
+    function makeResizable(handleId, dir, read, write, clamp) {
+        const handle = $(handleId);
+        if (!handle) return;
+        handle.setAttribute('role', 'separator');
+        handle.setAttribute('aria-orientation', 'vertical');
+
+        let startX = 0, startW = 0, id = null;
+
+        const onMove = (e) => {
+            if (id === null || e.pointerId !== id) return;
+            // clientX only. There is deliberately no clientY term anywhere in this
+            // function: the panels resize horizontally and nothing else.
+            const next = clamp(startW + dir * (e.clientX - startX));
+            if (next === read()) return;
+            write(next);
+            applyPaneWidths();
+        };
+
+        const end = (e) => {
+            if (id === null || (e && e.pointerId !== undefined && e.pointerId !== id)) return;
+            try { handle.releasePointerCapture(id); } catch (err) { /* already released */ }
+            id = null;
+            handle.classList.remove('dragging');
+            document.body.classList.remove('resizing-pane');
+            // Persisted at the END of the drag, not on every frame: settings.set is
+            // an IPC round trip and a debounced whole-file write, and a drag
+            // produces one move event per frame.
+            saveSettings({ sidebarWidth: settings.sidebarWidth, membersWidth: settings.membersWidth });
+        };
+
+        handle.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            id = e.pointerId;
+            startX = e.clientX;
+            startW = read();
+            try { handle.setPointerCapture(id); } catch (err) { /* best effort */ }
+            handle.classList.add('dragging');
+            document.body.classList.add('resizing-pane');
+        });
+        handle.addEventListener('pointermove', onMove);
+        handle.addEventListener('pointerup', end);
+        handle.addEventListener('pointercancel', end);
+        // The window losing the pointer entirely (alt-tab mid-drag) leaves no up.
+        window.addEventListener('blur', () => { if (id !== null) end(null); });
+
+        // Double-click restores the default, which is the cheapest way back from a
+        // width somebody dragged and did not like.
+        handle.addEventListener('dblclick', () => {
+            write(clamp(handleId === 'members-resize' ? DEFAULT_MEMBERS_W : DEFAULT_SIDEBAR_W));
+            applyPaneWidths();
+            saveSettings({ sidebarWidth: settings.sidebarWidth, membersWidth: settings.membersWidth });
+        });
+
+        // A resizer is a real control, so the arrows have to work — it is focusable
+        // and announces itself as a separator, and a focus ring that does nothing
+        // is worse than no focus ring.
+        handle.addEventListener('keydown', (e) => {
+            const step = e.shiftKey ? 40 : 10;
+            let delta = 0;
+            if (e.key === 'ArrowLeft') delta = -step;
+            else if (e.key === 'ArrowRight') delta = step;
+            else if (e.key === 'Home') delta = -9999;
+            else if (e.key === 'End') delta = 9999;
+            else return;
+            e.preventDefault();
+            write(clamp(read() + dir * delta));
+            applyPaneWidths();
+            saveSettings({ sidebarWidth: settings.sidebarWidth, membersWidth: settings.membersWidth });
+        });
+    }
+
+    const DEFAULT_SIDEBAR_W = 300, DEFAULT_MEMBERS_W = 264;
+
+    function initPaneResizing() {
+        settings.sidebarWidth = clampSidebar(settings.sidebarWidth || DEFAULT_SIDEBAR_W, 0);
+        settings.membersWidth = clampMembers(settings.membersWidth || DEFAULT_MEMBERS_W, 0);
+        applyPaneWidths();
+
+        ['sidebar-resize', 'dm-sidebar-resize'].forEach((idAttr) => {
+            makeResizable(idAttr, 1,
+                () => settings.sidebarWidth,
+                (v) => { settings.sidebarWidth = v; },
+                (v) => clampSidebar(v, membersWidthNow()));
+        });
+        makeResizable('members-resize', -1,
+            () => settings.membersWidth,
+            (v) => { settings.membersWidth = v; },
+            (v) => clampMembers(v, clampSidebar(settings.sidebarWidth, 0)));
+
+        // Shrinking the window is the other way to squeeze the message column, so
+        // the clamp is re-applied rather than only enforced while dragging.
+        window.addEventListener('resize', applyPaneWidths);
+    }
+
     // ---------- layout chrome: rail, categories, members sidebar ----------
 
     function applyMembersPanel(show) {
         $('members-panel').hidden = !show;
+        // The sidebar's ceiling depends on whether the member list is taking any
+        // room, so hiding it lets the sidebar grow and showing it may have to give
+        // some back. applyPaneWidths clamps from `settings` itself, so it is safe to
+        // call before initPaneResizing has run — which it is, on the first paint.
+        if (settings) applyPaneWidths();
         const btn = $('btn-members');
         btn.classList.toggle('on', show);
         btn.setAttribute('aria-pressed', String(show));
@@ -7488,6 +7718,11 @@
         applyCategory('voice', settings.catVoiceOpen !== false);
         applyTheme();
         applyDensity();
+        // Creating a channel is admin-and-above now — it used to be open to every
+        // signed-in member, on the server as well as here. Hidden rather than
+        // disabled: a + that never works is not information, and channels.js
+        // refuses the call regardless of what this button does.
+        $('btn-add-channel').hidden = !can('channel.create');
         // The host is no longer a second line under the name — it is on the
         // header's own tooltip, where it answers "which server is this" without
         // spending a line on an answer nobody reads twice.
@@ -7649,13 +7884,17 @@
                 onClick: () => setChannelAlertMode(name, 'mentions') },
             { label: 'Nothing', icon: 'bell-off', check: mode === 'none',
                 onClick: () => setChannelAlertMode(name, 'none') },
-            // Reshaping a channel is admin-only server-side — deleting one drops
-            // every message in it, its reactions and its attachments. Offering
-            // the item to a member just produces a 403 toast.
-            ...(isAdmin() ? [
-                'sep',
+            // Reshaping a channel is gated server-side, per operation — renaming
+            // is an admin power, DELETING is the owner's, because it drops every
+            // message in the channel along with its reactions and attachments and
+            // cannot be undone. Offering either to somebody who cannot use it just
+            // produces a 403 toast.
+            ...(can('channel.rename') || can('channel.delete') ? ['sep'] : []),
+            ...(can('channel.rename') ? [
                 { label: 'Rename channel', icon: 'pencil', disabled: name === 'general',
-                    onClick: () => { switchChannel(name).then(renameChannel); } },
+                    onClick: () => { switchChannel(name).then(renameChannel); } }
+            ] : []),
+            ...(can('channel.delete') ? [
                 { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
                     onClick: () => { switchChannel(name).then(deleteChannel); } }
             ] : [])
@@ -7679,8 +7918,11 @@
 
     async function openSettings() {
         settings = await L.settings.get();
-        $('acct-members').hidden = !isAdmin();
-        if (isAdmin()) renderMemberAdmin();
+        // Member management is the OWNER's, not every admin's — see CAPABILITIES.
+        // An admin used to see this whole panel, which is how one could ban, reset
+        // the password of, or demote anybody, the owner included.
+        $('acct-members').hidden = !can('member.setRole');
+        if (can('member.setRole')) renderMemberAdmin();
         $('set-name').value = settings.displayName || '';
         $('set-mode').value = settings.voiceMode || 'open';
         $('set-ec').checked = settings.echoCancellation !== false;
@@ -7810,7 +8052,10 @@
         }
         if (account) {
             $('acct-user').textContent = account.username;
-            $('acct-role').textContent = (account.role === 'admin' ? '(admin)' : '') +
+            // Every role is named, including member: "what am I" is the first
+            // question the permission tiers raise, and it was only answered when
+            // the answer happened to be admin.
+            $('acct-role').textContent = '(' + roleLabel(account.role).toLowerCase() + ')' +
                 (account.totp ? ' · 2FA on' : '');
             $('btn-acct-2fa').textContent = account.totp ? 'Turn off 2FA' : 'Enable 2FA';
         }
@@ -7992,7 +8237,48 @@
     // ---- board account (username + role on top of the shared password) ----
 
     let account = null;               // { id, username, role } | null
-    const isAdmin = () => !!(account && account.role === 'admin');
+
+    // ---- roles and capabilities -------------------------------------------
+    //
+    // A MIRROR of the server's table (functions/api/board/_accounts.js
+    // CAPABILITIES), and only ever a mirror: every one of these is enforced again
+    // on the server, so this decides what to DRAW, never what is allowed. Hiding a
+    // button is not a permission check — anyone can call the endpoint directly —
+    // which is why the two exist separately and why the server's copy is the one
+    // that matters.
+    //
+    // Kept as one table here for the same reason it is one table there: "what can
+    // an admin do" has to be answerable by reading a list, not by grepping for
+    // role comparisons and hoping none were missed.
+    const CAPABILITIES = {
+        // Content and the shape of the channel list — admin and owner.
+        'message.moderate': ['owner', 'admin'],
+        'message.pin': ['owner', 'admin'],
+        'emoji.moderate': ['owner', 'admin'],
+        'voice.kick': ['owner', 'admin'],
+        'channel.create': ['owner', 'admin'],
+        'channel.rename': ['owner', 'admin'],
+        // Destructive, and anything that touches an ACCOUNT — owner only.
+        'channel.delete': ['owner'],
+        'member.setRole': ['owner'],
+        'member.ban': ['owner'],
+        'member.unban': ['owner'],
+        'member.resetPassword': ['owner'],
+        'member.clearTotp': ['owner'],
+        'member.delete': ['owner']
+    };
+
+    function can(capability) {
+        const allowed = CAPABILITIES[capability];
+        return !!(allowed && account && allowed.includes(account.role));
+    }
+
+    const isOwner = () => !!(account && account.role === 'owner');
+    // "Admin OR ABOVE" — the owner has every ability an admin has. Every existing
+    // caller meant this, from when admin was the top of the tree.
+    const isAdmin = () => !!(account && (account.role === 'owner' || account.role === 'admin'));
+    const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member' };
+    const roleLabel = (role) => ROLE_LABEL[role] || 'Member';
 
     // Did I write this post? Mirrors the author half of _authz.js mayModifyPost
     // on the server, and has to stay mirrored: the affordance and the rule that
@@ -8012,7 +8298,7 @@
     // Pinning is the same rule as editing and deleting — admins anything, members
     // only their own — and pin.js enforces it. See the pin button in renderMessage.
     function mayPin(p) {
-        return isAdmin() || ownsPost(p);
+        return can('message.pin') || ownsPost(p);
     }
 
     // "Did I write this?" — the cosmetic question, as opposed to ownsPost's
@@ -8075,6 +8361,104 @@
         try { await L.rt.stop(); await L.rt.start(); } catch (e) { /* it will retry on its own */ }
     }
 
+    // ---- a role that changed under us ---------------------------------------
+
+    // Everything on screen that a role decides. Called when the answer changes
+    // rather than when the app starts, which is the whole point — the role used to
+    // be read once at startup and never again, so a promotion or a demotion did
+    // nothing at all until the affected person restarted the app.
+    //
+    // Enumerated rather than "just reload": a reload would throw away the messages
+    // they are reading, their scroll position and anything half-typed, for a change
+    // that only affects which buttons exist.
+    function repaintForRole() {
+        renderAccountCard();     // the role line, and whether Members is offered
+        renderMessages();        // edit / delete / pin on other people's messages
+        renderChannels();        // the per-channel gear, and the + that creates one
+        applyChrome();           // the sidebar's create-channel affordance
+        // renderVoiceRoster() is the wrapper that merges presence with the SFU
+        // roster and then feeds renderMembers(list, inCall) — which takes arguments
+        // and must not be called bare. Calling it directly threw a TypeError that
+        // this function swallowed nothing of: everything after it, including the
+        // message repaint, silently did not happen.
+        renderVoiceRoster();
+        // The popover is drawn from the role too, and it is a floating panel that
+        // would otherwise keep offering moderation actions the server now refuses.
+        if (!$('popover').hidden) closePopover();
+        // Settings is where member management lives, and its visibility is decided
+        // when the sheet OPENS — so a role that changes while it is already open
+        // leaves the panel showing (or hiding) the wrong thing until it is reopened.
+        $('acct-members').hidden = !can('member.setRole');
+        // Open on the Members pane as a demoted admin, this list is no longer
+        // yours to see; as a promoted one it is, and it is empty until asked for.
+        if (!$('settings').hidden && can('member.setRole')) renderMemberAdmin();
+    }
+
+    // A push from the server saying our role changed. `m` carries { role, by }.
+    //
+    // account/me is refetched rather than trusting the event's `role`, because that
+    // endpoint is the authoritative answer and this event is only a trigger — it
+    // also picks up anything else that changed about the account in the meantime.
+    // The event's `by` is still used for the message, since only it knows who did
+    // it. If the refetch fails we fall back to the pushed role rather than doing
+    // nothing: the alternative is a client that has been told it was promoted and
+    // acts as though it wasn't.
+    let roleNoticeOpen = false;
+    async function applyRoleChange(m) {
+        const before = account && account.role;
+        let after = m && m.role;
+        try {
+            const res = await L.account.me();
+            if (res && res.success && res.user) {
+                account = res.user;
+                after = account.role;
+            } else if (account && after) {
+                account = Object.assign({}, account, { role: after });
+            }
+        } catch (e) {
+            if (account && after) account = Object.assign({}, account, { role: after });
+        }
+        if (!after || after === before) return;      // nothing actually moved
+
+        repaintForRole();
+
+        // Say what happened, with one button to dismiss it. A toast is not enough
+        // for this: it is a change to what the person is allowed to do, it may have
+        // happened while they were reading something else, and a toast is gone in
+        // two seconds whether or not anyone was looking at the window.
+        //
+        // Guarded because two devices, or a quick promote-then-demote, would
+        // otherwise stack dialogs — openDialog resolves the previous one as null,
+        // so the second notice would silently replace the first.
+        if (roleNoticeOpen) return;
+        roleNoticeOpen = true;
+        const promoted = ROLE_RANK[after] < ROLE_RANK[before || 'member'];
+        const by = m && m.by ? m.by : null;
+        const title = promoted
+            ? `You've been promoted to ${roleLabel(after)}`
+            : `You've been changed to ${roleLabel(after)}`;
+        try {
+            await tellUser(title, ROLE_NOTICE[after] + (by ? `\n\nChanged by ${by}.` : ''), 'OK');
+        } finally {
+            roleNoticeOpen = false;
+        }
+    }
+
+    // Lower is more privileged, so a promotion is a DECREASE. Only used to word the
+    // notice; nothing is authorised by it.
+    const ROLE_RANK = { owner: 0, admin: 1, member: 2 };
+
+    // What the new role actually lets them do, in the same words the release notes
+    // use — being told "you are an admin now" without being told what that means is
+    // half a notification.
+    const ROLE_NOTICE = {
+        owner: 'You have full control of the board.',
+        admin: 'You can now delete and edit anyone\'s messages, pin them, and create '
+            + 'and rename channels. Account settings — bans, passwords and roles — stay with the owner.',
+        member: 'You can edit and delete your own messages. Creating channels and '
+            + 'moderating other people\'s messages are no longer available to you.'
+    };
+
     function acctError(msg) {
         const el = $('acct-error');
         el.textContent = msg || '';
@@ -8107,7 +8491,8 @@
         loadDmThreads();
         toast(mode === 'register'
             ? `Account created — welcome, ${account.username}` +
-              (account.role === 'admin' ? '. You are the admin.' : '')
+              (account.role === 'owner' ? '. You are the board owner.'
+                  : account.role === 'admin' ? '. You are an admin.' : '')
             : `Signed in as ${account.username}`);
     }
 
@@ -8146,8 +8531,21 @@
             const who = document.createElement('span');
             who.className = 'ma-who';
             who.innerHTML = `<b>${esc(u.username)}</b>` +
-                `<em class="hint">${u.role === 'admin' ? 'admin' : 'member'}${u.banned ? ' · banned' : ''}</em>`;
+                `<em class="hint">${esc(roleLabel(u.role).toLowerCase())}${u.banned ? ' · banned' : ''}</em>`;
             row.appendChild(who);
+
+            // An owner cannot be managed from here by anybody, including another
+            // owner: the role is established once, when the board's first account
+            // is created, and the server refuses every action aimed at it
+            // (mayManage). Saying so beats five buttons that all answer 403.
+            if (u.role === 'owner') {
+                const note = document.createElement('em');
+                note.className = 'hint';
+                note.textContent = 'Board owner — cannot be changed or removed.';
+                row.appendChild(note);
+                box.appendChild(row);
+                return;
+            }
 
             const btn = (label, danger, fn) => {
                 const b = document.createElement('button');
@@ -8162,7 +8560,14 @@
                 manageMember({ action: 'setRole', userId: u.id, role: u.role === 'admin' ? 'member' : 'admin' },
                     u.role === 'admin' ? null : {
                         title: `Make ${u.username} an admin?`,
-                        message: 'Admins can delete and pin anyone\'s messages and manage members — including you.',
+                        // Says what an admin can and cannot do, because the answer
+                        // changed: an admin used to be able to manage members —
+                        // including demoting the owner, which is the hole this
+                        // release closed. They now get content moderation and the
+                        // channel list, and nothing that touches an account.
+                        message: 'Admins can edit, delete and pin anyone\'s messages, and create and '
+                            + 'rename channels. They cannot ban, reset passwords, clear 2FA, delete '
+                            + 'accounts or change roles — those stay with you.',
                         ok: 'Make admin'
                     }));
 
@@ -8452,7 +8857,7 @@
             row.appendChild(by);
 
             const mine = !!(account && em.user_id && em.user_id === account.id);
-            if (mine || isAdmin()) {
+            if (mine || can('emoji.moderate')) {
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'icon-btn danger';
@@ -9617,8 +10022,16 @@
             mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
             // A DM's delete endpoint checks authorship as well as membership, so
             // an admin acting on someone else's message would be refused.
-            !dm && !mine && isAdmin() && 'sep',
-            !dm && !mine && isAdmin() && { label: 'Delete (admin)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
+            // Editing and deleting somebody ELSE's message — the moderation
+            // capability. Labelled "(moderator)" so it is never mistaken for the
+            // ordinary edit of your own message; the edit is attributed on the
+            // message itself afterwards.
+            !dm && !mine && can('message.moderate') && 'sep',
+            !dm && !mine && can('message.moderate') && {
+                label: 'Edit (moderator)', icon: 'pencil',
+                onClick: () => startEdit(p, el)
+            },
+            !dm && !mine && can('message.moderate') && { label: 'Delete (moderator)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
             // One separator for the person group, whichever of the two it holds.
             (canDm || canBlock) && 'sep',
             canDm && {
@@ -10085,6 +10498,13 @@
 
     function startEdit(p, el) {
         if (editingId) return;                       // one at a time
+        // The same rule deletePost applies, for the same reason: the affordances are
+        // gated, but a keyboard shortcut, a stale menu or a repaint that raced a
+        // role change all reach here without passing one — and the answer should be
+        // the reason rather than a bare 403 after the editor has already opened.
+        if (!ownsPost(p) && !can('message.moderate')) {
+            return toast('You can only edit your own messages', true);
+        }
         const textEl = el.querySelector('.msg-text');
         if (!textEl) return;
         editingId = p.id;
@@ -10186,7 +10606,7 @@
     }
 
     async function deletePost(p) {
-        if (!isAdmin() && !ownsPost(p)) return toast('You can only delete your own messages', true);
+        if (!can('message.moderate') && !ownsPost(p)) return toast('You can only delete your own messages', true);
 
         const preview = (p.body || p.att_name || '').slice(0, 80);
         const ok = await askConfirm(
@@ -11051,6 +11471,18 @@
         wrap.appendChild(retry);
         $('search-results').appendChild(wrap);
         console.warn('[search] archive search failed for', JSON.stringify(q), res);
+    }
+
+    // The stamp on a moderator's edit: enough to place it without turning the
+    // marker into a second line. Today's edits show only a time, an older one shows
+    // the date too — the same rule the message list itself follows.
+    function editedStamp(ts) {
+        const d = new Date(ts);
+        const now = new Date();
+        const sameDay = d.toDateString() === now.toDateString();
+        return sameDay
+            ? timeStr(ts)
+            : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + timeStr(ts);
     }
 
     function searchTime(ts) {

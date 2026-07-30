@@ -95,6 +95,11 @@
   </nav>
 
   <aside id="sidebar">
+    <!-- The drag handle for this panel's width, on its RIGHT edge. See
+         #members-resize for why it lives inside the panel. -->
+    <div class="pane-resize pane-resize-right" id="sidebar-resize"
+         role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Resize the channel list" title="Drag to resize — double-click to reset"></div>
     <!-- "Server" header, above the channel list like Discord's. One line and a
          chevron: it is the entry point to settings and the invite link, not a
          label, and a second line of host name was saying something the About
@@ -636,6 +641,12 @@
        list, because DMs are not part of a server — they are the other place
        you can be. #dm-list is MOVED in here rather than duplicated. -->
   <aside id="dm-sidebar" hidden>
+    <!-- The conversation list occupies the SAME grid column as #sidebar and shares
+         its width, so it gets the same handle. Without one, dragging worked in
+         channels and silently did not in DMs. -->
+    <div class="pane-resize pane-resize-right" id="dm-sidebar-resize"
+         role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Resize the conversation list" title="Drag to resize — double-click to reset"></div>
     <header id="dm-side-head">
       <button type="button" id="dm-find">Find or start a conversation</button>
     </header>
@@ -733,6 +744,14 @@
   <!-- No panel title: the group heading below already says what this is and
        how many there are, and two headers for one list is one too many. -->
   <aside id="members-panel">
+    <!-- The drag handle for this panel's width, on its LEFT edge — the one facing
+         the messages. Kept inside the panel and absolutely positioned, so it needs
+         no grid track of its own and hiding the panel takes the handle with it.
+         role="separator" with aria-orientation="vertical" is what a resizer IS, and
+         it makes the arrow keys below discoverable rather than a secret. -->
+    <div class="pane-resize pane-resize-left" id="members-resize"
+         role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Resize the member list" title="Drag to resize — double-click to reset"></div>
     <ul id="members-list" class="voice-roster"></ul>
   </aside>
 </div>
