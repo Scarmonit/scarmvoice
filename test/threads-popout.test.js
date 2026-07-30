@@ -101,6 +101,34 @@ describe('the button', () => {
         expect(popup().hidden).toBe(true);
     });
 
+    // The reference puts its popover's trailing edge 6px past the trigger's, so the
+    // panel and the button that opened it read as one gesture. This was centred over
+    // the conversation for a while on the theory that a panel this wide would hang
+    // off the left edge; it does not — the window's minWidth is 900, the panel is
+    // 602, and the button sits ~90px in from the right.
+    it('hangs off the button rather than floating loose', async () => {
+        await open();
+        // jsdom has no layout, so every rect is zero and the arithmetic lands on the
+        // clamp — but the CLAMP is the thing worth pinning: it must not be the
+        // centring maths, which had no reference to the button at all.
+        expect(popup().style.left).not.toBe('');
+        const src = require('node:fs')
+            .readFileSync(require('node:path').resolve(__dirname, '..', 'src', 'renderer', 'app.js'), 'utf8');
+        const fn = src.slice(src.indexOf('function placeThreadsPop'), src.indexOf('async function openThreadsPop'));
+        expect(fn).toContain('btn.right + 6 - w');
+        expect(fn).not.toContain('col.width');
+    });
+
+    it('lights the trigger while it is open', async () => {
+        // The stylesheet turns any header button with aria-expanded white; the
+        // button's job is to SET it, which it did not use to do at all.
+        await open();
+        expect($('btn-threads').getAttribute('aria-expanded')).toBe('true');
+        document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await settle();
+        expect($('btn-threads').getAttribute('aria-expanded')).toBe('false');
+    });
+
     it('closes on Escape and on a click outside', async () => {
         await open();
         document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -170,9 +198,26 @@ describe('the empty state', () => {
         served = [];
         await open();
         expect(empty().querySelector('.tp-empty-title').textContent).toBe('There are no threads.');
-        expect(empty().textContent).toContain('Stay focused on a conversation with a thread');
+        expect(empty().textContent).toContain('Stay focused with a thread');
         expect(empty().querySelector('.tp-create').textContent).toBe('Create Thread');
         expect(rows()).toHaveLength(0);
+    });
+
+    it('draws a composed ILLUSTRATION, not the header glyph scaled up', async () => {
+        // The reference's is a disc holding the mark plus two sparkle clusters, and
+        // that composition is most of why its empty state reads as designed rather
+        // than as missing content. Its own viewBox, too — an illustration is wider
+        // than it is tall, so it cannot share the 24x24 glyph grid.
+        served = [];
+        await open();
+        const mark = empty().querySelector('.tp-empty-mark');
+        expect(mark.getAttribute('viewBox')).toBe('0 0 104 80');
+        // A disc, three bars, and sparkles in two different colours.
+        expect(mark.querySelector('circle')).toBeTruthy();
+        expect(mark.querySelectorAll('path').length).toBeGreaterThanOrEqual(6);
+        const fills = Array.from(mark.querySelectorAll('[fill]'))
+            .map((n) => n.getAttribute('fill')).filter((f) => f && f !== 'none');
+        expect(new Set(fills).size).toBeGreaterThan(2);
     });
 });
 

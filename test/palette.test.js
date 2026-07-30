@@ -1403,3 +1403,67 @@ describe('the backdrop behind a modal', () => {
         expect(dark).toMatch(/--scrim:\s*rgba\(0, 0, 0, \.72\)/);
     });
 });
+
+// The Threads popover, measured off the reference. It shares two faults with the
+// pinned popover — a tinted header and a --line border — which is what makes them
+// worth pinning together rather than one at a time.
+describe('the threads popover, measured', () => {
+    const tp = () => css.slice(css.indexOf('.threads-pop {'), css.indexOf('.tp-item {'));
+
+    it('is 602 x 450', () => {
+        // It was 528 x 368, and the empty state is the whole point of the panel.
+        expect(tp()).toMatch(/width: 602px/);
+        expect(tp()).toMatch(/min-height: 450px/);
+        expect(tp()).toMatch(/border: 1px solid #29292c/);
+    });
+
+    it('fills the header with the body shade, like the pinned one', () => {
+        // Both popovers filled their header with --float-2 — which is a CARD
+        // colour — so the bar read as raised out of the panel. The reference keeps
+        // it flush and separates it with the rule alone.
+        expect(tp()).toMatch(/\.tp-head \{[^}]*height: 48px/);
+        expect(tp()).toMatch(/background: var\(--float\); border-bottom: 1px solid #323237/);
+        expect(tp()).not.toMatch(/\.tp-head \{[^}]*var\(--float-2\)/);
+        // The pinned popover's header must not drift back either.
+        const ph = css.slice(css.indexOf('.pinned-head {'), css.indexOf('.pinned-title {'));
+        expect(ph).toMatch(/background: var\(--float\)/);
+    });
+
+    it('draws the search box as a bordered input, not a well', () => {
+        // It was --sunk with no border: 21 points darker than the header it sat in.
+        // The reference's is four points darker than the panel, with a hairline —
+        // the same field treatment the Filters form needed.
+        expect(tp()).toMatch(/\.tp-search \{[^}]*flex: 0 0 280px/);
+        expect(tp()).toMatch(/\.tp-search \{[^}]*height: 32px/);
+        expect(tp()).toMatch(/\.tp-search \{[^}]*background: #202024; border: 1px solid #37373d/);
+    });
+
+    it('sizes the header glyph to 22, like the pinned popover s pin', () => {
+        expect(tp()).toMatch(/\.tp-title \.ico \{ width: 22px; height: 22px/);
+    });
+
+    it('gives the empty state an illustration, a big heading and a bright line', () => {
+        // 104x80 against the 47x32 the bare glyph drew — roughly twice the
+        // footprint, and a composition rather than an icon scaled up. That is most
+        // of why the reference's empty state reads as designed.
+        expect(tp()).toMatch(/\.tp-empty-mark \{ width: 104px; height: 80px/);
+        // 24px, for an 18px cap height. It was 17, which drew 13.
+        expect(tp()).toMatch(/\.tp-empty-title \{ font-size: 24px/);
+        // Nearly body text, not --panel-sub: that measured 156 against the
+        // reference's 240 and read as a caption rather than as the sentence it is.
+        expect(tp()).toMatch(/\.tp-empty-sub \{[^}]*color: var\(--msg-text\)/);
+        expect(tp()).toMatch(/max-width: 494px/);
+        // Centred in the body, which is where the reference puts it: it measured
+        // 85px of clear space above the illustration and 86 below the button.
+        expect(tp()).toMatch(/\.tp-empty \{[^}]*margin: auto 0/);
+    });
+});
+
+describe('a header button whose panel is open', () => {
+    it('goes white, not just the members toggle', () => {
+        // The threads button and the bell both set aria-expanded and neither was
+        // styled for it, so a panel could be open with nothing in the header saying
+        // which button had opened it. The members toggle already did this via .on.
+        expect(css).toMatch(/#chan-head \.ch-btn\[aria-expanded="true"\] \{[^}]*color: var\(--text-strong\)/);
+    });
+});

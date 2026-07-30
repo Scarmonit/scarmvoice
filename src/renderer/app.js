@@ -13130,18 +13130,22 @@
         $('btn-threads').setAttribute('aria-expanded', 'false');
     }
 
-    // CENTRED over the conversation, not hung off the button — which is where the
-    // reference puts it, and the only placement that works: the panel is 528px
-    // wide and the button is near the right edge of a window that can be 900px, so
-    // aligning their trailing edges pushes half of it off the left of the screen.
-    // Vertically it still drops from the button, so it reads as belonging to it.
+    // Hung off the BUTTON, trailing edges aligned — the reference puts its right
+    // edge 6px past the trigger's, so the panel and the thing that opened it read
+    // as one gesture.
+    //
+    // This was centred over the conversation for a while, on the theory that a
+    // panel this wide right-aligned to a button near the window's right edge would
+    // hang off the left. It does not: the window's minWidth is 900, the panel is
+    // 602, and the button sits ~90px in from the right — which leaves ~200px of
+    // room. The clamp below is still the backstop for a window narrower than the
+    // panel plus its margins.
     function placeThreadsPop() {
         if (!threadsPopOpen()) return;
         const pop = $('threads-pop');
-        const col = ($('messages-wrap') || document.body).getBoundingClientRect();
         const btn = $('btn-threads').getBoundingClientRect();
         const w = pop.offsetWidth;
-        const left = col.left + (col.width - w) / 2;
+        const left = btn.right + 6 - w;
         pop.style.left = Math.max(8, Math.min(left, window.innerWidth - w - 8)) + 'px';
         pop.style.top = Math.round(btn.bottom + 8) + 'px';
     }
@@ -13209,17 +13213,22 @@
             // Thread there would read as "create one called that".
             if (q) {
                 e.innerHTML =
-                    I('threads', 'ico tp-empty-mark') +
+                    I('threads-empty', 'tp-empty-mark') +
                     '<div class="tp-empty-title">No threads found</div>' +
                     `<div class="tp-empty-sub">Nothing in #${esc(channel)} matches “${esc(threadsFilter.trim())}”.</div>`;
                 body.appendChild(e);
                 return;
             }
             e.innerHTML =
-                I('threads', 'ico tp-empty-mark') +
+                I('threads-empty', 'tp-empty-mark') +
                 '<div class="tp-empty-title">There are no threads.</div>' +
-                '<div class="tp-empty-sub">Stay focused on a conversation with a thread — ' +
-                'a side conversation that hangs off one message and keeps the channel clear.</div>';
+                // Shorter than it was, which is what lets it sit on two lines in the
+                // reference's own width rather than three in a narrower box — and
+                // "off one message" is the part that is actually true here. Threads
+                // in this app are not temporary, so the reference's own wording
+                // ("a temporary text channel") would be a claim, not a description.
+                '<div class="tp-empty-sub">Stay focused with a thread — ' +
+                'a side conversation off one message.</div>';
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'tp-create';

@@ -193,13 +193,16 @@
         reply: '<path d="M9.4 6.2L3.8 11.8l5.6 5.6"/><path d="M3.8 11.8h9.6a6.8 6.8 0 0 1 6.8 6.8v1.2"/>',
         thread: '<path d="M20.4 13.6a2 2 0 0 1-2 2H8.6L4.4 19.8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>' +
             '<path d="M8.4 8.6h8M8.4 11.8h5"/>',
-        // The header's Threads button, and the empty state's mark. Three
-        // right-leaning strokes of decreasing length — the reference's glyph,
-        // which is deliberately NOT the speech bubble `thread` uses on a message
-        // row: one means "this message has a thread", the other means "every
-        // thread in this channel".
-        threads: '<path d="M3.6 17.8L9.4 6.2"/><path d="M9.8 17.8L15.6 6.2"/>' +
-            '<path d="M16 17.8L21.8 6.2"/>',
+        // The header's Threads button. Three right-leaning strokes — the
+        // reference's glyph, deliberately NOT the speech bubble `thread` uses on a
+        // message row: one means "this message has a thread", the other means
+        // "every thread in this channel".
+        //
+        // Heavier and filling more of the box than it did: at 18px it drew a 15x10
+        // ink mark against the reference's 22x22, which read as a scratch beside the
+        // title rather than as an icon. See `threads-empty` for the illustration.
+        threads: '<g stroke-width="2.6"><path d="M3.4 19L9.6 5"/><path d="M9.9 19L16.1 5"/>' +
+            '<path d="M16.4 19L22.6 5"/></g>',
         smile: '<circle cx="12" cy="12" r="8.6"/><path d="M8.6 14.2a4.2 4.2 0 0 0 6.8 0"/>' +
             '<path d="M9.4 9.4h.01M14.6 9.4h.01" stroke-width="2.4"/>',
         at: '<circle cx="12" cy="12" r="3.6"/>' +
@@ -265,31 +268,72 @@
         'mark-read': '<path d="M20.4 13.6a2 2 0 0 1-2 2H8.6L4.4 19.8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>' +
             '<path d="M8.8 9.8l2.4 2.4 4.2-4.2"/>',
         undo: '<path d="M4 9.6h10.4a5.4 5.4 0 0 1 0 10.8H7.2"/><path d="M8 5.2L3.6 9.6 8 14"/>',
-        redo: '<path d="M20 9.6H9.6a5.4 5.4 0 0 0 0 10.8h7.2"/><path d="M16 5.2l4.4 4.4L16 14"/>'
+        redo: '<path d="M20 9.6H9.6a5.4 5.4 0 0 0 0 10.8h7.2"/><path d="M16 5.2l4.4 4.4L16 14"/>',
+
+        // ---- illustrations ------------------------------------------------
+        // Not glyphs: their own box, filled rather than stroked, and their own
+        // colours. See entry() for why that is a different shape of value.
+        //
+        // The threads empty state. The reference composes one rather than scaling
+        // its header icon up — a disc holding the mark, a gold sparkle at the lower
+        // left and a small blue cluster at the upper right — and that composition is
+        // most of why its empty state reads as designed rather than as missing
+        // content. Colours are literal because the whole point is that they differ
+        // from each other; only the disc and the mark track the theme.
+        'threads-empty': {
+            box: '0 0 104 80',
+            inner:
+                // The disc, a step lighter than the panel it sits on.
+                '<circle cx="53" cy="39" r="29" fill="#2e2e35"/>' +
+                // The mark inside it: three right-leaning bars, thicker than the
+                // header glyph because at this size a hairline reads as a scratch.
+                '<g stroke="#b7b8c0" stroke-width="4.6" stroke-linecap="round" fill="none">' +
+                '<path d="M41 51L48 27"/><path d="M50 51L57 27"/><path d="M59 51L66 27"/>' +
+                '</g>' +
+                // A four-pointed sparkle, lower left. Concave sides, so it reads as
+                // a sparkle rather than as a diamond.
+                '<path fill="#e8a723" d="M13 48' +
+                'Q15.4 57.6 22 60Q15.4 62.4 13 72Q10.6 62.4 4 60Q10.6 57.6 13 48Z"/>' +
+                // …and a cluster of small ones, upper right.
+                '<path fill="#5d67f6" d="M88 8Q89.4 13.6 94 15Q89.4 16.4 88 22Q86.6 16.4 82 15Q86.6 13.6 88 8Z"/>' +
+                '<path fill="#7b84ff" d="M97 22Q97.9 25.4 100.8 26.3Q97.9 27.2 97 30.6Q96.1 27.2 93.2 26.3Q96.1 25.4 97 22Z"/>' +
+                '<circle cx="80" cy="28" r="2.2" fill="#5d67f6"/>'
+        }
     };
 
     const NS = 'http://www.w3.org/2000/svg';
 
+    // Every glyph shares one 24x24 box and one stroke contract, which is what makes
+    // the set look like a set. An ILLUSTRATION is not a glyph, though: it is wider
+    // than it is tall, it is filled rather than stroked, and it carries its own
+    // colours. So an entry may be `{ box, inner }` instead of a string, and only
+    // those get a different viewBox — nothing else in the set changes.
+    function entry(name) {
+        const v = P[name];
+        if (!v) return null;
+        return typeof v === 'string' ? { box: '0 0 24 24', inner: v } : v;
+    }
+
     function build(name, className) {
-        const inner = P[name];
-        if (!inner) { console.warn('[icons] unknown icon: ' + name); return null; }
+        const e = entry(name);
+        if (!e) { console.warn('[icons] unknown icon: ' + name); return null; }
         const wrap = document.createElementNS(NS, 'svg');
-        wrap.setAttribute('viewBox', '0 0 24 24');
+        wrap.setAttribute('viewBox', e.box);
         wrap.setAttribute('aria-hidden', 'true');
         wrap.setAttribute('class', className || 'ico');
         // Parsed as SVG, not HTML, so <circle>/<rect> land in the right namespace.
         const doc = new DOMParser().parseFromString(
-            '<svg xmlns="' + NS + '">' + inner + '</svg>', 'image/svg+xml');
+            '<svg xmlns="' + NS + '">' + e.inner + '</svg>', 'image/svg+xml');
         Array.from(doc.documentElement.childNodes).forEach((n) => wrap.appendChild(n));
         return wrap;
     }
 
     // Markup form, for the places that still assemble a row with innerHTML.
     function markup(name, className) {
-        const inner = P[name];
-        if (!inner) { console.warn('[icons] unknown icon: ' + name); return ''; }
-        return '<svg viewBox="0 0 24 24" aria-hidden="true" class="' +
-            (className || 'ico') + '">' + inner + '</svg>';
+        const e = entry(name);
+        if (!e) { console.warn('[icons] unknown icon: ' + name); return ''; }
+        return '<svg viewBox="' + e.box + '" aria-hidden="true" class="' +
+            (className || 'ico') + '">' + e.inner + '</svg>';
     }
 
     // Swap every <span data-icon="…"> placeholder for its glyph, carrying the

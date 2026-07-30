@@ -1099,6 +1099,11 @@ button { font-family: inherit; }
 .ch-btn:hover { background: none; color: var(--text-strong); }
 #chan-head .ch-btn.on { background: none; color: var(--text-strong); }
 #chan-head .ch-btn[aria-pressed="true"].on { background: none; }
+/* A button whose panel is OPEN goes white, the way the members toggle already
+   did. The threads button and the bell both set aria-expanded and neither was
+   styled for it, so their panel could be open with nothing in the header saying
+   which button had opened it. */
+#chan-head .ch-btn[aria-expanded="true"] { background: none; color: var(--text-strong); }
 /* A well cut into the header rather than a control raised out of it, with the
    magnifier trailing the placeholder — the field reads as a sentence you
    finish, not a button you press. */
@@ -1989,28 +1994,45 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 
 .threads-pop {
   position: fixed; z-index: 70;
-  width: 528px; max-width: calc(100vw - 24px);
+  /* 602 x 450, measured off the reference. It was 528 x 368, and the empty state
+     is the whole point of this panel — it needs the room. */
+  width: 602px; max-width: calc(100vw - 24px);
   display: flex; flex-direction: column;
-  max-height: min(460px, calc(100vh - 120px));
-  background: var(--float); border: 1px solid var(--line);
+  min-height: 450px; max-height: min(560px, calc(100vh - 120px));
+  /* Explicit hairline, like the pinned popover's: over --float, --line computes to
+     #313136, eight points brighter than the reference's #29292C. */
+  background: var(--float); border: 1px solid #29292c;
   border-radius: 8px; overflow: hidden;
   box-shadow: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
 }
 .threads-pop[hidden] { display: none; }
 .tp-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
-  padding: 12px 16px; background: var(--float-2); border-bottom: 1px solid var(--line);
+  /* 48px, and the SAME shade as the body — separated by the rule alone. It was
+     --float-2, which reads as a bar raised out of the panel; the pinned popover
+     had the identical problem and this is the same correction. */
+  height: 48px; box-sizing: border-box; padding: 0 16px;
+  background: var(--float); border-bottom: 1px solid #323237;
 }
 .tp-title {
-  display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 10px; flex: 0 0 auto;
   font-size: 15px; font-weight: 700; color: var(--text-strong);
 }
-.tp-title .ico { width: 18px; height: 18px; color: var(--ch-icon); }
+/* 22px, matching the reference — it was 18, which drew a 15x10 ink mark against
+   the reference's 22x22. */
+.tp-title .ico { width: 22px; height: 22px; flex: 0 0 22px; color: var(--panel-icon); }
+
+/* A bordered INPUT, not a well cut into the header. It was --sunk (21 points
+   darker than the header it sat in) with no border at all; the reference's is four
+   points darker than the panel with a #37373D hairline — the same field treatment
+   the Filters form needed. Fixed at 280 like the reference's, with Create pushed
+   to the trailing edge rather than the field stretching to meet it. */
 .tp-search {
-  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px;
-  height: 30px; padding: 0 8px; border-radius: 4px;
-  background: var(--sunk); border: 1px solid transparent;
+  flex: 0 0 280px; min-width: 0; display: flex; align-items: center; gap: 6px;
+  height: 32px; box-sizing: border-box; padding: 0 8px; border-radius: 4px;
+  background: #202024; border: 1px solid #37373d;
 }
+.tp-search:hover { border-color: #43434a; }
 .tp-search:focus-within { border-color: var(--accent-line); }
 .tp-search .ico { width: 15px; height: 15px; flex: 0 0 15px; color: var(--dim); }
 .tp-search input {
@@ -2019,23 +2041,44 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 }
 .tp-search input::placeholder { color: var(--placeholder); }
 .tp-create {
-  flex: 0 0 auto; height: 30px; padding: 0 14px; border: 0; border-radius: 4px;
+  flex: 0 0 auto; margin-left: auto;
+  height: 32px; padding: 0 13px; border: 0; border-radius: 4px;
   background: var(--slider); color: #fff; cursor: pointer;
   font: inherit; font-size: 13px; font-weight: 600;
 }
 .tp-create:hover { filter: brightness(1.1); }
-.tp-body { flex: 1 1 auto; overflow-y: auto; padding: 8px; }
+/* A flex column so the empty state can centre itself in whatever height is left,
+   the way the reference's does — it measured 85px of clear space above the
+   illustration and 86 below the button. A list of threads still stacks from the
+   top, because that is what a column does with ordinary children. */
+.tp-body { flex: 1 1 auto; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; }
 
-/* The empty state, matching the reference: the mark, a line, a sentence, and the
-   button that resolves it. */
+/* The empty state, matching the reference: an illustration, a line, a sentence,
+   and the button that resolves it. */
 .tp-empty {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 40px 24px 44px; text-align: center;
+  /* Vertical margin auto — centred in the body rather than sitting under the
+     header with all the slack below it. */
+  margin: auto 0; padding: 16px 24px; text-align: center;
 }
-.tp-empty-mark { width: 56px; height: 56px; color: var(--dim); opacity: .85; margin-bottom: 4px; }
-.tp-empty-title { font-size: 17px; font-weight: 600; color: var(--text-strong); }
-.tp-empty-sub { font-size: 14px; color: var(--panel-sub); max-width: 42ch; line-height: 1.4; }
-.tp-empty .tp-create { height: 38px; padding: 0 16px; font-size: 14px; margin-top: 8px; }
+/* An ILLUSTRATION, not the header's icon scaled up. 104x80, which is a bit over
+   twice the footprint of the 47x32 glyph that used to be here — and that
+   difference is most of why the reference's empty state reads as designed and this
+   one read as missing content. Drawn in icons.js as `threads-empty`. */
+.tp-empty-mark { width: 104px; height: 80px; margin-bottom: 6px; flex: 0 0 auto; }
+/* 24px, for the reference's 18px cap height — it was 17, which drew 13. The
+   width-to-height ratio was already right, so the face was never the problem. */
+.tp-empty-title { font-size: 24px; font-weight: 700; color: var(--text-strong); letter-spacing: -.01em; }
+/* Nearly as bright as body text, and 82% of the panel wide. It was --panel-sub
+   (peak 156 against the reference's 240) inside a 42ch box — 59% of the panel — so
+   it was both too dim to read as the sentence it is and wrapped to three lines. */
+.tp-empty-sub {
+  font-size: 14px; color: var(--msg-text); line-height: 1.45;
+  /* 82% of the POPOVER, which is what the reference gives its description — not
+     82% of this padded box, which would come out 50px narrower. */
+  max-width: 494px; margin: 0 auto;
+}
+.tp-empty .tp-create { height: 40px; padding: 0 20px; font-size: 14px; margin: 12px 0 0; }
 
 .tp-item {
   display: flex; gap: 12px; align-items: flex-start;
