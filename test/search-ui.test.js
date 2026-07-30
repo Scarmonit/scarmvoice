@@ -133,6 +133,13 @@ describe('the filters form', () => {
         rowNamed('More filters').click();
         await settle(6);
     };
+    // Pick a value the way a person does. Assigning `.value` fires nothing, and
+    // Apply is only enabled once the form differs from what is already applied —
+    // so a spec that assigns silently would be pressing a disabled button.
+    const pick = (id, value) => {
+        field(id).value = value;
+        field(id).dispatchEvent(new window.Event('change', { bubbles: true }));
+    };
 
     it('names every field, and says what each one does', async () => {
         await open();
@@ -164,6 +171,64 @@ describe('the filters form', () => {
         await settle(4);
     });
 
+    // Applying a form that already says what the box says does nothing, and a
+    // button that does nothing should say so — the reference disables its own Apply
+    // in the same state. The rule here is stricter than the reference's, because
+    // this form's fields are selects reading "Anyone" rather than dim placeholders:
+    // "nothing chosen" is not a state it has, so the test is whether applying would
+    // be a NO-OP.
+    it('offers Apply only when pressing it would change something', async () => {
+        await type('');
+        await open();
+        expect($('fm-apply').disabled, 'nothing chosen over an empty box').toBe(true);
+
+        pick('fm-has', 'link');
+        await settle(2);
+        expect($('fm-apply').disabled, 'a filter chosen').toBe(false);
+
+        // …and back again. The reference would leave this enabled and do nothing.
+        pick('fm-has', '');
+        await settle(2);
+        expect($('fm-apply').disabled, 'put back the way it was').toBe(true);
+
+        $('fm-cancel').click();
+        await settle(4);
+    });
+
+    it('enables Apply when the form is cleared over an ACTIVE filter', async () => {
+        // Clearing is a change too: applying an empty form over `has:link` removes
+        // it, so the button has work to do.
+        //
+        // The trailing space is load-bearing, as it is in the app: with the caret
+        // INSIDE `has:link` the dropdown offers values for that operator rather than
+        // the filter list, so there is no "More filters" row to click.
+        await type('has:link ');
+        await open();
+        expect($('fm-apply').disabled, 'form matches the box').toBe(true);
+
+        $('fm-clear').click();
+        await settle(2);
+        expect($('fm-apply').disabled, 'cleared, so applying removes the filter').toBe(false);
+
+        $('fm-cancel').click();
+        await settle(4);
+    });
+
+    it('notices the date row opening, which fires no change of its own', async () => {
+        await type('');
+        await open();
+        expect($('fm-apply').disabled).toBe(true);
+        $('fm-date-add').click();
+        await settle(2);
+        // Showing the row is a change nothing on the row itself can report.
+        expect($('fm-date-row').hidden).toBe(false);
+        $('fm-date-clear').click();
+        await settle(2);
+        expect($('fm-apply').disabled, 'row hidden again').toBe(true);
+        $('fm-cancel').click();
+        await settle(4);
+    });
+
     it('starts the date as a button, not an empty field', async () => {
         await open();
         expect($('fm-date-add').hidden).toBe(false);
@@ -191,8 +256,8 @@ describe('the filters form', () => {
     it('writes them back on apply, and combines them', async () => {
         await type('');
         await open();
-        field('fm-from').value = 'Parker';
-        field('fm-has').value = 'link';
+        pick('fm-from', 'Parker');
+        pick('fm-has', 'link');
         $('fm-apply').click();
         await settle(10);
 
@@ -213,7 +278,7 @@ describe('the filters form', () => {
         // and means there is no "More filters" row to click.
         await type('from:Parker logo');
         await open();
-        field('fm-has').value = 'link';
+        pick('fm-has', 'link');
         $('fm-apply').click();
         await settle(10);
 
@@ -232,8 +297,8 @@ describe('the filters form', () => {
         const d = new Date(NOW - 4000);
         const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
             '-' + String(d.getDate()).padStart(2, '0');
-        field('fm-date-mode').value = 'during';
-        field('fm-date-value').value = iso;
+        pick('fm-date-mode', 'during');
+        pick('fm-date-value', iso);
         $('fm-apply').click();
         await settle(10);
 
@@ -266,7 +331,7 @@ describe('the filters form', () => {
         // without typing a space nobody would think to type.
         await type('');
         await open();
-        field('fm-from').value = 'Parker';
+        pick('fm-from', 'Parker');
         $('fm-apply').click();
         await settle(10);
 

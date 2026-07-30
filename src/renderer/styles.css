@@ -101,7 +101,14 @@
   --spoiler: #2e2e33;
   --spoiler-hover: #383840;
   --divider: rgba(0, 0, 0, .28);
-  --scrim: rgba(4, 5, 7, .82);
+  /* PURE BLACK at .72, measured against the reference's own backdrop.
+     It was rgba(4,5,7,.82), and the tint is what made the dimming NON-UNIFORM: a
+     coloured scrim contributes its own colour in proportion to how dark the
+     surface under it is, so the rail came out at a 0.41 multiplier against the
+     chat column's 0.34 while the reference sits flat at 0.27-0.29 everywhere.
+     Black at .72 is 0.28 over every surface, and it dims MORE than the old value
+     despite the lower alpha — the tint was doing the lifting. */
+  --scrim: rgba(0, 0, 0, .72);
   /* LIGHTER than the surface, not darker. These were rgba(0,0,0,.45)/.65, which
      over the message column drew a thumb twelve points darker than the background
      — a groove rather than a handle. */
@@ -2423,7 +2430,10 @@ input[readonly] { opacity: .75; cursor: default; }
 
 .modal {
   width: 100%; max-width: 560px; max-height: 84vh;
-  background: var(--float); border: 1px solid var(--line);
+  /* An explicit hairline rather than --line, which over --float computes to
+     #313136 — a point brighter than the reference's #323237 on every modal in
+     the app. */
+  background: var(--float); border: 1px solid #323237;
   border-radius: 12px; display: flex; flex-direction: column;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -2433,9 +2443,23 @@ input[readonly] { opacity: .75; cursor: default; }
   display: flex; align-items: center; padding: 16px 18px;
   box-shadow: 0 1px 0 var(--line);
 }
-.modal-head h2 { margin: 0; font-size: 16px; font-weight: 700; }
+/* 20px, not 16. Measured against the reference's modal title, the old size was
+   ~20% small — and it was ONLY the bold labels that were undersized; the
+   sublabels under them already matched to the pixel. */
+.modal-head h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
 .modal-head .icon-btn { margin-left: auto; }
 .modal-body { padding: 6px 18px 20px; overflow-y: auto; min-height: 0; }
+/* A modal's scrollbar STAYS, and its thumb is much lighter than the sheet — the
+   reference's is #666770 on a #242429 body. It is not the chat scrollbar's job:
+   there, a permanent bar down the edge of a conversation is chrome asking to be
+   read, so it hides. Here it is the only thing saying there is more below the
+   fold, and a form you cannot tell scrolls is a form with fields you never find.
+   8px of visible track, as measured. */
+.modal-body::-webkit-scrollbar { width: 14px; }
+.modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .30); background-clip: content-box;
+}
+.modal-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .40); background-clip: content-box; }
 
 /* ---------- settings ---------------------------------------------------- */
 /* A card on a dimmed app, not a takeover. Filling the window was the single
@@ -4816,35 +4840,65 @@ html.win-hidden .up-bar i {
    extra criteria are a different shape of question — a date, a role, a
    channel — and a menu that answers by adding eight more rows is a list you
    scroll past rather than a thing you fill in. */
-.fm-modal { max-width: 470px; max-height: 78vh; }
-.fm-body { padding: 4px 18px 8px; }
+/* 480 wide and capped at 800 tall with the BODY scrolling, measured off the
+   reference. It used to grow to fit — 470x911 — which is taller than a 900px
+   window can show, and the field rhythm was already right (111px pitch against
+   the reference's 110) so only the frame needed moving. */
+.fm-modal { max-width: 480px; max-height: min(800px, 88vh); }
+/* 24px on the leading edge, and 10 on the trailing one so the 14px scrollbar sits
+   in that gap rather than eating into the field: 478 inner - 24 - 10 - 14 leaves a
+   430px field, which is the reference's. The reference's scrollbar overlays its own
+   padding; Chromium's takes the width, so the padding gives it the room instead.
+   Asymmetric only in theory — eight sections never fit in a 640px body. */
+.fm-body { padding: 4px 10px 12px 24px; }
+/* A header and a footer the size of the reference's. Explicit, because both are
+   made of padding plus whatever the type inside happens to measure — and the
+   header came out at 61 against 72, the footer at 60 against 88. */
+.fm-modal .modal-head { height: 72px; box-sizing: border-box; padding: 0 18px 0 24px; }
+.fm-modal .modal-head .icon-btn .ico { width: 16px; height: 16px; }
 
 /* Label, then what it means, then the control. The description is not
    decoration: "Sent by any of the selected users" is the difference between a
-   field you understand at a glance and one you have to try. */
-.fm-field { padding: 14px 0; }
-.fm-field + .fm-field { border-top: 1px solid var(--line); }
+   field you understand at a glance and one you have to try.
+
+   NO rule between sections. The reference has exactly two — under the header and
+   above the footer — because each of its fields is a visibly bounded box, so the
+   form does not need dividers to be legible. This had one after every section for
+   the opposite reason: the fields were underlines, so without the rules there was
+   nothing to separate. Give the fields borders (below) and the dividers become
+   redundant, and the whole thing stops reading as a settings list. */
+/* 12px, for the reference's 110px field pitch — 14 drew 116. */
+.fm-field { padding: 12px 0; }
 .fm-label {
-  display: block; font-size: 13px; font-weight: 700; color: var(--text-strong);
+  display: block; font-size: 16px; font-weight: 700; color: var(--text-strong);
 }
-.fm-hint { margin: 2px 0 9px; font-size: 12.5px; color: var(--muted); }
+.fm-hint { margin: 2px 0 7px; font-size: 12.5px; color: var(--muted); }
+/* A BOX, not an underline. Measured off the reference: 40px tall, its own fill
+   four points darker than the modal, and a hairline on all four sides. It used to
+   be var(--input) with a transparent border, and --input is close enough to
+   --float that a scan straight across the From field found nothing at all — no
+   top, no sides, no fill. An input that is not drawn as an input reads as a list
+   row, which is what made the whole sheet look like settings. */
 .fm-input {
-  width: 100%; height: 38px; padding: 0 11px; border-radius: 6px;
-  background: var(--input); border: 1px solid transparent; outline: none;
+  width: 100%; height: 40px; padding: 0 11px; border-radius: 6px;
+  background: #202024; border: 1px solid #37373d; outline: none;
   color: var(--text); font: inherit; font-size: 13.5px;
 }
+.fm-input:hover { border-color: #43434a; }
 .fm-input:focus-visible { border-color: var(--accent-line); }
 select.fm-input { cursor: pointer; }
 
 /* The date starts as a button because most searches do not have one, and an
-   empty date field reads as a question you have to answer. */
+   empty date field reads as a question you have to answer. A real button now,
+   the same 40px as the fields it sits among — it was plain text on the modal's
+   own fill, so there was nothing there to press. */
 .fm-add {
   display: flex; align-items: center; justify-content: center; gap: 7px;
-  width: 100%; height: 38px; border-radius: 6px; cursor: pointer;
-  background: var(--input); border: 1px solid transparent;
+  width: 100%; height: 40px; border-radius: 6px; cursor: pointer;
+  background: #323237; border: 1px solid #35353b;
   color: var(--text); font: inherit; font-size: 13.5px; font-weight: 500;
 }
-.fm-add:hover { background: var(--elev); }
+.fm-add:hover { background: #3a3a41; border-color: #45454d; }
 .fm-add .ico { width: 15px; height: 15px; }
 .fm-date-row { display: flex; align-items: center; gap: 8px; }
 .fm-date-row[hidden] { display: none; }
@@ -4855,7 +4909,10 @@ select.fm-input { cursor: pointer; }
 
 .fm-foot {
   flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  padding: 14px 18px; box-shadow: 0 -1px 0 var(--line);
+  /* 88px, the reference's — it was 60. The footer of a form is where the two
+     decisions live, and it should not be the thinnest band on the sheet. */
+  min-height: 88px; box-sizing: border-box;
+  padding: 0 24px; box-shadow: 0 -1px 0 var(--line);
 }
 /* A link, not a button: clearing is the reversible one of the three, and it
    should not compete with Apply for the eye. */
@@ -4865,14 +4922,29 @@ select.fm-input { cursor: pointer; }
   font: inherit; font-size: 13px; font-weight: 500;
 }
 .fm-link:hover { text-decoration: underline; }
+/* LIGHTER than the modal, with its own outline. It was var(--input) — two points
+   DARKER than the sheet it sits on and no border, so Cancel was essentially
+   invisible as a button. Same elevation inversion as the scrollbar and the pinned
+   header: a control on a surface has to be raised out of it. */
 .fm-foot button:not(.fm-link) {
-  padding: 9px 18px; border-radius: 6px; cursor: pointer;
-  background: var(--input); border: 0; color: var(--text);
+  height: 40px; padding: 0 18px; border-radius: 6px; cursor: pointer;
+  background: #323237; border: 1px solid #35353b; color: var(--text);
   font: inherit; font-size: 13px; font-weight: 600;
 }
-.fm-foot button:not(.fm-link):hover { background: var(--elev); }
-.fm-apply { background: var(--accent) !important; color: var(--on-accent) !important; }
-.fm-apply:hover { background: var(--accent-hi) !important; }
+.fm-foot button:not(.fm-link):hover { background: #3a3a41; border-color: #45454d; }
+.fm-apply {
+  background: var(--accent) !important; border-color: var(--accent) !important;
+  color: var(--on-accent) !important;
+}
+.fm-apply:hover { background: var(--accent-hi) !important; border-color: var(--accent-hi) !important; }
+/* Applying a form that already matches what is applied does nothing, and a button
+   that does nothing should say so — the reference disables its own Apply in the
+   same state. Half-strength over the modal, which is exactly how the reference
+   draws it (its #41468F is #5865F2 at 50% over #242429). */
+.fm-apply:disabled {
+  opacity: .5; cursor: default;
+  background: var(--accent) !important; color: var(--on-accent) !important;
+}
 .fm-foot button:focus-visible, .fm-link:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }

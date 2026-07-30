@@ -12495,9 +12495,49 @@
         fmDateRaw = hasDate ? String(ops[mode][0]) : '';
         $('fm-date-value').value = fmDateRaw;
 
+        // What was in the box when this opened, so Apply can tell whether pressing
+        // it would change anything. See refreshApplyEnabled.
+        fmOpenedWith = fmFormState();
+        refreshApplyEnabled();
+
         $('filters-modal').hidden = false;
         trapFocus($('filters-modal'), { label: 'Filters', initial: $('fm-from') });
     }
+
+    // ---- Apply is only offered when it would do something -------------------
+    //
+    // The reference disables its own Apply Filters in the empty state, and it can:
+    // its fields are dim `ex. scarmonit` placeholders, so "empty" and "unset" are
+    // the same thing. This form's fields are selects that read "Anyone" / "Any
+    // channel" — resolved values, which is the more honest thing for a select to
+    // say, and it means "nothing chosen" is not a state this form has.
+    //
+    // So the rule is the one that is actually true here, and it is stricter than
+    // the reference's: Apply is disabled when applying would be a NO-OP — when the
+    // form says exactly what the search box already says. That covers the empty
+    // state the reference cares about (open it over an empty box, change nothing)
+    // and it also covers "I set a filter, then put it back", which the reference
+    // would offer as an enabled button that does nothing.
+    let fmOpenedWith = '';
+
+    function fmFormState() {
+        return JSON.stringify([
+            $('fm-from').value, $('fm-in').value, $('fm-has').value,
+            $('fm-mentions').value, $('fm-author').value, $('fm-pinned').value,
+            $('fm-date-row').hidden ? '' : $('fm-date-mode').value,
+            $('fm-date-row').hidden ? '' : ($('fm-date-value').value || fmDateRaw)
+        ]);
+    }
+
+    function refreshApplyEnabled() {
+        const btn = $('fm-apply');
+        if (btn) btn.disabled = fmFormState() === fmOpenedWith;
+    }
+
+    // Every control in the form, on one listener — `change` covers the selects and
+    // the date input, and the two date buttons call it themselves because showing
+    // or hiding that row is a change the row's own events never see.
+    $('filters-modal').addEventListener('change', refreshApplyEnabled);
 
     function closeFiltersModal() {
         releaseFocus($('filters-modal'));
@@ -12561,18 +12601,25 @@
         $('fm-date-mode').value = 'during';
         $('fm-date-row').hidden = true;
         $('fm-date-add').hidden = false;
+        // Clearing a form that was already clear changes nothing, so Apply goes
+        // back to disabled — and clearing one that had filters in it enables it,
+        // because applying now removes them.
+        refreshApplyEnabled();
     });
 
     $('fm-date-add').addEventListener('click', () => {
         $('fm-date-row').hidden = false;
         $('fm-date-add').hidden = true;
         $('fm-date-value').focus();
+        // Showing the row is a change no event on the row itself can see.
+        refreshApplyEnabled();
     });
     $('fm-date-clear').addEventListener('click', () => {
         $('fm-date-value').value = '';
         fmDateRaw = '';                 // …including the un-displayable original
         $('fm-date-row').hidden = true;
         $('fm-date-add').hidden = false;
+        refreshApplyEnabled();
     });
 
     // ---------- wiring ------------------------------------------------------

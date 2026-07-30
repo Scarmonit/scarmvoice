@@ -1332,3 +1332,74 @@ describe('the (edited) marker', () => {
         expect(css).not.toMatch(/\.msg-edited\.by-mod \{[^}]*color:/);
     });
 });
+
+// The Filters form, measured off the reference. Its fields were the biggest
+// divergence in the app: they were drawn as underlines, so a scan straight across
+// one found nothing at all — no top, no sides, no fill — and the sheet read as a
+// settings list rather than as a form.
+describe('the filters modal, measured', () => {
+    const fm = () => css.slice(css.indexOf('.fm-modal {'), css.indexOf('.fm-foot {'));
+
+    it('is 480 wide, capped at 800, with the body scrolling', () => {
+        // It used to grow to fit — 470x911 — which is taller than a 900px window
+        // can show. The field rhythm was already right, so only the frame moved.
+        expect(fm()).toMatch(/max-width: 480px; max-height: min\(800px, 88vh\)/);
+    });
+
+    it('draws each field as a BOUNDED BOX, not an underline', () => {
+        // The fill is four points darker than the modal and the hairline goes all
+        // the way round. It used to be var(--input) with a transparent border, and
+        // --input is close enough to --float that the field had no visible edge.
+        expect(fm()).toMatch(/\.fm-input \{[^}]*height: 40px/);
+        expect(fm()).toMatch(/\.fm-input \{[^}]*background: #202024; border: 1px solid #37373d/);
+    });
+
+    it('has no rule between sections', () => {
+        // The reference has exactly two — under the header and above the footer —
+        // because each of its fields is visibly bounded. Give the fields borders
+        // and the dividers become redundant.
+        expect(css).not.toMatch(/\.fm-field \+ \.fm-field/);
+    });
+
+    it('draws Add date as a real button the same height as a field', () => {
+        // It was plain text on the modal's own fill: nothing there to press.
+        expect(fm()).toMatch(/\.fm-add \{[^}]*height: 40px/);
+        expect(fm()).toMatch(/\.fm-add \{[^}]*background: #323237; border: 1px solid #35353b/);
+    });
+
+    it('raises the footer buttons OUT of the sheet', () => {
+        // Cancel was var(--input) with no border — two points DARKER than the modal
+        // it sits on, so it was invisible as a button. Same elevation inversion as
+        // the scrollbar and the pinned header.
+        const foot = css.slice(css.indexOf('.fm-foot {'));
+        expect(foot).toMatch(/\.fm-foot button:not\(\.fm-link\) \{[^}]*background: #323237; border: 1px solid #35353b/);
+        expect(foot).toMatch(/\.fm-apply:disabled \{[^}]*opacity: \.5/);
+    });
+
+    it('gives every modal the reference s border and title size', () => {
+        const modal = css.slice(css.indexOf('.modal {'), css.indexOf('.modal-body {'));
+        expect(modal).toMatch(/border: 1px solid #323237/);
+        expect(modal).toMatch(/\.modal-head h2 \{[^}]*font-size: 20px/);
+    });
+
+    it('keeps a modal s scrollbar visible, and light', () => {
+        // The opposite call from the chat scrollbar, deliberately: there a permanent
+        // bar down the edge of a conversation is chrome asking to be read, so it
+        // hides. Here it is the only thing saying there is more below the fold.
+        const bar = css.slice(css.indexOf('.modal-body::-webkit-scrollbar'));
+        expect(bar).toMatch(/background: rgba\(255, 255, 255, \.30\)/);
+        expect(css).not.toMatch(/\.modal-body\.scrolling/);
+    });
+});
+
+describe('the backdrop behind a modal', () => {
+    it('is PURE BLACK, which is what makes the dimming uniform', () => {
+        // It was rgba(4,5,7,.82). A coloured scrim contributes its own colour in
+        // proportion to how dark the surface under it is, so the rail came out at a
+        // 0.41 multiplier against the chat column's 0.34 while the reference sits
+        // flat at 0.27-0.29 everywhere. Black at .72 measures 0.27-0.29 on every
+        // surface — and dims MORE than the old value despite the lower alpha,
+        // because the tint was doing the lifting.
+        expect(dark).toMatch(/--scrim:\s*rgba\(0, 0, 0, \.72\)/);
+    });
+});
