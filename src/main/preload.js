@@ -97,7 +97,17 @@ contextBridge.exposeInMainWorld('lounge', {
         copy: () => ipcRenderer.invoke('edit:command', 'copy'),
         paste: () => ipcRenderer.invoke('edit:command', 'paste'),
         selectAll: () => ipcRenderer.invoke('edit:command', 'selectAll'),
-        clipboard: () => ipcRenderer.invoke('edit:clipboard')
+        clipboard: () => ipcRenderer.invoke('edit:clipboard'),
+        // Right-click in a text field. Pushed FROM main rather than read from a
+        // DOM event, because the spellchecker's answers — the misspelled word and
+        // what it should be — exist only on main's `context-menu` event, and
+        // cancelling the DOM event to draw our own menu is what used to stop that
+        // event ever firing. See the handler in main.js.
+        onContext: (cb) => sub('edit:context', cb),
+        // Replace the misspelling under the cursor with a chosen suggestion.
+        replaceMisspelling: (word) => ipcRenderer.invoke('edit:replaceMisspelling', word),
+        // Teach the spellchecker a word so it stops being underlined.
+        addToDictionary: (word) => ipcRenderer.invoke('edit:addToDictionary', word)
     },
 
     settings: {

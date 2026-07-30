@@ -294,6 +294,51 @@ function createWindow(forceShow) {
         e.preventDefault();
         if (/^https?:/.test(url)) openExternal(url);
     });
+
+    // The right-click menu for text fields — and the ONLY place the spellchecker's
+    // answers are readable.
+    //
+    // `spellcheck: true` (see webPreferences) has always underlined misspellings in
+    // the composer: on Windows 10+ Chromium uses the OS spellchecker, so it needs
+    // no dictionary download and works offline. What it could not do was offer the
+    // corrections, because the suggestions live on THIS event and nothing was
+    // listening — the renderer built the composer's menu itself, from a DOM
+    // `contextmenu` handler that called preventDefault(). That is not a stylistic
+    // choice: a cancelled DOM contextmenu event stops Blink asking the browser
+    // process for a menu at all, so this event never fired and the red squiggle
+    // was a dead end. Verified both ways in test/e2e/spellcheck.spec.js.
+    //
+    // So the flow is inverted: the renderer no longer opens the menu for an
+    // editable field, main tells it to. Everything the menu needs arrives with the
+    // click and nothing has to be asked for afterwards —
+    //
+    //   • misspelledWord + dictionarySuggestions, from the same spellchecker that
+    //     drew the underline, so the menu can never disagree with it
+    //   • editFlags, which is Chromium's own answer to "is there a selection to
+    //     cut, is there anything on the clipboard" — better than the round trip it
+    //     replaces, because it knows about image data and arrives synchronously
+    //   • x/y in CSS pixels relative to the page, i.e. exactly clientX/clientY
+    //
+    // Non-editable targets are left alone: the message rows, the channel list and
+    // the lightbox all cancel their own contextmenu event, so this never sees them
+    // and their menus keep working the way they always have.
+    win.webContents.on('context-menu', (_e, params) => {
+        if (!win || win.isDestroyed()) return;
+        if (!params.isEditable) return;
+        const flags = params.editFlags || {};
+        win.webContents.send('edit:context', {
+            x: Math.round(params.x) || 0,
+            y: Math.round(params.y) || 0,
+            misspelledWord: params.misspelledWord || '',
+            // Chromium offers up to five; capped anyway so a pathological answer
+            // cannot push the editing commands off the bottom of the screen.
+            suggestions: (params.dictionarySuggestions || []).slice(0, 5),
+            canCut: !!flags.canCut,
+            canCopy: !!flags.canCopy,
+            canPaste: !!flags.canPaste,
+            canSelectAll: !!flags.canSelectAll
+        });
+    });
 }
 
 // shell.openExternal returns a promise that rejects when nothing is registered
@@ -1406,12 +1451,52 @@ function registerIpc() {
 
     // What's on the clipboard, so the menu can grey out Paste rather than
     // offering an action that does nothing.
+    //
+    // The context menu reads params.editFlags.canPaste instead — it arrives with
+    // the click, costs no round trip, and is Chromium's own answer rather than a
+    // second guess at it. This stays because "can I paste" is a fair question for
+    // anything else that grows a paste affordance, and because it is the only way
+    // to distinguish text from an image on the clipboard.
     handle('edit:clipboard', () => {
         const formats = clipboard.availableFormats();
         return {
             text: clipboard.readText().length > 0,
             image: formats.some((f) => f.startsWith('image/'))
         };
+    });
+
+    // Swap a misspelled word for the correction the user picked.
+    //
+    // Chromium's own editing command, for the same reason cut/copy/paste are: it
+    // acts on the misspelling the renderer is CURRENTLY showing as selected —
+    // right-clicking a flagged word selects it — so there is no offset arithmetic
+    // here to disagree with what is on screen, it fires a real `input` event (so
+    // autosize and the send button update themselves), and it lands on the undo
+    // stack, which means Ctrl+Z takes the correction back.
+    handle('edit:replaceMisspelling', (_e, word) => {
+        if (!win || win.isDestroyed()) return false;
+        const w = String(word == null ? '' : word);
+        if (!w || w.length > 80) return false;
+        win.webContents.replaceMisspelling(w);
+        return true;
+    });
+
+    // "Add to dictionary" — for names, in-jokes and the game-of-the-month, which a
+    // chat client has rather a lot of. On Windows 10+ this writes through to the
+    // OS custom dictionary, so the word stops being flagged everywhere, and the
+    // underline goes on its own without a reload.
+    handle('edit:addToDictionary', (_e, word) => {
+        if (!win || win.isDestroyed()) return false;
+        const w = String(word == null ? '' : word).trim();
+        // A dictionary entry is a word. The ceiling is arbitrary but the shape
+        // check is not: this value reaches a persisted OS-level list.
+        if (!w || w.length > 80 || /\s/.test(w)) return false;
+        try {
+            return !!win.webContents.session.addWordToSpellCheckerDictionary(w);
+        } catch (e) {
+            console.warn('[spell] could not add to the dictionary:', e && e.message);
+            return false;
+        }
     });
 }
 

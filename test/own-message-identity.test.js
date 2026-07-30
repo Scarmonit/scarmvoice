@@ -93,7 +93,12 @@ function stubBridge() {
         },
         edit: {
             cut: noop, copy: noop, paste: noop, selectAll: noop,
-            clipboard: vi.fn(async () => ({ text: false, image: false }))
+            clipboard: vi.fn(async () => ({ text: false, image: false })),
+            // The editable-field context menu is opened by main now, not by a DOM
+            // handler here — see main.js's context-menu listener.
+            onContext: unsub,
+            replaceMisspelling: vi.fn(async () => true),
+            addToDictionary: vi.fn(async () => true)
         },
         settings: {
             get: vi.fn(async () => ({

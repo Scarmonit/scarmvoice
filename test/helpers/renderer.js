@@ -49,6 +49,7 @@ export async function bootRenderer(opts = {}) {
     const board = opts.board || vi.fn(async () => ({ success: true }));
     const settings = Object.assign({}, DEFAULT_SETTINGS, opts.settings || {});
     let rtMessage = null;
+    let editContext = null;
     let resync = null;
     let winHidden = null;
     let winFocus = null;
@@ -107,8 +108,22 @@ export async function bootRenderer(opts = {}) {
             onStatus: unsub
         },
         edit: {
-            cut: noop, copy: noop, paste: noop, selectAll: noop,
-            clipboard: vi.fn(async () => ({ text: false, image: false }))
+            // Spies rather than no-ops: the context menu's whole job is to run one
+            // of these on the right element, so a spec about the menu has nothing
+            // to assert on otherwise.
+            cut: vi.fn(async () => true),
+            copy: vi.fn(async () => true),
+            paste: vi.fn(async () => true),
+            selectAll: vi.fn(async () => true),
+            clipboard: vi.fn(async () => ({ text: false, image: false })),
+            replaceMisspelling: vi.fn(async () => true),
+            addToDictionary: vi.fn(async () => true),
+            // Held, like rt.onMessage: main pushes this on every right-click in an
+            // editable field, and it is the ONLY way the menu opens now — the
+            // spellchecker's suggestions exist only on main's context-menu event,
+            // and a DOM handler that cancelled the event to draw its own menu is
+            // what stopped that event ever firing. See main.js.
+            onContext: (cb) => { editContext = cb; return noop; }
         },
         settings: {
             get: vi.fn(async () => Object.assign({}, settings)),
@@ -213,6 +228,15 @@ export async function bootRenderer(opts = {}) {
         resync: () => { if (resync) resync(); },
         // The window went to / came back from the tray.
         hidden: (h) => { if (winHidden) winHidden(h); },
+        // A right-click in a text field, as main delivers it. Defaults match
+        // Chromium's editFlags for "a field with text in it and nothing selected".
+        rightClickField: (over = {}) => {
+            if (!editContext) return;
+            editContext(Object.assign({
+                x: 100, y: 200, misspelledWord: '', suggestions: [],
+                canCut: false, canCopy: false, canPaste: true, canSelectAll: true
+            }, over));
+        },
         // Focus left or came back.
         focus: (f) => { if (winFocus) winFocus(f); }
     };

@@ -81,7 +81,8 @@ beforeAll(async () => {
             send: noop, notifyPosted: noop, sendTyping: noop, sendVoice: noop,
             onMessage: unsub, onStatus: unsub
         },
-        edit: { cut: noop, copy: noop, paste: noop, selectAll: noop, clipboard: vi.fn(async () => ({ text: false, image: false })) },
+        edit: { cut: noop, copy: noop, paste: noop, selectAll: noop, clipboard: vi.fn(async () => ({ text: false, image: false })),
+            onContext: unsub, replaceMisspelling: vi.fn(async () => true), addToDictionary: vi.fn(async () => true) },
         settings: {
             get: vi.fn(async () => ({
                 baseUrl: 'https://scarmonit.com', room: 'lounge', clientId: 'me', displayName: 'Me',

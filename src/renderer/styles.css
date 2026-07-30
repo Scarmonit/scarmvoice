@@ -2542,6 +2542,11 @@ input[readonly] { opacity: .75; cursor: default; }
 .ctx-item:disabled { color: var(--dim); cursor: default; background: none; }
 .ctx-item.danger { color: var(--danger-hi); }
 .ctx-item.danger:hover { background: var(--danger); color: #fff; }
+/* A spelling suggestion. Its label is a WORD that will be inserted rather than
+   the name of a command, which is why every browser bolds them — and why it gets
+   the full text colour instead of the menu's ordinary weight. */
+.ctx-item.strong .ctx-label { font-weight: 600; color: var(--text); }
+.ctx-item.strong:hover .ctx-label { color: inherit; }
 .ctx-sep { height: 1px; margin: 5px 6px; background: var(--line); }
 
 /* ---------- dialog ----------------------------------------------------- */

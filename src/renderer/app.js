@@ -3638,28 +3638,76 @@
         stageFiles(items);
     });
 
-    // Right-click the composer for the standard editing actions. Electron ships
-    // no context menu of its own, so without this the only way to paste is the
-    // keyboard. The commands run in the main process as native editing commands
-    // on the focused element — that's what makes Paste behave exactly like
-    // Ctrl+V, image-on-the-clipboard included, instead of being a second
-    // half-implementation of it.
-    input.addEventListener('contextmenu', async (e) => {
-        e.preventDefault();
-        const selected = input.selectionStart !== input.selectionEnd;
-        const clip = await L.edit.clipboard();
-        const canPaste = !!(clip && (clip.text || clip.image));
-        // The menu takes the click, so put the caret back before the command
-        // runs — otherwise it lands on nothing.
-        const on = (fn) => () => { input.focus(); fn(); };
+    // Right-click in a text field: the standard editing actions, and the
+    // spellchecker's corrections above them.
+    //
+    // Electron ships no context menu of its own, so without this the only way to
+    // paste is the keyboard. The commands run in the main process as native
+    // editing commands on the focused element — that's what makes Paste behave
+    // exactly like Ctrl+V, image-on-the-clipboard included, instead of being a
+    // second half-implementation of it.
+    //
+    // MAIN OPENS THIS, and that inversion is the whole spellcheck feature. The
+    // misspelled word and its suggestions exist only on main's `context-menu`
+    // event, and this used to be a DOM `contextmenu` handler that called
+    // preventDefault() — which stops Blink asking the browser process for a menu,
+    // so that event never fired and the red underline the app had been drawing all
+    // along led nowhere. Main now sends everything the menu needs (see the handler
+    // there), which also means Cut/Copy/Paste are gated on Chromium's own
+    // editFlags instead of a clipboard round trip, so the menu opens in one hop.
+    //
+    // It covers EVERY editable field rather than just the composer, because
+    // `isEditable` is the only thing main can tell them apart by — and because a
+    // text field you cannot paste into is the bug this menu was added to fix, which
+    // was equally true of the thread composer, the edit box and the search field.
+    L.edit.onContext((m) => {
+        if (!m) return;
+        // Right-clicking a field focuses it, and #ctx-menu never takes focus (its
+        // mousedown is prevented), so the command will land on the right element.
+        // Captured anyway, and restored before the command runs, because that
+        // invariant is one repaint away from not being true and the failure mode is
+        // a menu item that silently does nothing.
+        const target = document.activeElement;
+        const on = (fn) => () => {
+            if (target && target.isConnected && typeof target.focus === 'function') target.focus();
+            fn();
+        };
 
-        openCtxMenu([
-            { label: 'Cut', icon: 'scissors', disabled: !selected, onClick: on(() => L.edit.cut()) },
-            { label: 'Copy', icon: 'copy', disabled: !selected, onClick: on(() => L.edit.copy()) },
-            { label: 'Paste', icon: 'clipboard', disabled: !canPaste, onClick: on(() => L.edit.paste()) },
+        const items = [];
+        // The corrections first, in Chromium's own order of likelihood, and bold —
+        // the same place and the same weight every browser puts them, because they
+        // are the reason the menu was opened and they insert text rather than
+        // running a command.
+        if (m.misspelledWord) {
+            (m.suggestions || []).forEach((s) => {
+                items.push({ label: s, strong: true, onClick: on(() => L.edit.replaceMisspelling(s)) });
+            });
+            // Chromium finds nothing for a bad enough typo, or for a name. Saying so
+            // is better than a menu that silently looks like any other, and it keeps
+            // "Add to dictionary" in the same position either way.
+            if (!(m.suggestions || []).length) {
+                items.push({ label: 'No suggestions', disabled: true });
+            }
+            items.push({
+                label: 'Add to dictionary', icon: 'plus',
+                onClick: on(async () => {
+                    if (await L.edit.addToDictionary(m.misspelledWord)) {
+                        toast(`Added “${m.misspelledWord}” to your dictionary`);
+                    }
+                })
+            });
+            items.push('sep');
+        }
+
+        items.push(
+            { label: 'Cut', icon: 'scissors', disabled: !m.canCut, onClick: on(() => L.edit.cut()) },
+            { label: 'Copy', icon: 'copy', disabled: !m.canCopy, onClick: on(() => L.edit.copy()) },
+            { label: 'Paste', icon: 'clipboard', disabled: !m.canPaste, onClick: on(() => L.edit.paste()) },
             'sep',
-            { label: 'Select all', icon: 'list', disabled: !input.value.length, onClick: on(() => L.edit.selectAll()) }
-        ], e.clientX, e.clientY);
+            { label: 'Select all', icon: 'list', disabled: !m.canSelectAll, onClick: on(() => L.edit.selectAll()) }
+        );
+
+        openCtxMenu(items, m.x, m.y);
     });
 
     // ---------- composer emoji, mentions, reply ---------------------------
@@ -9434,7 +9482,12 @@
             }
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'ctx-item' + (it.danger ? ' danger' : '') + (it.check ? ' checked' : '');
+            // `strong` is for an item whose label is CONTENT rather than the name of
+            // a command — a spelling suggestion is a word that will be inserted, not
+            // an action. Every browser bolds them for that reason, and it is what
+            // keeps them from reading as four more commands.
+            b.className = 'ctx-item' + (it.danger ? ' danger' : '') +
+                (it.check ? ' checked' : '') + (it.strong ? ' strong' : '');
             // `dot` is for the presence picker: the thing being chosen IS a
             // colour, so a line icon would say less than the swatch does.
             if (it.dot !== undefined) {

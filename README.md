@@ -150,10 +150,16 @@ board session is remembered for 30 days.
   link address, on bare URLs in a message and anywhere on a YouTube or Open Graph
   preview card, thumbnail and padding included. Only `http`/`https` is ever
   offered; see [Opening links](#opening-links)
-- **Composer menu** on right-click — Cut / Copy / Paste / Select all, greyed out
+- **Spellcheck with corrections** — misspellings are underlined as you type, and
+  right-clicking one lists the words you probably meant at the top of the menu.
+  Click a suggestion and it replaces the word; "Add to dictionary" stops a name
+  or an in-joke being flagged again. Chromium's own spellchecker, which on
+  Windows 10+ means the OS one: no dictionary download, nothing sent anywhere,
+  works offline. See [Spellcheck](#spellcheck)
+- **Text-field menu** on right-click — Cut / Copy / Paste / Select all, greyed out
   when they'd do nothing (nothing selected, empty clipboard). Paste runs as a
   native editing command, so an image on the clipboard stages as an attachment
-  exactly as Ctrl+V does
+  exactly as Ctrl+V does. Every editable field has it, not just the composer
 - **YouTube previews** — thumbnail, title and channel with a play overlay, for
   `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/` and `m.`/`music.`
   hosts, ignoring any `&t=`/playlist/tracking params. Clicking opens the video in
@@ -980,6 +986,59 @@ The inline editor has to survive the background poll — `renderMessages()` rebu
 the whole list, which would rip a half-typed edit out from under you, so it
 returns early while an edit is open and resyncs when the edit finishes. A failed
 save keeps the editor open with your text intact rather than discarding it.
+
+### Spellcheck
+
+The underline was never the hard part. `webPreferences.spellcheck` is on, so
+Chromium has been marking misspellings in the composer since the app existed —
+and on Windows 10+ Chromium uses the **OS** spellchecker, which means no Hunspell
+download from Google's CDN, no network dependency, and it works offline. The
+languages default to the OS locale rather than being pinned, so a machine set to
+French is checked in French.
+
+What could not be done was offering the **corrections**, and the reason is worth
+writing down because it is invisible:
+
+> The misspelled word and its suggestions exist **only** on the main process's
+> [`context-menu`](https://www.electronjs.org/docs/latest/api/web-contents#event-context-menu)
+> event — and that event does not fire if the renderer cancels the DOM
+> `contextmenu` event. A cancelled `contextmenu` stops Blink asking the browser
+> process for a menu at all.
+
+The composer drew its own styled menu from a DOM handler that called
+`preventDefault()`, which is exactly that. So the red squiggle was a dead end:
+you could see that a word was wrong and there was no way to ask what it should
+be. Nothing errored; the feature simply had no path to the surface.
+
+So the flow is inverted. The renderer no longer opens the menu for a text field —
+**main tells it to**, pushing everything the menu needs with the click:
+
+| from `params` | what it's for |
+| --- | --- |
+| `misspelledWord`, `dictionarySuggestions` | the corrections, from the same spellchecker that drew the underline, so the menu can never disagree with it |
+| `editFlags` | Chromium's own answer to "is there a selection to cut, is there anything to paste" — it knows about image data, and it arrives with the event, so the menu no longer waits on a clipboard round trip |
+| `x`, `y` | CSS pixels relative to the page, i.e. exactly `clientX`/`clientY` |
+
+Picking a suggestion runs Chromium's `replaceMisspelling` editing command rather
+than splicing the string here. That is what makes it act on the selection already
+on screen (right-clicking a flagged word selects it), fire a real `input` event —
+so autosize and the send button update themselves — and land on the undo stack,
+so Ctrl+Z takes the correction back.
+
+Two consequences worth knowing:
+
+- **Every** editable field gets the menu, not just the composer, because
+  `isEditable` is the only thing main can tell them apart by. That is the right
+  answer anyway: "a text field you cannot paste into" is the bug this menu was
+  added to fix, and it was equally true of the thread composer, the edit box and
+  the search field.
+- A `preventDefault()` added to a text field's `contextmenu` in future would
+  silently kill spellcheck again. `test/e2e/spellcheck.spec.js` asserts that main
+  sees the right-click, which is the only thing that catches it.
+
+`test/spellcheck-menu.test.js` covers the menu the renderer builds from that
+push; the e2e spec covers the parts jsdom cannot see — that the event fires, that
+Chromium really flags a typo, and that the replacement edits the textarea.
 
 ### Push-to-talk
 
