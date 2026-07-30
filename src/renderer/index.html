@@ -1435,7 +1435,11 @@
             <span class="set-slider-sub">Adjust the size of the interface. You can also change this with Ctrl +/−.</span>
           </div>
           <div class="set-ticks" id="ticks-zoom"></div>
-          <input type="range" id="set-zoom" min="50" max="200" step="5" aria-label="Zoom level">
+          <!-- step="1", not 5. The value is constrained by the SNAP LIST in app.js
+                   (Chromium's own zoom stops, which are not evenly spaced), and a step
+                   attribute re-snaps whatever that writes back: snapping 60 to 67 then
+                   had step turn it into 65, a zoom level no tick names. -->
+              <input type="range" id="set-zoom" min="50" max="200" step="1" aria-label="Zoom level">
         </div>
 
         <div class="set-rule"></div>

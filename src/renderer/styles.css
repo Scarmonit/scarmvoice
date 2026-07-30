@@ -4006,18 +4006,41 @@ button.ap-row:hover .ap-more { color: var(--text); }
    colour has almost no contrast against the fill it is sitting on. The fill
    itself comes from --fill, written by paintRangeFill. */
 .ap-slider input[type="range"],
+/* EVERY slider in the settings sheet, drawn one way.
+   There used to be two rules at equal specificity — this one at a 4px track, and a
+   .set-slider one at 8px — so which a control got depended on which appeared later
+   in the file. The Accessibility pane's four had a scale and a fill; Voice & Audio's
+   three had neither, and set --fill nowhere, so they sat permanently half filled at
+   the 50% default. */
 .settings-modal input[type="range"] {
-  width: 100%; height: 16px; margin: 0;
-  -webkit-appearance: none; appearance: none; background: none; outline: none;
+  -webkit-appearance: none; appearance: none;
+  display: block; width: 100%; height: 8px; margin: 0;
+  background: none; outline: none; cursor: pointer;
 }
-.ap-slider input[type="range"]::-webkit-slider-runnable-track,
+/* THE TRAVELED HALF IS FILLED. A range input's track is one element, so the fill is
+   a hard-stopped gradient at --fill — a length app.js writes on every `input`
+   alongside the tick highlight, positioned under the thumb's centre rather than at a
+   naive percentage of the width. */
 .settings-modal input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 4px;
+  background:
+    linear-gradient(to right, var(--slider) 0 var(--fill, 0%), var(--track) var(--fill, 0%) 100%);
+}
+.settings-modal input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; margin-top: -4px; border-radius: 50%;
+  background: #fff; border: 0; box-shadow: 0 2px 4px rgba(0, 0, 0, .3);
+}
+.settings-modal input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+/* The audio popover's own slider keeps the slimmer track: it is a 220px popover
+   over the user dock, not a settings pane. */
+.ap-slider input[type="range"]::-webkit-slider-runnable-track {
   height: 4px; border-radius: 2px;
   background: linear-gradient(var(--slider), var(--slider)) 0 / var(--fill, 50%) 100% no-repeat,
               var(--track);
 }
-.ap-slider input[type="range"]::-webkit-slider-thumb,
-.settings-modal input[type="range"]::-webkit-slider-thumb {
+.ap-slider input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 16px; height: 16px; margin-top: -6px;
   border-radius: 50%; background: #fff; border: 0;
@@ -4306,7 +4329,7 @@ button.ap-row:hover .ap-more { color: var(--text); }
   color: var(--text); font-size: 14px; min-width: 0;
 }
 .set-field select:focus { border-color: var(--accent); }
-.set-field input[type="range"] { width: 100%; margin: 12px 0 0; }
+.set-field input[type="range"] { width: 100%; margin: 4px 0 0; }
 
 /* The test is an action and the meter is its answer, so they share a row. */
 .set-testrow { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
@@ -4422,33 +4445,32 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-slider-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 14px; }
 .set-slider-title { font-size: 16px; font-weight: 500; color: var(--text-strong); }
 .set-slider-sub { font-size: 13px; line-height: 1.4; color: var(--panel-sub); }
-.set-ticks { position: relative; height: 16px; margin: 0 0 2px; }
+/* The scale: a label per value, and a TICK MARK per value crossing the track just
+   below it. The marks were missing entirely — the track was a plain bar with
+   numbers floating over it, so every label named a position nothing on the track
+   agreed with. 22px tall to hold both. */
+.set-ticks { position: relative; height: 22px; margin: 0 0 2px; }
 .set-tick {
-  position: absolute; transform: translateX(-50%);
+  position: absolute; top: 0; transform: translateX(-50%);
   font-size: 12px; font-weight: 600; color: var(--dim);
   white-space: nowrap; user-select: none;
 }
+/* The end labels align to their own end rather than centring on it: centred, the
+   first hangs off the left of the column and the last off the right. */
+.set-tick.first { transform: none; }
+.set-tick.last { transform: translateX(-100%); }
 .set-tick.on { color: var(--text-strong); }
-.set-slider input[type="range"] {
-  -webkit-appearance: none; appearance: none;
-  display: block; width: 100%; height: 8px; margin: 0;
-  background: none; cursor: pointer;
+/* A hairline standing on the track. Light enough to read over the grey half AND
+   over the blurple fill, which is why it is a translucent white rather than either
+   of those two colours. */
+.set-tick-mark {
+  position: absolute; bottom: 0; width: 1px; height: 9px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, .38); pointer-events: none;
 }
-/* THE TRAVELED HALF IS FILLED. A range input's track is one element, so the fill
-   is a hard-stopped gradient at --fill — a percentage app.js writes on every
-   `input` alongside the tick highlight. Without it the value could only be read
-   off the thumb's position, and both halves measured the same grey. */
-.set-slider input[type="range"]::-webkit-slider-runnable-track {
-  height: 8px; border-radius: 4px;
-  background:
-    linear-gradient(to right, var(--slider) 0 var(--fill, 0%), var(--track) var(--fill, 0%) 100%);
-}
-.set-slider input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none;
-  width: 16px; height: 16px; margin-top: -4px; border-radius: 50%;
-  background: #fff; border: 0; box-shadow: 0 2px 4px rgba(0, 0, 0, .3);
-}
-.set-slider input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.set-tick-mark.on { background: rgba(255, 255, 255, .72); }
+/* The track, the thumb and the fill are shared by every slider in the sheet —
+   see "EVERY slider in the settings sheet" above. */
 
 /* A titled block of radios — "UI Density", "Chat Message Display". */
 .set-field-block { margin-bottom: 22px; }
@@ -5077,7 +5099,10 @@ html.desat .toast {
 html.desat .msg-att img, html.desat .msg-att video,
 html.desat img.link-image, html.desat .lb-stage img,
 html.desat .yt-thumb, html.desat video {
-  filter: saturate(calc(1 / var(--sat, 1)));
+  /* --unsat, not calc(1 / var(--sat)): at 0% that divides by zero, which is
+     invalid at computed-value time — the declaration is dropped and the media
+     inherits the greyscale it was meant to be exempt from. app.js computes it. */
+  filter: saturate(var(--unsat, 1));
 }
 
 /* High contrast. Brighter text, real borders instead of hairlines, and a heavier

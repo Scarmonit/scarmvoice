@@ -829,7 +829,7 @@
         if (sel) sel.value = nearestFontKey(n);
         const slider = $('set-font-px');
         if (slider) slider.value = String(n);
-        paintTicks('ticks-font', n);
+        paintSlider('set-font-px', n);
         renderA11yPreview();
         return n;
     }
@@ -866,11 +866,32 @@
         // Saturation. Skipped entirely at 100%: a filter creates a containing
         // block, so leaving it on at `saturate(1)` would change how position:fixed
         // resolves for every descendant, for no visual gain.
-        const sat = Math.max(0, Math.min(100, parseInt(settings.saturation, 10) || 0)) || 100;
+        //
+        // Parsed in two steps ON PURPOSE. It used to end `|| 100`, which reads as
+        // "default to full" and is right for undefined — but 0 is falsy, so dragging
+        // the slider to 0% applied 100%: the one value where the reading and the
+        // effect were opposites. Only a value that is not a number falls back.
+        const satRaw = parseInt(settings.saturation, 10);
+        const sat = Number.isFinite(satRaw) ? Math.max(0, Math.min(100, satRaw)) : 100;
         const isFull = sat >= 100;
         root.classList.toggle('desat', !isFull);
-        if (isFull) root.style.removeProperty('--sat');
-        else root.style.setProperty('--sat', String(sat / 100));
+        if (isFull) {
+            root.style.removeProperty('--sat');
+            root.style.removeProperty('--unsat');
+        } else {
+            root.style.setProperty('--sat', String(sat / 100));
+            // The factor that gives media its colour BACK, computed here rather than
+            // as calc(1 / var(--sat)) in the stylesheet — at 0% that divides by zero,
+            // which is invalid at computed-value time, so the whole declaration is
+            // dropped and the images silently inherit the greyscale they were meant
+            // to be exempt from.
+            //
+            // At exactly 0% there is nothing to give back: saturate(0) discards the
+            // colour information before any descendant filter could restore it. So 0%
+            // is genuinely greyscale everywhere — which is what "0%" should mean, and
+            // is the honest reading of a slider that says zero.
+            root.style.setProperty('--unsat', String(sat > 0 ? Math.min(50, 100 / sat) : 1));
+        }
 
         root.classList.toggle('high-contrast', !!settings.highContrast);
         root.classList.toggle('no-motion', !!settings.reducedMotion);
@@ -903,60 +924,156 @@
         } catch (e) { /* an older main process has no such channel */ }
     }
 
-    // The labelled scale above a slider. Positions are percentages of the track,
-    // so the labels line up with the input's own stops at any width.
-    const TICKS = {
-        'ticks-font': { min: 12, max: 24, at: [12, 14, 15, 16, 18, 20, 24], suffix: 'px' },
-        'ticks-gap': { min: 0, max: 24, at: [0, 4, 8, 16, 24], suffix: 'px' },
-        'ticks-zoom': { min: 50, max: 200, at: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200], suffix: '' },
-        'ticks-sat': { min: 0, max: 100, at: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], suffix: '%' }
+    // ---------- the sliders in Settings -------------------------------------
+    //
+    // One registry and one painter for EVERY range input in the sheet, rather than
+    // four in the Accessibility pane with a labelled scale and three in Voice &
+    // Audio with nothing at all. `min` and `max` are read off the element, so they
+    // cannot drift from the markup.
+    //
+    //   at      the values that get a label AND a tick mark on the track
+    //   suffix  what the label reads after the number
+    //   snap    the value may ONLY rest on one of `at` (see snapSlider)
+    //   defer   apply on release rather than while dragging (see the zoom listener)
+    const SLIDERS = {
+        // 12-24 in the sizes the chat actually offers. NOT a uniform step, which is
+        // why this one has to snap: at step="1" dragging from 16 towards 18 rested
+        // on 17, a size no tick names.
+        'set-font-px': { at: [12, 14, 15, 16, 18, 20, 24], suffix: 'px', snap: true },
+        // step="4" already makes every stop valid; the labels are a subset of them.
+        'set-msg-gap': { at: [0, 4, 8, 16, 24], suffix: 'px' },
+        // Chromium's own zoom stops. Non-uniform, so it snaps — and it is the one
+        // slider whose effect is the whole window, so it waits for the mouse.
+        'set-zoom': {
+            at: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200],
+            suffix: '', snap: true, defer: true
+        },
+        'set-saturation': { at: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], suffix: '%' },
+        'set-invol': { at: [0, 50, 100, 150, 200], suffix: '%' },
+        'set-outvol': { at: [0, 50, 100, 150, 200], suffix: '%' },
+        'set-vad': { at: [1, 5, 10, 15, 20, 25, 30], suffix: '' }
     };
 
-    // The scale above a slider AND the slider's own progress fill, which are the
-    // same arithmetic — so they are written together and can never disagree.
-    //
-    // The fill has to be a variable rather than CSS: a range input's track is one
-    // element, so "blurple up to here, grey after" is a hard-stopped gradient, and
-    // only the value can say where the stop goes.
-    function paintTicks(id, value) {
-        const host = $(id);
-        const spec = TICKS[id];
-        if (!host || !spec) return;
-        const span = spec.max - spec.min;
-
-        // The thumb is 16px and its centre travels between 8px and (width - 8),
-        // not 0 and 100% — so a naive percentage leaves the fill ahead of the
-        // thumb at the low end and behind it at the high end. Interpolating
-        // between 8px and calc(100% - 8px) keeps the stop under the thumb's
-        // centre at every value.
-        const t = span > 0 ? Math.max(0, Math.min(1, (value - spec.min) / span)) : 0;
-        const input = host.parentElement && host.parentElement.querySelector('input[type="range"]');
-        if (input) {
-            input.style.setProperty('--fill', `calc(8px + ${(t * 100).toFixed(2)}% - ${(t * 16).toFixed(2)}px)`);
-        }
-        // Rebuilt only when it has to be: the marks never change, so dragging a
-        // slider just moves which one is highlighted.
-        if (!host.children.length) {
-            spec.at.forEach((v) => {
-                const t = document.createElement('span');
-                t.className = 'set-tick';
-                t.dataset.v = String(v);
-                t.textContent = v + spec.suffix;
-                // Inset at the ends so the first and last labels stay inside the
-                // column instead of hanging off it.
-                const pct = ((v - spec.min) / span) * 100;
-                t.style.left = Math.max(2, Math.min(98, pct)) + '%';
-                host.appendChild(t);
-            });
-        }
-        // Nearest mark, so a value between two of them still lights the one it is
-        // closest to rather than none at all.
-        let nearest = spec.at[0];
-        spec.at.forEach((v) => {
-            if (Math.abs(v - value) < Math.abs(nearest - value)) nearest = v;
+    function sliderSpec(input) {
+        const spec = SLIDERS[input && input.id];
+        if (!spec) return null;
+        const min = parseFloat(input.min);
+        const max = parseFloat(input.max);
+        return Object.assign({}, spec, {
+            min: Number.isFinite(min) ? min : 0,
+            max: Number.isFinite(max) ? max : 100
         });
-        Array.from(host.children).forEach((t) => {
-            t.classList.toggle('on', Number(t.dataset.v) === nearest);
+    }
+
+    // Where the THUMB'S CENTRE sits for a value, as a CSS length.
+    //
+    // A range thumb is 16px wide and its centre travels between 8px and
+    // (width - 8px), not between 0 and 100% — so a naive percentage puts the fill
+    // and the tick marks ahead of the thumb at the low end and behind it at the
+    // high end. Everything positioned along the track uses this one function, so
+    // the labels, the marks, the fill and the thumb cannot disagree.
+    function thumbAt(spec, value) {
+        const span = spec.max - spec.min;
+        const t = span > 0 ? Math.max(0, Math.min(1, (value - spec.min) / span)) : 0;
+        const pct = t * 100;
+        return `calc(8px + ${pct.toFixed(3)}% - ${(t * 16).toFixed(3)}px)`;
+    }
+
+    // The scale lives in a .set-ticks box immediately before the input. The
+    // Accessibility pane's four have one in the markup; the rest get one made here,
+    // so registering a slider is one line rather than a markup edit as well.
+    function ticksHostFor(input) {
+        const prev = input.previousElementSibling;
+        if (prev && prev.classList.contains('set-ticks')) return prev;
+        const host = document.createElement('div');
+        host.className = 'set-ticks';
+        input.parentElement.insertBefore(host, input);
+        return host;
+    }
+
+    // Labels and TICK MARKS, built once — neither depends on the value.
+    //
+    // The marks are what was missing: the track was a plain bar with numbers
+    // floating above it, so a label named a position nothing on the track agreed
+    // with. Each is a hairline crossing the track at its value.
+    function buildSlider(input) {
+        const spec = sliderSpec(input);
+        if (!spec) return null;
+        const host = ticksHostFor(input);
+        if (host.children.length) return host;
+        spec.at.forEach((v, i) => {
+            const left = thumbAt(spec, v);
+
+            const mark = document.createElement('i');
+            mark.className = 'set-tick-mark';
+            mark.dataset.v = String(v);
+            mark.style.left = left;
+            host.appendChild(mark);
+
+            const label = document.createElement('span');
+            label.className = 'set-tick';
+            label.dataset.v = String(v);
+            label.textContent = v + spec.suffix;
+            label.style.left = left;
+            // The end labels align to their own end instead of centring on it —
+            // centred, the first hangs off the left of the column and the last off
+            // the right. The reference does the same.
+            if (i === 0) label.classList.add('first');
+            else if (i === spec.at.length - 1) label.classList.add('last');
+            host.appendChild(label);
+        });
+        return host;
+    }
+
+    // The value's own state: the fill up to the thumb, and which label is lit.
+    function paintSlider(id, value) {
+        const input = $(id);
+        if (!input) return;
+        const spec = sliderSpec(input);
+        if (!spec) return;
+        const v = Number(value === undefined ? input.value : value);
+        input.style.setProperty('--fill', thumbAt(spec, v));
+
+        const host = buildSlider(input);
+        if (!host) return;
+        // Nearest label, so a value between two of them lights the one it is closest
+        // to rather than none at all.
+        let nearest = spec.at[0];
+        spec.at.forEach((a) => { if (Math.abs(a - v) < Math.abs(nearest - v)) nearest = a; });
+        Array.from(host.children).forEach((el) => {
+            el.classList.toggle('on', Number(el.dataset.v) === nearest);
+        });
+    }
+
+    // Snap a snapping slider's raw value onto the nearest value it is allowed to
+    // rest on, and write it back to the element so the thumb lands there too.
+    // Returns the value to act on either way.
+    function snapSlider(input) {
+        const spec = sliderSpec(input);
+        const raw = Number(input.value);
+        if (!spec || !spec.snap) return raw;
+        let best = spec.at[0];
+        spec.at.forEach((a) => { if (Math.abs(a - raw) < Math.abs(best - raw)) best = a; });
+        if (String(best) !== input.value) input.value = String(best);
+        return best;
+    }
+
+    // Every registered slider, drawn and kept in step. Called once the sheet's
+    // markup exists; paintPaneControls repaints the values on every open.
+    function initSliders() {
+        Object.keys(SLIDERS).forEach((id) => {
+            const input = $(id);
+            if (!input) return;
+            buildSlider(input);
+            // Snapping has to happen before anything else reads the value, so it is
+            // wired here rather than left to each slider's own listener — capture,
+            // so the value is already snapped by the time those run.
+            const spec = sliderSpec(input);
+            if (spec && spec.snap) {
+                input.addEventListener('input', () => snapSlider(input), true);
+            }
+            // The scale follows the thumb on every slider, whatever else it does.
+            input.addEventListener('input', () => paintSlider(id));
         });
     }
 
@@ -10074,21 +10191,21 @@
     function paintPaneControls() {
         const px = currentFontPx();
         if ($('set-font-px')) $('set-font-px').value = String(px);
-        paintTicks('ticks-font', px);
+        paintSlider('set-font-px', px);
 
         const gapRaw = parseInt(settings.msgGroupGap, 10);
         const gap = Number.isFinite(gapRaw) ? gapRaw : 16;
         if ($('set-msg-gap')) $('set-msg-gap').value = String(gap);
-        paintTicks('ticks-gap', gap);
+        paintSlider('set-msg-gap', gap);
 
         const zoom = parseInt(settings.zoomLevel, 10) || 100;
         if ($('set-zoom')) $('set-zoom').value = String(zoom);
-        paintTicks('ticks-zoom', zoom);
+        paintSlider('set-zoom', zoom);
 
         const satRaw = parseInt(settings.saturation, 10);
         const sat = Number.isFinite(satRaw) ? satRaw : 100;
         if ($('set-saturation')) $('set-saturation').value = String(sat);
-        paintTicks('ticks-sat', sat);
+        paintSlider('set-saturation', sat);
 
         paintSwitches();
         paintRadios();
@@ -10203,11 +10320,10 @@
                     sb.textContent = h4.textContent;
                     sb.addEventListener('click', () => {
                         showPane(g);
-                        // The pane is the scroller, and the sticky preview sits over
-                        // its top — so scroll the heading to just under that rather
-                        // than to the very top, where it would be covered.
-                        const top = h4.offsetTop - 12;
-                        body.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+                        scrollToHeading(h4);
+                        // Marked at once so the click feels immediate; the scrollspy
+                        // owns it from here and will confirm or correct it as the
+                        // animation lands.
                         subs.forEach((x) => x.el.classList.toggle('on', x.el === sb));
                     });
                     subWrap.appendChild(sb);
@@ -10241,9 +10357,59 @@
         // capture, or the mic light stays on while you read About.
         const voiceGroup = $('btn-mic-test') && $('btn-mic-test').closest('.set-group');
 
+        // How far below the pane's top edge a heading has to reach before it counts
+        // as "the one you are reading". Enough to clear the Accessibility pane's
+        // sticky preview, which floats over the top of its own scroller.
+        const SPY_LINE = 96;
+
+        // Scroll a heading into view WITHOUT the bounce.
+        //
+        // Measured from the two elements' rects rather than from offsetTop, which
+        // resolves against the nearest positioned ancestor — .settings-modal, not the
+        // scroller — so it was off by the header row's height and by whatever padding
+        // sat above the group. A delta added to the current scrollTop cannot be off
+        // by either.
+        function scrollToHeading(h4) {
+            const bodyTop = body.getBoundingClientRect().top;
+            const delta = h4.getBoundingClientRect().top - bodyTop - 20;
+            body.scrollTo({ top: Math.max(0, body.scrollTop + delta), behavior: 'smooth' });
+        }
+
+        // Which heading of the open pane is currently being read, and light its
+        // entry — the sidebar tracking the scroll rather than only the other way
+        // round. Every pane with subsections gets this, not just Accessibility.
+        function syncSpy() {
+            const open = items.find((it) => !it.g.hidden);
+            if (!open || !open.subs.length) return;
+            const visible = open.subs.filter((x) => !x.el.hidden);
+            if (!visible.length) return;
+
+            const bodyTop = body.getBoundingClientRect().top;
+            // The LAST heading that has passed the line — so the highlight moves as a
+            // section's own content scrolls up past it, not when the next heading
+            // happens to appear at the bottom of the pane.
+            let current = visible[0];
+            visible.forEach((x) => {
+                if (x.h4.getBoundingClientRect().top - bodyTop <= SPY_LINE) current = x;
+            });
+            // At the very bottom the last section is what you are looking at, even if
+            // its heading never reaches the line — a short final section is otherwise
+            // unreachable by the spy, and it is the one people scroll to on purpose.
+            if (body.scrollHeight - body.scrollTop - body.clientHeight < 8) {
+                current = visible[visible.length - 1];
+            }
+            visible.forEach((x) => x.el.classList.toggle('on', x === current));
+        }
+        // Passive: this only reads geometry, and a scroll listener that can block
+        // scrolling is the one kind worth avoiding on a pane people drag through.
+        body.addEventListener('scroll', syncSpy, { passive: true });
+
         function showPane(g) {
             const target = g || (items[0] && items[0].g);
             if (!target) return;
+            // Whether this is a SWITCH or a re-show of the pane already open, which
+            // decides whether the scroll position is reset — see below.
+            const changed = target !== items.find((it) => !it.g.hidden)?.g;
             if (micTest && target !== voiceGroup) stopMicTest();
             items.forEach((it) => {
                 const on = it.g === target;
@@ -10266,16 +10432,23 @@
                         if (n.hidden || (n.style && n.style.display === 'none')) { shown = false; break; }
                     }
                     x.el.hidden = !shown;
-                    // The first VISIBLE entry is where the pane opens, so it is
-                    // the one marked; nothing else has been navigated to yet.
-                    x.el.classList.toggle('on', shown && visible === 0);
+                    // The first VISIBLE entry is where a pane OPENS at. Only on a
+                    // real switch: re-showing the pane that is already open must not
+                    // move the mark, because the click that did it has usually just
+                    // set the mark itself.
+                    if (changed) x.el.classList.toggle('on', shown && visible === 0);
                     if (shown) visible++;
                 });
                 if (it.subWrap) it.subWrap.hidden = visible === 0;
             });
             const h = target.querySelector('h3');
             $('settings-title').textContent = h ? h.textContent : 'Settings';
-            body.scrollTop = 0;
+            // ONLY on a real switch. This used to run unconditionally, which is what
+            // made clicking a subsection bounce: the sub-nav click calls showPane for
+            // the pane that is already open, so the scroll snapped to the top and the
+            // smooth scroll to the heading then ran from there. Two competing scroll
+            // actions, exactly as it looked.
+            if (changed) body.scrollTop = 0;
             // The release history is a network round trip to GitHub, which is
             // rate limited per address — so it is fetched when somebody actually
             // looks at About, not every time Settings opens.
@@ -10691,12 +10864,16 @@
     // under the thumb while it is being dragged — which is the whole reason the
     // preview is on the same pane.
 
+    // Labels, tick marks and the snapping, for every slider in the sheet. Once —
+    // it attaches listeners. Values are painted on every open by paintPaneControls.
+    initSliders();
+
     $('set-font-px').addEventListener('input', (e) => { setChatFontPx(e.target.value); });
 
     $('set-msg-gap').addEventListener('input', async (e) => {
         const v = Math.max(0, Math.min(24, parseInt(e.target.value, 10) || 0));
         await saveSettings({ msgGroupGap: v });
-        paintTicks('ticks-gap', v);
+        paintSlider('set-msg-gap', v);
         applyAccessibility();
         renderA11yPreview();
     });
@@ -10704,23 +10881,23 @@
     $('set-saturation').addEventListener('input', async (e) => {
         const v = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
         await saveSettings({ saturation: v });
-        paintTicks('ticks-sat', v);
+        paintSlider('set-saturation', v);
         applyAccessibility();
     });
 
-    // Zoom is the one that cannot be applied on every pointer move: each call is
-    // an IPC round trip AND a full relayout of the window. Debounced, with the
-    // ticks and the stored value kept live so the control still feels immediate.
-    let zoomTimer = null;
-    $('set-zoom').addEventListener('input', (e) => {
+    // ZOOM APPLIES ON RELEASE, not while dragging — the one slider on this pane
+    // whose effect is the whole window, so watching the interface pulse under the
+    // thumb is not a preview, it is a fight. `change` on a range input is exactly
+    // "the drag ended", which is also true of a keyboard nudge.
+    //
+    // It was debounced at 120ms instead, which is not the same thing: a slow drag
+    // never stops long enough to be quiet, so it zoomed the whole way anyway.
+    $('set-zoom').addEventListener('input', () => { paintSlider('set-zoom'); });
+    $('set-zoom').addEventListener('change', async (e) => {
         const v = Math.max(50, Math.min(200, parseInt(e.target.value, 10) || 100));
-        paintTicks('ticks-zoom', v);
-        if (zoomTimer) clearTimeout(zoomTimer);
-        zoomTimer = setTimeout(async () => {
-            zoomTimer = null;
-            await saveSettings({ zoomLevel: v });
-            applyZoom();
-        }, 120);
+        paintSlider('set-zoom', v);
+        await saveSettings({ zoomLevel: v });
+        applyZoom();
     });
 
     wireSwitch('set-underline', () => !!settings.underlineLinks, async (v) => {
