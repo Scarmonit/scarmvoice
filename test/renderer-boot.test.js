@@ -580,7 +580,8 @@ describe('the settings screen', () => {
     it('files every section under a divider, in the markup s own order', () => {
         expect(nav().map((b) => b.textContent.trim())).toEqual([
             'Account', 'Custom emoji', 'Privacy',
-            'Voice & Audio', 'Notifications', 'Appearance', 'Screen share', 'Behaviour',
+            'Voice & Audio', 'Notifications', 'Appearance', 'Accessibility',
+            'Screen share', 'System',
             'About'
         ]);
         expect([...document.querySelectorAll('.set-nav-head')].map((h) => h.textContent))
@@ -591,18 +592,34 @@ describe('the settings screen', () => {
 
     it('shows exactly one section at a time', () => {
         expect(shown()).toEqual(['Account']);
-        nav().find((b) => b.textContent.includes('Behaviour')).click();
-        expect(shown()).toEqual(['Behaviour']);
+        nav().find((b) => b.textContent.includes('System')).click();
+        expect(shown()).toEqual(['System']);
         expect(nav().filter((b) => b.classList.contains('on')).map((b) => b.textContent.trim()))
-            .toEqual(['Behaviour']);
+            .toEqual(['System']);
+    });
+
+    // Each tab lists its OWN headings under it while it is open — the reference
+    // does this, and in a pane as long as Accessibility it is the only way to see
+    // what is in one without scrolling the whole thing. Built from the markup, so
+    // a new h4.set-sub needs no wiring.
+    it('lists the open section s headings, and only the open one s', () => {
+        nav().find((b) => b.textContent.includes('Accessibility')).click();
+        const visible = [...document.querySelectorAll('.set-nav-subs')].filter((w) => !w.hidden);
+        expect(visible).toHaveLength(1);
+        expect([...visible[0].children].map((b) => b.textContent)).toEqual([
+            'Text Readability', 'Visual Density', 'Color & Contrast',
+            'Reduced Motion', 'Audio & Screen Reader'
+        ]);
+        // The first is marked, because that is where the pane opens.
+        expect(visible[0].children[0].classList.contains('on')).toBe(true);
     });
 
     it('searches the sections contents, not just their titles', () => {
-        // Nobody knows that the tray toggle lives under "Behaviour" — which is
-        // the whole reason the box is there.
+        // Nobody knows that the tray toggle lives under "System" — which is the
+        // whole reason the box is there.
         type('tray');
-        expect(nav().filter((b) => !b.hidden).map((b) => b.textContent.trim())).toEqual(['Behaviour']);
-        expect(shown()).toEqual(['Behaviour']);
+        expect(nav().filter((b) => !b.hidden).map((b) => b.textContent.trim())).toEqual(['System']);
+        expect(shown()).toEqual(['System']);
         // A divider with nothing under it is worse than no divider.
         expect([...document.querySelectorAll('.set-nav-head')].filter((h) => !h.hidden)
             .map((h) => h.textContent)).toEqual(['App Settings']);

@@ -1183,6 +1183,86 @@ debounced whole-file write. Double-click resets a panel; the arrow keys move it 
 (the handle is a focusable `role="separator"`, so a focus ring that did nothing
 would be worse than none).
 
+### The channel header's two popouts
+
+The bell and a new Threads button beside it, in the reference's order — threads,
+bell, pins, members, then search.
+
+**Notifications** is the reference's menu: *Mute Channel* with a hover submenu of
+durations, a rule, then the three levels as radios on the trailing edge. Two
+things about it are decisions rather than markup:
+
+- **A mute is a second axis, not a fourth level.** The level says what a channel
+  is normally worth hearing about; a mute says "not for the next three hours"
+  without throwing that away, so coming off mute restores whatever the level
+  already was. `channelMuteUntil[name]` is an epoch ms, or `-1` for *until I turn
+  it back on* — a distinct value rather than a timestamp a century out, because
+  "no expiry" is a different thing from "an expiry nobody will reach".
+  `channelMutedNow()` is deliberately **read-only**: it is called from renders and
+  from the alert check, neither of which may write, so a separate 30-second sweep
+  prunes what has expired and says so.
+- **"Use Category Default" is absent.** This board has no channel categories, so
+  it would be a fourth radio meaning exactly what the first one means.
+
+The header bell used to open the channel's whole context menu, rename and delete
+included, which is not what a bell in a header means. That menu is still on the
+channel *row* and its right-click, where it belongs.
+
+**Threads** lists every thread in the channel from `/api/board/threads` — a new
+endpoint, because both clients could only ever half-derive this from the page they
+happen to hold (a root carries `reply_count`), so a thread nobody had scrolled
+back to was missing from a panel whose whole claim is to list them all. It
+aggregates in one statement rather than a count per root; the local derivation
+survives as the offline fallback. Centred over the conversation rather than hung
+off the button: the panel is 528px and the button is near the right edge of a
+window that can be 900px.
+
+*Create* is **adapted, not copied**. A thread here hangs off a message and there
+is no such thing as an empty one, so Create asks for the opening message, posts
+it, and opens its thread. That is what "start a thread" means in this app, and it
+is real — the alternative was a button that could not do anything.
+
+### Settings: Accessibility and System
+
+Two new panes, plus the switch-and-radio vocabulary the reference uses, applied
+across Notifications and Account.
+
+Everything in Accessibility **does something**, and the tests assert what:
+`--chat-fs` (a 12–24px slider now, not four names — `store.js` seeds it from the
+old scale once), `--msg-gap`, `data-ui-density`, `.desat` + `--sat`,
+`.high-contrast`, `.no-motion`, `.underline-links`, `aria-live` on the
+conversation, and `webContents.setZoomFactor` for zoom. Two details worth keeping:
+
+- **Saturation is skipped entirely at 100%.** A CSS filter creates a containing
+  block, so leaving `saturate(1)` on would change how `position: fixed` resolves
+  for every descendant, for no visual gain. It is also applied to `#app` and each
+  floating surface separately rather than to `<html>` — and *undone* on images and
+  video, because the reference is explicit that it does not touch user content.
+- **The live Preview is the real renderer.** Two fixed messages through
+  `renderMessage()`, so the markdown, the link, the reactions and the grouping are
+  the same code the conversation uses — a slider can be dragged while watching
+  what it actually does. Built when that pane is shown, not kept in sync behind a
+  closed sheet.
+
+System is the old Behaviour pane in the reference's shape, plus **hardware
+acceleration** — the one setting Chromium can only be told about before the app is
+ready, so it says a restart is needed and offers one instead of appearing to take
+effect. Its Custom Keybinds are the *same* bindings Voice & Audio records:
+`bindKeyRecorder` takes a list of buttons now, so two panes cannot show different
+keys for one hotkey. **Default Keybinds** lists only shortcuts the app really
+implements — written from the handlers, not from memory.
+
+There is no System Helper (the reference's is an update service; this app's updater
+needs no configuration), no Email notifications pane (this board sends none), and
+nothing about Nitro, billing, phone numbers, categories or other servers. A pane
+of toggles that control nothing is worse than a missing pane.
+
+Each tab also lists **its own headings** in the rail while it is open. A heading
+inside a block this viewer cannot see — *Members* is the owner's only — is dropped
+from that list, and the check walks the DOM for `hidden` rather than asking the
+layout: `offsetParent` is the obvious test and it is null for everything in jsdom,
+which would hide every sub-entry under test while looking correct in the app.
+
 ### Spellcheck
 
 The underline was never the hard part. `webPreferences.spellcheck` is on, so

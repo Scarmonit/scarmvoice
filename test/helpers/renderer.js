@@ -179,6 +179,14 @@ export async function bootRenderer(opts = {}) {
             openExternal: vi.fn(async () => true), systemTheme: vi.fn(async () => ({ dark: true })),
             setTheme: vi.fn(async () => true), onThemeChange: unsub,
             onCommand: unsub,
+            // Whole-interface zoom lives in main because webFrame needs node in
+            // the renderer. Answers with what it was asked for, the way the real
+            // handler does once the value is in range.
+            setZoom: vi.fn(async (p) => Math.max(50, Math.min(200, Math.round(Number(p) || 100)))),
+            // Restart in place. A spy, not a no-op: "did it relaunch the app
+            // behind their back" is the assertion the hardware-acceleration
+            // switch needs.
+            relaunch: vi.fn(async () => true),
             // Captured, not discarded: this is the callback main.js fires on
             // restore-from-tray / wake, and it is now the only way a test can
             // make the renderer resync on demand. The visibilitychange event it

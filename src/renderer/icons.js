@@ -193,6 +193,13 @@
         reply: '<path d="M9.4 6.2L3.8 11.8l5.6 5.6"/><path d="M3.8 11.8h9.6a6.8 6.8 0 0 1 6.8 6.8v1.2"/>',
         thread: '<path d="M20.4 13.6a2 2 0 0 1-2 2H8.6L4.4 19.8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>' +
             '<path d="M8.4 8.6h8M8.4 11.8h5"/>',
+        // The header's Threads button, and the empty state's mark. Three
+        // right-leaning strokes of decreasing length — the reference's glyph,
+        // which is deliberately NOT the speech bubble `thread` uses on a message
+        // row: one means "this message has a thread", the other means "every
+        // thread in this channel".
+        threads: '<path d="M3.6 17.8L9.4 6.2"/><path d="M9.8 17.8L15.6 6.2"/>' +
+            '<path d="M16 17.8L21.8 6.2"/>',
         smile: '<circle cx="12" cy="12" r="8.6"/><path d="M8.6 14.2a4.2 4.2 0 0 0 6.8 0"/>' +
             '<path d="M9.4 9.4h.01M14.6 9.4h.01" stroke-width="2.4"/>',
         at: '<circle cx="12" cy="12" r="3.6"/>' +
@@ -243,6 +250,13 @@
         clipboard: '<rect x="5" y="5" width="14" height="16" rx="1.8"/>' +
             '<path d="M9 5V3.8a1.2 1.2 0 0 1 1.2-1.2h3.6A1.2 1.2 0 0 1 15 3.8V5z"/>',
         list: '<path d="M4 6.4h16M4 12h16M4 17.6h10"/>',
+        // Settings nav. `accessibility` is the standing figure in a ring the
+        // reference uses; `system` is a desktop tower.
+        accessibility: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="7.6" r="1.3" fill="currentColor" stroke="none"/>' +
+            '<path d="M7.6 10.4h8.8"/><path d="M10.2 10.8L9.4 17M13.8 10.8l.8 6.2"/>',
+        system: '<rect x="3.4" y="3.4" width="10.2" height="17.2" rx="1.8"/>' +
+            '<path d="M6.4 7.2h4.2M6.4 10.2h4.2"/><circle cx="8.5" cy="16.4" r="1.6"/>' +
+            '<path d="M16.6 7.4h4M16.6 12h4M16.6 16.6h4"/>',
         // A curved arrow back over its own tail, and its mirror. Mirrored by hand
         // rather than with a transform, because the icon set is raw path data that
         // build() drops straight into one <svg> shape.

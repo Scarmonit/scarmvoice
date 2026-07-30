@@ -233,6 +233,11 @@ describe('a message I wrote does not announce itself to me', () => {
         play.mockRestore();
     });
 
+    // The window in this spec is deliberately UNFOCUSED (win.isFocused answers
+    // false), which is what makes this the ordinary case: "New Message in the
+    // channel I'm currently reading" only silences the chime when you are
+    // actually looking at it — focused, not in the tray, no drawer over the
+    // channel, and at the live edge.
     it('still chimes for a message from somebody else', async () => {
         const play = vi.spyOn(window.loungeSounds, 'playMessage');
 

@@ -1236,7 +1236,10 @@ button { font-family: inherit; }
 .msg {
   position: relative;
   display: flex; gap: .95em;
-  margin-top: 1.1em;
+  /* --msg-gap is the Accessibility slider's "Space Between Message Groups", set
+     in px by app.js. Falls back to the em-based value the app shipped with, so a
+     profile that has never touched the slider looks identical. */
+  margin-top: var(--msg-gap, 1.1em);
   padding: 2px 48px 2px 16px;
 }
 .msg:hover { background: var(--msg-hover); }
@@ -1879,6 +1882,134 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 .sr-body { margin-top: 3px; font-size: 12.5px; color: var(--muted); line-height: 1.4; word-break: break-word; }
 .sr-body mark { background: rgba(var(--accent-rgb), .28); color: var(--text); border-radius: 3px; padding: 0 2px; }
 
+/* ---------- notification settings popout --------------------------------
+   The reference's: a narrow menu off the header's bell. "Mute Channel" with a
+   caret that opens a submenu of durations beside it, a rule, then the three
+   notification levels as radios on the TRAILING edge — which is what makes them
+   read as one choice with three answers rather than three commands. */
+
+.notif-pop {
+  position: fixed; z-index: 70;
+  min-width: 188px; max-width: 260px; padding: 6px 8px;
+  background: var(--float); border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, .24), 0 0 0 1px rgba(0, 0, 0, .12);
+}
+.notif-pop[hidden] { display: none; }
+.np-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  min-height: 32px; padding: 6px 8px; border: 0; border-radius: 2px;
+  background: none; color: var(--text); cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 500; text-align: left;
+}
+.np-item:hover, .np-item.open { background: var(--slider); color: #fff; }
+.np-label { flex: 1 1 auto; min-width: 0; }
+/* While the channel IS muted the row carries what is currently true underneath
+   what it does — "Mute Channel / Muted for 2h 14m more" — so it needs to stack. */
+.np-label.np-stacked { display: flex; flex-direction: column; gap: 1px; }
+.np-sub-label { font-size: 12px; font-weight: 500; color: var(--panel-sub); }
+.np-item:hover .np-sub-label, .np-item.open .np-sub-label { color: rgba(255, 255, 255, .7); }
+.np-caret { width: 16px; height: 16px; flex: 0 0 16px; }
+.np-sep { height: 1px; margin: 6px 8px; background: var(--line-2); }
+.np-radios { display: block; }
+
+/* Label on the left, the radio hard right — the reference's arrangement. The
+   control is a real <input type=radio> so one name makes them exclusive and the
+   arrow keys walk them. */
+.np-radio {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 34px; padding: 6px 8px; border-radius: 2px; cursor: pointer;
+  font-size: 14px; font-weight: 500; color: var(--text);
+}
+.np-radio:hover { background: var(--slider); color: #fff; }
+.np-radio > span { flex: 1 1 auto; min-width: 0; }
+.np-radio input[type="radio"] {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; flex: 0 0 20px; margin: 0;
+  border-radius: 50%; border: 2px solid var(--nav-idle); background: none;
+  display: grid; place-items: center; cursor: pointer;
+}
+.np-radio:hover input[type="radio"] { border-color: #fff; }
+.np-radio input[type="radio"]:checked { border-color: var(--slider); background: var(--slider); }
+.np-radio input[type="radio"]:checked::after {
+  content: ""; width: 7px; height: 7px; border-radius: 50%; background: #fff;
+}
+.np-radio:hover input[type="radio"]:checked { border-color: #fff; }
+
+/* ---------- threads popout ----------------------------------------------
+   Title, search and Create on one bar, the list — or the empty state — below.
+   Sized and shaped like the reference's: a wide panel centred over the
+   conversation rather than a narrow menu. */
+
+.threads-pop {
+  position: fixed; z-index: 70;
+  width: 528px; max-width: calc(100vw - 24px);
+  display: flex; flex-direction: column;
+  max-height: min(460px, calc(100vh - 120px));
+  background: var(--float); border: 1px solid var(--line);
+  border-radius: 8px; overflow: hidden;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
+}
+.threads-pop[hidden] { display: none; }
+.tp-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; background: var(--float-2); border-bottom: 1px solid var(--line);
+}
+.tp-title {
+  display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  font-size: 15px; font-weight: 700; color: var(--text-strong);
+}
+.tp-title .ico { width: 18px; height: 18px; color: var(--ch-icon); }
+.tp-search {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 8px; border-radius: 4px;
+  background: var(--sunk); border: 1px solid transparent;
+}
+.tp-search:focus-within { border-color: var(--accent-line); }
+.tp-search .ico { width: 15px; height: 15px; flex: 0 0 15px; color: var(--dim); }
+.tp-search input {
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 13px;
+}
+.tp-search input::placeholder { color: var(--placeholder); }
+.tp-create {
+  flex: 0 0 auto; height: 30px; padding: 0 14px; border: 0; border-radius: 4px;
+  background: var(--slider); color: #fff; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600;
+}
+.tp-create:hover { filter: brightness(1.1); }
+.tp-body { flex: 1 1 auto; overflow-y: auto; padding: 8px; }
+
+/* The empty state, matching the reference: the mark, a line, a sentence, and the
+   button that resolves it. */
+.tp-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 40px 24px 44px; text-align: center;
+}
+.tp-empty-mark { width: 56px; height: 56px; color: var(--dim); opacity: .85; margin-bottom: 4px; }
+.tp-empty-title { font-size: 17px; font-weight: 600; color: var(--text-strong); }
+.tp-empty-sub { font-size: 14px; color: var(--panel-sub); max-width: 42ch; line-height: 1.4; }
+.tp-empty .tp-create { height: 38px; padding: 0 16px; font-size: 14px; margin-top: 8px; }
+
+.tp-item {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 10px 12px; margin-bottom: 4px; border-radius: 6px; cursor: pointer;
+  background: none; border: 0; width: 100%; text-align: left; font: inherit;
+}
+.tp-item:last-child { margin-bottom: 0; }
+.tp-item:hover { background: var(--chat-2); }
+.tp-item .ico { width: 18px; height: 18px; flex: 0 0 18px; color: var(--ch-icon); margin-top: 2px; }
+.tp-item-main { flex: 1 1 auto; min-width: 0; }
+.tp-item-name {
+  font-size: 15px; font-weight: 600; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tp-item-meta { font-size: 12px; color: var(--meta); margin-top: 1px; }
+.tp-item-last {
+  font-size: 13px; color: var(--muted); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ---------- pinned messages --------------------------------------------
    A popover anchored under the header's pin button, matching the reference: a
    titled panel of CARDS, one per pin, each carrying the avatar, the name, the
@@ -2341,6 +2472,27 @@ input[readonly] { opacity: .75; cursor: default; }
 .set-nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-nav-item:hover { background: var(--hover); color: var(--text); }
 .set-nav-item.on { background: var(--float-2); color: var(--text-strong); font-weight: 600; }
+
+/* The open tab's own headings, listed under it — the reference does this, and in
+   a pane as long as Accessibility or Notifications it is the only way to see
+   what is in one without scrolling the whole thing. The rule on the leading edge
+   is what makes them read as a branch off the row above rather than as more
+   tabs. */
+.set-nav-subs { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 4px; }
+.set-nav-subs[hidden] { display: none; }
+.set-nav-sub {
+  position: relative; width: 100%; text-align: left; cursor: pointer;
+  padding: 5px 10px 5px 26px; border: 0; border-radius: 4px; background: none;
+  color: var(--nav-idle); font: inherit; font-size: 13.5px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.set-nav-sub::before {
+  content: ""; position: absolute; left: 14px; top: 6px; bottom: 6px;
+  width: 2px; border-radius: 1px; background: transparent;
+}
+.set-nav-sub:hover { color: var(--text); background: var(--hover); }
+.set-nav-sub.on { color: var(--text-strong); }
+.set-nav-sub.on::before { background: var(--text-strong); }
 
 /* A header bar inside the card: the section's name on the left, the way out on
    the right, and the body scrolling under it. */
@@ -3063,6 +3215,14 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 /* The channel name takes the slack so every dropdown lines up on the right
    edge regardless of how long the names are. */
 .chan-mute > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "Muted for 2h 14m more". A timed mute is not the same as the level being set
+   to Nothing, and the dropdown beside it cannot say so — so this does, and the
+   way out sits next to it. */
+.chan-mute-tag {
+  flex: 0 0 auto !important; padding: 2px 8px; border-radius: 10px;
+  background: var(--btn-secondary); color: var(--muted);
+  font-size: 11.5px; font-weight: 600; white-space: nowrap;
+}
 /* Same undefined-variable slip as .emoji-name-input — both blocks landed in the
    same release carrying the website's names. --border resolves to nothing here
    and has no fallback, so these dropdowns were drawn with no border at all. */
@@ -4062,6 +4222,139 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-advanced[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .set-more-caret { transition: none; } }
 
+/* ---------- settings: switches with an explanation ----------------------
+   The reference's row shape: a label, a sentence under it, and the switch hard
+   right. .set-toggle already existed for a bare label; this is the same row with
+   room for the sentence, and it is what every new toggle in Notifications,
+   Accessibility and System uses. */
+.set-toggle-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.set-toggle-sub { font-size: 13px; line-height: 1.4; color: var(--panel-sub); }
+.set-toggle + .set-toggle { border-top: 1px solid var(--line); }
+/* A row whose setting cannot apply yet — "Start minimized" with launch-on-startup
+   off. Greyed rather than hidden, which is also what says WHY it is there. */
+.set-toggle.disabled { opacity: .45; }
+.set-toggle.disabled .switch { cursor: default; }
+/* "Preview Sound" under a sound's name — a link, because it does not change
+   anything. */
+.set-preview {
+  align-self: flex-start; padding: 0; border: 0; background: none;
+  color: var(--accent); cursor: pointer; font: inherit; font-size: 13px;
+}
+.set-preview:hover { text-decoration: underline; }
+
+/* ---------- settings: a slider with labelled ticks ---------------------
+   The reference draws the scale ABOVE the track with a mark under each value,
+   which is what makes "16px" mean something while you drag. The ticks are laid
+   out by percentage so the labels line up with the track's own stops. */
+.set-slider { margin: 4px 0 22px; }
+.set-slider-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 14px; }
+.set-slider-title { font-size: 16px; font-weight: 500; color: var(--text-strong); }
+.set-slider-sub { font-size: 13px; line-height: 1.4; color: var(--panel-sub); }
+.set-ticks { position: relative; height: 16px; margin: 0 0 2px; }
+.set-tick {
+  position: absolute; transform: translateX(-50%);
+  font-size: 12px; font-weight: 600; color: var(--dim);
+  white-space: nowrap; user-select: none;
+}
+.set-tick.on { color: var(--text-strong); }
+.set-slider input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  display: block; width: 100%; height: 8px; margin: 0;
+  background: none; cursor: pointer;
+}
+.set-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 4px; background: var(--track);
+}
+.set-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; margin-top: -4px; border-radius: 50%;
+  background: #fff; border: 0; box-shadow: 0 2px 4px rgba(0, 0, 0, .3);
+}
+.set-slider input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+/* A titled block of radios — "UI Density", "Chat Message Display". */
+.set-field-block { margin-bottom: 22px; }
+.set-block-title { display: block; font-size: 16px; font-weight: 500; color: var(--text-strong); }
+.set-block-sub { display: block; font-size: 13px; color: var(--panel-sub); margin-top: 3px; }
+.set-field-block .set-radios { margin-top: 10px; }
+
+/* ---------- Accessibility: the live preview ----------------------------
+   Real message rows through the real renderer, pinned to the top of the pane so
+   a slider can be dragged while watching what it does to them. */
+.a11y-preview {
+  position: sticky; top: 0; z-index: 3;
+  margin: -4px 0 22px; padding: 4px 0 12px;
+  background: var(--chat);
+}
+.a11y-preview-label {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--text-strong); margin-bottom: 8px;
+}
+.a11y-preview-box {
+  padding: 12px 8px; border-radius: 8px;
+  background: var(--sunk); border: 1px solid var(--line);
+  overflow: hidden;
+}
+/* The preview draws .msg rows, which are styled for the message column — this
+   scopes the few things that assume that context. */
+.a11y-msgs { font-size: var(--chat-fs); }
+.a11y-msgs .msg { padding-left: 12px; padding-right: 12px; }
+.a11y-msgs .msg-actions { display: none; }
+
+/* ---------- System: keybinds -------------------------------------------- */
+.set-keybinds { display: flex; flex-direction: column; gap: 0; margin: 8px 0 4px; }
+.set-keybind {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 0;
+}
+.set-keybind + .set-keybind { border-top: 1px solid var(--line); }
+.set-keybind-label { font-size: 15px; font-weight: 500; color: var(--text-strong); }
+
+/* The read-only list. Rows on their own plate, the shortcut drawn as keycaps on
+   the trailing edge — the reference's Default Keybinds table. */
+.set-keys { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.set-keys-head {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--panel-sub); margin: 14px 0 4px;
+}
+.set-key {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 12px; border-radius: 4px; background: var(--chat-2);
+  font-size: 14px; color: var(--text);
+}
+.set-key-combo { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.set-key-cap {
+  padding: 2px 7px; border-radius: 3px;
+  background: var(--elev); border: 1px solid var(--line-2);
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  color: var(--text-strong); text-transform: uppercase;
+}
+
+/* ---------- Account: the info card ------------------------------------
+   Label above value, one row per fact, a rule between them — the reference's
+   Account Info block. */
+.acct-info {
+  margin: 0 0 24px; padding: 16px; border-radius: 8px; background: var(--chat-2);
+}
+.acct-info-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 0; flex-wrap: wrap;
+}
+.acct-info-row + .acct-info-row { border-top: 1px solid var(--line); }
+.acct-info-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 220px; }
+.acct-info-label {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--panel-sub);
+  text-transform: uppercase;
+}
+.acct-info-value { font-size: 15px; color: var(--text); overflow-wrap: break-word; }
+.acct-info-note { flex: 0 1 auto; text-align: right; }
+.acct-info-row input[type="text"] {
+  height: 36px; padding: 0 10px; border-radius: 4px;
+  background: var(--sunk); border: 1px solid var(--line-2); outline: none;
+  color: var(--text); font: inherit; font-size: 14px; max-width: 340px;
+}
+.acct-info-row input[type="text"]:focus { border-color: var(--accent); }
+
 /* ---- account removal ---------------------------------------------------
    The reference lays these out as a full-width row per action: label and
    explanation on the left, the button hard right, a rule between them. Both
@@ -4510,4 +4803,115 @@ select.fm-input { cursor: pointer; }
 .fm-apply:hover { background: var(--accent-hi) !important; }
 .fm-foot button:focus-visible, .fm-link:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Accessibility
+   Everything the Accessibility pane actually changes. All of it hangs off a
+   class or a variable on <html>, set by app.js from the stored setting — so the
+   preview in that pane and the real app are driven by the same declarations
+   rather than by two sets that can drift.
+   ========================================================================== */
+
+/* Saturation. A filter on the shell rather than a second palette: it has to
+   reach every colour including the ones inside canvas and SVG. --sat is a
+   number 0-1 set by app.js; the rule is skipped entirely at 1 so an untouched
+   profile pays nothing (a filter creates a containing block, which changes how
+   `position: fixed` resolves inside it — see the exclusions below).
+
+   #app, not <html>: applying it to the root would take the popouts and modals
+   with it (they are position:fixed children of <body>) and, worse, a filter on
+   an ancestor makes `fixed` resolve against IT rather than the viewport. The
+   floating surfaces are listed separately for that reason. */
+html.desat #app,
+html.desat #login,
+html.desat .overlay,
+html.desat .pinned-panel,
+html.desat .threads-pop,
+html.desat .notif-pop,
+html.desat .ctx-menu,
+html.desat #lightbox,
+html.desat .toast {
+  filter: saturate(var(--sat, 1));
+}
+/* …and NOT over the content people posted. The reference is explicit that
+   saturation does not affect images, video or other user content, and a filter
+   on an ancestor cannot be undone by a descendant — so these get it back. */
+html.desat .msg-att img, html.desat .msg-att video,
+html.desat img.link-image, html.desat .lb-stage img,
+html.desat .yt-thumb, html.desat video {
+  filter: saturate(calc(1 / var(--sat, 1)));
+}
+
+/* High contrast. Brighter text, real borders instead of hairlines, and a heavier
+   weight on the things that carry meaning. Deliberately a handful of token
+   overrides rather than a third theme: the whole palette is variables, so this
+   is the cheapest honest version of it. */
+html.high-contrast {
+  --text: #ffffff;
+  --text-body: #ffffff;
+  --msg-text: #ffffff;
+  --muted: #e4e4e8;
+  --dim: #c8c8d0;
+  --meta: #c8c8d0;
+  --panel-sub: #d8d8de;
+  --nav-idle: #dcdce2;
+  --ch-icon: #e4e4e8;
+  --day-sep: #e4e4e8;
+  --placeholder: #a8a8b2;
+  --line: rgba(255, 255, 255, .34);
+  --line-lo: rgba(255, 255, 255, .22);
+  --line-2: rgba(255, 255, 255, .48);
+  --line-solid: rgba(255, 255, 255, .48);
+  --hover: rgba(255, 255, 255, .14);
+  --active: rgba(255, 255, 255, .22);
+  --msg-hover: rgba(255, 255, 255, .07);
+  --track: #6d6f7c;
+}
+html.high-contrast .msg-author,
+html.high-contrast .chan-name,
+html.high-contrast .set-nav-item { font-weight: 600; }
+/* Focus has to be unmissable, which is the whole point of the mode. */
+html.high-contrast :focus-visible { outline: 3px solid var(--accent-hi); outline-offset: 2px; }
+html.high-contrast .composer-row,
+html.high-contrast .msg-code,
+html.high-contrast .inline-code,
+html.high-contrast .set-key,
+html.high-contrast .acct-info { border: 1px solid var(--line-2); }
+
+/* Reduced motion, asked for rather than detected. The @media rules elsewhere in
+   this file cover the OS setting; this is the same answer for somebody whose OS
+   setting is off. An explicit selector list, never `*` — that recalculates the
+   whole document every time the class goes on or off. */
+html.no-motion .switch, html.no-motion .switch-knob,
+html.no-motion .set-more-caret, html.no-motion .me-pop,
+html.no-motion .audio-pop, html.no-motion .tip, html.no-motion .conn-pop,
+html.no-motion .set-more-caret, html.no-motion .jump-latest,
+html.no-motion .pinned-acts, html.no-motion .msg.flash,
+html.no-motion .toast, html.no-motion .set-nav-item,
+html.no-motion .unread-bar, html.no-motion .spoiler {
+  animation: none !important;
+  transition: none !important;
+}
+html.no-motion * { scroll-behavior: auto !important; }
+
+/* Links always underlined, not only on hover. */
+html.underline-links .msg-text a,
+html.underline-links .msg-body a,
+html.underline-links .pinned-body a { text-decoration: underline; }
+
+/* UI density — the space in the channel and member lists, which is what the
+   reference's control adjusts. One multiplier, applied to the two lists' row
+   padding; the message column has its own control (Chat Message Display). */
+html[data-ui-density="compact"] { --ui-row-pad: 3px; --ui-row-gap: 0px; }
+html[data-ui-density="default"] { --ui-row-pad: 6px; --ui-row-gap: 1px; }
+html[data-ui-density="spacious"] { --ui-row-pad: 10px; --ui-row-gap: 4px; }
+/* .chan is the channel list AND the DM list (the same row component); .vp is the
+   voice roster and the member list. Between them that is every list the
+   reference's control applies to. */
+html[data-ui-density] .chan,
+html[data-ui-density] #members-list .vp,
+html[data-ui-density] #voice-people .vp {
+  padding-top: var(--ui-row-pad); padding-bottom: var(--ui-row-pad);
+  margin-bottom: var(--ui-row-gap);
 }

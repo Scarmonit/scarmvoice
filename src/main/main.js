@@ -97,6 +97,15 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // which on a dark theme reads as a faint rainbow along the type.
 app.commandLine.appendSwitch('disable-lcd-text');
 
+// GPU compositing, off only if somebody has asked for it in System settings.
+// Read HERE because disableHardwareAcceleration() has to be called before the app
+// is ready — which is also why the setting says a restart is needed rather than
+// pretending to take effect on the spot.
+if (store.get().hardwareAcceleration === false) {
+    app.disableHardwareAcceleration();
+    console.info('[app] hardware acceleration disabled by setting');
+}
+
 // Make the spellchecker hand its SUGGESTIONS over with the right-click, instead
 // of expecting the menu to come back and ask for them.
 //
@@ -1382,9 +1391,13 @@ function registerIpc() {
     // This used to clear the overlay when the count was zero and otherwise only
     // flash the frame, so the badge was never actually drawn — and nothing in
     // the renderer called it at all.
-    handle('app:badge', (_e, count) => {
+    // `flash` is the Notifications → Taskbar Flashing switch, separate from the
+    // count: somebody can want the number without the button pulsing at them.
+    // Defaults true so an older renderer behaves exactly as it did.
+    handle('app:badge', (_e, count, flash) => {
         if (!win || win.isDestroyed()) return false;
         const n = Math.max(0, Math.floor(Number(count) || 0));
+        const mayFlash = flash === undefined ? true : !!flash;
 
         if (!n) {
             try {
@@ -1405,8 +1418,9 @@ function registerIpc() {
             console.warn('[badge] overlay failed:', e.message);
         }
         // Flash only when the count actually goes up, so a re-render can't make
-        // the taskbar button strobe.
-        if (n > lastBadge && !win.isFocused()) win.flashFrame(true);
+        // the taskbar button strobe — and only if it is still wanted.
+        if (mayFlash && n > lastBadge && !win.isFocused()) win.flashFrame(true);
+        else if (!mayFlash) { try { win.flashFrame(false); } catch (e) {} }
         lastBadge = n;
         return true;
     });
@@ -1432,6 +1446,31 @@ function registerIpc() {
         dark: { color: '#131316', symbolColor: '#e9ebf0' },
         light: { color: '#eeeeef', symbolColor: '#31343b' }
     };
+
+    // Whole-interface zoom, for the Accessibility slider and for Ctrl +/-/0.
+    //
+    // In the MAIN process, not the renderer: webFrame.setZoomFactor needs node in
+    // the renderer, which this app deliberately does not have. Chromium clamps to
+    // its own range anyway; clamped here as well so the slider and the setting
+    // agree with what actually happened.
+    handle('app:setZoom', (_e, percent) => {
+        if (!win || win.isDestroyed()) return 100;
+        const p = Math.max(50, Math.min(200, Math.round(Number(percent) || 100)));
+        try { win.webContents.setZoomFactor(p / 100); } catch (e) { return 100; }
+        return p;
+    });
+
+    // Restart the app in place. The only thing that needs it is the hardware
+    // acceleration switch, which Chromium can only be told about before the app
+    // is ready — so the setting says so and offers this rather than appearing to
+    // take effect and not doing anything until the next launch.
+    handle('app:relaunch', () => {
+        // relaunchAllowed guards the same thing quitAndInstall does: a call in
+        // progress must not be dropped by a restart somebody asked for casually.
+        app.relaunch();
+        app.exit(0);
+        return true;
+    });
 
     handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
 

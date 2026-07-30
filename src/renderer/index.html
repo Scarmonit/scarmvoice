@@ -460,7 +460,15 @@
            field broke the grouping — and reshaping a channel is not a header
            action at all: it lives on the channel, in its own menu. -->
       <div class="chan-actions">
-        <button class="icon-btn ch-btn" id="btn-chan-alerts" data-tip="Notification Settings" aria-label="Notification Settings">
+        <!-- Threads first, then the bell, then pins, then members — the
+             reference's order, and it reads outward from "this conversation" to
+             "this channel" to "these people". -->
+        <button class="icon-btn ch-btn" id="btn-threads" data-tip="Threads" aria-label="Threads"
+                aria-expanded="false">
+          <span class="ico" data-icon="threads"></span>
+        </button>
+        <button class="icon-btn ch-btn" id="btn-chan-alerts" data-tip="Notification Settings" aria-label="Notification Settings"
+                aria-expanded="false">
           <span class="ico" data-icon="bell"></span>
         </button>
         <button class="icon-btn ch-btn" id="btn-pinned" data-tip="Pinned Messages" aria-label="Pinned Messages">
@@ -872,8 +880,20 @@
 
     <div class="modal-body" id="settings-body">
 
+      <!-- ---------- Account ----------
+           Laid out the way the reference lays its Account tab out — Account Info
+           then Password & Security, each a heading over a card of label / value /
+           action rows — with every ScarmVoice-specific thing kept and working:
+           the profile picture, the read-only display name, the custom status, the
+           board account, 2FA, the owner's member management (make admin, ban,
+           reset password, clear 2FA, delete), sign out, and account removal.
+
+           No Account Standing and no Family Center: neither exists here, and a
+           panel that reports on nothing is worse than no panel. -->
       <section class="set-group" data-nav-group="User Settings" data-nav-icon="users">
         <h3>Account</h3>
+
+        <!-- The banner-and-face card the reference opens with. -->
         <div class="acct-card">
           <span class="acct-avatar" id="set-avatar"></span>
           <div class="acct-body">
@@ -892,21 +912,46 @@
           <span class="hint" id="avatar-hint">PNG, JPEG, GIF or WebP, up to 5 MB. Everyone on the board sees it — the website and phone app too.</span>
         </div>
         <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-        <!-- Read-only on purpose. The name everyone sees IS the account
-             username, so nobody can sit in a channel wearing someone else's
-             name. Changing it means changing the account. -->
-        <label class="row">
-          <span>Display name</span>
-          <input type="text" id="set-name" maxlength="40" readonly
-                 title="Your display name is your account username">
-        </label>
-        <p class="hint set-name-hint">Everyone sees your account username, so names can't be impersonated.</p>
-        <label class="row">
-          <span>Custom status</span>
-          <input type="text" id="set-status" maxlength="80" placeholder="What you're up to">
-        </label>
+
+        <h4 class="set-sub">Account Info</h4>
+        <div class="acct-info">
+          <!-- Read-only on purpose. The name everyone sees IS the account
+               username, so nobody can sit in a channel wearing someone else's
+               name. Changing it means changing the account — which is why the
+               row shows it rather than offering an Edit button that cannot work. -->
+          <div class="acct-info-row">
+            <div class="acct-info-text">
+              <span class="acct-info-label">Display name</span>
+              <span class="acct-info-value" id="acct-info-name">—</span>
+            </div>
+            <span class="hint acct-info-note">Your account username. Names can't be impersonated.</span>
+          </div>
+          <div class="acct-info-row">
+            <div class="acct-info-text">
+              <span class="acct-info-label">Custom status</span>
+              <input type="text" id="set-status" maxlength="80" placeholder="What you're up to">
+            </div>
+          </div>
+          <div class="acct-info-row" id="acct-info-email-row" hidden>
+            <div class="acct-info-text">
+              <span class="acct-info-label">Email</span>
+              <span class="acct-info-value" id="acct-info-email">—</span>
+            </div>
+          </div>
+          <div class="acct-info-row">
+            <div class="acct-info-text">
+              <span class="acct-info-label">Role on this board</span>
+              <span class="acct-info-value" id="acct-info-role">—</span>
+            </div>
+          </div>
+        </div>
+        <!-- Kept, hidden: applyName/openSettings and the tests read this field,
+             and it is the same value the row above prints. -->
+        <input type="text" id="set-name" maxlength="40" readonly hidden aria-hidden="true"
+               title="Your display name is your account username">
+
+        <h4 class="set-sub">Password &amp; Security</h4>
         <div class="row stack">
-          <span>Board account</span>
           <div class="acct-board" id="acct-signed" hidden>
             <span class="acct-signed-as">Signed in as <b id="acct-user"></b> <em class="hint" id="acct-role"></em></span>
             <button type="button" class="keycap" id="btn-acct-2fa">Enable 2FA</button>
@@ -944,10 +989,20 @@
           </div>
           <span class="hint acct-err" id="acct-error" hidden></span>
         </div>
-        <div class="row stack" id="acct-members" hidden>
-          <span>Members <em class="hint">— admin only</em></span>
+
+        <!-- The owner's member management. Its own heading rather than a row in
+             the middle of the security card: this is the most consequential block
+             in the sheet, and it belongs to a different subject. Gated on
+             member.setRole — an ADMIN does not see it, which is the point of
+             having a role above admin. -->
+        <div id="acct-members" hidden>
+          <h4 class="set-sub">Members</h4>
+          <p class="set-help">Everyone with an account on this board. Making somebody
+            an admin gives them moderation over messages and channels; it never gives
+            them anything on this list. Nothing here can be done to the owner.</p>
           <div id="member-admin-list" class="member-admin-list"></div>
         </div>
+
         <div class="row note">
           <span class="hint">Until you upload one, your avatar is generated from your display name —
             either way it looks the same here, on the website and in the phone app.</span>
@@ -1125,27 +1180,102 @@
         </div>
       </section>
 
+      <!-- ---------- Notifications ----------
+           The reference's Overview / Sounds / Badges / Advanced, minus what does
+           not exist here: no Email section (this board sends no notification
+           mail), and none of the "friends came online / friendship anniversary"
+           toggles, which have nothing behind them in a single-board app. -->
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="bell">
         <h3>Notifications</h3>
-        <label class="row check">
-          <input type="checkbox" id="set-dnd">
-          <span>Do not disturb <em class="hint">— silences every notification and sound until you turn it off</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-notify"><span>Desktop notifications for new messages</span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-notify-sound">
-          <span>Notification sound <em class="hint">— chime when a new message arrives</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-voice-sounds">
-          <span>Join &amp; leave sounds <em class="hint">— only audible while you're in the call</em></span>
-        </label>
-        <div class="row stack">
-          <span>Channel notifications</span>
-          <div class="chan-mutes" id="set-muted-channels"></div>
+        <h4 class="set-sub">Overview</h4>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Enable Desktop Notifications</span>
+            <span class="set-toggle-sub">For per-channel notifications, use the bell in the channel
+              header — or right-click the channel in the list.</span>
+          </span>
+          <button type="button" class="switch" id="set-notify" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
         </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Enable Taskbar Flashing</span>
+            <span class="set-toggle-sub">Flashes the app in your taskbar when you have new notifications.</span>
+          </span>
+          <button type="button" class="switch" id="set-taskbar-flash" role="switch" aria-checked="true">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Do Not Disturb</span>
+            <span class="set-toggle-sub">Silences every notification, sound and badge until you turn it off.</span>
+          </span>
+          <button type="button" class="switch" id="set-dnd" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Sounds</h4>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">New Message</span>
+            <button type="button" class="set-preview" data-preview="message">Preview Sound</button>
+          </span>
+          <button type="button" class="switch" id="set-notify-sound" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">New Message in the channel I'm currently reading</span>
+            <button type="button" class="set-preview" data-preview="message">Preview Sound</button>
+          </span>
+          <button type="button" class="switch" id="set-sound-own" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Voice Join &amp; Leave</span>
+            <span class="set-toggle-sub">Only audible while you are in the call.</span>
+            <button type="button" class="set-preview" data-preview="join">Preview Sound</button>
+          </span>
+          <button type="button" class="switch" id="set-voice-sounds" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Disable All Notification Sounds</span>
+            <span class="set-toggle-sub">Disables every sound above, including voice join and leave.
+              Your individual choices are kept and restored if you turn this off.</span>
+          </span>
+          <button type="button" class="switch" id="set-mute-sounds" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Badges</h4>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Unread count on the taskbar button</span>
+            <span class="set-toggle-sub">The number drawn over the app's icon in the taskbar. Muted
+              channels are never counted.</span>
+          </span>
+          <button type="button" class="switch" id="set-badge" role="switch" aria-checked="true">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Advanced</h4>
+        <p class="set-help">Per-channel notification settings. The same three levels the
+          bell in the channel header offers, and any channel muted for a while.</p>
+        <div class="chan-mutes" id="set-muted-channels"></div>
       </section>
 
       <section class="set-group" data-nav-group="User Settings" data-nav-icon="smile">
@@ -1170,31 +1300,193 @@
 
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="moon">
         <h3>Appearance</h3>
-        <label class="row">
-          <span>Theme</span>
-          <select id="set-theme">
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="system">Match Windows</option>
-          </select>
-        </label>
-        <label class="row">
-          <span>Message density</span>
-          <select id="set-density">
-            <option value="cozy">Cozy — avatars, roomy spacing</option>
-            <option value="compact">Compact — one line per message</option>
-          </select>
-        </label>
-        <label class="row">
-          <span>Chat font size</span>
-          <select id="set-font-size">
-            <option value="small">Small</option>
-            <option value="medium">Medium</option>
-            <option value="large">Large</option>
-            <option value="xlarge">Extra Large</option>
-          </select>
-          <span class="hint">Ctrl + / Ctrl − / Ctrl 0</span>
-        </label>
+        <h4 class="set-sub">Theme</h4>
+        <div class="set-radios" id="set-theme-radios">
+          <label class="set-radio">
+            <input type="radio" name="set-theme" value="dark">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Dark</span>
+              <span class="set-radio-sub">The layered shades this app was designed in</span>
+            </span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="set-theme" value="light">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Light</span>
+              <span class="set-radio-sub">The same layout, inverted</span>
+            </span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="set-theme" value="system">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Sync with computer</span>
+              <span class="set-radio-sub">Follows the Windows light/dark setting</span>
+            </span>
+          </label>
+        </div>
+        <!-- Kept so nothing that reads it breaks; the radios above write through
+             to the same setting. -->
+        <select id="set-theme" hidden aria-hidden="true">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="system">Match Windows</option>
+        </select>
+        <div class="row note">
+          <span class="hint">Text size, message spacing, zoom, saturation and contrast are in
+            <b>Accessibility</b> — they belong with the rest of the readability controls.</span>
+        </div>
+      </section>
+
+      <!-- ---------- Accessibility ----------
+           The reference's tab, section for section, minus the settings that have
+           nothing here to control. Everything in it does something real: the
+           preview at the top is the live message renderer, not a picture. -->
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="accessibility">
+        <h3>Accessibility</h3>
+
+        <!-- Sticks to the top of the pane while the controls scroll under it, so a
+             slider can be dragged while watching what it does. -->
+        <div class="a11y-preview" id="a11y-preview">
+          <div class="a11y-preview-label">Preview</div>
+          <div class="a11y-preview-box">
+            <div id="a11y-preview-msgs" class="a11y-msgs"></div>
+          </div>
+        </div>
+
+        <h4 class="set-sub">Text Readability</h4>
+        <div class="set-slider">
+          <div class="set-slider-head">
+            <span class="set-slider-title">Text size in chat</span>
+            <span class="set-slider-sub">Adjust the size of the chat font.</span>
+          </div>
+          <div class="set-ticks" id="ticks-font"></div>
+          <input type="range" id="set-font-px" min="12" max="24" step="1" list="ticks-font-list"
+                 aria-label="Text size in chat">
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Always underline links</span>
+            <span class="set-toggle-sub">Make links stand out more.</span>
+          </span>
+          <button type="button" class="switch" id="set-underline" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <!-- Kept from the old Appearance pane so the select-driven code and the
+             Ctrl +/− shortcuts still have something to write to. -->
+        <select id="set-font-size" hidden aria-hidden="true">
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+          <option value="xlarge">Extra Large</option>
+        </select>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Visual Density</h4>
+        <div class="set-field-block">
+          <span class="set-block-title">UI Density</span>
+          <span class="set-block-sub">Adjust the space between the channel and member lists.</span>
+          <div class="set-radios" id="set-uidensity">
+            <label class="set-radio">
+              <input type="radio" name="set-uidensity" value="compact">
+              <span class="set-radio-body"><span class="set-radio-title">Compact</span></span>
+            </label>
+            <label class="set-radio">
+              <input type="radio" name="set-uidensity" value="default">
+              <span class="set-radio-body"><span class="set-radio-title">Default</span></span>
+            </label>
+            <label class="set-radio">
+              <input type="radio" name="set-uidensity" value="spacious">
+              <span class="set-radio-body"><span class="set-radio-title">Spacious</span></span>
+            </label>
+          </div>
+        </div>
+        <div class="set-field-block">
+          <span class="set-block-title">Chat Message Display</span>
+          <span class="set-block-sub">Change the appearance of chat messages.</span>
+          <div class="set-radios" id="set-msgdisplay">
+            <label class="set-radio">
+              <input type="radio" name="set-msgdisplay" value="cozy">
+              <span class="set-radio-body"><span class="set-radio-title">Default</span></span>
+            </label>
+            <label class="set-radio">
+              <input type="radio" name="set-msgdisplay" value="compact">
+              <span class="set-radio-body"><span class="set-radio-title">Compact</span></span>
+            </label>
+          </div>
+        </div>
+        <!-- Same setting the old Appearance select drove. -->
+        <select id="set-density" hidden aria-hidden="true">
+          <option value="cozy">Cozy</option>
+          <option value="compact">Compact</option>
+        </select>
+        <div class="set-slider">
+          <div class="set-slider-head">
+            <span class="set-slider-title">Space Between Message Groups</span>
+            <span class="set-slider-sub">Adjust the spacing between message groups.</span>
+          </div>
+          <div class="set-ticks" id="ticks-gap"></div>
+          <input type="range" id="set-msg-gap" min="0" max="24" step="4"
+                 aria-label="Space between message groups">
+        </div>
+        <div class="set-slider">
+          <div class="set-slider-head">
+            <span class="set-slider-title">Zoom level</span>
+            <span class="set-slider-sub">Adjust the size of the interface. You can also change this with Ctrl +/−.</span>
+          </div>
+          <div class="set-ticks" id="ticks-zoom"></div>
+          <input type="range" id="set-zoom" min="50" max="200" step="5" aria-label="Zoom level">
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Color &amp; Contrast</h4>
+        <div class="set-slider">
+          <div class="set-slider-head">
+            <span class="set-slider-title">Saturation</span>
+            <span class="set-slider-sub">Reduce the saturation of colours in the app, for those with
+              colour sensitivities. This does not affect images, video or attachments.</span>
+          </div>
+          <div class="set-ticks" id="ticks-sat"></div>
+          <input type="range" id="set-saturation" min="0" max="100" step="10" aria-label="Saturation">
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Enable High Contrast Mode</span>
+            <span class="set-toggle-sub">Enhance visibility with bolder text, brighter borders and sharper contrast.</span>
+          </span>
+          <button type="button" class="switch" id="set-contrast" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Reduced Motion</h4>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Enable Reduced Motion</span>
+            <span class="set-toggle-sub">Stops animations and transitions throughout the app. On
+              automatically when Windows is set to reduce motion.</span>
+          </span>
+          <button type="button" class="switch" id="set-reduced-motion" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Audio &amp; Screen Reader</h4>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Announce new messages</span>
+            <span class="set-toggle-sub">Reads incoming messages out with your screen reader.
+              Off unless you use one — it makes the conversation an assertive live region.</span>
+          </span>
+          <button type="button" class="switch" id="set-announce" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="row note">
+          <span class="hint">Notification and join/leave sounds are in <b>Notifications</b>.</span>
+        </div>
       </section>
 
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="screen">
@@ -1232,33 +1524,96 @@
         </div>
       </section>
 
-      <section class="set-group" data-nav-group="App Settings" data-nav-icon="sliders">
-        <h3>Behaviour</h3>
-        <label class="row check">
-          <input type="checkbox" id="set-launch"><span>Launch on system startup</span>
-        </label>
-        <label class="row check indent">
-          <input type="checkbox" id="set-launch-hidden">
-          <span>Start minimized to the tray <em class="hint">— open quietly in the background</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-tray">
-          <span>Keep running in the tray when closed <em class="hint">— off quits ScarmVoice when you close the window</em></span>
-        </label>
-        <label class="row check">
-          <input type="checkbox" id="set-autojoin"><span>Join voice automatically on launch</span>
-        </label>
-        <!-- No toggle here any more. Updates download and install themselves the
-             moment they are ready, and the app restarts into them — the only
-             thing that holds it is a call in progress. A checkbox that cannot
-             change any of that would be decoration. -->
-        <div class="row">
-          <span class="hint">Updates install themselves as soon as they are ready. The app never restarts during a call.</span>
+      <!-- ---------- System ----------
+           Was "Behaviour". Same settings, the reference's shape: General as
+           switches, then the keybinds — the ones you set and the ones that are
+           already there.
+
+           No "System Helper". The reference's is a background service that
+           installs updates; this app's updater does that itself and there is
+           nothing to configure, so a switch for it would control nothing. -->
+      <section class="set-group" data-nav-group="App Settings" data-nav-icon="system">
+        <h3>System</h3>
+        <h4 class="set-sub">General</h4>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Automatically open ScarmVoice when your computer starts up</span>
+          </span>
+          <button type="button" class="switch" id="set-launch" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
         </div>
-        <!-- Checking for updates, and the notes that come with them, moved to
-             About — where the version and the release history already are.
-             Behaviour is for how the app behaves; an update is not a behaviour
-             you configure, it is something that happens to the app. -->
+        <div class="set-toggle" id="row-launch-hidden">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Start ScarmVoice minimized</span>
+            <span class="set-toggle-sub">Start ScarmVoice in the background, out of your way.</span>
+          </span>
+          <button type="button" class="switch" id="set-launch-hidden" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Minimize ScarmVoice to System Tray</span>
+            <span class="set-toggle-sub">Clicking X minimizes ScarmVoice instead of closing it completely.</span>
+          </span>
+          <button type="button" class="switch" id="set-tray" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Enable Hardware Acceleration</span>
+            <span class="set-toggle-sub">Uses your GPU to make ScarmVoice run more smoothly. Turn this
+              off if you are seeing visual glitches. Needs a restart.</span>
+          </span>
+          <button type="button" class="switch" id="set-hwaccel" role="switch" aria-checked="true">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="set-toggle">
+          <span class="set-toggle-text">
+            <span class="set-toggle-label">Join voice automatically on launch</span>
+            <span class="set-toggle-sub">Connects you to the voice channel as soon as the app opens.</span>
+          </span>
+          <button type="button" class="switch" id="set-autojoin" role="switch" aria-checked="false">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Custom Keybinds</h4>
+        <p class="set-help">Keybinds work system-wide, even while another window is
+          focused. Click one and press the keys — or a mouse button — you want;
+          Backspace clears it.</p>
+        <div class="set-keybinds" id="set-keybinds">
+          <div class="set-keybind">
+            <span class="set-keybind-label">Push to Talk</span>
+            <button type="button" id="set-ptt-2" class="keycap">Backquote</button>
+          </div>
+          <div class="set-keybind">
+            <span class="set-keybind-label">Toggle Mute</span>
+            <button type="button" id="set-mute-key-2" class="keycap">Click to set</button>
+          </div>
+          <div class="set-keybind">
+            <span class="set-keybind-label">Toggle Deafen</span>
+            <button type="button" id="set-deafen-key-2" class="keycap">Click to set</button>
+          </div>
+        </div>
+        <p class="set-help" id="keybind-native-note"></p>
+
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Default Keybinds</h4>
+        <p class="set-help">Built in, and not reassignable. These are the real ones —
+          every entry here is wired in the app.</p>
+        <div class="set-keys" id="set-default-keys"></div>
+
+        <div class="set-rule"></div>
+        <div class="row note">
+          <span class="hint">Updates install themselves as soon as they are ready, and the app
+            never restarts during a call — so there is nothing here to configure.
+            The version, the release history and a manual check are in <b>About</b>.</span>
+        </div>
         <!-- No Server URL field. It decided which host receives the session
              cookie AND the account token, both bearer-equivalent, so it was the
              one setting in this sheet that could hand somebody's credentials
@@ -1599,6 +1954,50 @@
     <button class="icon-btn" id="pinned-close" title="Close"><span class="ico" data-icon="x"></span></button>
   </div>
   <div id="pinned-list"></div>
+</div>
+
+<!-- Notification settings for this channel, hung off the header's bell. Built to
+     match the reference: Mute Channel with a hover submenu of durations, then the
+     three notification levels as radios.
+
+     "Use Category Default" is deliberately absent — this board has no channel
+     categories, so it would be a fourth radio that means the same as the first.
+
+     Two panels, not one: the submenu is its own positioned box so it can sit to
+     the side of the row that opens it, the way the reference has it. -->
+<div id="notif-pop" class="notif-pop" hidden role="menu" aria-label="Notification settings">
+  <button type="button" class="np-item np-sub" id="np-mute" role="menuitem"
+          aria-haspopup="true" aria-expanded="false">
+    <span class="np-label" id="np-mute-label">Mute Channel</span>
+    <span class="ico np-caret" data-icon="chevron"></span>
+  </button>
+  <!-- Only while the channel IS muted: the way back out, in the place the
+       reference puts it. -->
+  <button type="button" class="np-item" id="np-unmute" role="menuitem" hidden>
+    <span class="np-label">Unmute Channel</span>
+  </button>
+  <div class="np-sep"></div>
+  <div class="np-radios" id="np-radios" role="group" aria-label="Notification level"></div>
+</div>
+<div id="notif-sub" class="notif-pop notif-sub" hidden role="menu" aria-label="Mute for how long"></div>
+
+<!-- Threads in this channel, hung off the header's threads button. The reference
+     puts the title, a search box and Create on one bar, with the list (or the
+     empty state) below. -->
+<div id="threads-pop" class="threads-pop" hidden
+     role="dialog" aria-modal="false" aria-labelledby="threads-title">
+  <div class="tp-head">
+    <span class="tp-title" id="threads-title">
+      <span class="ico" data-icon="threads"></span><span>Threads</span>
+    </span>
+    <div class="tp-search">
+      <span class="ico" data-icon="search"></span>
+      <input type="text" id="threads-search" placeholder="Search for Thread Name"
+             autocomplete="off" spellcheck="false" aria-label="Search for thread name">
+    </div>
+    <button type="button" class="tp-create" id="threads-create">Create</button>
+  </div>
+  <div class="tp-body" id="threads-body"></div>
 </div>
 
 <!-- Shared right-click menu, used by messages and by the expanded image. -->

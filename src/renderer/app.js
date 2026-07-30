@@ -29,6 +29,20 @@
     const MAX_POSTS = 400;
 
     let settings = {};
+    // Every settings control that is DRAWN FROM a setting registers a repainter
+    // here, so the whole sheet can be brought up to date in one call — see
+    // wireSwitch / wireRadios / paintPaneControls.
+    //
+    // Declared HERE rather than beside those factories because the settings nav is
+    // built at module scope and shows a pane on the way in, which repaints it: a
+    // `const` further down the file is in its temporal dead zone until that line
+    // runs, and reaching it from higher up throws — killing the rest of app.js,
+    // which is every listener in the app.
+    const switchPainters = [];
+    const radioPainters = [];
+    function paintSwitches() { switchPainters.forEach((f) => f()); }
+    function paintRadios() { radioPainters.forEach((f) => f()); }
+
     let channels = [];
     let channel = 'general';
     let posts = [];
@@ -776,27 +790,195 @@
     // One CSS variable drives the whole message body — text, names, timestamps
     // and avatars are all sized in em against it, so they scale together.
 
-    function applyChatFontSize(key) {
-        const f = FONT_SIZES[fontSizeIndex(key)];
-        document.documentElement.style.setProperty('--chat-fs', f.px + 'px');
-        const sel = $('set-font-size');
-        if (sel) sel.value = f.key;
-        return f;
+    // Chat text size is a NUMBER now, in pixels, 12-24 — the reference's slider.
+    // The four-name scale it replaced is still honoured on the way in (store.js
+    // seeds chatFontPx from it once) and `chatFontSize` is still written, so an
+    // older build and the tests that read it keep working.
+    const FONT_PX_MIN = 12;
+    const FONT_PX_MAX = 24;
+    const FONT_PX_DEFAULT = 16;
+
+    function clampFontPx(v) {
+        const n = Math.round(Number(v));
+        if (!Number.isFinite(n)) return FONT_PX_DEFAULT;
+        return Math.max(FONT_PX_MIN, Math.min(FONT_PX_MAX, n));
     }
 
-    // step: -1 smaller, +1 larger, 0 reset to medium.
-    async function stepChatFontSize(step) {
-        const current = fontSizeIndex(settings.chatFontSize);
-        const next = step === 0
-            ? fontSizeIndex('medium')
-            : Math.max(0, Math.min(FONT_SIZES.length - 1, current + step));
-        if (next === current && step !== 0) {
-            return toast(`Already at ${FONT_SIZES[current].label}`);
+    // What the stored profile means, whichever of the two forms it is in.
+    function currentFontPx() {
+        if (settings.chatFontPx !== undefined && settings.chatFontPx !== null) {
+            return clampFontPx(settings.chatFontPx);
         }
-        const f = FONT_SIZES[next];
-        await saveSettings({ chatFontSize: f.key });
-        applyChatFontSize(f.key);
-        toast(`Chat font: ${f.label}`);
+        return FONT_SIZES[fontSizeIndex(settings.chatFontSize)].px;
+    }
+
+    // The nearest name on the old scale, so `chatFontSize` keeps meaning
+    // something for anything still reading it.
+    function nearestFontKey(px) {
+        let best = FONT_SIZES[0];
+        FONT_SIZES.forEach((f) => {
+            if (Math.abs(f.px - px) < Math.abs(best.px - px)) best = f;
+        });
+        return best.key;
+    }
+
+    function applyChatFontSize(px) {
+        const n = clampFontPx(px);
+        document.documentElement.style.setProperty('--chat-fs', n + 'px');
+        const sel = $('set-font-size');
+        if (sel) sel.value = nearestFontKey(n);
+        const slider = $('set-font-px');
+        if (slider) slider.value = String(n);
+        paintTicks('ticks-font', n);
+        renderA11yPreview();
+        return n;
+    }
+
+    async function setChatFontPx(px) {
+        const n = clampFontPx(px);
+        await saveSettings({ chatFontPx: n, chatFontSize: nearestFontKey(n) });
+        applyChatFontSize(n);
+    }
+
+    // step: -1 smaller, +1 larger, 0 reset to the default. One pixel a press,
+    // which is what a pixel scale means — the old version stepped between four
+    // named sizes and could only say "already at Extra Large".
+    async function stepChatFontSize(step) {
+        const current = currentFontPx();
+        const next = step === 0 ? FONT_PX_DEFAULT : clampFontPx(current + step);
+        if (next === current && step !== 0) {
+            return toast(`Chat font: already at ${current}px`);
+        }
+        await setChatFontPx(next);
+        toast(`Chat font: ${next}px`);
+    }
+
+    // ---------- accessibility ----------------------------------------------
+    //
+    // One function applies everything the Accessibility pane sets, from the stored
+    // settings, and it is the ONLY thing that writes those classes and variables —
+    // so the pane's live preview and the app itself can never disagree about what
+    // a setting does. Called at boot and after every change.
+
+    function applyAccessibility() {
+        const root = document.documentElement;
+
+        // Saturation. Skipped entirely at 100%: a filter creates a containing
+        // block, so leaving it on at `saturate(1)` would change how position:fixed
+        // resolves for every descendant, for no visual gain.
+        const sat = Math.max(0, Math.min(100, parseInt(settings.saturation, 10) || 0)) || 100;
+        const isFull = sat >= 100;
+        root.classList.toggle('desat', !isFull);
+        if (isFull) root.style.removeProperty('--sat');
+        else root.style.setProperty('--sat', String(sat / 100));
+
+        root.classList.toggle('high-contrast', !!settings.highContrast);
+        root.classList.toggle('no-motion', !!settings.reducedMotion);
+        root.classList.toggle('underline-links', !!settings.underlineLinks);
+
+        const density = ['compact', 'default', 'spacious'].includes(settings.uiDensity)
+            ? settings.uiDensity : 'default';
+        root.dataset.uiDensity = density;
+
+        // Message-group spacing. 16px is the shipped look, so that value clears the
+        // override and lets the stylesheet's own em-based margin stand.
+        const gap = Math.max(0, Math.min(24, parseInt(settings.msgGroupGap, 10)));
+        if (Number.isFinite(gap) && gap !== 16) root.style.setProperty('--msg-gap', gap + 'px');
+        else root.style.removeProperty('--msg-gap');
+
+        // The conversation as a live region. 'polite' is the shipped value and is
+        // what a screen reader ignores while the user is doing something else;
+        // 'assertive' interrupts, which is what somebody who asked for this wants.
+        const msgs = $('messages');
+        if (msgs) msgs.setAttribute('aria-live', settings.announceMessages ? 'assertive' : 'polite');
+    }
+
+    // Zoom lives in the main process (webFrame needs node in the renderer, which
+    // this app does not have). Answers with what was actually applied.
+    async function applyZoom() {
+        const want = Math.max(50, Math.min(200, parseInt(settings.zoomLevel, 10) || 100));
+        try {
+            const got = await L.app.setZoom(want);
+            if (got && got !== want) await saveSettings({ zoomLevel: got });
+        } catch (e) { /* an older main process has no such channel */ }
+    }
+
+    // The labelled scale above a slider. Positions are percentages of the track,
+    // so the labels line up with the input's own stops at any width.
+    const TICKS = {
+        'ticks-font': { min: 12, max: 24, at: [12, 14, 15, 16, 18, 20, 24], suffix: 'px' },
+        'ticks-gap': { min: 0, max: 24, at: [0, 4, 8, 16, 24], suffix: 'px' },
+        'ticks-zoom': { min: 50, max: 200, at: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200], suffix: '' },
+        'ticks-sat': { min: 0, max: 100, at: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], suffix: '%' }
+    };
+
+    function paintTicks(id, value) {
+        const host = $(id);
+        const spec = TICKS[id];
+        if (!host || !spec) return;
+        const span = spec.max - spec.min;
+        // Rebuilt only when it has to be: the marks never change, so dragging a
+        // slider just moves which one is highlighted.
+        if (!host.children.length) {
+            spec.at.forEach((v) => {
+                const t = document.createElement('span');
+                t.className = 'set-tick';
+                t.dataset.v = String(v);
+                t.textContent = v + spec.suffix;
+                // Inset at the ends so the first and last labels stay inside the
+                // column instead of hanging off it.
+                const pct = ((v - spec.min) / span) * 100;
+                t.style.left = Math.max(2, Math.min(98, pct)) + '%';
+                host.appendChild(t);
+            });
+        }
+        // Nearest mark, so a value between two of them still lights the one it is
+        // closest to rather than none at all.
+        let nearest = spec.at[0];
+        spec.at.forEach((v) => {
+            if (Math.abs(v - value) < Math.abs(nearest - value)) nearest = v;
+        });
+        Array.from(host.children).forEach((t) => {
+            t.classList.toggle('on', Number(t.dataset.v) === nearest);
+        });
+    }
+
+    // The live preview: REAL message rows through renderMessage(), so every
+    // setting on this pane is demonstrated by the thing it actually changes. Two
+    // fixed messages rather than the channel's own, because the pane has to look
+    // the same on an empty board as on a busy one.
+    const A11Y_PREVIEW_POSTS = [
+        {
+            id: -101, name: 'Scarmonit', client_id: 'preview-a', user_id: -1,
+            body: 'what happened to all the beans',
+            created_at: 1700000000000, pinned: 0, reply_count: 0,
+            reactions: [{ emoji: '🫘', count: 3, who: [] }, { emoji: '🎉', count: 1, who: [] }]
+        },
+        {
+            id: -102, name: 'Scarmonit', client_id: 'preview-a', user_id: -1,
+            body: "here's a link https://scarmonit.com/messageboard and some **bold** text",
+            created_at: 1700000060000, pinned: 0, reply_count: 0, reactions: []
+        }
+    ];
+
+    function renderA11yPreview() {
+        const host = $('a11y-preview-msgs');
+        if (!host) return;
+        // Only while somebody is looking at it. applyChatFontSize runs at boot and
+        // on every Ctrl+= — rebuilding two message rows behind a closed sheet each
+        // time is work nobody asked for.
+        const pane = host.closest('.set-group');
+        if (!pane || pane.hidden) return;
+        host.innerHTML = '';
+        let prev = null;
+        A11Y_PREVIEW_POSTS.forEach((p) => {
+            // Through the real renderer, in the real density — grouped exactly as
+            // the message list would group them.
+            const row = renderMessage(p, prev);
+            host.appendChild(row);
+            prev = p;
+        });
+        highlightCodeBlocks(host);
     }
 
     // ---------- dialogs ---------------------------------------------------
@@ -1456,7 +1638,9 @@
             // first successful poll proves we're online.
             loadOutbox();
 
-            applyChatFontSize(settings.chatFontSize);
+            applyChatFontSize(currentFontPx());
+            applyAccessibility();
+            applyZoom();
             applyChrome();
             initPaneResizing();
             setChannelTitle(channel);
@@ -1665,11 +1849,17 @@
     // are visible when the window is minimised or hidden in the tray. Muted
     // channels are excluded — they are muted precisely so they don't nag.
     let lastTaskbarBadge = -1;
+    let lastTaskbarFlash = null;
     function setTaskbarBadge(total) {
-        const n = isDnd() ? 0 : Math.max(0, total | 0);
-        if (n === lastTaskbarBadge) return;     // don't re-flash on every render
+        // Two settings, two answers — deliberately not folded together. Somebody
+        // can want the count without the button pulsing at them, and Badges off
+        // must not stop the flash the other switch is still asking for.
+        const n = (isDnd() || settings.badgeUnread === false) ? 0 : Math.max(0, total | 0);
+        const flash = !isDnd() && settings.taskbarFlash !== false;
+        if (n === lastTaskbarBadge && flash === lastTaskbarFlash) return;   // don't re-flash on every render
         lastTaskbarBadge = n;
-        L.app.setBadge(n);
+        lastTaskbarFlash = flash;
+        L.app.setBadge(n, flash);
     }
 
     // Channel name only — the '#' is a separate glyph in the header.
@@ -1744,6 +1934,11 @@
         // panel you opened over one conversation is not an answer about the next
         // one, and the reference closes it on a channel change too.
         if (!$('pinned-panel').hidden) togglePinned(false);
+        // Both header popouts are about the channel being left, for the same
+        // reason the pinned panel is: a thread list or a mute setting you opened
+        // over one conversation is not an answer about the next one.
+        if (!$('notif-pop').hidden) closeNotifPop();
+        if (!$('threads-pop').hidden) closeThreadsPop();
     }
 
     async function switchChannel(name) {
@@ -2054,7 +2249,19 @@
                     // A mentions-only channel still chimes for an actual
                     // mention — the whole point of the middle setting.
                     const hasMention = fresh.some((p) => mentionsMe(p.body));
-                    if (alertsAllowed(channel, hasMention)) window.loungeSounds.playMessage();
+                    // "New Message in the channel I'm currently reading", off by
+                    // default like the reference: this IS that channel, and you are
+                    // looking at it. A mention still chimes either way — being
+                    // named is worth a noise even on the screen you are on.
+                    //
+                    // "Reading" means all four: the window has focus, it is not in
+                    // the tray, no drawer is covering the channel, and the view is
+                    // at the live edge. Miss any one of them and you are not
+                    // looking at the message, so the ordinary chime applies.
+                    const watching = windowFocused && !appHidden() &&
+                        !threadOpen() && !dmPanelOpen() && nearBottom();
+                    const wanted = settings.soundOwnChannel || hasMention || !watching;
+                    if (wanted && alertsAllowed(channel, hasMention)) window.loungeSounds.playMessage();
                 }
                 notifyForPosts(fresh);
             }
@@ -8129,12 +8336,97 @@
         return channelMuted(name) ? 'none' : 'all';
     }
 
+    // ---- muting a channel for a while -------------------------------------
+    //
+    // A SECOND axis, not a fourth notification level, which is how the reference
+    // has it: the level says what this channel is normally worth hearing about,
+    // and a mute says "not for the next three hours" without throwing that away.
+    // Coming off mute therefore restores whatever the level already was.
+    //
+    // Stored as channelMuteUntil[name] = epoch ms, or MUTE_FOREVER for "until I
+    // turn it back on". Absent means not muted — so a profile that has never
+    // touched this is the same as one that has and undone it.
+    const MUTE_FOREVER = -1;
+    const MUTE_DURATIONS = [
+        { label: 'For 15 Minutes', ms: 15 * 60000 },
+        { label: 'For 1 Hour', ms: 60 * 60000 },
+        { label: 'For 3 Hours', ms: 3 * 60 * 60000 },
+        { label: 'For 8 Hours', ms: 8 * 60 * 60000 },
+        { label: 'For 24 Hours', ms: 24 * 60 * 60000 },
+        { label: 'Until I turn it back on', ms: MUTE_FOREVER }
+    ];
+
+    function muteUntilFor(name) {
+        const v = (settings.channelMuteUntil || {})[name];
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    // Read-only: it must not write from inside a render or an alert check. Expiry
+    // is swept by pruneExpiredMutes on a timer and on every open of the popout.
+    function channelMutedNow(name) {
+        const until = muteUntilFor(name);
+        if (until === null) return false;
+        if (until === MUTE_FOREVER) return true;
+        return Date.now() < until;
+    }
+
+    // "muted for 2h 14m" / "muted until I turn it back on" — the sub-label under
+    // Mute Channel, and what the tooltip on a dimmed channel row says.
+    function muteRemainingText(name) {
+        const until = muteUntilFor(name);
+        if (until === null) return '';
+        if (until === MUTE_FOREVER) return 'Muted until you turn it back on';
+        const left = until - Date.now();
+        if (left <= 0) return '';
+        const mins = Math.ceil(left / 60000);
+        if (mins < 60) return `Muted for ${mins} more minute${mins === 1 ? '' : 's'}`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `Muted for ${h}h${m ? ' ' + m + 'm' : ''} more`;
+    }
+
+    async function setChannelMute(name, ms) {
+        const map = Object.assign({}, settings.channelMuteUntil || {});
+        if (ms === null) delete map[name];
+        else map[name] = ms === MUTE_FOREVER ? MUTE_FOREVER : Date.now() + ms;
+        await saveSettings({ channelMuteUntil: map });
+        renderChannels();
+        renderMutedChannels();
+        renderNotifPop();
+    }
+
+    // Drop entries whose time is up. Runs on a timer because a mute expiring has
+    // to show on the channel row and in the badge without anybody clicking
+    // anything — and because `channelMutedNow` deliberately does not write.
+    async function pruneExpiredMutes() {
+        const map = settings.channelMuteUntil || {};
+        const now = Date.now();
+        const gone = Object.keys(map).filter((k) => {
+            const n = parseInt(map[k], 10);
+            return Number.isFinite(n) && n !== MUTE_FOREVER && n <= now;
+        });
+        if (!gone.length) return;
+        const next = Object.assign({}, map);
+        gone.forEach((k) => { delete next[k]; });
+        await saveSettings({ channelMuteUntil: next });
+        renderChannels();
+        renderMutedChannels();
+        if (!$('notif-pop').hidden) renderNotifPop();
+        // Silently would be worse: the channel simply starts making noise again
+        // and nobody knows why.
+        gone.forEach((k) => toast('#' + k + ' is no longer muted'));
+    }
+    setInterval(() => { pruneExpiredMutes(); }, 30000);
+
     // One place decides whether anything is allowed to make a noise or a toast.
     // `isMention` is what separates 'mentions' from 'none'; callers that cannot
     // know (a terse cross-channel nudge carries no body) pass false, which is
     // the quiet answer — see notifyOtherChannel.
     function alertsAllowed(channelName, isMention) {
         if (isDnd()) return false;
+        // A timed mute outranks the level: that is the whole point of it.
+        if (channelName && channelMutedNow(channelName)) return false;
         const mode = channelAlertMode(channelName);
         if (mode === 'none') return false;
         if (mode === 'mentions') return !!isMention;
@@ -8147,8 +8439,11 @@
 
     // True when the channel is anything other than fully alerting — this is what
     // dims the row and keeps it out of the taskbar badge, so 'mentions' looks
-    // calm without looking dead.
-    function channelQuieted(name) { return channelAlertMode(name) !== 'all'; }
+    // calm without looking dead. A timed mute counts, or muting a channel would
+    // silence it while its row went on looking wide awake.
+    function channelQuieted(name) {
+        return channelAlertMode(name) !== 'all' || channelMutedNow(name);
+    }
 
     async function setChannelAlertMode(name, mode) {
         if (!ALERT_MODES.includes(mode)) return;
@@ -8205,15 +8500,25 @@
         toast('Unblocked ' + (name || 'them'));
     }
 
-    // Everything you can do to a channel, in one place — reached by right-click
-    // and by the bell on the row, so neither is the only way in.
+    // Everything you can do to a channel, in one place — reached by right-click on
+    // the channel row and by the bell ON that row, so neither is the only way in.
+    //
+    // The HEADER's bell opens the notification POPOUT below instead, which is what
+    // the reference puts there: mute-for-a-while plus the three levels, and
+    // nothing that reshapes the channel.
     function openChannelMenu(name, x, y) {
         const mode = channelAlertMode(name);
+        const muted = channelMutedNow(name);
         // Three radio-ish items rather than one toggle: the middle setting is
         // the whole point, and a toggle cannot express it. `check` marks the
         // active one so the menu shows the current state instead of an action
         // whose meaning depends on state you have to remember.
         openCtxMenu([
+            muted
+                ? { label: 'Unmute channel', icon: 'bell', onClick: () => setChannelMute(name, null) }
+                : { label: 'Mute channel…', icon: 'bell-off',
+                    onClick: () => openNotifPop(name, lastMenuAt.x, lastMenuAt.y, true) },
+            'sep',
             { label: 'All messages', icon: 'bell', check: mode === 'all',
                 onClick: () => setChannelAlertMode(name, 'all') },
             { label: 'Only @mentions', icon: 'at', check: mode === 'mentions',
@@ -8236,6 +8541,163 @@
             ] : [])
         ], x, y);
     }
+
+    // ---------- notification settings popout --------------------------------
+    //
+    // The reference's, matching it item for item minus the one that cannot apply:
+    // "Use Category Default" is absent because this board has no channel
+    // categories, so it would be a fourth radio meaning exactly what the first
+    // one means.
+    //
+    // Two panels. The submenu is separate so it can sit BESIDE the row that opens
+    // it rather than pushing the radios down — and so a mouse travelling from
+    // "Mute Channel" to "For 3 Hours" passes over nothing that would close it.
+
+    let notifFor = '';          // which channel the open popout is about
+    let notifSubTimer = null;
+
+    function notifPopOpen() { return !$('notif-pop').hidden; }
+
+    function closeNotifSub() {
+        if (notifSubTimer) { clearTimeout(notifSubTimer); notifSubTimer = null; }
+        $('notif-sub').hidden = true;
+        $('np-mute').classList.remove('open');
+        $('np-mute').setAttribute('aria-expanded', 'false');
+    }
+
+    function closeNotifPop() {
+        closeNotifSub();
+        $('notif-pop').hidden = true;
+        $('btn-chan-alerts').setAttribute('aria-expanded', 'false');
+        notifFor = '';
+    }
+
+    // Anchor a fixed panel so its trailing edge lines up with the button's, and
+    // clamp it on screen. Shared by both popouts in this section.
+    function placeFixedPanel(panel, anchorRect, opts) {
+        const o = opts || {};
+        const w = panel.offsetWidth;
+        const h = panel.offsetHeight;
+        const left = o.alignLeft ? anchorRect.left : anchorRect.right - w;
+        panel.style.left = Math.max(8, Math.min(left, window.innerWidth - w - 8)) + 'px';
+        panel.style.top = Math.max(8, Math.min(anchorRect.bottom + 8, window.innerHeight - h - 8)) + 'px';
+    }
+
+    function renderNotifPop() {
+        if (!notifPopOpen()) return;
+        const name = notifFor;
+        const muted = channelMutedNow(name);
+        const remaining = muteRemainingText(name);
+
+        // The row says what it DOES, and carries what is currently true
+        // underneath it — a muted channel's popout that still just said "Mute
+        // Channel" would be the one place that could not tell you it was muted.
+        $('np-mute-label').innerHTML = muted
+            ? 'Mute Channel<span class="np-sub-label">' + esc(remaining) + '</span>'
+            : 'Mute Channel';
+        $('np-mute-label').classList.toggle('np-stacked', muted);
+        $('np-unmute').hidden = !muted;
+
+        const radios = $('np-radios');
+        const mode = channelAlertMode(name);
+        radios.innerHTML = '';
+        [
+            ['all', 'All Messages'],
+            ['mentions', 'Only @mentions'],
+            ['none', 'Nothing']
+        ].forEach(([value, label]) => {
+            const row = document.createElement('label');
+            row.className = 'np-radio';
+            row.innerHTML = `<span>${esc(label)}</span>` +
+                `<input type="radio" name="np-level" value="${value}"${mode === value ? ' checked' : ''}>`;
+            row.querySelector('input').addEventListener('change', () => {
+                setChannelAlertMode(name, value);
+                // Left OPEN, like the reference: picking a level is a setting, not
+                // a command, and the radio moving is the confirmation.
+                renderNotifPop();
+            });
+            radios.appendChild(row);
+        });
+    }
+
+    function openNotifSub() {
+        const name = notifFor;
+        const sub = $('notif-sub');
+        sub.innerHTML = '';
+        MUTE_DURATIONS.forEach((d) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'np-item';
+            b.setAttribute('role', 'menuitem');
+            b.innerHTML = `<span class="np-label">${esc(d.label)}</span>`;
+            b.addEventListener('click', () => {
+                setChannelMute(name, d.ms);
+                closeNotifPop();
+                toast(d.ms === MUTE_FOREVER
+                    ? '#' + name + ' muted until you turn it back on'
+                    : '#' + name + ' muted ' + d.label.toLowerCase());
+            });
+            sub.appendChild(b);
+        });
+
+        // Beside the row, top-aligned with it, flipping to the left when there is
+        // no room on the right.
+        sub.hidden = false;
+        const r = $('np-mute').getBoundingClientRect();
+        const pop = $('notif-pop').getBoundingClientRect();
+        const w = sub.offsetWidth, h = sub.offsetHeight;
+        const right = pop.right + 6;
+        sub.style.left = (right + w <= window.innerWidth - 8 ? right : Math.max(8, pop.left - w - 6)) + 'px';
+        sub.style.top = Math.max(8, Math.min(r.top - 6, window.innerHeight - h - 8)) + 'px';
+        $('np-mute').classList.add('open');
+        $('np-mute').setAttribute('aria-expanded', 'true');
+    }
+
+    // `straightToSub` opens with the durations already showing — used by the
+    // channel row's "Mute channel…", which has already said what it is for.
+    function openNotifPop(name, x, y, straightToSub) {
+        pruneExpiredMutes();
+        closeThreadsPop();
+        notifFor = name || channel;
+        const pop = $('notif-pop');
+        pop.hidden = false;
+        $('btn-chan-alerts').setAttribute('aria-expanded', 'true');
+        renderNotifPop();
+        // Measured after the content exists, or the height is the empty box's.
+        const w = pop.offsetWidth, h = pop.offsetHeight;
+        pop.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
+        pop.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';
+        if (straightToSub) openNotifSub();
+    }
+
+    // Hover opens the submenu, and a small delay on the way OUT keeps it open
+    // while the pointer crosses the gap between the two panels. Click works too,
+    // for touch and for the keyboard.
+    $('np-mute').addEventListener('mouseenter', () => {
+        if (notifSubTimer) { clearTimeout(notifSubTimer); notifSubTimer = null; }
+        if ($('notif-sub').hidden) openNotifSub();
+    });
+    $('np-mute').addEventListener('click', () => {
+        if ($('notif-sub').hidden) openNotifSub(); else closeNotifSub();
+    });
+    [$('notif-pop'), $('notif-sub')].forEach((el) => {
+        el.addEventListener('mouseleave', () => {
+            if (notifSubTimer) clearTimeout(notifSubTimer);
+            notifSubTimer = setTimeout(() => {
+                // Only when the pointer is in neither panel.
+                if (!$('notif-pop').matches(':hover') && !$('notif-sub').matches(':hover')) closeNotifSub();
+            }, 220);
+        });
+        el.addEventListener('mouseenter', () => {
+            if (notifSubTimer) { clearTimeout(notifSubTimer); notifSubTimer = null; }
+        });
+    });
+    $('np-unmute').addEventListener('click', () => {
+        const name = notifFor;
+        setChannelMute(name, null);
+        closeNotifPop();
+        toast('#' + name + ' unmuted');
+    });
 
     $('channel-list').addEventListener('contextmenu', (e) => {
         const row = e.target.closest('.chan');
@@ -8265,26 +8727,18 @@
         $('set-ns').checked = settings.noiseSuppression !== false;
         $('set-nsai').checked = !!settings.noiseSuppressionAI;
         $('set-agc').checked = !!settings.autoGainControl;
-        $('set-tray').checked = settings.minimizeToTray !== false;
         refreshUpdateStatus();
-        // Read the login item's ACTUAL OS state, so the toggle is correct even
-        // if the user changed it outside the app.
+        // Read the login item's ACTUAL OS state, so the switch is correct even
+        // if the user changed it outside the app. Written back into `settings`
+        // because that is what the switch reads.
         try {
             const li = await L.startup.get();
-            $('set-launch').checked = !!li.openAtLogin;
-            $('set-launch-hidden').checked = !!li.openAsHidden;
-        } catch (e) {
-            $('set-launch').checked = !!settings.launchOnStartup;
-            $('set-launch-hidden').checked = !!settings.startMinimized;
-        }
+            settings.launchOnStartup = !!li.openAtLogin;
+            settings.startMinimized = !!li.openAsHidden;
+        } catch (e) { /* the mirror in settings is the fallback */ }
         updateLaunchHiddenEnabled();
-        $('set-notify').checked = settings.notifications !== false;
-        $('set-notify-sound').checked = settings.notificationSound !== false;
-        $('set-voice-sounds').checked = settings.voiceSounds !== false;
-        $('set-autojoin').checked = !!settings.autoJoinVoice;
         $('set-outvol').value = Math.round((settings.outputVolume === undefined ? 1 : settings.outputVolume) * 100);
         $('set-outvol-val').textContent = $('set-outvol').value + '%';
-        $('set-font-size').value = FONT_SIZES[fontSizeIndex(settings.chatFontSize)].key;
         $('set-share-quality').value = settings.shareQuality || '1080p';
         $('set-share-motion').value = settings.shareMotion || 'sharp';
         $('set-share-audio').checked = settings.shareAudio !== false;
@@ -8295,13 +8749,15 @@
 
         // Account / notifications / appearance / privacy
         $('set-status').value = settings.status || '';
-        $('set-dnd').checked = isDnd();
         $('set-theme').value = settings.theme || 'dark';
         $('set-density').value = settings.density || 'cozy';
         $('set-vad').value = String(vadValue());
+
+        paintPaneControls();
         paintThreshold();
         paintVoicePane();
         renderAccountCard();
+        renderAccountInfo();
         renderMutedChannels();
         renderBlocked();
         // Refetched rather than drawn from cache: someone else may have added
@@ -9089,7 +9545,131 @@
                 });
             sel.addEventListener('change', () => setChannelAlertMode(c.name, sel.value));
             row.appendChild(sel);
+            // A channel muted for a while is not the same as one set to Nothing,
+            // and the select cannot express it — so it is said, with the way out
+            // beside it. Without this the Advanced list was the one place that
+            // could show a muted channel as "All messages".
+            if (channelMutedNow(c.name)) {
+                const tag = document.createElement('span');
+                tag.className = 'chan-mute-tag';
+                tag.textContent = muteRemainingText(c.name);
+                const un = document.createElement('button');
+                un.type = 'button';
+                un.className = 'keycap';
+                un.textContent = 'Unmute';
+                un.addEventListener('click', () => setChannelMute(c.name, null));
+                row.appendChild(tag);
+                row.appendChild(un);
+            }
             box.appendChild(row);
+        });
+    }
+
+    // ---------- Account Info ------------------------------------------------
+    // The reference's label / value rows. Everything here is READ — the display
+    // name is the account username and cannot be edited (which is the whole point
+    // of it), and the email belongs to the account rather than to this app — so
+    // the rows state rather than offering Edit buttons that could not work.
+    function renderAccountInfo() {
+        const nameRow = $('acct-info-name');
+        if (nameRow) nameRow.textContent = settings.displayName || 'Anonymous';
+
+        const roleRow = $('acct-info-role');
+        if (roleRow) {
+            roleRow.textContent = account
+                ? (ROLE_LABEL[account.role] || account.role || 'Member')
+                : 'Not signed in to a board account';
+        }
+
+        // Only when there is one to show. account/me does not always carry it.
+        const emailRow = $('acct-info-email-row');
+        const email = account && account.email;
+        if (emailRow) {
+            emailRow.hidden = !email;
+            if (email) $('acct-info-email').textContent = maskEmail(email);
+        }
+    }
+
+    // "sc••••••@gmail.com" — enough to recognise which address it is without
+    // printing it in full on a screen somebody may be sharing.
+    function maskEmail(addr) {
+        const s = String(addr || '');
+        const at = s.indexOf('@');
+        if (at < 1) return s;
+        const user = s.slice(0, at);
+        const keep = user.slice(0, Math.min(2, user.length));
+        return keep + '•'.repeat(Math.max(3, user.length - keep.length)) + s.slice(at);
+    }
+
+    // ---------- System: keybinds -------------------------------------------
+    // The three settable ones are the SAME bindings the Voice & Audio pane
+    // records — one setting, two places to reach it, which is what the reference
+    // does with its keybind list. The recorders are bound below, beside the
+    // originals, so there is one recorder implementation rather than two.
+    async function paintKeybinds() {
+        const pairs = [
+            ['set-ptt-2', settings.pttBinding],
+            ['set-mute-key-2', settings.muteBinding],
+            ['set-deafen-key-2', settings.deafenBinding]
+        ];
+        for (const [id, binding] of pairs) {
+            const el = $(id);
+            if (!el) continue;
+            el.textContent = (await L.ptt.describe(binding)) || 'Click to set';
+        }
+        const note = $('keybind-native-note');
+        if (note) {
+            note.textContent = pttHookAvailable
+                ? 'These work system-wide — the native key hook is running.'
+                : 'The native key hook is unavailable on this machine, so push-to-talk ' +
+                  'behaves as a system-wide TOGGLE and hold-to-talk works while the window is focused.';
+        }
+    }
+
+    // Every shortcut the app actually implements, grouped the way the reference
+    // groups its Default Keybinds. Written from the handlers rather than from
+    // memory: each entry below is wired in this file.
+    const DEFAULT_KEYS = [
+        ['Messages', [
+            ['Send', ['Enter']],
+            ['New line without sending', ['Shift', 'Enter']],
+            ['Accept the @mention being suggested', ['Tab']],
+            ['Reveal a spoiler', ['Enter']]
+        ]],
+        ['The conversation', [
+            ['Move between messages', ['↑', '↓']],
+            ['First / last message', ['Home', 'End']],
+            ['Open the focused message’s menu', ['Enter']],
+            ['Close that menu', ['Esc']]
+        ]],
+        ['Navigation', [
+            ['Search this channel', ['Ctrl', 'F']],
+            ['Close the top-most panel, menu or sheet', ['Esc']]
+        ]],
+        ['Text', [
+            ['Larger chat text', ['Ctrl', '+']],
+            ['Smaller chat text', ['Ctrl', '−']],
+            ['Reset chat text size', ['Ctrl', '0']]
+        ]]
+    ];
+
+    let defaultKeysDrawn = false;
+    function renderDefaultKeys() {
+        const box = $('set-default-keys');
+        if (!box || defaultKeysDrawn) return;
+        defaultKeysDrawn = true;
+        DEFAULT_KEYS.forEach(([group, rows]) => {
+            const h = document.createElement('div');
+            h.className = 'set-keys-head';
+            h.textContent = group;
+            box.appendChild(h);
+            rows.forEach(([label, keys]) => {
+                const row = document.createElement('div');
+                row.className = 'set-key';
+                const caps = keys.map((k) => `<span class="set-key-cap">${esc(k)}</span>`).join('');
+                row.innerHTML = `<span>${esc(label)}</span><span class="set-key-combo">${caps}</span>`;
+                box.appendChild(row);
+            });
         });
     }
 
@@ -9411,6 +9991,41 @@
         paintAvatarEl(av, name, myUserId());
     }
 
+    // Everything in the settings sheet that is DRAWN FROM a setting rather than
+    // wired to one: the sliders and their scales, the switches, the radios, the
+    // keybind buttons, the live preview.
+    //
+    // Called both when the sheet opens and whenever a pane is shown, because a
+    // pane can be reached long after the sheet did — and a slider whose scale was
+    // never drawn, or a radio group with nothing selected, is exactly what that
+    // looked like before.
+    function paintPaneControls() {
+        const px = currentFontPx();
+        if ($('set-font-px')) $('set-font-px').value = String(px);
+        paintTicks('ticks-font', px);
+
+        const gapRaw = parseInt(settings.msgGroupGap, 10);
+        const gap = Number.isFinite(gapRaw) ? gapRaw : 16;
+        if ($('set-msg-gap')) $('set-msg-gap').value = String(gap);
+        paintTicks('ticks-gap', gap);
+
+        const zoom = parseInt(settings.zoomLevel, 10) || 100;
+        if ($('set-zoom')) $('set-zoom').value = String(zoom);
+        paintTicks('ticks-zoom', zoom);
+
+        const satRaw = parseInt(settings.saturation, 10);
+        const sat = Number.isFinite(satRaw) ? satRaw : 100;
+        if ($('set-saturation')) $('set-saturation').value = String(sat);
+        paintTicks('ticks-sat', sat);
+
+        paintSwitches();
+        paintRadios();
+        updateLaunchHiddenEnabled();
+        renderDefaultKeys();
+        paintKeybinds();
+        renderA11yPreview();
+    }
+
     function settingsPaneByTitle(title) {
         return [...document.querySelectorAll('#settings-body .set-group')]
             .find((g) => {
@@ -9497,7 +10112,47 @@
                 b.appendChild(label);
                 b.addEventListener('click', () => showPane(g));
                 inner.appendChild(b);
-                const it = { g, b, key: (h.textContent + ' ' + g.textContent).toLowerCase() };
+
+                // SUB-ENTRIES, one per h4.set-sub in the section — the reference
+                // lists a tab's own headings under it while that tab is open, and
+                // in a pane as long as Accessibility or Notifications they are the
+                // only way to see what is in it without scrolling the whole thing.
+                //
+                // Built from the markup, like the tabs themselves: a new heading
+                // needs no wiring. Shown only while its section is the open one.
+                const subWrap = document.createElement('div');
+                subWrap.className = 'set-nav-subs';
+                subWrap.hidden = true;
+                const subs = [];
+                g.querySelectorAll('h4.set-sub').forEach((h4) => {
+                    const sb = document.createElement('button');
+                    sb.type = 'button';
+                    sb.className = 'set-nav-sub';
+                    sb.textContent = h4.textContent;
+                    sb.addEventListener('click', () => {
+                        showPane(g);
+                        // The pane is the scroller, and the sticky preview sits over
+                        // its top — so scroll the heading to just under that rather
+                        // than to the very top, where it would be covered.
+                        const top = h4.offsetTop - 12;
+                        body.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+                        subs.forEach((x) => x.el.classList.toggle('on', x.el === sb));
+                    });
+                    subWrap.appendChild(sb);
+                    subs.push({ el: sb, h4 });
+                });
+                if (subs.length) inner.appendChild(subWrap);
+                // Some of those headings live in a block that is hidden for this
+                // viewer — "Members" is the owner's only — so the entry has to
+                // follow it. Recomputed on every show rather than once: the role
+                // can change mid-session, and openSettings decides that block's
+                // visibility after this nav was built.
+                subWrap.dataset.count = String(subs.length);
+
+                const it = {
+                    g, b, subWrap: subs.length ? subWrap : null, subs,
+                    key: (h.textContent + ' ' + g.textContent).toLowerCase()
+                };
                 items.push(it);
                 mine.push(it);
             });
@@ -9519,8 +10174,32 @@
             if (!target) return;
             if (micTest && target !== voiceGroup) stopMicTest();
             items.forEach((it) => {
-                it.g.hidden = it.g !== target;
-                it.b.classList.toggle('on', it.g === target);
+                const on = it.g === target;
+                it.g.hidden = !on;
+                it.b.classList.toggle('on', on);
+                if (it.subWrap) it.subWrap.hidden = !on;
+                if (!on) return;
+                // A heading inside a block this viewer cannot see — "Members" is
+                // the owner's only — must not appear in the rail either.
+                //
+                // Asked of the DOM by walking up to the pane looking for `hidden`
+                // or an inline display:none, rather than of the LAYOUT: offsetParent
+                // would be the obvious test and it is null for everything in jsdom,
+                // which has no layout at all — so it would hide every sub-entry
+                // under test while looking correct in the app.
+                let visible = 0;
+                it.subs.forEach((x) => {
+                    let shown = true;
+                    for (let n = x.h4; n && n !== it.g; n = n.parentElement) {
+                        if (n.hidden || (n.style && n.style.display === 'none')) { shown = false; break; }
+                    }
+                    x.el.hidden = !shown;
+                    // The first VISIBLE entry is where the pane opens, so it is
+                    // the one marked; nothing else has been navigated to yet.
+                    x.el.classList.toggle('on', shown && visible === 0);
+                    if (shown) visible++;
+                });
+                if (it.subWrap) it.subWrap.hidden = visible === 0;
             });
             const h = target.querySelector('h3');
             $('settings-title').textContent = h ? h.textContent : 'Settings';
@@ -9529,6 +10208,12 @@
             // rate limited per address — so it is fetched when somebody actually
             // looks at About, not every time Settings opens.
             if (target === settingsPaneByTitle('About')) loadReleaseHistory(false);
+            // Every control on the pane being shown, painted from the settings as
+            // they are NOW. openSettings does this too, but a pane can be reached
+            // long after the sheet opened — and a slider whose scale was never
+            // drawn, or a radio group with nothing selected, is what that looked
+            // like before this line.
+            paintPaneControls();
         }
 
         // A query that matches nothing hides every row in the rail, and an empty
@@ -9573,19 +10258,55 @@
     })();
 
     // ---- new settings controls ----
+    //
+    // Two tiny factories first, because everything below uses them. Their
+    // registries are declared at the top of this file, not here — the settings nav
+    // repaints them from module scope, which is above this point.
+
+    // A <button role="switch"> with the reference's look. One line per toggle:
+    // where to find it, how to read the setting, how to write it.
+    function wireSwitch(id, get, set) {
+        const el = $(id);
+        if (!el) return;
+        const paint = () => el.setAttribute('aria-checked', get() ? 'true' : 'false');
+        el.addEventListener('click', async () => {
+            if (el.disabled) return;
+            await set(!get());
+            paint();
+        });
+        // A button gets Enter for free; a switch also has to answer to Space.
+        el.addEventListener('keydown', (e) => {
+            if (e.key === ' ') { e.preventDefault(); el.click(); }
+        });
+        switchPainters.push(paint);
+        paint();
+    }
+
+    // A radio group. Same shape: name the group, read the setting, write it.
+    function wireRadios(name, get, set) {
+        const all = () => document.querySelectorAll(`input[type="radio"][name="${name}"]`);
+        all().forEach((r) => {
+            r.addEventListener('change', () => { if (r.checked) set(r.value); });
+        });
+        radioPainters.push(() => {
+            const v = get();
+            all().forEach((r) => { r.checked = r.value === v; });
+        });
+    }
+
     $('set-status').addEventListener('change', async (e) => {
         await saveSettings({ status: e.target.value.trim().slice(0, 80) });
         renderMe();
         renderAccountCard();
         sendTextPresence(false);        // publish it now rather than up to 20s later
     });
-    $('set-dnd').addEventListener('change', async (e) => {
-        // Through setPresenceMode, so the checkbox and the account panel's
-        // picker can never end up saying different things. Unticking returns to
-        // Online rather than to whatever override was set before — the checkbox
-        // has no way to express "back to Idle", so it must not pretend to.
-        await setPresenceMode(e.target.checked ? 'dnd' : 'online');
-        toast(e.target.checked ? 'Do not disturb on — everything is silenced' : 'Do not disturb off');
+    // Through setPresenceMode, so the switch and the account panel's picker can
+    // never end up saying different things. Turning it off returns to Online
+    // rather than to whatever override was set before — a two-state switch has no
+    // way to express "back to Idle", so it must not pretend to.
+    wireSwitch('set-dnd', () => isDnd(), async (v) => {
+        await setPresenceMode(v ? 'dnd' : 'online');
+        toast(v ? 'Do not disturb on — everything is silenced' : 'Do not disturb off');
     });
     $('set-theme').addEventListener('change', async (e) => {
         await saveSettings({ theme: e.target.value });
@@ -9884,10 +10605,91 @@
             ? 'AI noise suppression could not start — rejoin voice to use standard noise suppression'
             : 'AI noise suppression could not start — using standard noise suppression instead', true);
     }
-    $('set-font-size').addEventListener('change', async (e) => {
-        await saveSettings({ chatFontSize: e.target.value });
-        applyChatFontSize(e.target.value);
+    // The hidden legacy select. Kept wired because the four-name scale is still
+    // written to the profile, so anything that sets it (an older build, a test)
+    // still moves the size.
+    $('set-font-size').addEventListener('change', (e) => {
+        setChatFontPx(FONT_SIZES[fontSizeIndex(e.target.value)].px);
     });
+
+    // ---- Accessibility controls ------------------------------------------
+    //
+    // Every one of these writes the setting, then calls the single apply function
+    // for its family. `input` rather than `change` on the sliders, so the app moves
+    // under the thumb while it is being dragged — which is the whole reason the
+    // preview is on the same pane.
+
+    $('set-font-px').addEventListener('input', (e) => { setChatFontPx(e.target.value); });
+
+    $('set-msg-gap').addEventListener('input', async (e) => {
+        const v = Math.max(0, Math.min(24, parseInt(e.target.value, 10) || 0));
+        await saveSettings({ msgGroupGap: v });
+        paintTicks('ticks-gap', v);
+        applyAccessibility();
+        renderA11yPreview();
+    });
+
+    $('set-saturation').addEventListener('input', async (e) => {
+        const v = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+        await saveSettings({ saturation: v });
+        paintTicks('ticks-sat', v);
+        applyAccessibility();
+    });
+
+    // Zoom is the one that cannot be applied on every pointer move: each call is
+    // an IPC round trip AND a full relayout of the window. Debounced, with the
+    // ticks and the stored value kept live so the control still feels immediate.
+    let zoomTimer = null;
+    $('set-zoom').addEventListener('input', (e) => {
+        const v = Math.max(50, Math.min(200, parseInt(e.target.value, 10) || 100));
+        paintTicks('ticks-zoom', v);
+        if (zoomTimer) clearTimeout(zoomTimer);
+        zoomTimer = setTimeout(async () => {
+            zoomTimer = null;
+            await saveSettings({ zoomLevel: v });
+            applyZoom();
+        }, 120);
+    });
+
+    wireSwitch('set-underline', () => !!settings.underlineLinks, async (v) => {
+        await saveSettings({ underlineLinks: v });
+        applyAccessibility();
+    });
+    wireSwitch('set-contrast', () => !!settings.highContrast, async (v) => {
+        await saveSettings({ highContrast: v });
+        applyAccessibility();
+    });
+    wireSwitch('set-reduced-motion', () => !!settings.reducedMotion, async (v) => {
+        await saveSettings({ reducedMotion: v });
+        applyAccessibility();
+    });
+    wireSwitch('set-announce', () => !!settings.announceMessages, async (v) => {
+        await saveSettings({ announceMessages: v });
+        applyAccessibility();
+        toast(v ? 'New messages will be announced' : 'New messages will not be announced');
+    });
+
+    wireRadios('set-uidensity',
+        () => (['compact', 'default', 'spacious'].includes(settings.uiDensity) ? settings.uiDensity : 'default'),
+        async (v) => { await saveSettings({ uiDensity: v }); applyAccessibility(); });
+
+    wireRadios('set-msgdisplay',
+        () => (settings.density === 'compact' ? 'compact' : 'cozy'),
+        async (v) => {
+            await saveSettings({ density: v });
+            applyDensity();
+            renderMessages();
+            renderA11yPreview();
+        });
+
+    wireRadios('set-theme',
+        () => (['dark', 'light', 'system'].includes(settings.theme) ? settings.theme : 'dark'),
+        async (v) => {
+            await saveSettings({ theme: v });
+            $('set-theme').value = v;
+            applyTheme();
+            renderA11yPreview();
+        });
     $('set-share-quality').addEventListener('change', async (e) => {
         await saveSettings({ shareQuality: e.target.value });
         voice.setShareQuality(e.target.value);
@@ -9898,28 +10700,33 @@
     });
     $('set-share-audio').addEventListener('change', (e) => saveSettings({ shareAudio: e.target.checked }));
 
-    // "Start minimized" only makes sense when launch-on-startup is on.
+    // The OS login item is the source of truth for both of these, so they are
+    // read back from it after every write rather than assumed — Windows can
+    // refuse, and a switch that flipped anyway would be lying.
+    //
+    // "Start minimized" only makes sense when launch-on-startup is on, and the
+    // reference greys it out rather than hiding it, which is also what says WHY.
     function updateLaunchHiddenEnabled() {
-        const on = $('set-launch').checked;
-        const row = $('set-launch-hidden').closest('.row');
+        const on = !!settings.launchOnStartup;
+        const row = $('row-launch-hidden');
         if (row) row.classList.toggle('disabled', !on);
-        $('set-launch-hidden').disabled = !on;
+        const sw = $('set-launch-hidden');
+        if (sw) sw.disabled = !on;
     }
 
-    async function applyStartup() {
-        const openAtLogin = $('set-launch').checked;
-        const openAsHidden = openAtLogin && $('set-launch-hidden').checked;
-        const li = await L.startup.set(openAtLogin, openAsHidden);
+    async function applyStartup(openAtLogin, openAsHidden) {
+        const li = await L.startup.set(!!openAtLogin, !!(openAtLogin && openAsHidden));
         // Keep the mirror in settings, and reuse startMinimized for the "open
         // hidden" behaviour so a manual launch behaves the same.
         await saveSettings({ launchOnStartup: !!li.openAtLogin, startMinimized: !!li.openAsHidden });
-        $('set-launch').checked = !!li.openAtLogin;
-        $('set-launch-hidden').checked = !!li.openAsHidden;
+        paintSwitches();
         updateLaunchHiddenEnabled();
     }
 
-    $('set-launch').addEventListener('change', applyStartup);
-    $('set-launch-hidden').addEventListener('change', applyStartup);
+    wireSwitch('set-launch', () => !!settings.launchOnStartup,
+        (v) => applyStartup(v, settings.startMinimized));
+    wireSwitch('set-launch-hidden', () => !!settings.startMinimized,
+        (v) => applyStartup(settings.launchOnStartup, v));
 
     // ---- auto-update settings ----
     function updateStatusText(s) {
@@ -9954,27 +10761,87 @@
         if (r && r.reason === 'dev') $('update-status').textContent = 'Updates are only available in the installed app.';
     });
 
-    $('set-tray').addEventListener('change', (e) => saveSettings({ minimizeToTray: e.target.checked }));
-    $('set-notify').addEventListener('change', (e) => saveSettings({ notifications: e.target.checked }));
+    // ---- System + Notifications switches ---------------------------------
+
+    wireSwitch('set-tray', () => settings.minimizeToTray !== false,
+        (v) => saveSettings({ minimizeToTray: v }));
+    wireSwitch('set-autojoin', () => !!settings.autoJoinVoice,
+        (v) => saveSettings({ autoJoinVoice: v }));
+
+    // Hardware acceleration can only be told to Chromium before the app is ready,
+    // so this is the one setting that asks to restart. It says so, and it offers —
+    // it does not restart out from under somebody, and it does not pretend to have
+    // taken effect either.
+    wireSwitch('set-hwaccel', () => settings.hardwareAcceleration !== false, async (v) => {
+        await saveSettings({ hardwareAcceleration: v });
+        const ok = await askConfirm(
+            v ? 'Turn hardware acceleration on?' : 'Turn hardware acceleration off?',
+            'ScarmVoice has to restart for this to take effect. Restart now?',
+            'Restart now');
+        if (ok) { try { await L.app.relaunch(); } catch (e) { toast('Could not restart — close and reopen the app', true); } }
+        else toast('Saved — it takes effect the next time ScarmVoice starts');
+    });
+
+    wireSwitch('set-notify', () => settings.notifications !== false,
+        (v) => saveSettings({ notifications: v }));
+    wireSwitch('set-taskbar-flash', () => settings.taskbarFlash !== false,
+        (v) => saveSettings({ taskbarFlash: v }));
+    wireSwitch('set-badge', () => settings.badgeUnread !== false, async (v) => {
+        await saveSettings({ badgeUnread: v });
+        // Applied at once: turning it off has to clear the number that is already
+        // on the taskbar button, not wait for the next message.
+        renderChannels();
+    });
     // Preview the sound on enable, so the toggle proves itself.
-    $('set-notify-sound').addEventListener('change', async (e) => {
-        await saveSettings({ notificationSound: e.target.checked });
-        if (e.target.checked) window.loungeSounds.playMessage();
+    wireSwitch('set-notify-sound', () => settings.notificationSound !== false, async (v) => {
+        await saveSettings({ notificationSound: v });
+        if (v) window.loungeSounds.playMessage();
     });
-    $('set-voice-sounds').addEventListener('change', async (e) => {
-        await saveSettings({ voiceSounds: e.target.checked });
-        if (e.target.checked) window.loungeSounds.playVoice('join');
+    wireSwitch('set-sound-own', () => !!settings.soundOwnChannel, async (v) => {
+        await saveSettings({ soundOwnChannel: v });
+        if (v) window.loungeSounds.playMessage();
     });
-    $('set-autojoin').addEventListener('change', (e) => saveSettings({ autoJoinVoice: e.target.checked }));
+    wireSwitch('set-voice-sounds', () => settings.voiceSounds !== false, async (v) => {
+        await saveSettings({ voiceSounds: v });
+        if (v) window.loungeSounds.playVoice('join');
+    });
+    // The master switch. Kept apart from Do Not Disturb, which also silences
+    // toasts and badges — this one is sounds only, and it leaves the individual
+    // choices above alone so turning it off restores them.
+    wireSwitch('set-mute-sounds', () => !!settings.disableAllSounds, async (v) => {
+        await saveSettings({ disableAllSounds: v });
+        window.loungeSounds.init(settings);
+        toast(v ? 'All notification sounds off' : 'Notification sounds restored');
+    });
+
+    // Preview Sound, under each sound's name.
+    document.querySelectorAll('.set-preview').forEach((b) => {
+        b.addEventListener('click', () => {
+            // Deliberately ignores the toggles: this is "what does this sound
+            // like", not "would I hear it right now".
+            if (b.dataset.preview === 'join') window.loungeSounds.playVoice('join');
+            else window.loungeSounds.playMessage();
+        });
+    });
 
     // Hotkey recorder: captures the next key or mouse button pressed. Shared
     // by push-to-talk and the mute/deafen toggles — one recorder at a time,
     // guarded by the same recordingPtt flag the in-window PTT handlers respect.
-    function bindKeyRecorder(btnId, settingKey, afterSave) {
-        $(btnId).addEventListener('click', () => {
+    // `btnIds` may name MORE THAN ONE button for the same binding: push-to-talk,
+    // mute and deafen are each reachable from two panes now (Voice & Audio's
+    // advanced block and System's keybind list), and they are ONE setting. Both
+    // buttons record into it and both are repainted, so the two panes cannot show
+    // different keys for the same hotkey.
+    function bindKeyRecorder(btnIds, settingKey, afterSave) {
+        const ids = Array.isArray(btnIds) ? btnIds : [btnIds];
+        const buttons = () => ids.map((id) => $(id)).filter(Boolean);
+        const repaint = async () => {
+            const text = (await L.ptt.describe(settings[settingKey])) || 'Click to set';
+            buttons().forEach((b) => { b.textContent = text; });
+        };
+        buttons().forEach((btn) => btn.addEventListener('click', () => {
             if (recordingPtt) return;
             recordingPtt = true;
-            const btn = $(btnId);
             btn.classList.add('recording');
             btn.textContent = 'Press any key…';
 
@@ -9990,7 +10857,7 @@
                     await saveSettings({ [settingKey]: binding });
                     await applyPtt();
                 }
-                btn.textContent = (await L.ptt.describe(settings[settingKey])) || 'Click to set';
+                await repaint();
                 if (afterSave) afterSave();
             };
 
@@ -10027,11 +10894,11 @@
             // a global hotkey silently rebound, with nothing on screen to
             // explain either. Cancel is exactly the Escape path.
             cancelKeyRecorder = () => finish(null, false);
-        });
+        }));
     }
-    bindKeyRecorder('set-ptt', 'pttBinding', refreshPttHint);
-    bindKeyRecorder('set-mute-key', 'muteBinding');
-    bindKeyRecorder('set-deafen-key', 'deafenBinding');
+    bindKeyRecorder(['set-ptt', 'set-ptt-2'], 'pttBinding', refreshPttHint);
+    bindKeyRecorder(['set-mute-key', 'set-mute-key-2'], 'muteBinding');
+    bindKeyRecorder(['set-deafen-key', 'set-deafen-key-2'], 'deafenBinding');
 
     // "Sign out" means out of EVERYTHING — board session and account — so the
     // next sign-in walks both steps again. One function, because it is now
@@ -12156,6 +13023,221 @@
         $('thread-input').focus();
     });
 
+    // ---------- threads popout ----------------------------------------------
+    //
+    // Every thread in the channel, off the header's Threads button — the
+    // reference's panel: title, a search box and Create on one bar, the list or
+    // an empty state below.
+    //
+    // The list comes from /api/board/threads rather than from the loaded page.
+    // Both clients can half-derive it locally (a root carries reply_count), but
+    // only for the page they happen to hold — so a thread nobody had scrolled
+    // back to was missing from a panel whose whole claim is to list them all.
+    //
+    // CREATE is adapted, not copied. A thread here hangs off a message; there is
+    // no such thing as an empty one. So Create asks for the opening message,
+    // posts it, and opens its thread — which is what "start a thread" means in
+    // this app, and is real rather than a button that cannot do anything.
+
+    let threadsList = null;          // null = not loaded yet
+    let threadsFilter = '';
+
+    function threadsPopOpen() { return !$('threads-pop').hidden; }
+
+    function closeThreadsPop() {
+        $('threads-pop').hidden = true;
+        $('btn-threads').setAttribute('aria-expanded', 'false');
+    }
+
+    // CENTRED over the conversation, not hung off the button — which is where the
+    // reference puts it, and the only placement that works: the panel is 528px
+    // wide and the button is near the right edge of a window that can be 900px, so
+    // aligning their trailing edges pushes half of it off the left of the screen.
+    // Vertically it still drops from the button, so it reads as belonging to it.
+    function placeThreadsPop() {
+        if (!threadsPopOpen()) return;
+        const pop = $('threads-pop');
+        const col = ($('messages-wrap') || document.body).getBoundingClientRect();
+        const btn = $('btn-threads').getBoundingClientRect();
+        const w = pop.offsetWidth;
+        const left = col.left + (col.width - w) / 2;
+        pop.style.left = Math.max(8, Math.min(left, window.innerWidth - w - 8)) + 'px';
+        pop.style.top = Math.round(btn.bottom + 8) + 'px';
+    }
+
+    async function openThreadsPop() {
+        closeNotifPop();
+        const pop = $('threads-pop');
+        pop.hidden = false;
+        $('btn-threads').setAttribute('aria-expanded', 'true');
+        threadsFilter = '';
+        $('threads-search').value = '';
+        threadsList = null;
+        renderThreadsPop();          // the loading state, in this frame
+        placeThreadsPop();
+        $('threads-search').focus();
+
+        const forChannel = channel;
+        let list = null;
+        try {
+            const res = await L.board('threads', { query: { channel: forChannel } });
+            if (res && res.success && Array.isArray(res.threads)) list = res.threads;
+        } catch (e) { /* fall through to the local derivation */ }
+        if (forChannel !== channel || !threadsPopOpen()) return;
+        // Offline, or an older server with no such endpoint: what the loaded page
+        // can see is worth more than an error.
+        if (!list) {
+            list = posts.filter((p) => (p.reply_count || 0) > 0).map((p) => ({
+                id: p.id,
+                name: p.name,
+                user_id: p.user_id,
+                title: (String(p.body || '').split('\n').map((s) => s.trim()).find(Boolean) ||
+                    p.att_name || 'Thread').slice(0, 100),
+                reply_count: p.reply_count || 0,
+                last_reply_at: p.last_reply_at || p.created_at
+            })).sort((a, b) => b.last_reply_at - a.last_reply_at);
+        }
+        threadsList = list;
+        renderThreadsPop();
+        placeThreadsPop();
+    }
+
+    function renderThreadsPop() {
+        const body = $('threads-body');
+        body.innerHTML = '';
+
+        if (threadsList === null) {
+            const l = document.createElement('div');
+            l.className = 'tp-empty';
+            l.innerHTML = '<div class="tp-empty-sub">Loading threads…</div>';
+            body.appendChild(l);
+            return;
+        }
+
+        const q = threadsFilter.trim().toLowerCase();
+        const shown = q
+            ? threadsList.filter((t) => (t.title || '').toLowerCase().includes(q) ||
+                (t.name || '').toLowerCase().includes(q))
+            : threadsList;
+
+        if (!shown.length) {
+            const e = document.createElement('div');
+            e.className = 'tp-empty';
+            // Two different empty states. "No threads at all" is an invitation;
+            // "nothing matched your search" is an answer, and offering Create
+            // Thread there would read as "create one called that".
+            if (q) {
+                e.innerHTML =
+                    I('threads', 'ico tp-empty-mark') +
+                    '<div class="tp-empty-title">No threads found</div>' +
+                    `<div class="tp-empty-sub">Nothing in #${esc(channel)} matches “${esc(threadsFilter.trim())}”.</div>`;
+                body.appendChild(e);
+                return;
+            }
+            e.innerHTML =
+                I('threads', 'ico tp-empty-mark') +
+                '<div class="tp-empty-title">There are no threads.</div>' +
+                '<div class="tp-empty-sub">Stay focused on a conversation with a thread — ' +
+                'a side conversation that hangs off one message and keeps the channel clear.</div>';
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'tp-create';
+            b.textContent = 'Create Thread';
+            b.addEventListener('click', createThreadFromPop);
+            e.appendChild(b);
+            body.appendChild(e);
+            return;
+        }
+
+        shown.forEach((t) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'tp-item';
+            const n = t.reply_count || 0;
+            row.innerHTML =
+                I('thread') +
+                '<div class="tp-item-main">' +
+                `<div class="tp-item-name">${esc(t.title || 'Thread')}</div>` +
+                `<div class="tp-item-meta">${esc(t.name || 'Someone')} · ` +
+                `${n} ${n === 1 ? 'reply' : 'replies'} · last ${esc(stampStr(t.last_reply_at))}</div>` +
+                '</div>';
+            row.addEventListener('click', () => {
+                closeThreadsPop();
+                openThread(t.id, channel);
+            });
+            body.appendChild(row);
+        });
+    }
+
+    async function createThreadFromPop() {
+        const forChannel = channel;
+        // Through openDialog rather than askText so it can carry the explanation:
+        // "create a thread" in this app means posting the message it hangs off,
+        // and that is worth saying before somebody types into the box.
+        const body = await openDialog({
+            title: 'Start a thread',
+            message: 'A thread hangs off a message. What should the opening message say? ' +
+                'Its first line becomes the thread\'s name.',
+            value: '', ok: 'Create', withInput: true, maxLength: 200
+        });
+        if (!body || !body.trim()) return;
+
+        const res = await L.board('post', {
+            method: 'POST',
+            body: {
+                body: body.trim(),
+                name: settings.displayName || 'Anonymous',
+                clientId: settings.clientId,
+                channel: forChannel
+            }
+        });
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not start the thread', true);
+
+        closeThreadsPop();
+        announcePosted(forChannel, body.trim());
+        echoPost(res.id, body.trim(), forChannel, null, null);
+        await loadMessages(true);
+        // The root exists now, so the drawer has something to open onto — and the
+        // reply box in it is where the thread actually begins.
+        openThread(res.id, forChannel);
+    }
+
+    $('threads-search').addEventListener('input', (e) => {
+        threadsFilter = e.target.value;
+        renderThreadsPop();
+    });
+    $('threads-create').addEventListener('click', createThreadFromPop);
+
+    // ---- the header's two popouts share their open/close rules ---------------
+
+    $('btn-threads').addEventListener('click', () => {
+        if (threadsPopOpen()) closeThreadsPop(); else openThreadsPop();
+    });
+    // The header bell opens the notification popout, aligned to its trailing edge.
+    $('btn-chan-alerts').addEventListener('click', () => {
+        if (notifPopOpen()) { closeNotifPop(); return; }
+        const r = $('btn-chan-alerts').getBoundingClientRect();
+        const pop = $('notif-pop');
+        // Opened first so it can be measured, then anchored.
+        openNotifPop(channel, 0, 0);
+        placeFixedPanel(pop, r);
+    });
+
+    // A click outside closes them, and so does Escape (see the global keydown).
+    // The buttons are excluded or the toggle would close and reopen in one gesture.
+    document.addEventListener('mousedown', (e) => {
+        if (notifPopOpen() && !$('notif-pop').contains(e.target) &&
+            !$('notif-sub').contains(e.target) && !e.target.closest('#btn-chan-alerts')) {
+            closeNotifPop();
+        }
+        if (threadsPopOpen() && !$('threads-pop').contains(e.target) &&
+            !e.target.closest('#btn-threads')) {
+            closeThreadsPop();
+        }
+    });
+    window.addEventListener('resize', () => { placeThreadsPop(); if (notifPopOpen()) closeNotifPop(); });
+
     // ---------- pinned ----------------------------------------------------
 
     async function pinPost(id, pinned) {
@@ -12216,11 +13298,10 @@
     });
     window.addEventListener('resize', placePinned);
 
-    // The same menu the channel row and the right-click open, from the header.
-    $('btn-chan-alerts').addEventListener('click', (e) => {
-        const r = e.currentTarget.getBoundingClientRect();
-        openChannelMenu(channel, r.left - 120, r.bottom + 6);
-    });
+    // The header bell opens the NOTIFICATION POPOUT, wired above with the threads
+    // button it sits beside. It used to open the channel's whole context menu —
+    // rename and delete included — which is not what a bell in a header means; the
+    // channel row's own bell and right-click still open that.
 
     $('btn-pinned').addEventListener('click', () => togglePinned($('pinned-panel').hidden));
     $('pinned-close').addEventListener('click', () => togglePinned(false));
@@ -13401,6 +14482,12 @@
             // used to close the thread behind the picture that was still up.
             if (emojiPopOpen()) closeEmojiPop();
             else if (!$('ctx-menu').hidden) closeCtxMenu();
+            // The mute-duration submenu is inside the notification popout, so it
+            // has to come off first — Escape on it must not take the whole popout
+            // with it.
+            else if (!$('notif-sub').hidden) closeNotifSub();
+            else if (notifPopOpen()) closeNotifPop();
+            else if (threadsPopOpen()) closeThreadsPop();
             else if (mePopoverOpen()) closeMePopover();
             else if (!$('lightbox').hidden) closeLightbox();
             else if (!$('dialog').hidden) closeDialog(inp_null());

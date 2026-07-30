@@ -147,12 +147,19 @@ contextBridge.exposeInMainWorld('lounge', {
         log: (line) => ipcRenderer.invoke('app:log', line),
         notify: (payload) => ipcRenderer.invoke('app:notify', payload),
         setVoiceState: (state) => ipcRenderer.invoke('app:voiceState', state),
-        setBadge: (count) => ipcRenderer.invoke('app:badge', count),
+        // `flash` is the taskbar-flashing setting, separate from the count.
+        setBadge: (count, flash) => ipcRenderer.invoke('app:badge', count, flash),
         openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
         // Theme. The renderer decides dark/light/follow-Windows; main owns the
         // system answer and restyles the native caption buttons to match.
         systemTheme: () => ipcRenderer.invoke('app:systemTheme'),
         setTheme: (theme) => ipcRenderer.invoke('app:setTheme', theme),
+        // Whole-interface zoom, 50-200. Applied in main because webFrame needs
+        // node in the renderer; answers with the value that was actually set.
+        setZoom: (percent) => ipcRenderer.invoke('app:setZoom', percent),
+        // Restart in place — the hardware acceleration switch is the only setting
+        // Chromium cannot be told about after start-up.
+        relaunch: () => ipcRenderer.invoke('app:relaunch'),
         onThemeChange: (cb) => sub('app:themeChange', cb),
         // Tray / menu actions that need to drive the UI.
         onCommand: (cb) => sub('app:command', cb),

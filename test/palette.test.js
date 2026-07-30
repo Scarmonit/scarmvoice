@@ -795,7 +795,10 @@ describe('the channel header', () => {
         const ids = [...acts.matchAll(/id="(btn-[a-z-]+)"/g)].map((m) => m[1]);
         // The field itself is no longer one of them: it is an input, and the
         // only button inside it is the one that clears it.
-        expect(ids).toEqual(['btn-chan-alerts', 'btn-pinned', 'btn-members']);
+        // Threads first, then the bell, then pins, then members — the
+        // reference's order, and it reads outward from "this conversation" to
+        // "this channel" to "these people".
+        expect(ids).toEqual(['btn-threads', 'btn-chan-alerts', 'btn-pinned', 'btn-members']);
         expect(acts).toContain('id="search-input"');
         // Reshaping a channel is not a header action: it lives on the channel,
         // in the menu the row and the right-click both open.

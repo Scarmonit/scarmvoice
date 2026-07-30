@@ -87,6 +87,48 @@ const DEFAULTS = {
     dnd: false,                  // do not disturb: silences every alert + sound
     mutedChannels: [],           // legacy binary mute; still written for older builds + the website
     channelAlerts: {},           // channel -> 'all' | 'mentions' | 'none' ('all' is implied by absence)
+    // Muting a channel FOR A WHILE. A second axis from channelAlerts, which is
+    // how the reference has it: the level says what a channel is normally worth
+    // hearing about, and a mute says "not for the next three hours" without
+    // throwing that away. channel -> epoch ms, or -1 for "until I turn it back
+    // on"; absent means not muted.
+    channelMuteUntil: {},
+    // Flash the taskbar button when a message arrives while the window is not
+    // focused. Separate from `notifications`: one is a toast, the other is the
+    // button in the taskbar, and the reference offers them separately.
+    taskbarFlash: true,
+    // A chime for a message in the channel you are ALREADY READING. Off, like the
+    // reference: you are looking at it.
+    soundOwnChannel: false,
+    // The master switch under all of them. Kept apart from `dnd`, which also
+    // silences toasts and badges — this is sounds only.
+    disableAllSounds: false,
+    // The unread count drawn on the taskbar button (see main/badge.js).
+    badgeUnread: true,
+
+    // Accessibility
+    // Chat text size in PIXELS. Replaces the old four-name scale (chatFontSize),
+    // which is still read once to seed this — see load(). 12-24 to match the
+    // reference's slider.
+    chatFontPx: 16,
+    underlineLinks: false,       // links always underlined, not only on hover
+    uiDensity: 'default',        // 'compact' | 'default' | 'spacious' — sidebar + member list
+    msgGroupGap: 16,             // px between message groups, 0-24
+    zoomLevel: 100,              // whole-interface zoom, 50-200 (Ctrl +/-/0 also drives it)
+    saturation: 100,             // 0-100; a filter over the app, not over media
+    highContrast: false,
+    // A manual override for people whose OS setting is off but who still want it.
+    // The prefers-reduced-motion rules already in styles.css are the other half.
+    reducedMotion: false,
+    // Make the message list an assertive live region so a screen reader reads new
+    // messages out. Off by default: it is the right behaviour for somebody using
+    // one and noise for everybody else.
+    announceMessages: false,
+
+    // System
+    // Chromium's GPU compositing. Turning it off needs a restart, which the UI
+    // says and offers — main.js reads this before app-ready.
+    hardwareAcceleration: true,
 
     // Privacy — local only; the board has no server-side block
     blocked: {},                 // clientId -> display name
@@ -222,8 +264,11 @@ function migrateLegacyProfile() {
 
 function load() {
     let merged;
+    // Held outside the try because the migrations below have to distinguish "the
+    // file did not have this key" from "the default happens to equal it".
+    let raw = null;
     try {
-        const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
         // Merged key by key for the same reason set() is: Object.assign writes
         // through the setter, so a "__proto__" key in a hand-edited (or
         // corrupted) settings.json would re-point this object's prototype.
@@ -250,6 +295,15 @@ function load() {
     if (!merged.autoRestartMigrated) {
         merged.autoUpdateOnLaunch = true;
         merged.autoRestartMigrated = true;
+    }
+
+    // Chat text size went from a four-name scale to a pixel value, because the
+    // reference's control is a 12-24px slider and four names cannot express it.
+    // A profile that had picked one of those names keeps that size rather than
+    // being reset to the middle — the sizes are the ones FONT_SIZES shipped with.
+    if (raw && raw.chatFontPx === undefined && typeof raw.chatFontSize === 'string') {
+        const px = { small: 14, medium: 16, large: 18, xlarge: 21 }[raw.chatFontSize];
+        if (px) merged.chatFontPx = px;
     }
 
     // A hand-edited (or previously written) settings.json is just as capable of

@@ -30,8 +30,13 @@
 
     function log(msg) { try { console.info('[sound] ' + msg); } catch (e) {} }
 
-    function voiceEnabled() { return settings.voiceSounds !== false; }
-    function notifyEnabled() { return settings.notificationSound !== false; }
+    // The master switch, checked by both. It is deliberately NOT the same thing as
+    // Do Not Disturb — that also silences toasts and badges, and this is sounds
+    // only — and it leaves the two individual settings alone, so turning it off
+    // restores whatever they already were rather than a default.
+    function allSilenced() { return !!settings.disableAllSounds; }
+    function voiceEnabled() { return !allSilenced() && settings.voiceSounds !== false; }
+    function notifyEnabled() { return !allSilenced() && settings.notificationSound !== false; }
 
     // ---- message chime (Web Audio, buffered) -----------------------------
 

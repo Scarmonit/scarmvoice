@@ -132,15 +132,33 @@ describe('coming back to a channel', () => {
         expect(chimes, 'chimes on returning to a channel').toBe(0);
     });
 
-    it('still chimes for a message that arrives while you are watching', async () => {
-        // The suppression is one-shot, not a mute — it covers the restored page
-        // and nothing after it.
+    // The one-shot suppression covers the restored page and nothing after it —
+    // but a message in THE CHANNEL YOU ARE READING is governed by its own
+    // setting now (Notifications -> Sounds -> "New Message in the channel I'm
+    // currently reading"), which is off by default, matching the reference. You
+    // are looking at it; a noise adds nothing.
+    it('does not chime for a message in the channel you are watching', async () => {
         chimes = 0;
         pages.general = pages.general.concat([post(20, 'general', 'arriving while you watch')]);
         app.rt({ t: 'posted', channel: 'general' });
         await settle(30);
 
+        // It still ARRIVES — this is about the sound, not about delivery.
         expect(bodies()).toHaveLength(4);
-        expect(chimes, 'chimes for a message that arrives while watching').toBe(1);
+        expect(chimes, 'the channel on screen should be silent by default').toBe(0);
+    });
+
+    // …and the moment you are NOT looking at it, the ordinary chime is back. The
+    // window going to the tray is enough — that is one of the four things
+    // "reading it" requires.
+    it('chimes for it again once the window is not on screen', async () => {
+        app.hidden(true);
+        chimes = 0;
+        pages.general = pages.general.concat([post(21, 'general', 'and now with sound')]);
+        app.rt({ t: 'posted', channel: 'general' });
+        await settle(30);
+
+        expect(chimes, 'a hidden window should chime for the open channel').toBe(1);
+        app.hidden(false);
     });
 });

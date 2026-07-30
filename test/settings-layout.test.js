@@ -41,8 +41,8 @@ describe('signing out', () => {
 describe('the server URL', () => {
     // It decided which host receives the session cookie AND the account token,
     // both bearer-equivalent. There is one server, and no field can name another.
-    it('cannot be edited from Behaviour', () => {
-        expect(section('Behaviour')).not.toContain('set-base');
+    it('cannot be edited from System', () => {
+        expect(section('System')).not.toContain('set-base');
     });
 
     it('cannot be edited from the sign-in card either', () => {
@@ -67,10 +67,10 @@ describe('updates', () => {
         expect(about).toContain('id="set-version"');
     });
 
-    it('are not configured from Behaviour any more', () => {
-        // Behaviour is how the app behaves; an update is not a behaviour you
+    it('are not configured from System any more', () => {
+        // System is how the app behaves; an update is not a behaviour you
         // configure, it is something that happens to the app.
-        expect(section('Behaviour')).not.toContain('btn-check-update');
+        expect(section('System')).not.toContain('btn-check-update');
     });
 
     it('link out to the full history, since only the recent ones are listed', () => {
