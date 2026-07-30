@@ -1947,11 +1947,14 @@
      column's overflow. -->
 <div id="pinned-panel" class="pinned-panel" hidden
      role="dialog" aria-modal="false" aria-labelledby="pinned-title">
+  <!-- No close button. The reference has none, and it does not need one: Escape,
+       a click anywhere outside, the pin button itself and a channel switch all
+       close this. An ✕ up here was also the only ✕ in the panel, which made the
+       one on a card read as "close" rather than "unpin". -->
   <div class="pinned-head">
     <span class="pinned-title" id="pinned-title">
       <span class="ico" data-icon="pin"></span><span>Pinned Messages</span>
     </span>
-    <button class="icon-btn" id="pinned-close" title="Close"><span class="ico" data-icon="x"></span></button>
   </div>
   <div id="pinned-list"></div>
 </div>

@@ -1240,3 +1240,95 @@ describe('the Voice & Audio pane', () => {
         expect(css).toMatch(/\.settings-modal input\[type="range"\]::-webkit-slider-runnable-track/);
     });
 });
+
+// Measurements taken off the reference and then pinned as the declarations that
+// produce them, because every one is a value somebody will reasonably want to
+// nudge later and each has a reason that is invisible from the declaration alone.
+describe('the pinned popover, measured', () => {
+    const block = () => css.slice(css.indexOf('.pinned-panel {'), css.indexOf('.pinned-empty'));
+
+    it('is 422 wide with a 202 floor', () => {
+        // The floor is what keeps one pin from producing a squat box — the
+        // reference leaves room under a single card.
+        expect(block()).toMatch(/width: 422px/);
+        expect(block()).toMatch(/min-height: 202px/);
+    });
+
+    it('outlines itself with an explicit hairline, not --line', () => {
+        // Over --float that token computes to #313136, eight points brighter than
+        // the reference's #29292C — bright enough to read as a highlight.
+        expect(block()).toMatch(/border: 1px solid #29292c/);
+        expect(block()).not.toMatch(/\.pinned-panel \{[^}]*border: 1px solid var\(--line\)/);
+    });
+
+    it('fills the header with the body shade, separated only by the rule', () => {
+        // It used to be --float-2, which is ALSO the card colour, so the bar read
+        // as raised out of the panel and level with the cards under it.
+        const head = css.slice(css.indexOf('.pinned-head {'), css.indexOf('.pinned-title {'));
+        expect(head).toMatch(/background: var\(--float\); border-bottom: 1px solid #323237/);
+        expect(head).not.toMatch(/background: var\(--float-2\)/);
+    });
+
+    it('sizes the title and the pin to each other', () => {
+        // 9x13 against a 15px title is what made them look unrelated rather than
+        // like one mark and one word.
+        const head = css.slice(css.indexOf('.pinned-head {'), css.indexOf('#pinned-list {'));
+        expect(head).toMatch(/font-size: 22px; line-height: 1;/);
+        expect(head).toMatch(/\.pinned-title \.ico \{ width: 22px; height: 22px/);
+        // …and the later "Icon contexts" block must not set a second size: same
+        // specificity, later in the file, so it used to win and drag the pin back
+        // down to 15.
+        expect(css.slice(css.indexOf('Icon contexts'))).not.toMatch(/\.pinned-title \.ico \{ width/);
+    });
+
+    it('gives a card its own fill, its own outline and a 78px floor', () => {
+        const card = css.slice(css.indexOf('.pinned-item {'), css.indexOf('.pinned-avatar'));
+        expect(card).toMatch(/background: #28282d; border: 1px solid #35353b/);
+        expect(card).toMatch(/min-height: 78px/);
+        expect(card).toMatch(/padding: 16px;/);
+    });
+});
+
+describe('a pinned message in the channel', () => {
+    it('is marked by the tag beside its timestamp and by nothing else', () => {
+        // The row used to carry a tinted background and a 2px accent bar as well,
+        // which was wrong twice: it does not scale (ten pins mean ten permanently
+        // highlighted rows scattered through the scrollback), and accent-bar-plus-
+        // tint is already the language of a reply quote AND of the jump flash — so
+        // three different states looked the same.
+        expect(css).toMatch(/\.msg-pinned-tag \{[^}]*color: var\(--accent\)/);
+        expect(css).not.toMatch(/\.msg\.pinned \{[^}]*background/);
+        expect(css).not.toMatch(/\.msg\.pinned \{[^}]*inset 2px/);
+        // The flash and the reply quote keep theirs — they are the states that
+        // treatment belongs to.
+        expect(css).toMatch(/@keyframes flash/);
+    });
+});
+
+describe('the scrollbar', () => {
+    it('draws a thumb LIGHTER than what it sits on', () => {
+        // It was rgba(0,0,0,.45), so over the message column (#1A1A1E) it computed
+        // to #0E0E10 — twelve points DARKER than its background, which reads as a
+        // recessed groove with no handle in it.
+        expect(dark).toMatch(/--scrollbar:\s*rgba\(255, 255, 255, \.13\)/);
+        expect(dark).toMatch(/--scrollbar-hover:\s*rgba\(255, 255, 255, \.22\)/);
+    });
+
+    it('hides itself when nothing is happening', () => {
+        // Transparent at rest; hover brings it back, and so does actually
+        // scrolling — the case CSS alone cannot express.
+        expect(css).toMatch(/#messages::-webkit-scrollbar-thumb,[\s\S]{0,320}background: transparent/);
+        expect(css).toMatch(/#messages\.scrolling::-webkit-scrollbar-thumb/);
+        expect(css).toMatch(/#messages:hover::-webkit-scrollbar-thumb/);
+    });
+});
+
+describe('the (edited) marker', () => {
+    it('tells the two apart by italic, not by brightness', () => {
+        // They used to render at 175 and 128, so one footnote looked like a
+        // different kind of text rather than the same kind with two readings.
+        expect(css).toMatch(/\.msg-edited \{[^}]*color: var\(--dim\)/);
+        expect(css).toMatch(/\.msg-edited\.by-mod \{ font-style: italic; \}/);
+        expect(css).not.toMatch(/\.msg-edited\.by-mod \{[^}]*color:/);
+    });
+});

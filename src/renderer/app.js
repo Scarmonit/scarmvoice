@@ -2479,6 +2479,27 @@
         updateJump();
     }
 
+    // ---------- the scrollbar shows itself while you scroll ------------------
+    //
+    // The bar is transparent at rest (see styles.css) so a conversation does not
+    // carry a permanent piece of chrome down its edge — the reference's hides too.
+    // Hover brings it back, and so does actually scrolling, which is the case CSS
+    // alone cannot express: a wheel turn over a list is exactly when somebody
+    // wants to see where they are.
+    //
+    // Delegated with ONE capturing listener rather than one per scroller, because
+    // scroll does not bubble — and `#dm-messages` and the thread list are rebuilt
+    // often enough that per-element listeners would need re-attaching.
+    const SCROLLBAR_IDLE_MS = 900;
+    const scrollIdle = new WeakMap();
+    document.addEventListener('scroll', (e) => {
+        const el = e.target;
+        if (!el || el.nodeType !== 1 || !el.classList) return;
+        el.classList.add('scrolling');
+        clearTimeout(scrollIdle.get(el));
+        scrollIdle.set(el, setTimeout(() => el.classList.remove('scrolling'), SCROLLBAR_IDLE_MS));
+    }, true);
+
     // ---------- new messages bar -------------------------------------------
     //
     // "12 new messages since 12:38 AM on March 21, 2026", with Mark As Read, at
@@ -3136,7 +3157,20 @@
                 ed.title = 'Edited ' + new Date(p.edited_at).toLocaleString() +
                     (p.edited_by ? ' by ' + p.edited_by : '');
                 if (p.edited_by) ed.classList.add('by-mod');
-                textEl.appendChild(ed);
+                // INSIDE the last paragraph, not after it.
+                //
+                // renderBody wraps prose in .msg-para, which is display:block — so
+                // appending the marker to textEl made it a block sibling and it
+                // landed on a line of its own under the message. The convention
+                // everywhere else, this app's own reference included, is a small
+                // "(edited)" trailing the last words of the text.
+                //
+                // Only when the last block IS a paragraph: after a code fence, a
+                // list or a quote there is no line to trail, and its own line is
+                // then the only sensible place for it.
+                const tail = textEl.lastElementChild;
+                if (tail && tail.classList.contains('msg-para')) tail.appendChild(ed);
+                else textEl.appendChild(ed);
             }
             highlightCodeBlocks(textEl);
         }
@@ -13304,7 +13338,9 @@
     // channel row's own bell and right-click still open that.
 
     $('btn-pinned').addEventListener('click', () => togglePinned($('pinned-panel').hidden));
-    $('pinned-close').addEventListener('click', () => togglePinned(false));
+    // No close button to wire: the panel closes on Escape, on a click outside, on
+    // the pin button and on a channel switch — the reference has no ✕ either, and
+    // one up there made the ✕ on a card read as "close" rather than "unpin".
 
     async function renderPinned() {
         const list = $('pinned-list');
@@ -13351,10 +13387,18 @@
                 '<div class="pinned-body"></div>' +
                 '</div>' +
                 '<div class="pinned-acts">' +
+                // Jump first, the reference's order: it is what the panel was opened
+                // for. Unpin is the small destructive one, on the outside edge.
+                '<button class="pinned-jump" type="button" title="Jump to this message">Jump</button>' +
                 // Unpinning is the same admin-or-owner rule as pinning; offering it
                 // to a member on somebody else's message only produced a 403.
-                (mayPin(p) ? '<button class="pinned-unpin" type="button" title="Unpin this message">Unpin</button>' : '') +
-                '<button class="pinned-jump" type="button" title="Jump to this message">Jump</button>' +
+                // An ✕ rather than the word — it was the widest thing on the card,
+                // which made Jump look secondary. The label lives in the title and
+                // aria-label instead, so it still says what it does.
+                (mayPin(p)
+                    ? '<button class="pinned-unpin" type="button" title="Unpin this message" ' +
+                      'aria-label="Unpin this message">' + I('x') + '</button>'
+                    : '') +
                 '</div>';
 
             const bodyEl = item.querySelector('.pinned-body');

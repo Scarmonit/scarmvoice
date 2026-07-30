@@ -103,3 +103,58 @@ describe('an edit made by somebody other than the author', () => {
 // PERSONAL mute — that it is local-only, and that it is available to everybody
 // regardless of role — so a future change cannot quietly turn it into something
 // that mutes the person for the whole room.
+
+// WHERE the marker goes, which is a separate question from what it says.
+//
+// renderBody wraps prose in .msg-para, and that is display:block — so appending
+// the marker to .msg-text made it a block SIBLING and it landed on a line of its
+// own underneath the message. The convention everywhere else, this app's own
+// reference included, is a small "(edited)" trailing the last words of the text.
+describe('where the marker sits', () => {
+    const edited = (posts) => ({ success: true, voice: [], typing: [], hasMore: false, maxId: 9, posts });
+
+    it('trails the last words of the message, not a line of its own', async () => {
+        await bootRenderer(asRole('member', {
+            board: router({ list: () => edited([POST({ body: 'hello there', edited_at: 1700000600000 })]) })
+        }));
+        await settle();
+
+        const marker = rowFor(1).querySelector('.msg-edited');
+        expect(marker).toBeTruthy();
+        // Inside the paragraph — which is what puts it on the same line.
+        expect(marker.parentElement.classList.contains('msg-para')).toBe(true);
+        expect(rowFor(1).querySelector('.msg-text').textContent).toBe('hello there(edited)');
+    });
+
+    it('falls back to its own line after a block that has no line to trail', async () => {
+        // A code fence, a list or a quote ends in a block element; there is no last
+        // line of text to sit on, so under it is the only sensible place.
+        await bootRenderer(asRole('member', {
+            board: router({
+                list: () => edited([POST({ body: '```js\nconst a = 1;\n```', edited_at: 1700000600000 })])
+            })
+        }));
+        await settle();
+
+        const text = rowFor(1).querySelector('.msg-text');
+        const marker = text.querySelector('.msg-edited');
+        expect(marker).toBeTruthy();
+        expect(marker.parentElement).toBe(text);
+        expect(text.querySelector('pre.msg-code')).toBeTruthy();
+    });
+
+    it('keeps the moderator variant in the same place', async () => {
+        await bootRenderer(asRole('member', {
+            board: router({
+                list: () => edited([POST({
+                    body: 'this is looking better', edited_at: 1700000600000, edited_by: 'Scarmonit'
+                })])
+            })
+        }));
+        await settle();
+
+        const marker = rowFor(1).querySelector('.msg-edited.by-mod');
+        expect(marker.parentElement.classList.contains('msg-para')).toBe(true);
+        expect(marker.textContent).toContain('edited by Scarmonit');
+    });
+});

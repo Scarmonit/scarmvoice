@@ -102,8 +102,11 @@
   --spoiler-hover: #383840;
   --divider: rgba(0, 0, 0, .28);
   --scrim: rgba(4, 5, 7, .82);
-  --scrollbar: rgba(0, 0, 0, .45);
-  --scrollbar-hover: rgba(0, 0, 0, .65);
+  /* LIGHTER than the surface, not darker. These were rgba(0,0,0,.45)/.65, which
+     over the message column drew a thumb twelve points darker than the background
+     — a groove rather than a handle. */
+  --scrollbar: rgba(255, 255, 255, .13);
+  --scrollbar-hover: rgba(255, 255, 255, .22);
   --rail-plate: linear-gradient(155deg, #2a2a30, #121215);
   --rail-plate-hover: linear-gradient(155deg, #34343c, #17171b);
 
@@ -215,6 +218,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 input, textarea, select { user-select: text; }
 button { font-family: inherit; }
 
+/* The thumb is LIGHTER than what it sits on, which is the whole job of a
+   scrollbar: it is the handle, not the groove.
+   --scrollbar used to be rgba(0,0,0,.45), so over the message column (#1A1A1E) it
+   computed to #0E0E10 — twelve points DARKER than the background it was drawn on,
+   which reads as a recessed channel with no handle in it at all. */
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -226,12 +234,31 @@ button { font-family: inherit; }
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* The sidebars hide their scrollbar until the pointer is over them, so a short
-   channel list reads as one clean column. */
+/* …and it AUTO-HIDES when nothing is happening, as the reference's does. A
+   permanent bar down the edge of a conversation is a permanent piece of chrome
+   asking to be read.
+   `.scrolling` is added while the wheel is turning and removed a second after it
+   stops (see app.js); hover shows it too, because that is when somebody is about
+   to reach for it. Scoped to the scrollers this applies to rather than done with
+   `*`, which would recalculate the whole document each time the class flips. */
+#messages::-webkit-scrollbar-thumb,
+#thread-list::-webkit-scrollbar-thumb,
+#dm-messages::-webkit-scrollbar-thumb,
 .side-scroll::-webkit-scrollbar-thumb,
 #members-list::-webkit-scrollbar-thumb { background: transparent; }
+
+#messages:hover::-webkit-scrollbar-thumb,
+#messages.scrolling::-webkit-scrollbar-thumb,
+#thread-list:hover::-webkit-scrollbar-thumb,
+#thread-list.scrolling::-webkit-scrollbar-thumb,
+#dm-messages:hover::-webkit-scrollbar-thumb,
+#dm-messages.scrolling::-webkit-scrollbar-thumb,
 .side-scroll:hover::-webkit-scrollbar-thumb,
-#members-list:hover::-webkit-scrollbar-thumb { background: var(--scrollbar); background-clip: content-box; }
+.side-scroll.scrolling::-webkit-scrollbar-thumb,
+#members-list:hover::-webkit-scrollbar-thumb,
+#members-list.scrolling::-webkit-scrollbar-thumb {
+  background: var(--scrollbar); background-clip: content-box;
+}
 
 /* ---------- title bar ---------------------------------------------------- */
 /* Native minimise/maximise/close are painted over the right of this bar by
@@ -1294,11 +1321,14 @@ button { font-family: inherit; }
 .msg-text a { color: var(--accent); text-decoration: none; }
 .msg-text a:hover { text-decoration: underline; }
 .msg-edited { font-size: 0.68em; color: var(--dim); margin-left: 4px; }
-/* An edit made by somebody OTHER than the author. It names them, so it is
-   longer than "(edited)" and worth a shade more contrast: it is a statement
-   about who changed the message rather than a footnote on the author's own
-   correction. */
-.msg-edited.by-mod { color: var(--muted); font-style: italic; }
+/* An edit made by somebody OTHER than the author, which is worth telling apart:
+   one is a correction, the other is a moderator rewriting what you said while your
+   name still sits above it.
+   Told apart by the ITALIC and by naming them — NOT by brightness. It used to be
+   --muted against --dim, so the two markers rendered at 175 and 128 and the
+   footnote looked like two different kinds of text rather than one kind with two
+   readings. */
+.msg-edited.by-mod { font-style: italic; }
 
 /* Keyboard cursor in the message list. Focus rings on the message itself would
    be lost against the hover background, so this is an explicit marker — and the
@@ -1457,9 +1487,18 @@ button { font-family: inherit; }
 .msg-act:hover { background: var(--elev); color: var(--text); }
 .msg-act.on { color: var(--accent); }
 .msg-act.danger:hover { background: var(--danger-soft); color: var(--danger-hi); }
+/* A pinned message is marked by the TAG BESIDE ITS TIMESTAMP and by nothing else.
+   It used to also carry a tinted background and a 2px accent bar down its leading
+   edge, which was wrong twice over:
+     • it does not scale — ten pins mean ten permanently highlighted rows
+       scattered through the scrollback, and the channel stops reading as one
+       conversation; the pinned panel is where the list belongs.
+     • the treatment was OVERLOADED. Accent bar plus tinted background is already
+       the language of a reply quote and of the flash that marks a jump target, so
+       using it permanently for "pinned" left three different states looking the
+       same.
+   The tag is the whole marker now, and it is enough. */
 .msg-pinned-tag { font-size: 0.68em; color: var(--accent); font-weight: 600; }
-.msg.pinned { background: rgba(var(--accent-rgb), .045); box-shadow: inset 2px 0 0 var(--accent); }
-.msg.pinned:hover { background: rgba(var(--accent-rgb), .07); }
 .msg.flash { animation: flash 1.6s ease-out; }
 @keyframes flash {
   0%, 25% { background: rgba(var(--accent-rgb), .18); }
@@ -2024,33 +2063,57 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 .pinned-panel[hidden] { display: none; }
 .pinned-panel {
   position: fixed; z-index: 60;
-  width: 452px; max-width: calc(100vw - 24px);
+  /* Measured against the reference: 422 wide, and a floor of 200 so a single pin
+     does not produce a squat box — the reference leaves room under one card. */
+  width: 422px; max-width: calc(100vw - 24px);
+  min-height: 202px;
   display: flex; flex-direction: column;
   max-height: min(520px, calc(100vh - 96px));
-  background: var(--float); border: 1px solid var(--line);
+  /* An explicit hairline rather than --line. Over --float that token computes to
+     #313136, which is eight points brighter than the reference's #29292C and
+     drew the panel's outline as a highlight. */
+  background: var(--float); border: 1px solid #29292c;
   border-radius: 8px; overflow: hidden;
   box-shadow: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
 }
 .pinned-head {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 8px;
-  padding: 12px 12px 12px 16px;
-  /* Its own shade and a hairline under it, so the list scrolls beneath a bar
-     that stays put rather than under type that dissolves into the cards. */
-  background: var(--float-2); border-bottom: 1px solid var(--line);
-  font-size: 15px; font-weight: 700; color: var(--text-strong);
+  padding: 17px 16px 17px;
+  /* THE SAME shade as the body, separated only by the rule — measured off the
+     reference. It used to be --float-2, which is also the card colour, so the bar
+     read as raised out of the panel and level with the cards under it. */
+  background: var(--float); border-bottom: 1px solid #323237;
+  /* 22px, not 15. Measured against the reference's own title, the old size was
+     ~30% small — and the pin beside it was 9x13 against it, which is what made the
+     two look unrelated rather than like one piece of chrome.
+     line-height:1 so the bar is 17 + 22 + 16 + the rule = 56px, matching the
+     reference; without it the inherited line-height made the header 85px. */
+  font-size: 22px; line-height: 1; font-weight: 700; color: var(--text-strong);
+  letter-spacing: -.01em;
 }
-.pinned-head .icon-btn { margin-left: auto; }
+/* The icon matches the title's cap height, which is what makes them read as one
+   mark and one word rather than a small glyph parked beside some type. */
+.pinned-title { gap: 10px; }
+.pinned-title .ico { width: 22px; height: 22px; flex: 0 0 22px; }
 #pinned-list { flex: 1 1 auto; overflow-y: auto; padding: 12px; }
 
 .pinned-item {
   position: relative;
   display: flex; gap: 12px;
-  padding: 12px; margin-bottom: 8px; cursor: pointer;
-  background: var(--chat-2); border-radius: 8px;
+  /* 16px of padding and a 78px floor, measured off the reference — it was 12px of
+     padding and no floor, which drew a 65px card. The floor is what keeps a
+     one-line pin the same height as the reference's rather than collapsing onto
+     its avatar. */
+  padding: 16px; min-height: 78px; box-sizing: border-box;
+  margin-bottom: 8px; cursor: pointer;
+  /* Measured: #28282D with its own 1px #35353B outline. It used to be --float-2
+     (#2C2C31) with no border, which is also what the header was filled with — so
+     card and header read as the same surface. */
+  background: #28282d; border: 1px solid #35353b; border-radius: 8px;
 }
 .pinned-item:last-child { margin-bottom: 0; }
-.pinned-item:hover { background: var(--float-2); }
+.pinned-item:hover { background: #2e2e34; border-color: #3d3d44; }
 .pinned-avatar {
   flex: 0 0 40px; width: 40px; height: 40px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
@@ -2070,13 +2133,14 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 .pinned-body .msg-para { display: block; }
 .pinned-att { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 5px; }
 
-/* Jump and Unpin. Hidden until the card is hovered or something inside it has
-   keyboard focus — the reference reveals Jump on hover, and hiding them by
-   default is what keeps a stack of cards readable. `visibility` rather than
+/* Jump then Unpin, in the reference's order — Jump is what you came for, so it
+   leads, and unpinning is the small destructive one on the outside edge.
+   Hidden until the card is hovered or something inside it has keyboard focus,
+   which is what keeps a stack of cards readable. `visibility` rather than
    `display`, so the buttons keep their size and the text never reflows under
    them. */
 .pinned-acts {
-  position: absolute; top: 8px; right: 8px;
+  position: absolute; top: 10px; right: 10px;
   display: flex; align-items: center; gap: 6px;
   visibility: hidden; opacity: 0; transition: opacity .1s ease;
 }
@@ -2085,14 +2149,19 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 .pinned-jump {
   border: 0; border-radius: 3px; cursor: pointer;
   background: var(--btn-secondary); color: var(--text);
-  font-size: 12px; font-weight: 500; padding: 3px 10px;
+  font-size: 12px; font-weight: 500; padding: 4px 10px;
 }
 .pinned-jump:hover { background: var(--btn-secondary-hover); }
+/* An ✕, as the reference has it, rather than the word "Unpin" — which was the
+   widest thing on the card and made Jump look secondary. It still says what it
+   does: the title and the aria-label both read "Unpin this message". */
 .pinned-unpin {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
   border: 0; border-radius: 3px; cursor: pointer;
-  background: var(--btn-secondary); color: var(--danger-label);
-  font-size: 12px; font-weight: 500; padding: 3px 10px;
+  background: var(--btn-secondary); color: var(--muted);
 }
+.pinned-unpin .ico { width: 15px; height: 15px; }
 .pinned-unpin:hover { background: var(--danger-solid); color: #fff; }
 .pinned-empty { text-align: center; color: var(--dim); padding: 28px 22px; font-size: 13px; }
 
@@ -3051,8 +3120,11 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .sc-play .ico { width: 12px; height: 12px; }
 .thread-head > .ico { width: 17px; height: 17px; color: var(--accent); }
 .ub-icon .ico { width: 15px; height: 15px; stroke-width: 2.4; }
-.pinned-title { display: inline-flex; align-items: center; gap: 6px; }
-.pinned-title .ico { width: 15px; height: 15px; }
+/* Size and gap live with the panel, further up — this section is only about the
+   fact that the title is an inline-flex row. It used to set 15x15 here as well,
+   which beat the panel's own rule (same specificity, later in the file) and left
+   the pin at 9x13 beside a 22px title. */
+.pinned-title { display: inline-flex; align-items: center; }
 .vp-flag .ico, .vp-invoice .ico { width: 15px; height: 15px; display: block; }
 .vp-flag.warn { color: var(--idle); }
 .msg-att-file .ico { width: 17px; height: 17px; color: var(--muted); flex: 0 0 17px; }

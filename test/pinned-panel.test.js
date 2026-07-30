@@ -54,8 +54,12 @@ async function open() {
     $('btn-pinned').click();
     await settle();
 }
+// Escape, because there is no close button — see "the shape of it" below.
 async function close() {
-    if (!panel().hidden) { $('pinned-close').click(); await settle(); }
+    while (!panel().hidden) {
+        document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await settle();
+    }
 }
 
 let h;
@@ -97,13 +101,6 @@ describe('as a member', () => {
             expect(panel().style.left).not.toBe('');
         });
 
-        it('closes on the X', async () => {
-            await open();
-            $('pinned-close').click();
-            await settle();
-            expect(panel().hidden).toBe(true);
-        });
-
         it('closes on Escape', async () => {
             await open();
             document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -132,6 +129,17 @@ describe('as a member', () => {
         });
     });
 
+    describe('the shape of it', () => {
+        it('has no close button in the header', async () => {
+            // The reference has none, and it does not need one: Escape, an outside
+            // click, the pin button and a channel switch all close it. An X up here
+            // was also the only X in the panel, which made the one on a card read
+            // as "close" rather than "unpin".
+            await open();
+            expect(panel().querySelector('.pinned-head button')).toBe(null);
+        });
+    });
+
     describe('the cards', () => {
         it('draws one card per pin, with a face, a name and a stamp', async () => {
             await open();
@@ -156,9 +164,20 @@ describe('as a member', () => {
             expect(cardFor('Me').querySelector('strong').textContent).toBe('first');
         });
 
-        it('offers Jump on every card', async () => {
+        it('offers Jump on every card, ahead of Unpin', async () => {
             await open();
             cards().forEach((c) => expect(c.querySelector('.pinned-jump')).toBeTruthy());
+            // Jump first — it is what the panel was opened for. Unpin is the small
+            // destructive one, on the outside edge, and it is an X rather than the
+            // word: "Unpin" was the widest thing on the card and made Jump look
+            // secondary. The label lives in the title and aria-label instead.
+            const mine = cardFor('Me');
+            const acts = Array.from(mine.querySelectorAll('.pinned-acts > button'))
+                .map((b) => b.className);
+            expect(acts).toEqual(['pinned-jump', 'pinned-unpin']);
+            const unpin = mine.querySelector('.pinned-unpin');
+            expect(unpin.textContent.trim()).toBe('');
+            expect(unpin.getAttribute('aria-label')).toBe('Unpin this message');
         });
 
         it('jumps to the message and closes the panel', async () => {
