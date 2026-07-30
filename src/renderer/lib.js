@@ -157,6 +157,20 @@
         return timeFmt().format(ms);
     }
 
+    // Date AND time, in one short numeric stamp — "3/5/2023 10:09 PM". What a
+    // pinned-message card carries: those cards are out of any day divider's
+    // context, so a bare clock time on one does not say which day it belongs to.
+    let STAMP_FMT = null;
+    function stampStr(ms) {
+        if (!STAMP_FMT) {
+            STAMP_FMT = new Intl.DateTimeFormat([], {
+                year: 'numeric', month: 'numeric', day: 'numeric',
+                hour: 'numeric', minute: '2-digit'
+            });
+        }
+        return STAMP_FMT.format(ms);
+    }
+
     // Which local calendar day an instant falls on, as an integer. The offset is
     // read for that instant, so DST transitions land on the right day.
     function localDayIndex(ms) {
@@ -501,7 +515,7 @@
 
     return {
         esc, hueOf, avatarStyle, bannerStyle, initials, isOnlyEmoji, mentionsMe,
-        timeStr, dayStr, fmtSize, fmtDuration, splitName,
+        timeStr, dayStr, stampStr, fmtSize, fmtDuration, splitName,
         attachmentKind, fileIcon,
         extractUrls, isImageUrl, safeHttpUrl, urlFileName, youtubeId,
         postMatchesFilter, postFrom,

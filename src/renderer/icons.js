@@ -242,7 +242,16 @@
             '<path d="M8.8 8.4L20.4 19.6M20.4 4.4L8.8 15.6"/>',
         clipboard: '<rect x="5" y="5" width="14" height="16" rx="1.8"/>' +
             '<path d="M9 5V3.8a1.2 1.2 0 0 1 1.2-1.2h3.6A1.2 1.2 0 0 1 15 3.8V5z"/>',
-        list: '<path d="M4 6.4h16M4 12h16M4 17.6h10"/>'
+        list: '<path d="M4 6.4h16M4 12h16M4 17.6h10"/>',
+        // A curved arrow back over its own tail, and its mirror. Mirrored by hand
+        // rather than with a transform, because the icon set is raw path data that
+        // build() drops straight into one <svg> shape.
+        // Mark As Read, on the new-messages bar: a speech bubble with a tick in
+        // it, which is what the reference puts beside that label.
+        'mark-read': '<path d="M20.4 13.6a2 2 0 0 1-2 2H8.6L4.4 19.8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>' +
+            '<path d="M8.8 9.8l2.4 2.4 4.2-4.2"/>',
+        undo: '<path d="M4 9.6h10.4a5.4 5.4 0 0 1 0 10.8H7.2"/><path d="M8 5.2L3.6 9.6 8 14"/>',
+        redo: '<path d="M20 9.6H9.6a5.4 5.4 0 0 0 0 10.8h7.2"/><path d="M16 5.2l4.4 4.4L16 14"/>'
     };
 
     const NS = 'http://www.w3.org/2000/svg';

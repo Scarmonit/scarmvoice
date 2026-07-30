@@ -110,7 +110,7 @@
     // these are local names for the parts used here.
     const {
         esc, avatarStyle, bannerStyle, initials, isOnlyEmoji,
-        timeStr, dayStr, fmtSize, fmtDuration, splitName,
+        timeStr, dayStr, stampStr, fmtSize, fmtDuration, splitName,
         attachmentKind, fileIcon,
         extractUrls, safeHttpUrl, urlFileName, youtubeId,
         FONT_SIZES, fontSizeIndex, matchesPttBinding
@@ -420,61 +420,186 @@
         if (last < text.length) appendMentionSegment(container, text.slice(last), ctx);
     }
 
-    // Inline: **bold**, *italic*, ~~strike~~, ||spoiler|| (recursive).
+    // Inline: ***bold italic***, **bold**, __underline__, *italic*, _italic_,
+    // ~~strike~~, ||spoiler|| — Discord's set, in Discord's precedence. Recursive,
+    // so the combinations nest.
+    //
+    //   `wrap`  a second element around the first. ***x*** is bold AND italic;
+    //           letting the two-star rule take it left the odd star behind, so
+    //           ***x*** rendered as a bold "*x" followed by a stray "*".
+    //   `lead`  the match opens with a capture group that is CONTEXT, not content:
+    //           the character in front of an underscore. Single-underscore italics
+    //           only apply at a word boundary, because snake_case_identifiers are
+    //           ordinary words in a chat about code — and Discord does not
+    //           italicise them either.
     const FMT = [
         { re: /\|\|([\s\S]+?)\|\|/, kind: 'spoiler' },
+        { re: /\*\*\*([\s\S]+?)\*\*\*/, kind: 'em', wrap: 'strong' },
         { re: /\*\*([\s\S]+?)\*\*/, kind: 'strong' },
+        { re: /___([\s\S]+?)___/, kind: 'em', wrap: 'u' },
+        { re: /__([\s\S]+?)__/, kind: 'u' },
         { re: /~~([\s\S]+?)~~/, kind: 'del' },
-        { re: /\*([\s\S]+?)\*/, kind: 'em' }
+        { re: /\*([\s\S]+?)\*/, kind: 'em' },
+        { re: /(^|[^\w_])_([^_\s](?:[^_]*[^_\s])?)_(?!\w)/, kind: 'em', lead: true }
     ];
 
-    function renderFormatted(container, text, ctx) {
+    // The earliest-starting rule wins; ties go to whichever comes first in FMT,
+    // which is why *** sits above ** and __ above _.
+    function fmtMatch(text) {
         let best = null;
         for (const f of FMT) {
             const m = f.re.exec(text);
-            if (m && (!best || m.index < best.m.index)) best = { f, m };
+            if (!m) continue;
+            const lead = f.lead ? m[1].length : 0;
+            const start = m.index + lead;
+            if (best && start >= best.start) continue;
+            best = { f, start, inner: f.lead ? m[2] : m[1], end: m.index + m[0].length };
         }
+        return best;
+    }
+
+    function renderFormatted(container, text, ctx) {
+        const best = fmtMatch(text);
         if (!best) { appendTextWithMentions(container, text, ctx); return; }
-        const { m } = best;
-        if (m.index > 0) appendTextWithMentions(container, text.slice(0, m.index), ctx);
+        if (best.start > 0) appendTextWithMentions(container, text.slice(0, best.start), ctx);
+
+        let host;
         if (best.f.kind === 'spoiler') {
-            const sp = document.createElement('span');
-            sp.className = 'spoiler';
-            sp.setAttribute('role', 'button');
-            sp.setAttribute('tabindex', '0');
-            sp.title = 'Click to reveal spoiler';
-            sp.addEventListener('click', () => sp.classList.add('revealed'));
-            sp.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sp.classList.add('revealed'); }
+            host = document.createElement('span');
+            host.className = 'spoiler';
+            host.setAttribute('role', 'button');
+            host.setAttribute('tabindex', '0');
+            host.title = 'Click to reveal spoiler';
+            host.addEventListener('click', () => host.classList.add('revealed'));
+            host.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); host.classList.add('revealed'); }
             });
-            renderFormatted(sp, m[1], ctx);
-            container.appendChild(sp);
+            container.appendChild(host);
         } else {
-            const el = document.createElement(best.f.kind);
-            renderFormatted(el, m[1], ctx);
-            container.appendChild(el);
+            host = document.createElement(best.f.kind);
+            if (best.f.wrap) {
+                const outer = document.createElement(best.f.wrap);
+                outer.appendChild(host);
+                container.appendChild(outer);
+            } else {
+                container.appendChild(host);
+            }
         }
-        const after = text.slice(m.index + m[0].length);
+        renderFormatted(host, best.inner, ctx);
+        const after = text.slice(best.end);
         if (after) renderFormatted(container, after, ctx);
     }
 
-    // `code` spans first, so formatting characters inside them stay literal.
+    // `code` and ``code`` spans first, so formatting characters inside them stay
+    // literal. Two backticks is how Discord writes a span containing a backtick;
+    // splitting the line on a single one turned ``a`` into a bare letter with no
+    // code styling, and an ODD number of backticks made everything after the last
+    // one look like code.
+    const CODE_SPAN_RE = /(`{1,2})([\s\S]+?)\1/;
     function renderInline(container, text, ctx) {
-        text.split('`').forEach((seg, j) => {
-            if (j % 2 === 1) {
-                const c = document.createElement('code');
-                c.className = 'inline-code';
-                c.textContent = seg;
-                container.appendChild(c);
-            } else if (seg) {
-                renderFormatted(container, seg, ctx);
-            }
-        });
+        let rest = String(text == null ? '' : text);
+        for (;;) {
+            const m = CODE_SPAN_RE.exec(rest);
+            if (!m) break;
+            if (m.index > 0) renderFormatted(container, rest.slice(0, m.index), ctx);
+            const c = document.createElement('code');
+            c.className = 'inline-code';
+            c.textContent = m[2];
+            container.appendChild(c);
+            rest = rest.slice(m.index + m[0].length);
+        }
+        if (rest) renderFormatted(container, rest, ctx);
     }
 
-    // Blocks within a non-code segment: lists, blockquotes, paragraphs.
+    // One line of a list: how far it is indented, whether it is numbered, and the
+    // number it was actually written with.
+    function listItem(line) {
+        const m = /^([ \t]*)(?:[-*+]|(\d{1,9})[.)])[ \t]+(.*)$/.exec(line);
+        if (!m) return null;
+        return {
+            indent: m[1].replace(/\t/g, '    ').length,
+            num: m[2] === undefined ? null : parseInt(m[2], 10),
+            text: m[3]
+        };
+    }
+    const blankLine = (s) => !String(s).trim();
+
+    // Renders the list starting at lines[i] — and, recursively, anything nested
+    // inside it — into `container`. Returns the index of the first line it did NOT
+    // consume.
+    //
+    // THIS is the fix for "every item says 1.". The old code took a run of
+    // CONSECUTIVE list lines and stopped at the first line that was not one, so a
+    // blank line between items, an indented sub-list, or a wrapped second line all
+    // ended the <ol> — and the next item opened a brand new <ol>, which starts
+    // counting from one again. A 1-through-8 list written with any spacing at all
+    // therefore came out as eight lists of one item, every one of them numbered 1.
+    function renderList(lines, i, container, ctx) {
+        const first = listItem(lines[i]);
+        const ordered = first.num !== null;
+        const base = first.indent;
+        const el = document.createElement(ordered ? 'ol' : 'ul');
+        el.className = 'msg-list';
+        // "3." starts at three. The numbers after the first are advisory —
+        // CommonMark and Discord both number the rest sequentially from the start
+        // value — which is what makes a list typed as 1. 1. 1. render 1, 2, 3.
+        if (ordered && first.num !== 1) el.setAttribute('start', String(first.num));
+
+        let item = null;                 // the lines of the item being collected
+        const flushItem = () => {
+            if (!item) return;
+            const li = document.createElement('li');
+            // The common case is one line with no block structure in it, and
+            // rendering that inline keeps the <li> free of a paragraph wrapper —
+            // which is exactly how every existing message already draws.
+            if (item.length === 1) renderInline(li, item[0], ctx);
+            else renderTextBlock(item.join('\n'), li, ctx);
+            el.appendChild(li);
+            item = null;
+        };
+
+        while (i < lines.length) {
+            if (blankLine(lines[i])) {
+                // A blank line inside a list is SPACING. It ends the list only if
+                // the list does not carry on below it.
+                let j = i;
+                while (j < lines.length && blankLine(lines[j])) j++;
+                if (j >= lines.length) break;
+                const next = listItem(lines[j]);
+                const carriesOn = (next && next.indent >= base && (next.num !== null) === ordered) ||
+                    /^[ \t]{2,}\S/.test(lines[j]);
+                if (!carriesOn) break;
+                if (item) item.push('');
+                i = j;
+                continue;
+            }
+            const m = listItem(lines[i]);
+            if (m && m.indent <= base) {
+                // Shallower than we opened at, or a bullet where the numbers were:
+                // a different list, and not this one's to consume.
+                if (m.indent < base || (m.num !== null) !== ordered) break;
+                flushItem();
+                item = [m.text];
+                i++;
+                continue;
+            }
+            // Anything indented under the current item belongs to it — a nested
+            // list, a second paragraph, a wrapped line. Dedented by one level so
+            // the recursive parse sees it at column zero.
+            if (!item) break;
+            item.push(lines[i].replace(/^[ \t]{1,4}/, ''));
+            i++;
+        }
+        flushItem();
+        container.appendChild(el);
+        return i;
+    }
+
+    // Blocks within a non-code segment: headings, subtext, lists, blockquotes,
+    // paragraphs. Discord's block set, so a message pasted from there reads the
+    // same here.
     function renderTextBlock(text, container, ctx) {
-        const lines = text.split('\n');
+        const lines = String(text == null ? '' : text).split('\n');
         let i = 0, para = null;
         const flush = () => { if (para) { container.appendChild(para); para = null; } };
         const startPara = () => {
@@ -484,46 +609,68 @@
 
         while (i < lines.length) {
             const line = lines[i];
-            const isUL = /^\s*[-*+]\s+(.*)$/.test(line);
-            const isOL = /^\s*\d+[.)]\s+(.*)$/.test(line);
-            const bq = /^\s*>\s?(.*)$/.exec(line);
 
-            if (isUL || isOL) {
+            // # ## ### and -#, all of which REQUIRE the space: "#general" is a
+            // channel somebody typed, not a heading, and "-#1" is not subtext.
+            const h = /^(#{1,3})[ \t]+(\S[\s\S]*)$/.exec(line);
+            if (h) {
                 flush();
-                const ordered = isOL && !isUL;
-                const listEl = document.createElement(ordered ? 'ol' : 'ul');
-                listEl.className = 'msg-list';
-                while (i < lines.length) {
-                    const lm = ordered
-                        ? /^\s*\d+[.)]\s+(.*)$/.exec(lines[i])
-                        : /^\s*[-*+]\s+(.*)$/.exec(lines[i]);
-                    if (!lm) break;
-                    const li = document.createElement('li');
-                    renderInline(li, lm[1], ctx);
-                    listEl.appendChild(li);
-                    i++;
-                }
-                container.appendChild(listEl);
+                const el = document.createElement('div');
+                el.className = 'msg-h msg-h' + h[1].length;
+                renderInline(el, h[2], ctx);
+                container.appendChild(el);
+                i++;
                 continue;
             }
-            if (bq) {
+            const sub = /^-#[ \t]+(\S[\s\S]*)$/.exec(line);
+            if (sub) {
+                flush();
+                const el = document.createElement('div');
+                el.className = 'msg-sub';
+                renderInline(el, sub[1], ctx);
+                container.appendChild(el);
+                i++;
+                continue;
+            }
+
+            if (listItem(line)) {
+                flush();
+                i = renderList(lines, i, container, ctx);
+                continue;
+            }
+
+            // >>> quotes everything that follows it; > quotes only its own line.
+            // Checked first, or the single-> rule eats it and leaves ">> " inside
+            // the quote.
+            const bqAll = /^[ \t]*>>>[ \t]?([\s\S]*)$/.exec(line);
+            if (bqAll) {
+                flush();
+                const q = document.createElement('blockquote');
+                q.className = 'msg-bq';
+                renderTextBlock([bqAll[1]].concat(lines.slice(i + 1)).join('\n'), q, ctx);
+                container.appendChild(q);
+                return;
+            }
+            if (/^[ \t]*>[ \t]?/.test(line)) {
                 flush();
                 // .msg-bq, not .msg-quote — that class is the reply quote box here.
                 const q = document.createElement('blockquote');
                 q.className = 'msg-bq';
-                let first = true;
+                const quoted = [];
                 while (i < lines.length) {
-                    const qm = /^\s*>\s?(.*)$/.exec(lines[i]);
+                    const qm = /^[ \t]*>[ \t]?(.*)$/.exec(lines[i]);
                     if (!qm) break;
-                    if (!first) q.appendChild(document.createElement('br'));
-                    renderInline(q, qm[1], ctx);
-                    first = false;
+                    quoted.push(qm[1]);
                     i++;
                 }
+                // Through renderTextBlock, not renderInline: a list or a heading
+                // inside a quote is still a list or a heading, and Discord renders
+                // it as one.
+                renderTextBlock(quoted.join('\n'), q, ctx);
                 container.appendChild(q);
                 continue;
             }
-            if (line === '') { flush(); i++; continue; }
+            if (blankLine(line)) { flush(); i++; continue; }
             startPara();
             renderInline(para, line, ctx);
             i++;
@@ -592,6 +739,18 @@
             // is worth keeping. Bounded by the same cachePut the preview caches
             // use.
             const lang = (/(?:^|\s)language-([\w+#._-]+)/.exec(code.className) || ['', ''])[1];
+            // Now that a message can be a quarter of a megabyte, a fence inside
+            // one can be too — and highlighting cost is linear in its length at
+            // best. Left as plain monospace past these sizes, which is what an
+            // unrecognised language already looks like. The `data-hl` stamp above
+            // means this decision is made once per block, not once per render.
+            //
+            // The unlabelled ceiling is far lower because a fence with no language
+            // runs auto-detection across every vendored language: 9.3ms for 1500
+            // characters (measured, see above), so a 100,000-character paste of
+            // logs would be most of a second of blocked main thread — per block.
+            const big = code.textContent.length;
+            if (big > (lang ? 50000 : 10000)) return;
             // A newline separates them safely: the language token is matched as
             // [\w+#._-]+, so it can never contain one.
             const key = lang + '\n' + code.textContent;
@@ -1360,6 +1519,13 @@
             renderMe();
             renderAccountCard();
             await channelsReady;
+            // AFTER the channel list (it carries the true unread count for this
+            // channel, counted server-side against the watermark that went out
+            // with the request) and BEFORE the first page lands, because that is
+            // what overwrites the watermark. This is the launch case: the app
+            // opens on the channel you left it on, and the bar is how you find
+            // out what happened there while it was closed.
+            enterUnread();
             await loadMessages(true, null, firstPage);
             startPolling();
             startTextPresence();
@@ -1551,6 +1717,9 @@
         following = true;
         seenTopId = 0;
         hasMore = true;
+        // Where this channel was last caught up to, captured NOW — before the
+        // first load overwrites it. See enterUnread().
+        enterUnread();
         // Typing belongs to the channel being LEFT. The poll used to overwrite
         // this set wholesale with an answer scoped to the new channel, so it was
         // cleared as a side effect; now that the socket's live set is authoritative
@@ -1568,13 +1737,13 @@
         clearReply();            // the quoted message lives in the old channel
         cancelEdit();            // an editor left open would freeze renderMessages()
         if (threadOpen()) closeThread();
-        // The pinned panel is per-channel too, and nothing ever repainted it on
-        // a switch: its header hard-codes the channel it was drawn for, so it
-        // sat over the new conversation still reading "PINNED IN #GENERAL" and
-        // still listing #general's messages — and clicking one of them yanked
-        // the reader into a channel they had just left. Every caller reassigns
-        // `channel` before getting here, so this redraws under the new name.
-        if (!$('pinned-panel').hidden) renderPinned();
+        // The pinned panel is per-channel, and nothing ever repainted it on a
+        // switch: it sat over the new conversation still listing #general's
+        // messages, and clicking one yanked the reader into a channel they had
+        // just left. Closed rather than redrawn now that it is a popover — a
+        // panel you opened over one conversation is not an answer about the next
+        // one, and the reference closes it on a channel change too.
+        if (!$('pinned-panel').hidden) togglePinned(false);
     }
 
     async function switchChannel(name) {
@@ -2103,6 +2272,97 @@
         updateJump();
     }
 
+    // ---------- new messages bar -------------------------------------------
+    //
+    // "12 new messages since 12:38 AM on March 21, 2026", with Mark As Read, at
+    // the top of a channel you have come back to. What it needs is a per-channel
+    // "last read" position — and the app already had one: `reads` (see loadReads),
+    // the map of channel -> newest post id seen, kept per account and sent to
+    // /api/board/channels to compute the sidebar's unread badges.
+    //
+    // What it did NOT have is that value at a moment when it is still useful.
+    // loadMessagesOnce writes `reads[channel] = res.maxId` on every load of the
+    // channel on screen, which is right for the badge (looking at a channel reads
+    // it) and destroys the only record of where you had got to. So the watermark
+    // is captured on the way IN, before the first load of the channel can
+    // overwrite it, and held for the length of the visit.
+    //
+    // It clears when the reader says so (Mark As Read), when they leave the
+    // channel, and when they post into it themselves — at which point they are
+    // plainly caught up. It deliberately does NOT clear on scrolling to the
+    // bottom: this app opens a channel AT the bottom, so that would hide the bar
+    // in the one moment it exists to be seen.
+    let unreadFrom = 0;         // last post id read on entering the channel; 0 = nothing to say
+    let unreadCount = 0;        // the server's count for the channel, if it is bigger than ours
+
+    function enterUnread() {
+        unreadFrom = (reads && parseInt(reads[channel], 10)) || 0;
+        unreadCount = 0;
+        const c = channels.find((x) => x.name === channel);
+        if (c) unreadCount = parseInt(c.unread, 10) || 0;
+        renderUnreadBar();
+    }
+
+    function clearUnread() {
+        if (!unreadFrom) return;
+        unreadFrom = 0;
+        unreadCount = 0;
+        renderUnreadBar();
+    }
+
+    // The messages that arrived while the reader was away, oldest first. Drawn
+    // from `displayedPosts` rather than raw `posts` for the reason updateJump
+    // does it: a blocked author's messages are never shown, so counting them
+    // promises something the jump can never reveal.
+    function unreadPosts() {
+        if (!unreadFrom) return [];
+        return displayedPosts().filter((p) => p.id > unreadFrom && !wroteByMe(p) && p.id);
+    }
+
+    function renderUnreadBar() {
+        const bar = $('unread-bar');
+        if (!bar) return;
+        // Not over a conversation, and not over a filtered list: the bar is about
+        // this channel's history, and neither of those is showing it.
+        const fresh = (dmMode || dmOpen || filterActive()) ? [] : unreadPosts();
+        if (!fresh.length) {
+            bar.hidden = true;
+            return;
+        }
+        // The server counted the whole channel; we can only see the page that is
+        // loaded. Its number is the true one whenever it is larger — which is
+        // exactly the case the loaded page cannot represent.
+        const n = Math.max(fresh.length, unreadCount);
+        const since = fresh[0].created_at;
+        $('unread-text').textContent =
+            `${n} new message${n === 1 ? '' : 's'} since ${timeStr(since)} on ${dayStr(since)}`;
+        $('unread-jump').dataset.id = String(fresh[0].id);
+        bar.hidden = false;
+    }
+
+    // Clicking the bar goes to the first message you have not read — the channel
+    // opened at the bottom, so without this the bar names messages that are
+    // somewhere above and offers no way to reach them.
+    $('unread-jump').addEventListener('click', () => {
+        const id = parseInt($('unread-jump').dataset.id, 10) || 0;
+        const target = posts.find((p) => p.id === id);
+        if (target) jumpToPost(target);
+    });
+
+    // Mark As Read. Stamps the watermark at the newest message, saves it, takes
+    // the bar down, and refreshes the sidebar so the channel's badge agrees.
+    $('unread-read').addEventListener('click', async () => {
+        const newest = newestId();
+        if (newest) {
+            reads[channel] = newest;
+            saveReads();
+        }
+        clearUnread();
+        const c = channels.find((x) => x.name === channel);
+        if (c) { c.unread = 0; renderChannels(); }
+        await loadChannels();
+    });
+
     // The BUTTON, not the banner. The banner is a label now, and making the
     // whole thing clickable would mean a stray click while selecting its text
     // threw the reader back to the live edge.
@@ -2189,6 +2449,11 @@
             const box = $('messages');
             box.scrollTop = box.scrollHeight;
             following = true;
+            // Writing into a channel is as clear a statement of "I have read this"
+            // as pressing Mark As Read, so the bar goes with it. A queued message
+            // flushing into a channel the reader is NOT in says nothing about that
+            // channel, which is why this sits inside `mine`.
+            clearUnread();
         }
         settleScroll();
     }
@@ -2213,6 +2478,27 @@
         return extra.length ? base.concat(extra) : base;
     }
 
+    // A stand-in for a body too long to keep putting through JSON.stringify.
+    //
+    // messageSig runs for EVERY row on EVERY render — a poll, a reaction, a
+    // channel repaint — and the signature it builds used to contain the whole
+    // message text. At the old 2000-character cap that was free. Uncapped it is
+    // not: a 250,000-character paste made every render pass copy and escape a
+    // quarter of a megabyte per row, for a string that is then only ever compared
+    // for equality and thrown away.
+    //
+    // Length, both ends and a 32-bit rolling hash. Two different bodies agreeing
+    // on all four is not a case that occurs; if it somehow did, the cost is one
+    // row not repainting after an edit, not incorrect content.
+    const SIG_INLINE_MAX = 4000;
+    function bodyKey(body) {
+        const s = String(body == null ? '' : body);
+        if (s.length <= SIG_INLINE_MAX) return s;
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) | 0;
+        return s.length + ':' + h + ':' + s.slice(0, 64) + ' ' + s.slice(-64);
+    }
+
     // Everything that can change how one message draws. Two posts with equal
     // signatures produce byte-identical DOM, so the existing node is kept.
     // `grouped` is in here because it depends on the message BEFORE this one:
@@ -2220,7 +2506,7 @@
     // itself changing.
     function messageSig(p, grouped, compact) {
         return JSON.stringify([
-            p.id, p.body, p.edited_at, p.edited_by, p.pinned, p.reply_count, p.name,
+            p.id, bodyKey(p.body), p.edited_at, p.edited_by, p.pinned, p.reply_count, p.name,
             avatarSrc(p.user_id),
             p.att_key, p.att_name, p.att_size, p.created_at,
             p.quote ? [p.quote.name, p.quote.body, p.quote.att_name, p.quote.missing] : 0,
@@ -2427,6 +2713,12 @@
                 box.insertBefore(node, cursor);      // moves it if it was elsewhere
             }
         });
+
+        // Here rather than at each call site, so the bar can never disagree with
+        // what is on screen — a filter being applied, a page landing, a DM opening
+        // over the top all reach it for free. Free when there is nothing unread:
+        // unreadPosts() answers with an empty list without touching `posts`.
+        renderUnreadBar();
     }
 
     // A queued message. Deliberately not run through renderMessage: it has no
@@ -2748,9 +3040,23 @@
 
     const input = $('composer-input');
 
+    // The composer grows to fit what is in it, up to 180px, and then scrolls.
+    const COMPOSER_MAX_PX = 180;
+    // Past this, the answer is always "the maximum" — and asking anyway is not
+    // free. Reading scrollHeight after height:auto forces Chromium to lay out the
+    // ENTIRE textarea, and this runs on every keystroke; with the character cap
+    // gone the field can hold a quarter of a megabyte, where that measurement is
+    // milliseconds of blocked typing per key. 6000 characters cannot fit in 180px
+    // at any font size the chat offers, so the measurement is skippable, not
+    // merely cached.
+    const AUTOSIZE_MEASURE_MAX = 6000;
     function autosize() {
+        if (input.value.length > AUTOSIZE_MEASURE_MAX) {
+            input.style.height = COMPOSER_MAX_PX + 'px';
+            return;
+        }
         input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 180) + 'px';
+        input.style.height = Math.min(input.scrollHeight, COMPOSER_MAX_PX) + 'px';
     }
 
     input.addEventListener('input', () => {
@@ -2985,8 +3291,31 @@
         outbox.forEach((o) => { outboxSeq = Math.max(outboxSeq, Number(o.seq) || 0); });
     }
 
+    // Persisting the queue is best-effort, and it now has a way to fail that it
+    // did not have before: a message may be a quarter of a megabyte, so fifty of
+    // them do not fit in localStorage's few-megabyte quota. The old single
+    // try/catch turned that into "nothing was saved at all" — the whole queue
+    // lost on the next launch, including the small entries that would have fitted.
+    // So a quota failure sheds the OLDEST entries and tries again, keeping the
+    // most recent ones, which is the same rule OUTBOX_MAX applies.
     function saveOutbox() {
-        try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox.slice(-OUTBOX_MAX))); } catch (e) {}
+        let keep = Math.min(outbox.length, OUTBOX_MAX);
+        for (;;) {
+            try {
+                localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox.slice(-keep)));
+                return;
+            } catch (e) {
+                if (keep <= 1) {
+                    // Even one did not fit. Nothing to shed; the in-memory queue
+                    // still sends it, this only gives up on surviving a restart.
+                    console.warn('[outbox] could not persist the queue:', (e && e.message) || e);
+                    try { localStorage.removeItem(OUTBOX_KEY); } catch (e2) {}
+                    return;
+                }
+                keep = Math.floor(keep / 2);
+                console.warn(`[outbox] queue too large for storage — persisting the newest ${keep}`);
+            }
+        }
     }
 
     function queueOutbox(body, quoteId, chan) {
@@ -3717,20 +4046,21 @@
         };
 
         const items = [];
-        // The corrections first, in Chromium's own order of likelihood, and bold —
-        // the same place and the same weight every browser puts them, because they
-        // are the reason the menu was opened and they insert text rather than
-        // running a command.
+        // EVERY correction, in Chromium's own order of likelihood, each its own
+        // item, and bold — the same place and the same weight every browser puts
+        // them, because they are the reason the menu was opened and they insert
+        // text rather than running a command. "toulp" offers tool, tolu, toil,
+        // tools and Toul; picking any one of them rewrites the word.
         if (m.misspelledWord) {
-            (m.suggestions || []).forEach((s) => {
+            const suggestions = (m.suggestions || []).filter(Boolean);
+            suggestions.forEach((s) => {
                 items.push({ label: s, strong: true, onClick: on(() => L.edit.replaceMisspelling(s)) });
             });
             // Chromium finds nothing for a bad enough typo, or for a name. Saying so
             // is better than a menu that silently looks like any other, and it keeps
             // "Add to dictionary" in the same position either way.
-            if (!(m.suggestions || []).length) {
-                items.push({ label: 'No suggestions', disabled: true });
-            }
+            if (!suggestions.length) items.push({ label: 'No suggestions', disabled: true });
+            items.push('sep');
             items.push({
                 label: 'Add to dictionary', icon: 'plus',
                 onClick: on(async () => {
@@ -3742,7 +4072,13 @@
             items.push('sep');
         }
 
+        // The standard editing block, in the order every platform menu uses it.
+        // Undo/Redo are Chromium's own — the same stack Ctrl+Z drives, so taking a
+        // spelling correction back works from either.
         items.push(
+            { label: 'Undo', icon: 'undo', disabled: !m.canUndo, onClick: on(() => L.edit.undo()) },
+            { label: 'Redo', icon: 'redo', disabled: !m.canRedo, onClick: on(() => L.edit.redo()) },
+            'sep',
             { label: 'Cut', icon: 'scissors', disabled: !m.canCut, onClick: on(() => L.edit.cut()) },
             { label: 'Copy', icon: 'copy', disabled: !m.canCopy, onClick: on(() => L.edit.copy()) },
             { label: 'Paste', icon: 'clipboard', disabled: !m.canPaste, onClick: on(() => L.edit.paste()) },
@@ -10512,7 +10848,9 @@
         const wrap = document.createElement('div');
         wrap.className = 'msg-edit';
         wrap.innerHTML =
-            '<textarea maxlength="2000"></textarea>' +
+            // Uncapped, like both composers: an edit box that refuses to hold the
+            // message it was opened on cannot save it either.
+            '<textarea></textarea>' +
             '<div class="msg-edit-hint"><b>Enter</b> to save · <b>Esc</b> to cancel</div>';
         const ta = wrap.querySelector('textarea');
         ta.value = p.body || '';
@@ -11843,11 +12181,40 @@
         toast(pinned ? 'Pinned' : 'Unpinned');
     }
 
+    // Anchor the panel under the header's pin button, right edges aligned, and
+    // clamp it on screen. Done in script rather than with a positioned ancestor
+    // because the panel is position:fixed — the header's own overflow would clip
+    // a 520px popover hanging out of a 40px bar.
+    function placePinned() {
+        const panel = $('pinned-panel');
+        if (panel.hidden) return;
+        const btn = $('btn-pinned').getBoundingClientRect();
+        const w = panel.offsetWidth;
+        panel.style.left = Math.max(8, Math.min(btn.right - w, window.innerWidth - w - 8)) + 'px';
+        panel.style.top = Math.round(btn.bottom + 8) + 'px';
+    }
+
     function togglePinned(open) {
         const panel = $('pinned-panel');
         panel.hidden = !open;
-        if (open) { closeSearchPop(); hideSearchResults(); renderPinned(); }
+        $('btn-pinned').setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (!open) return;
+        closeSearchPop();
+        hideSearchResults();
+        placePinned();
+        renderPinned();
     }
+
+    // Click anywhere else, and Escape, close it — the two things a popover has to
+    // answer to and an inline banner never did. The pin button is excluded or the
+    // toggle would close and reopen in the same gesture.
+    document.addEventListener('mousedown', (e) => {
+        const panel = $('pinned-panel');
+        if (panel.hidden) return;
+        if (panel.contains(e.target) || e.target.closest('#btn-pinned')) return;
+        togglePinned(false);
+    });
+    window.addEventListener('resize', placePinned);
 
     // The same menu the channel row and the right-click open, from the header.
     $('btn-chan-alerts').addEventListener('click', (e) => {
@@ -11860,7 +12227,6 @@
 
     async function renderPinned() {
         const list = $('pinned-list');
-        $('pinned-channel').textContent = channel;
         list.innerHTML = '';
 
         // The whole channel's pins from the server — not just whatever pages
@@ -11879,27 +12245,66 @@
             e.className = 'pinned-empty';
             e.textContent = 'No pinned messages in this channel yet.';
             list.appendChild(e);
+            placePinned();      // an empty panel is a different height
             return;
         }
 
         pinned.forEach((p) => {
             const item = document.createElement('div');
             item.className = 'pinned-item';
-            const bodyIcon = (!p.body && p.att_name) ? I(fileIcon(p.att_name), 'ico inline-ico') : '';
-            const body = p.body || p.att_name || '';
+            // A card, like the reference's: the face, the name, when it was said,
+            // and the WHOLE message — run through the same markdown renderer the
+            // conversation uses, so a pinned list or a pinned code block reads the
+            // way it does in the channel. The banner this replaced escaped the
+            // body and cut it at 240 characters.
             item.innerHTML =
+                `<div class="pinned-avatar${avatarCls(p.user_id)}" style="${avatarStyle(p.name)}">` +
+                `${esc(initials(p.name))}${avatarImgHtml(p.user_id)}</div>` +
+                '<div class="pinned-main">' +
                 '<div class="pinned-top">' +
                 `<span class="pinned-name">${esc(p.name)}</span>` +
-                `<span class="pinned-time">${esc(timeStr(p.created_at))}</span>` +
+                // Date AND time: a pin sits outside any day divider, so a bare
+                // clock reading does not say which day it belongs to.
+                `<span class="pinned-time">${esc(stampStr(p.created_at))}</span>` +
+                '</div>' +
+                '<div class="pinned-body"></div>' +
+                '</div>' +
+                '<div class="pinned-acts">' +
                 // Unpinning is the same admin-or-owner rule as pinning; offering it
                 // to a member on somebody else's message only produced a 403.
-                (mayPin(p) ? '<button class="pinned-unpin" type="button">Unpin</button>' : '') +
-                '</div>' +
-                `<div class="pinned-body">${bodyIcon}${esc(body.slice(0, 240))}</div>`;
-            item.addEventListener('click', () => {
-                // A pinned thread reply lives in its thread, not the main list.
+                (mayPin(p) ? '<button class="pinned-unpin" type="button" title="Unpin this message">Unpin</button>' : '') +
+                '<button class="pinned-jump" type="button" title="Jump to this message">Jump</button>' +
+                '</div>';
+
+            const bodyEl = item.querySelector('.pinned-body');
+            if (p.body) {
+                renderBody(p.body, bodyEl);
+                highlightCodeBlocks(bodyEl);
+            } else if (p.att_name) {
+                const att = document.createElement('span');
+                att.className = 'pinned-att';
+                const ico = I(fileIcon(p.att_name), 'ico inline-ico');
+                att.innerHTML = ico + esc(p.att_name);
+                bodyEl.appendChild(att);
+            }
+            wireAvatarFallback(item);
+
+            // A pinned thread reply lives in its thread, not the main list.
+            const jump = () => {
+                togglePinned(false);
                 if (p.thread_root_id) openThread(p.thread_root_id, p.channel);
                 else jumpToPost(p);
+            };
+            // The whole card is still clickable — the reference's cards are — but
+            // never through a control: a click on Unpin that also jumped would
+            // yank the reader somewhere on their way to removing the pin.
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('button')) return;
+                jump();
+            });
+            item.querySelector('.pinned-jump').addEventListener('click', (e) => {
+                e.stopPropagation();
+                jump();
             });
             const unpin = item.querySelector('.pinned-unpin');
             if (unpin) unpin.addEventListener('click', (e) => {
@@ -11908,6 +12313,9 @@
             });
             list.appendChild(item);
         });
+        // Measured after the cards exist: the panel grows to fit them up to its
+        // max, and an anchor computed against the empty box sits in the wrong place.
+        placePinned();
     }
 
     // ---------- direct messages --------------------------------------------
@@ -12287,6 +12695,10 @@
         const list = $('dm-list');
         if (list) (on ? $('dm-list-slot') : $('dm-section')).appendChild(list);
         $('dm-panel').hidden = !on;
+        // The new-messages bar belongs to a CHANNEL. Nothing else here repaints
+        // the message column on the way into the conversation list, so without
+        // this a bar raised over #general stayed up behind the DM panel.
+        renderUnreadBar();
         // Which of the two places you are in. The server mark was hard-coded
         // active, so it claimed to be selected while you were reading DMs.
         $('rail-home').classList.toggle('active', !on);

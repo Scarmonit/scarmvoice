@@ -29,6 +29,28 @@ export async function settle(n = 12) {
     for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
+// Silence the instance booted LAST, before booting the next one.
+//
+// bootRenderer cannot shut a renderer down — teardownSession is private to
+// app.js — so the previous instance's poll, presence heartbeat, DM poll and
+// avatar sweep all keep firing. Its $(…) lookups resolve against the SAME
+// document, so a stale instance repaints the fresh one's UI out of its own
+// state: a channel badge cleared, a message row rebuilt with the wrong role's
+// action bar, a banner filled in with the previous fixture's numbers. It is a
+// whole class of cross-file flakiness, and because it depends on scheduling it
+// lands on whichever spec the machine treated worst — reading as some unrelated
+// feature breaking at random.
+//
+// app.js captures `const L = window.lounge` by REFERENCE, which is the hook: a
+// board() on the old object that never settles reaches the old instance, and
+// every fetch-then-render path it has is rooted in that one call. Its timers
+// still fire; they just never get an answer to draw.
+function silencePrevious() {
+    const prev = window.lounge;
+    if (!prev) return;
+    prev.board = () => new Promise(() => {});
+}
+
 export const DEFAULT_SETTINGS = {
     baseUrl: 'https://scarmonit.com', room: 'lounge', clientId: 'me',
     displayName: 'Me', channel: 'general', theme: 'dark', density: 'cozy',
@@ -53,6 +75,8 @@ export async function bootRenderer(opts = {}) {
     let resync = null;
     let winHidden = null;
     let winFocus = null;
+
+    silencePrevious();
 
     const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
     document.documentElement.innerHTML = html
@@ -115,6 +139,8 @@ export async function bootRenderer(opts = {}) {
             copy: vi.fn(async () => true),
             paste: vi.fn(async () => true),
             selectAll: vi.fn(async () => true),
+            undo: vi.fn(async () => true),
+            redo: vi.fn(async () => true),
             clipboard: vi.fn(async () => ({ text: false, image: false })),
             replaceMisspelling: vi.fn(async () => true),
             addToDictionary: vi.fn(async () => true),
@@ -234,6 +260,7 @@ export async function bootRenderer(opts = {}) {
             if (!editContext) return;
             editContext(Object.assign({
                 x: 100, y: 200, misspelledWord: '', suggestions: [],
+                canUndo: false, canRedo: false,
                 canCut: false, canCopy: false, canPaste: true, canSelectAll: true
             }, over));
         },

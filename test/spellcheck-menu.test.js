@@ -55,24 +55,49 @@ describe('right-clicking a correctly spelled word', () => {
         await settle();
 
         expect(menu().hidden).toBe(false);
-        expect(labels()).toEqual(['Cut', 'Copy', 'Paste', 'Select all']);
+        expect(labels()).toEqual(['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select all']);
     });
 
     // Chromium's own answer, delivered with the click. It replaced a round trip to
     // read the clipboard, so the menu opens in one hop instead of two — and it
     // knows about image data, which a text-only check did not.
     it('greys out what the field cannot do', async () => {
-        h.rightClickField({ canCut: false, canCopy: false, canPaste: false, canSelectAll: false });
+        h.rightClickField({
+            canUndo: false, canRedo: false,
+            canCut: false, canCopy: false, canPaste: false, canSelectAll: false
+        });
         await settle();
 
-        ['Cut', 'Copy', 'Paste', 'Select all'].forEach((l) => expect(disabled(l), l).toBe(true));
+        ['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select all']
+            .forEach((l) => expect(disabled(l), l).toBe(true));
     });
 
     it('enables them when the field says it can', async () => {
-        h.rightClickField({ canCut: true, canCopy: true, canPaste: true, canSelectAll: true });
+        h.rightClickField({
+            canUndo: true, canRedo: true,
+            canCut: true, canCopy: true, canPaste: true, canSelectAll: true
+        });
         await settle();
 
-        ['Cut', 'Copy', 'Paste', 'Select all'].forEach((l) => expect(disabled(l), l).toBe(false));
+        ['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select all']
+            .forEach((l) => expect(disabled(l), l).toBe(false));
+    });
+
+    // Chromium's own undo stack, so this menu and Ctrl+Z take back the same edit —
+    // including a spelling correction, which goes through the editing pipeline
+    // rather than around it.
+    it('runs undo and redo as native commands', async () => {
+        h.rightClickField({ canUndo: true, canRedo: true });
+        await settle();
+        itemFor('Undo').click();
+        await settle();
+        expect(h.lounge.edit.undo).toHaveBeenCalled();
+
+        h.rightClickField({ canUndo: true, canRedo: true });
+        await settle();
+        itemFor('Redo').click();
+        await settle();
+        expect(h.lounge.edit.redo).toHaveBeenCalled();
     });
 
     it('runs the native command rather than reimplementing it', async () => {
@@ -107,7 +132,7 @@ describe('right-clicking a misspelled word', () => {
 
         expect(labels()).toEqual([
             'misspelled', 'dispelled', 'Add to dictionary',
-            'Cut', 'Copy', 'Paste', 'Select all'
+            'Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select all'
         ]);
     });
 
@@ -178,21 +203,40 @@ describe('right-clicking a misspelled word', () => {
 
         expect(labels()).toEqual([
             'No suggestions', 'Add to dictionary',
-            'Cut', 'Copy', 'Paste', 'Select all'
+            'Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select all'
         ]);
         expect(disabled('No suggestions')).toBe(true);
         expect(disabled('Add to dictionary')).toBe(false);
     });
 
-    it('caps a pathological list so the commands stay reachable', async () => {
-        // main slices to five; this pins the renderer not to grow it back.
+    // EVERY suggestion, each as its own item. This used to be capped at five in
+    // main, which could only ever throw away a correction the reader was looking
+    // for — and the reported complaint was a menu showing no corrections at all,
+    // not one showing too many. The menu clamps itself on screen, so a long answer
+    // still leaves the commands reachable.
+    it('renders every suggestion as a separate item', async () => {
         h.rightClickField({
-            misspelledWord: 'x',
-            suggestions: ['a', 'b', 'c', 'd', 'e']
+            misspelledWord: 'toulp',
+            suggestions: ['tool', 'tolu', 'toil', 'tools', 'Toul', 'tulip', 'toup']
         });
         await settle();
-        expect(labels().slice(0, 5)).toEqual(['a', 'b', 'c', 'd', 'e']);
+        expect(labels().slice(0, 7))
+            .toEqual(['tool', 'tolu', 'toil', 'tools', 'Toul', 'tulip', 'toup']);
+        expect(labels()).toContain('Add to dictionary');
         expect(labels()).toContain('Select all');
+        // Each one inserts a word, so each one is drawn as content.
+        ['tool', 'tulip'].forEach((w) =>
+            expect(itemFor(w).classList.contains('strong'), w).toBe(true));
+    });
+
+    it('offers the suggestions above everything else', async () => {
+        h.rightClickField({ misspelledWord: 'toulp', suggestions: ['tool', 'toil'] });
+        await settle();
+        const l = labels();
+        expect(l.indexOf('tool')).toBe(0);
+        expect(l.indexOf('toil')).toBeLessThan(l.indexOf('Add to dictionary'));
+        expect(l.indexOf('Add to dictionary')).toBeLessThan(l.indexOf('Undo'));
+        expect(l.indexOf('Undo')).toBeLessThan(l.indexOf('Cut'));
     });
 });
 

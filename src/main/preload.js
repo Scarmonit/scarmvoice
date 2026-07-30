@@ -97,6 +97,8 @@ contextBridge.exposeInMainWorld('lounge', {
         copy: () => ipcRenderer.invoke('edit:command', 'copy'),
         paste: () => ipcRenderer.invoke('edit:command', 'paste'),
         selectAll: () => ipcRenderer.invoke('edit:command', 'selectAll'),
+        undo: () => ipcRenderer.invoke('edit:command', 'undo'),
+        redo: () => ipcRenderer.invoke('edit:command', 'redo'),
         clipboard: () => ipcRenderer.invoke('edit:clipboard'),
         // Right-click in a text field. Pushed FROM main rather than read from a
         // DOM event, because the spellchecker's answers — the misspelled word and

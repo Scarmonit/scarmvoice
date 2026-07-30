@@ -153,7 +153,47 @@ test('right-clicking a text field reaches the main process', async () => {
     expect(ev.misspelledWord).toBe('');
     expect(await page.locator('#ctx-menu').isVisible()).toBe(true);
     const labels = await page.locator('#ctx-menu .ctx-label').allTextContents();
-    expect(labels).toEqual(['Cut', 'Copy', 'Paste', 'Select all']);
+    expect(labels).toEqual(['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select all']);
+    await page.keyboard.press('Escape');
+});
+
+// The OTHER way this feature comes out empty, and the one a stub cannot show you.
+//
+// On Windows 8+ Chromium spellchecks through the OS, and behind the
+// WinRetrieveSuggestionsOnlyOnDemand feature it leaves the corrections OUT of the
+// spelling markers — Chrome's own menu fetches them afterwards, asynchronously.
+// Electron has no equivalent: `context-menu` hands over the raw params and that is
+// the only chance to read them, so with the feature on you get a misspelledWord
+// and an EMPTY dictionarySuggestions. The word is flagged, the underline is drawn,
+// and there is nothing to offer. Whether it is on is a field trial, so main.js
+// pins it off with a command-line switch; this is what proves the switch is doing
+// its job, on this platform, in a real process.
+test('the spellchecker hands over SEVERAL suggestions, not one and not none', async () => {
+    await clearEvents();
+    const ta = page.locator('#composer-input');
+    await ta.click();
+    await ta.fill('');
+    // A deliberate non-word with many near neighbours — tool, tolu, toil, tools,
+    // Toul. One suggestion would pass a weaker assertion while the interesting
+    // half of the feature was still broken.
+    await ta.type('say toulp again', { delay: 25 });
+    await page.waitForTimeout(1500);
+
+    const at = await pointAtWord('toulp', 'say ');
+    await page.mouse.click(at.x, at.y, { button: 'right' });
+    await page.waitForTimeout(600);
+
+    const ev = await lastEvent();
+    expect(ev.misspelledWord).toBe('toulp');
+    expect(ev.suggestions.length,
+        'no suggestions at all — has the WinRetrieveSuggestionsOnlyOnDemand switch gone?')
+        .toBeGreaterThan(1);
+
+    // Every one of them is its own item in the app's menu, above Add to dictionary.
+    const labels = await page.locator('#ctx-menu .ctx-label').allTextContents();
+    ev.suggestions.forEach((s, i) => expect(labels[i]).toBe(s));
+    expect(labels.indexOf('Add to dictionary')).toBe(ev.suggestions.length);
+    expect(labels).toContain('Undo');
     await page.keyboard.press('Escape');
 });
 

@@ -81,6 +81,11 @@
      brand mark and it is everywhere; a slider is a control, and this is the one
      place the two were competing for the same read. */
   --slider:     #5d67f6;
+  /* The reference's brand blurple, measured off it (--background-brand,
+     hsl(234.935 85.556% 64.706%)). Only used where the reference uses that exact
+     colour and our teal would be wrong: the new-messages bar, which is a
+     recognisable piece of chrome people read by its colour. */
+  --brand:      #5865f2;
   /* Message prose sits brighter than --text-body, which is tuned for labels. */
   --msg-text:   #eff0f2;
   /* The user panel's own type ramp. Both lines were brighter than the
@@ -1131,6 +1136,43 @@ button { font-family: inherit; }
 
    `visibility` (not just opacity) is what keeps the button untabbable while the
    banner is hidden; it is inherited, so the button goes with it. */
+/* ---------- new messages bar --------------------------------------------
+   The reference's, matched: full width across the top of the conversation, the
+   brand blurple, white 12px semibold type, 24px tall, "N new messages since
+   <time> on <date>" on the left and Mark As Read on the right.
+
+   ABSOLUTE, over the top of the list rather than in the column above it. A bar
+   that took its own row would move every message down the moment it appeared and
+   back up again when it was dismissed, which is a layout shift for a notice. */
+.unread-bar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 25;
+  display: flex; align-items: center; gap: 8px;
+  height: 24px; padding: 0 8px 0 12px;
+  background: var(--brand); color: #fff;
+  font-size: 12px; font-weight: 600; line-height: 24px;
+}
+.unread-bar[hidden] { display: none; }
+/* The label is the jump target — clicking the bar takes you to the first message
+   you have not read, the way the reference does. A button, so it is reachable by
+   keyboard, but drawn as the bar's own text. */
+.ub-jump {
+  flex: 1 1 auto; min-width: 0; text-align: left;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  color: inherit; font: inherit;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ub-jump:hover { text-decoration: underline; }
+.ub-read {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0 4px; cursor: pointer;
+  color: inherit; font: inherit;
+}
+.ub-read:hover { text-decoration: underline; }
+.ub-read .ico { width: 15px; height: 15px; }
+/* The list starts below the bar while it is up, so the newest-first padding does
+   not tuck a message under it. */
+#messages-wrap:has(.unread-bar:not([hidden])) #messages { padding-top: 32px; }
+
 .jump-latest {
   position: absolute; left: 50%; bottom: 14px; z-index: 30;
   display: inline-flex; align-items: center; gap: 10px;
@@ -1445,6 +1487,30 @@ button { font-family: inherit; }
 }
 .msg-list { margin: 4px 0; padding-left: 22px; }
 .msg-list li { margin: 2px 0; line-height: 1.45; }
+/* A list nested inside a list item. No outer margin — the parent item already
+   spaces it — and the marker style walks the same 1./a./i. and •/◦/▪ sequences
+   the reference uses, so depth reads without counting indents. */
+.msg-list .msg-list { margin: 2px 0; padding-left: 20px; }
+ol.msg-list { list-style-type: decimal; }
+ol.msg-list ol.msg-list { list-style-type: lower-alpha; }
+ol.msg-list ol.msg-list ol.msg-list { list-style-type: lower-roman; }
+ul.msg-list ul.msg-list { list-style-type: circle; }
+ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
+/* An item holding more than one block gets .msg-para children, which are
+   display:block — so its own line-height has to come off or the marker floats
+   above the first line. */
+.msg-list li > .msg-para:first-child { margin-top: 0; }
+
+/* Discord's headings and subtext. Sized in em so they scale with the chat font
+   size, and the first one in a message loses its top margin — a message that
+   OPENS with a heading should not start with a gap the author did not type. */
+.msg-h { font-weight: 700; line-height: 1.3; margin: 8px 0 4px; }
+.msg-h1 { font-size: 1.5em; }
+.msg-h2 { font-size: 1.25em; }
+.msg-h3 { font-size: 1.05em; }
+.msg-sub { font-size: 0.8em; color: var(--dim); line-height: 1.4; margin: 2px 0; }
+.msg-text > .msg-h:first-child, .msg-text > .msg-sub:first-child { margin-top: 0; }
+
 .msg-bq {
   margin: 4px 0; padding: 2px 0 2px 12px;
   border-left: 4px solid var(--line-2); border-radius: 2px; color: var(--muted);
@@ -1813,33 +1879,91 @@ button { font-family: inherit; }
 .sr-body { margin-top: 3px; font-size: 12.5px; color: var(--muted); line-height: 1.4; word-break: break-word; }
 .sr-body mark { background: rgba(var(--accent-rgb), .28); color: var(--text); border-radius: 3px; padding: 0 2px; }
 
-/* ---------- pinned messages -------------------------------------------- */
+/* ---------- pinned messages --------------------------------------------
+   A popover anchored under the header's pin button, matching the reference: a
+   titled panel of CARDS, one per pin, each carrying the avatar, the name, the
+   timestamp and the whole message — with Jump appearing on hover.
 
-#pinned-panel {
-  flex: 0 0 auto;
-  background: var(--float); max-height: 40vh; overflow-y: auto;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .35), 0 1px 0 rgba(0, 0, 0, .3);
-  z-index: 4;
+   It replaced an inline banner that sat between the header and the
+   conversation. The banner was wrong in three ways at once: it pushed the
+   messages down, it had room for one truncated line per pin, and it stayed
+   until it was dismissed. */
+
+/* display:flex beats the [hidden] attribute, so say it explicitly. */
+.pinned-panel[hidden] { display: none; }
+.pinned-panel {
+  position: fixed; z-index: 60;
+  width: 452px; max-width: calc(100vw - 24px);
+  display: flex; flex-direction: column;
+  max-height: min(520px, calc(100vh - 96px));
+  background: var(--float); border: 1px solid var(--line);
+  border-radius: 8px; overflow: hidden;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
 }
 .pinned-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px; font-size: 12px; font-weight: 700; color: var(--accent);
-  position: sticky; top: 0; background: var(--float);
-  text-transform: uppercase; letter-spacing: .04em;
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 12px 12px 16px;
+  /* Its own shade and a hairline under it, so the list scrolls beneath a bar
+     that stays put rather than under type that dissolves into the cards. */
+  background: var(--float-2); border-bottom: 1px solid var(--line);
+  font-size: 15px; font-weight: 700; color: var(--text-strong);
 }
-#pinned-list { padding: 0 12px 12px; }
+.pinned-head .icon-btn { margin-left: auto; }
+#pinned-list { flex: 1 1 auto; overflow-y: auto; padding: 12px; }
+
 .pinned-item {
-  padding: 9px 12px; margin-bottom: 6px; cursor: pointer;
-  background: var(--chat-2); border: 1px solid transparent; border-radius: 8px;
+  position: relative;
+  display: flex; gap: 12px;
+  padding: 12px; margin-bottom: 8px; cursor: pointer;
+  background: var(--chat-2); border-radius: 8px;
 }
-.pinned-item:hover { border-color: var(--accent-line); }
+.pinned-item:last-child { margin-bottom: 0; }
+.pinned-item:hover { background: var(--float-2); }
+.pinned-avatar {
+  flex: 0 0 40px; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 600; color: #fff; overflow: hidden;
+  position: relative; user-select: none;
+}
+.pinned-main { flex: 1 1 auto; min-width: 0; }
 .pinned-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
-.pinned-name { font-weight: 700; font-size: 12.5px; }
-.pinned-time { font-size: 11px; color: var(--dim); }
-.pinned-unpin { margin-left: auto; background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 11px; }
-.pinned-unpin:hover { color: var(--danger-hi); }
-.pinned-body { font-size: 13px; color: var(--muted); line-height: 1.4; word-break: break-word; }
-.pinned-empty { text-align: center; color: var(--dim); padding: 22px; font-size: 13px; }
+.pinned-name { font-weight: 600; font-size: 15px; color: var(--author); }
+.pinned-time { font-size: 11px; color: var(--meta); font-weight: 500; }
+/* Wraps and breaks: a pin can be a whole paragraph, and the reference shows all
+   of it rather than one clipped line. */
+.pinned-body {
+  font-size: 14px; color: var(--msg-text); line-height: 1.375;
+  overflow-wrap: break-word; word-break: break-word; white-space: normal;
+}
+.pinned-body .msg-para { display: block; }
+.pinned-att { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 5px; }
+
+/* Jump and Unpin. Hidden until the card is hovered or something inside it has
+   keyboard focus — the reference reveals Jump on hover, and hiding them by
+   default is what keeps a stack of cards readable. `visibility` rather than
+   `display`, so the buttons keep their size and the text never reflows under
+   them. */
+.pinned-acts {
+  position: absolute; top: 8px; right: 8px;
+  display: flex; align-items: center; gap: 6px;
+  visibility: hidden; opacity: 0; transition: opacity .1s ease;
+}
+.pinned-item:hover .pinned-acts,
+.pinned-item:focus-within .pinned-acts { visibility: visible; opacity: 1; }
+.pinned-jump {
+  border: 0; border-radius: 3px; cursor: pointer;
+  background: var(--btn-secondary); color: var(--text);
+  font-size: 12px; font-weight: 500; padding: 3px 10px;
+}
+.pinned-jump:hover { background: var(--btn-secondary-hover); }
+.pinned-unpin {
+  border: 0; border-radius: 3px; cursor: pointer;
+  background: var(--btn-secondary); color: var(--danger-label);
+  font-size: 12px; font-weight: 500; padding: 3px 10px;
+}
+.pinned-unpin:hover { background: var(--danger-solid); color: #fff; }
+.pinned-empty { text-align: center; color: var(--dim); padding: 28px 22px; font-size: 13px; }
 
 /* ---------- screen share stage ----------------------------------------- */
 

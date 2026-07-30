@@ -279,6 +279,21 @@ Three tiers, each covering what the one below it can't reach:
 > fights over the user-data lock and the system-wide uiohook, which hard-crashes
 > the running one. Close it first (`Stop-Process -Name ScarmVoice`).
 
+`test/helpers/renderer.js` boots the real renderer into jsdom, and it cannot shut
+one down again — `teardownSession()` is private to `app.js`. So the previous
+instance's poll, presence heartbeat, DM poll and avatar sweep all keep firing, and
+its `$(…)` lookups resolve against the **same document**: a stale instance
+repaints the fresh one's UI out of its own state — a channel badge cleared, a row
+rebuilt with the wrong role's action bar, a banner filled in with the previous
+fixture's numbers. Because it depends on scheduling, it lands on whichever spec
+the machine treated worst, so it reads as some unrelated feature failing at
+random. `bootRenderer` now silences the previous instance first: `app.js` captures
+`const L = window.lounge` by *reference*, so replacing that object's `board()` with
+a promise that never settles reaches the old instance, and every fetch-then-render
+path it has is rooted in that one call. Its timers still fire; they just never get
+an answer to draw. Files that boot repeatedly should still prefer one boot and a
+mutable fixture — it is faster and there is less to go wrong.
+
 ### Shipping a release
 
 Bump `version` in package.json, **write `build/release-notes/v<version>.md`**,
@@ -628,6 +643,73 @@ cache stores the **class name as well as the markup**: `highlightElement` adds
 `hljs`, and the entire theme hangs off that class, so replaying the HTML alone
 gives an unstyled, unpadded, transparent block. Narrowing the language set would
 also make detection faster, and is not done — that trades quality for speed.
+Blocks past 50,000 characters (10,000 with no language named) are left as plain
+monospace, because a message can now be a quarter of a megabyte and highlighting
+cost is linear in length at best.
+
+#### Lists that count, and why they did not
+
+An ordered list came out with **every item numbered 1**. It looked like a CSS
+counter problem and it was not: the parser took a run of *consecutive* list lines
+and stopped at the first line that was not one. A blank line between items, an
+indented sub-list, or a wrapped second line therefore ended the `<ol>` — and the
+next item opened a brand new `<ol>`, which starts counting from one again. A list
+written 1 through 8 with any spacing at all became eight lists of one item.
+
+`renderList()` replaced that with a real list parser, one that owns a whole list
+rather than a run of lines:
+
+- A blank line inside a list is **spacing**. It ends the list only if the list
+  does not carry on below it.
+- Anything indented under the current item **belongs to** that item — a nested
+  list, a second paragraph, a wrapped line. It is dedented by one level and
+  parsed recursively, so a sub-list nests inside its `<li>` instead of breaking
+  the parent in half.
+- The **first** number is the start (`<ol start>`); the rest are advisory, as
+  CommonMark and the reference both have it. That is what makes a list typed
+  `1. 1. 1.` render 1, 2, 3.
+- A bullet where the numbers were, or a shallower indent, ends the list — that is
+  a different list, not this one's to consume.
+
+The inline set matched the reference at the same time, because "keep the
+markdown" and "get the markdown right" are the same request: `***bold italic***`
+(the two-star rule used to take it and leave the odd star behind),
+`__underline__`, `_italic_` with a word boundary so `snake_case_names` survive,
+` ``code`` ` spans, `# ## ###` headings, `-#` subtext, and `>>>` to quote
+everything that follows. A blockquote's contents go back through the block parser,
+so a list inside a quote is still a list. `test/markdown-render.test.js` covers
+all of it against the real renderer.
+
+#### There is no character limit
+
+The composer capped at 2000 characters, which is the reference's limit rather than
+anything this app needs — and it made pasting a transcript in impossible: the
+paste stopped dead partway through with no explanation and no way to finish. Every
+composer is uncapped now (main, thread, and the inline edit box), and the only
+limit left is the server's `MAX_BODY` at **250,000 characters**. That number is
+not a style choice: D1 refuses a row larger than 2,000,000 **bytes**, and 250,000
+characters is under it even if every one of them is a 4-byte astral codepoint.
+
+Over it the server answers **413 with the count**, rather than slicing. Silent
+truncation was the old behaviour, and it is the worse failure: the message arrives
+on the board with its ending missing, and the sender's own screen shows the whole
+thing until the next refresh replaces it. Both clients already surface a server
+rejection on the queued row with *Retry* and *Discard*.
+
+Three things had to change for a body that size to be survivable, none of them
+obvious from the limit:
+
+- **The row signature** contained the whole message text, and `messageSig` runs
+  for every row on every render. At 2000 characters that is free; at 250,000 it
+  is a quarter of a megabyte copied and escaped per row per poll. Long bodies are
+  fingerprinted instead — length, both ends and a rolling hash.
+- **Autosize** reads `scrollHeight` after `height: auto`, which forces Chromium to
+  lay out the entire textarea, on every keystroke. Past 6000 characters the answer
+  is always "the maximum", so the measurement is skipped rather than cached.
+- **The offline queue** is persisted to `localStorage`, and fifty quarter-megabyte
+  messages do not fit in its quota. A quota failure used to lose the whole queue;
+  it now sheds the oldest entries and keeps the newest, which is the rule
+  `OUTBOX_MAX` already applies.
 
 ### The camera and the screen share are different tracks
 
@@ -1130,8 +1212,36 @@ So the flow is inverted. The renderer no longer opens the menu for a text field 
 | from `params` | what it's for |
 | --- | --- |
 | `misspelledWord`, `dictionarySuggestions` | the corrections, from the same spellchecker that drew the underline, so the menu can never disagree with it |
-| `editFlags` | Chromium's own answer to "is there a selection to cut, is there anything to paste" — it knows about image data, and it arrives with the event, so the menu no longer waits on a clipboard round trip |
+| `editFlags` | Chromium's own answer to "is there a selection to cut, is there anything to paste, is there anything to undo" — it knows about image data, and it arrives with the event, so the menu no longer waits on a clipboard round trip |
 | `x`, `y` | CSS pixels relative to the page, i.e. exactly `clientX`/`clientY` |
+
+The menu that comes out of it is the standard one, in the standard order: the
+suggestions first (**all** of them, each its own item, bold because the label is a
+word that will be inserted rather than the name of a command), *Add to
+dictionary*, then *Undo* / *Redo*, *Cut* / *Copy* / *Paste*, *Select all*. The
+spelling half appears only when a misspelled word was actually right-clicked;
+otherwise it is the editing commands alone. Undo and Redo run Chromium's own
+commands, so the menu and Ctrl+Z drive the same stack — including for a spelling
+correction, which goes *through* the editing pipeline rather than around it.
+
+#### One Chromium switch does the rest
+
+There is a second reason the corrections can come out empty, and it has nothing to
+do with the DOM event. On Windows 8+ Chromium spellchecks through the OS, and
+behind the `WinRetrieveSuggestionsOnlyOnDemand` feature it deliberately leaves the
+corrections **out of the spelling markers** — Chrome's own context menu fetches
+them afterwards, asynchronously, once it knows a menu is being built. Electron has
+no equivalent: `context-menu` hands over the raw `ContextMenuParams` and that is
+the only chance to read them. With the feature on you get a `misspelledWord` and
+an **empty** `dictionarySuggestions`: the word is flagged, the underline is drawn,
+and there is nothing to offer.
+
+Whether it is on is a Chromium field trial, which is to say it varies between
+machines and between runs — not something to leave to chance for a feature whose
+failure mode is showing nothing. `app.commandLine.appendSwitch('disable-features',
+'WinRetrieveSuggestionsOnlyOnDemand')` pins the suggestions inline. Verified both
+ways against a real Electron process: "toulp" answers *tool, tolu, toil, tools,
+Toul*, which is what Chrome shows for it too.
 
 Picking a suggestion runs Chromium's `replaceMisspelling` editing command rather
 than splicing the string here. That is what makes it act on the selection already
@@ -1153,6 +1263,73 @@ Two consequences worth knowing:
 `test/spellcheck-menu.test.js` covers the menu the renderer builds from that
 push; the e2e spec covers the parts jsdom cannot see — that the event fires, that
 Chromium really flags a typo, and that the replacement edits the textarea.
+
+### Pinned messages
+
+Pins used to be an inline banner between the header and the conversation, and it
+was wrong in three ways at once: it pushed every message down while it was open,
+it had room for one truncated line per pin, and it stayed until it was dismissed.
+
+The pin button opens a **popover** now — *Pinned Messages*, one card per pin, each
+with the avatar, the name, the full date-and-time stamp and the whole message body,
+with *Jump* revealed on hover. Details worth knowing:
+
+- The body goes through the same `renderBody()` the conversation uses, so a pinned
+  list, a pinned code fence or a pinned mention reads the way it does in the
+  channel. The banner escaped the text and cut it at 240 characters.
+- The stamp is date **and** time. A pin sits outside any day divider, so a bare
+  clock reading does not say which day it belongs to.
+- It is `position: fixed` and lives at the end of the document rather than inside
+  `<main>`, because a 520 px popover hanging off a 40 px header would be clipped
+  by the column's overflow. `placePinned()` anchors it under the button, right
+  edges aligned, and clamps it on screen — re-measured *after* the cards exist,
+  since an anchor computed against the empty box lands in the wrong place.
+- It closes the way a popover has to: the X, Escape, a click anywhere outside, and
+  a channel switch. The banner did none of those, which is also how it went stale
+  — it hard-coded the channel it was drawn for and sat over the next conversation
+  still listing the previous one's messages.
+- *Unpin* is still there, on hover next to *Jump*, and still gated on `mayPin()` —
+  admin-and-above for somebody else's message, which is what the server enforces.
+  A click on either control does not also jump: being yanked away on the way to
+  removing a pin is not what the click meant.
+
+### The new-messages bar
+
+*"12 new messages since 12:38 AM on March 21, 2026"*, in the reference's brand
+blurple across the top of the channel, with *Mark As Read* on the right.
+
+The tracking it needs already existed. `reads` is the per-channel map of "the
+newest post id I have seen", kept **per account** in `localStorage` and posted to
+`/api/board/channels`, which is what computes the sidebar's unread badges. What did
+not exist was that value at a moment when it is still useful: `loadMessagesOnce`
+stamps `reads[channel] = maxId` on every load of the channel on screen. That is
+right for the badge — looking at a channel reads it — and it destroys the only
+record of where the reader had got to.
+
+So the watermark is captured **on the way in**, before the first load of the
+channel can overwrite it: at launch after the channel list lands (which is also
+when the server's true unread count for that channel is known, counted against the
+watermark that went out with the request), and in `resetChannelView()` on every
+switch. It is then held for the length of the visit.
+
+- The count is `max(what the loaded page can see, what the server counted)`. One
+  page is a window; the server's number is the total.
+- The timestamp is the **first unread message's**, which is where the reader left
+  off.
+- The bar is absolutely positioned over the top of the list rather than taking its
+  own row: a notice that appears and disappears must not move every message down
+  and back up again.
+- Clicking it jumps to the first unread message. This app opens a channel at the
+  *bottom*, so without that the bar names messages sitting somewhere above it and
+  offers no way to reach them.
+- It clears when the reader says so (*Mark As Read*, which also stamps the
+  watermark at the newest message and refreshes the badge), when they leave the
+  channel, and when they **post** into it — writing into a channel is as clear a
+  statement of "I have read this" as pressing the button. It deliberately does not
+  clear on reaching the bottom, because the channel *opens* at the bottom.
+- The reader's own messages never count, and neither does a blocked author's — for
+  the same reason the jump badge excludes them: a count that includes messages
+  which are never drawn promises something the jump can never deliver.
 
 ### Push-to-talk
 

@@ -97,6 +97,26 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // which on a dark theme reads as a faint rainbow along the type.
 app.commandLine.appendSwitch('disable-lcd-text');
 
+// Make the spellchecker hand its SUGGESTIONS over with the right-click, instead
+// of expecting the menu to come back and ask for them.
+//
+// On Windows 8+ Chromium spellchecks through the OS, and behind the
+// WinRetrieveSuggestionsOnlyOnDemand feature it deliberately leaves the
+// corrections out of the spelling markers: Chrome's own menu fetches them
+// afterwards, asynchronously, once it knows a menu is being built. Electron has
+// no equivalent — `context-menu` hands us the raw ContextMenuParams and that is
+// the only chance to read them — so with the feature on, params.misspelledWord
+// arrives with an EMPTY params.dictionarySuggestions. The word is flagged, the red
+// underline is drawn, and there is nothing to offer: exactly the "no corrections
+// ever appear" the menu was built to fix.
+//
+// Whether it is on is a Chromium field trial, which is to say it varies between
+// machines and between runs and is not something to leave to chance for a feature
+// that silently degrades to nothing. Turning it off pins the suggestions inline.
+// Verified both ways against a real Electron process — with the switch, "toulp"
+// answers tool / tolu / toil / tools / Toul, which is also what Chrome shows.
+app.commandLine.appendSwitch('disable-features', 'WinRetrieveSuggestionsOnlyOnDemand');
+
 // Must be registered before the app is ready.
 protocol.registerSchemesAsPrivileged([{
     scheme: 'lounge',
@@ -330,9 +350,14 @@ function createWindow(forceShow) {
             x: Math.round(params.x) || 0,
             y: Math.round(params.y) || 0,
             misspelledWord: params.misspelledWord || '',
-            // Chromium offers up to five; capped anyway so a pathological answer
-            // cannot push the editing commands off the bottom of the screen.
-            suggestions: (params.dictionarySuggestions || []).slice(0, 5),
+            // ALL of them. This used to be sliced to five, which is what Chromium
+            // happens to return today — so the cap only ever had the potential to
+            // throw away a correction the user was looking for. The menu clamps
+            // itself on screen (see openCtxMenu), so a long answer cannot push the
+            // editing commands out of reach.
+            suggestions: (params.dictionarySuggestions || []).map(String),
+            canUndo: !!flags.canUndo,
+            canRedo: !!flags.canRedo,
             canCut: !!flags.canCut,
             canCopy: !!flags.canCopy,
             canPaste: !!flags.canPaste,
@@ -1445,6 +1470,11 @@ function registerIpc() {
         else if (name === 'copy') wc.copy();
         else if (name === 'paste') wc.paste();
         else if (name === 'selectAll') wc.selectAll();
+        // Chromium's own undo stack, which is the one Ctrl+Z uses — so an Undo on
+        // this menu and an Undo from the keyboard take back the same edit, spelling
+        // corrections included (replaceMisspelling goes through the same pipeline).
+        else if (name === 'undo') wc.undo();
+        else if (name === 'redo') wc.redo();
         else return false;
         return true;
     });

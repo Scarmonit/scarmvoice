@@ -506,15 +506,6 @@
       <div id="search-results"></div>
     </div>
 
-    <!-- Pinned messages for this channel. -->
-    <div id="pinned-panel" hidden>
-      <div class="pinned-head">
-        <span class="pinned-title"><span class="ico" data-icon="pin"></span> Pinned in #<span id="pinned-channel">general</span></span>
-        <button class="icon-btn" id="pinned-close" title="Close"><span class="ico" data-icon="x"></span></button>
-      </div>
-      <div id="pinned-list"></div>
-    </div>
-
     <!-- Viewing stage. Several people can present at once; the strip below the
          head lists every live screen share and camera, and you pick which one
          plays here. -->
@@ -550,6 +541,20 @@
     <!-- The wrapper exists so the jump button can float over the bottom of the
          list without covering the composer. -->
     <div id="messages-wrap">
+      <!-- "12 new messages since 12:38 AM on March 21, 2026", with Mark As Read
+           on the right. What arrived in this channel while you were away, at the
+           top of it, over the conversation rather than pushing it down — the same
+           bar and the same wording the reference uses. Fed by the per-channel read
+           watermarks that already drive the unread badges (see `reads` in
+           app.js); the BAR needed the watermark as it was when you walked in,
+           which is captured on entry before the load overwrites it. -->
+      <div id="unread-bar" class="unread-bar" hidden>
+        <button type="button" class="ub-jump" id="unread-jump"
+                title="Jump to the first message you have not read"><span id="unread-text"></span></button>
+        <button type="button" class="ub-read" id="unread-read" title="Mark this channel as read">
+          <span>Mark As Read</span><span class="ico" data-icon="mark-read"></span>
+        </button>
+      </div>
       <!-- tabindex makes the conversation reachable from the composer; the
            arrow-key walk that follows from there lives in app.js. -->
       <div id="messages" role="log" aria-live="polite" tabindex="0"
@@ -593,7 +598,12 @@
         <button type="button" id="btn-attach" title="Attach a file (max 1 GB)">
           <span class="ico" data-icon="plus"></span>
         </button>
-        <textarea id="composer-input" rows="1" placeholder="Message #general" maxlength="2000"></textarea>
+        <!-- No maxlength, deliberately. It used to be 2000, which meant a long
+             paste stopped dead partway through with no explanation and no way to
+             finish the message. The server's MAX_BODY is the only limit now, it
+             is 250,000 characters, and it answers with a real error instead of
+             quietly dropping the tail. -->
+        <textarea id="composer-input" rows="1" placeholder="Message #general"></textarea>
         <div class="composer-tools">
           <button type="button" id="btn-mic" title="Record a voice message">
             <span class="ico" data-icon="mic-record"></span>
@@ -621,7 +631,8 @@
       </div>
       <div id="thread-list"></div>
       <form id="thread-composer" autocomplete="off">
-        <textarea id="thread-input" rows="1" placeholder="Reply in thread…" maxlength="2000"></textarea>
+        <!-- Uncapped, like the main composer. -->
+        <textarea id="thread-input" rows="1" placeholder="Reply in thread…"></textarea>
         <button type="submit" id="thread-send" title="Send (Enter)">
           <span class="ico" data-icon="send"></span>
         </button>
@@ -1569,6 +1580,25 @@
     <img id="lb-image" class="fit" alt="">
   </div>
   <div class="lb-caption" id="lb-caption"></div>
+</div>
+
+<!-- Pinned messages for this channel. A POPOVER hung off the header's pin
+     button, the way the reference does it — not the inline banner this used to
+     be. The banner pushed the conversation down, showed one truncated line per
+     pin, and had to be dismissed before you could read the channel again; a
+     panel floats over it, holds a full card per pin, and closes on Esc or a
+     click outside. Out here at the end of the document rather than inside
+     <main>, because it is position:fixed and must not be clipped by the
+     column's overflow. -->
+<div id="pinned-panel" class="pinned-panel" hidden
+     role="dialog" aria-modal="false" aria-labelledby="pinned-title">
+  <div class="pinned-head">
+    <span class="pinned-title" id="pinned-title">
+      <span class="ico" data-icon="pin"></span><span>Pinned Messages</span>
+    </span>
+    <button class="icon-btn" id="pinned-close" title="Close"><span class="ico" data-icon="x"></span></button>
+  </div>
+  <div id="pinned-list"></div>
 </div>
 
 <!-- Shared right-click menu, used by messages and by the expanded image. -->
