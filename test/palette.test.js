@@ -97,7 +97,10 @@ describe('the settings card', () => {
         expect(modal).toMatch(/border-radius: 8px/);
         expect(modal).toMatch(/border: 1px solid/);
         const sheet = /#settings \{[^}]*\}/.exec(css)[0];
-        expect(sheet).toMatch(/place-items: center/);
+        // Horizontally centred, TOP-aligned. It used to be centred both ways, but
+        // this overlay starts one title bar down, so centring put 103px of margin
+        // above the sheet and 72 below — see "the settings sheet, measured".
+        expect(sheet).toMatch(/place-items: start center/);
         // Dimmed, NOT blurred. Measured on the reference: text behind the panel
         // is as sharp as text inside it.
         expect(sheet).toMatch(/background: rgba\(0, 0, 0, \.68\)/);
@@ -119,7 +122,7 @@ describe('the settings card', () => {
         expect(/\.set-nav \{[^}]*flex-direction: column/.test(css)).toBe(true);
         expect(/\.set-nav-item \{[^}]*height: 36px/.test(css)).toBe(true);
         expect(/\.set-nav-item \.ico \{[^}]*width: 18px/.test(css)).toBe(true);
-        expect(/\.set-search \{[^}]*height: 38px/.test(css)).toBe(true);
+        expect(/\.set-search \{[^}]*height: 40px/.test(css)).toBe(true);
     });
 
     it('opens the nav with who you are, and a search you can find', () => {
@@ -1229,7 +1232,8 @@ describe('the Voice & Audio pane', () => {
     it('draws push to talk as a switch and folds the rest away', () => {
         expect(html()).toContain('id="set-ptt-toggle"');
         expect(html()).toMatch(/role="switch" aria-checked="false"/);
-        expect(css).toMatch(/\.switch\[aria-checked="true"\] \.switch-knob \{ transform: translateX\(16px\); \}/);
+        // 24px of travel now: the switch is 48 wide, not 40.
+        expect(css).toMatch(/\.switch\[aria-checked="true"\] \.switch-knob \{ transform: translateX\(24px\); \}/);
         expect(html()).toContain('id="set-voice-advanced"');
         expect(src()).toMatch(/\$\('set-voice-more'\)\.addEventListener\('click'/);
     });
@@ -1465,5 +1469,82 @@ describe('a header button whose panel is open', () => {
         // styled for it, so a panel could be open with nothing in the header saying
         // which button had opened it. The members toggle already did this via .on.
         expect(css).toMatch(/#chan-head \.ch-btn\[aria-expanded="true"\] \{[^}]*color: var\(--text-strong\)/);
+    });
+});
+
+// The settings sheet, measured off the reference. Several of these are the same
+// faults the popovers and the Filters form had — a field with no border, a control
+// darker than its surface — which is why they are pinned by value rather than left
+// to be re-noticed a fourth time.
+describe('the settings sheet, measured', () => {
+    const sheet = () => css.slice(css.indexOf('#settings {'), css.indexOf('.set-nav-head {'));
+
+    it('leaves 72px of margin top and bottom, not a box floating in the middle', () => {
+        // It was height: min(760px, 86vh) centred in an overlay that starts one
+        // title bar down, which measured 103 above and 72 below — and the practical
+        // cost was that Visual Density was always below the fold.
+        expect(sheet()).toMatch(/place-items: start center/);
+        expect(sheet()).toMatch(/margin-top: calc\(72px - var\(--tb\)\)/);
+        expect(sheet()).toMatch(/height: calc\(100% - 72px - \(72px - var\(--tb\)\)\)/);
+    });
+
+    it('insets the nav rail 16px, and fills the active pill at #2e2e33', () => {
+        expect(sheet()).toMatch(/padding: 16px 16px 24px/);
+        expect(css).toMatch(/\.set-nav-item\.on \{ background: #2e2e33/);
+    });
+
+    it('draws the profile avatar at 46px', () => {
+        // 34 was ~30% small against the two lines beside it, which already matched.
+        expect(sheet()).toMatch(/\.set-me-av \{\s*width: 46px; height: 46px/);
+    });
+
+    it('gives the rail search field a visible edge', () => {
+        // A transparent border on --sunk is not an edge. Same gap as the Filters
+        // fields and the Threads search box.
+        expect(sheet()).toMatch(/\.set-search \{[^}]*height: 40px/);
+        expect(sheet()).toMatch(/border: 1px solid #303035/);
+    });
+
+    it('sets section headings at 23px', () => {
+        // 20 drew an h20 cap height against the reference's h23; the
+        // width-to-height ratio already matched within 4%.
+        expect(css).toMatch(/\.set-sub \{[^}]*font-size: 23px/);
+    });
+});
+
+describe('the settings controls, measured', () => {
+    it('fills the traveled half of a slider', () => {
+        // The biggest functional miss on the Accessibility page: both halves of the
+        // track measured the same grey, so the value could only be read off the
+        // thumb. A range input's track is ONE element, so the fill is a
+        // hard-stopped gradient at --fill, which app.js writes on every input.
+        expect(css).toMatch(/linear-gradient\(to right, var\(--slider\) 0 var\(--fill, 0%\), var\(--track\) var\(--fill, 0%\) 100%\)/);
+    });
+
+    it('draws a selected radio as a filled disc with a white dot', () => {
+        // It was a 3px ring, a transparent gap and an 8px blurple dot floating
+        // inside it — much lighter weight, and blurple-on-blurple left the dot with
+        // almost no contrast against the ring holding it.
+        expect(css).toMatch(/\.set-radio input\[type="radio"\]:checked \{\s*border-color: var\(--slider\); background: var\(--slider\);/);
+        expect(css).toMatch(/\.set-radio input\[type="radio"\]:checked::after \{[^}]*width: 6px; height: 6px[^}]*background: #fff/);
+    });
+
+    it('draws an OFF switch as a dark well, not a grey pill', () => {
+        // --track is a mid grey, and a filled grey pill reads as a third state
+        // rather than as the absence of one. 48px wide, measured.
+        expect(css).toMatch(/\.switch \{[^}]*width: 48px/);
+        expect(css).toMatch(/\.switch \{[^}]*border: 1px solid #353539[^}]*background: #1c1c20/);
+        expect(css).toMatch(/\.switch\[aria-checked="true"\] \.switch-knob \{ transform: translateX\(24px\); \}/);
+    });
+
+    it('draws the preview as one outlined box with a muted caption', () => {
+        // It was a filled card holding a header strip, a divider and a nested darker
+        // panel — three surfaces where the reference has a single outline — and the
+        // caption was white, so it read as a heading.
+        expect(css).toMatch(/\.a11y-preview-box \{[^}]*background: none; border: 1px solid #38383d/);
+        expect(css).toMatch(/\.a11y-preview-box \{[^}]*min-height: 210px/);
+        expect(css).toMatch(/\.a11y-preview-label \{[^}]*color: var\(--panel-sub\)/);
+        // …and the sticky wrapper matches the sheet, or it draws a band across it.
+        expect(css).toMatch(/\.a11y-preview \{[^}]*background: var\(--chat-2\)/);
     });
 });

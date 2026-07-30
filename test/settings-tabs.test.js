@@ -16,6 +16,9 @@ const router = () => vi.fn(async (p) => {
     if (p === 'channels') return { success: true, channels: [{ name: 'general', unread: 0 }] };
     if (p === 'presence') return { success: true, members: [] };
     if (p === 'dm/threads') return { success: true, threads: [] };
+    // An avatar on file for user 1, so the preview has a real picture to resolve —
+    // which is the whole point of the fixture reading myUserId() rather than -1.
+    if (p === 'avatars') return { success: true, avatars: { 1: 'board/avatars/1.png' } };
     return { success: true };
 });
 
@@ -306,5 +309,39 @@ describe('Notifications', () => {
         // without the button pulsing at them.
         expect(h.settings.taskbarFlash).toBe(false);
         await flip('set-taskbar-flash');
+    });
+});
+
+// The two internal inconsistencies the preview had: it drew a GENERATED avatar
+// while every other face in the app — the message list, the sidebar, and the
+// profile header at the top of this very sheet — drew the real photograph, and
+// neither of its reaction pills was in the reacted state, so it could not show that
+// the two states differ at all.
+describe('the preview shows the reader s own message, not a stand-in', () => {
+    it('resolves the avatar the same way the message list does', async () => {
+        nav('Accessibility').click();
+        await settle();
+        const av = $('a11y-preview-msgs').querySelector('.msg-avatar');
+        expect(av).toBeTruthy();
+        // With an avatar on file the row carries the class that shows the picture;
+        // the fixture used to hard-code user_id: -1, which could never resolve one.
+        expect(av.classList.contains('has-img')).toBe(true);
+        expect(av.querySelector('img')).toBeTruthy();
+    });
+
+    it('names the reader, not a hard-coded name', async () => {
+        nav('Accessibility').click();
+        await settle();
+        expect($('a11y-preview-msgs').querySelector('.msg-author').textContent)
+            .toBe(h.settings.displayName);
+    });
+
+    it('shows one reaction reacted-to and one not', async () => {
+        nav('Accessibility').click();
+        await settle();
+        const pills = Array.from($('a11y-preview-msgs').querySelectorAll('.reaction'));
+        expect(pills).toHaveLength(2);
+        expect(pills[0].classList.contains('mine')).toBe(true);
+        expect(pills[1].classList.contains('mine')).toBe(false);
     });
 });

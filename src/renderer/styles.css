@@ -2511,7 +2511,10 @@ input[readonly] { opacity: .75; cursor: default; }
    Inset by the title bar so the OS window buttons stay live. */
 #settings {
   inset: var(--tb) 0 0 0;
-  place-items: center;
+  /* Top-aligned, not centred: the modal below is offset by hand so its margin is
+     measured from the WINDOW rather than from this overlay, which starts one title
+     bar down. Centring inside the overlay put 103px above it and 72 below. */
+  place-items: start center;
   /* Dimmed hard, and NOT blurred. Measured on the reference: text behind the
      panel is as sharp as text inside it, and the app drops to roughly a third
      of its brightness. Blur here costs a full-screen filter every frame and
@@ -2521,7 +2524,17 @@ input[readonly] { opacity: .75; cursor: default; }
 }
 .settings-modal {
   position: relative;
-  width: min(1400px, 88vw); height: min(760px, 86vh);
+  /* NEARLY FULL HEIGHT, measured off the reference: 72px of margin top and
+     bottom, not the ~320 a 760px box left. The practical cost of the old cap was
+     that the preview plus Text Readability filled the whole pane, so Visual
+     Density was always below the fold — everything on this page needed scrolling
+     before it could be compared with anything else on it. */
+  /* 72px of margin from the window, top and bottom, measured off the reference.
+     The overlay starts at --tb (the title bar has to stay live), so the top margin
+     is 72 minus that, and the height is what is left after both. */
+  width: min(1400px, 88vw);
+  margin-top: calc(72px - var(--tb));
+  height: calc(100% - 72px - (72px - var(--tb)));
   max-width: none; max-height: none;
   background: var(--chat-2);
   border: 1px solid var(--line-2); border-radius: 8px;
@@ -2539,7 +2552,9 @@ input[readonly] { opacity: .75; cursor: default; }
   grid-area: nav / nav / body / nav; min-height: 0; overflow-y: auto;
   background: var(--chat);
   display: flex; flex-direction: column;
-  padding: 16px 8px 24px;
+  /* 16px, not 8: the reference insets its rail's rows twice as far from the
+     sidebar edge, which is what stops the active pill touching it. */
+  padding: 16px 16px 24px;
 }
 
 /* Who you are, at the top of your own settings. */
@@ -2550,10 +2565,12 @@ input[readonly] { opacity: .75; cursor: default; }
   text-align: left;
 }
 .set-me:hover { background: var(--hover); }
+/* 46px, measured — it was 34, about 30% small against the two lines beside it,
+   which already matched. */
 .set-me-av {
-  width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%;
+  width: 46px; height: 46px; flex: 0 0 46px; border-radius: 50%;
   display: grid; place-items: center; position: relative;
-  font-size: 12px; font-weight: 800; color: var(--on-accent);
+  font-size: 15px; font-weight: 800; color: var(--on-accent);
 }
 .set-me-text { min-width: 0; display: flex; flex-direction: column; }
 .set-me-name {
@@ -2570,9 +2587,12 @@ input[readonly] { opacity: .75; cursor: default; }
   width: 16px; height: 16px; color: var(--dim); pointer-events: none;
 }
 .set-search {
-  width: 100%; height: 38px;
+  width: 100%; height: 40px;
   padding: 0 10px 0 31px; border-radius: 4px;
-  background: var(--sunk); border: 1px solid transparent; outline: none;
+  /* A visible edge, like the reference's — and like every other field in the app
+     after the Filters pass. It was a transparent border on --sunk, so the box had
+     no boundary of its own at all. */
+  background: var(--sunk); border: 1px solid #303035; outline: none;
   color: var(--text); font-size: 14px;
 }
 .set-search::placeholder { color: var(--dim); }
@@ -2607,7 +2627,7 @@ input[readonly] { opacity: .75; cursor: default; }
 .set-nav-item .ico { width: 18px; height: 18px; flex: 0 0 18px; stroke-width: 2; }
 .set-nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-nav-item:hover { background: var(--hover); color: var(--text); }
-.set-nav-item.on { background: var(--float-2); color: var(--text-strong); font-weight: 600; }
+.set-nav-item.on { background: #2e2e33; color: var(--text-strong); font-weight: 600; }
 
 /* The open tab's own headings, listed under it — the reference does this, and in
    a pane as long as Accessibility or Notifications it is the only way to see
@@ -4265,8 +4285,11 @@ button.ap-row:hover .ap-more { color: var(--text); }
 /* ---------- Voice & Audio ------------------------------------------------ */
 /* Devices and their volumes paired across two columns: a microphone and its
    level belong together, and so do a speaker and its own. */
+/* 23px, measured against the reference's own section headings — 20 drew h20
+   against its h23. The width-to-height ratio already matched within 4%, so the
+   face was never the problem. */
 .set-sub {
-  margin: 0 0 16px; font-size: 20px; line-height: 24px; font-weight: 700;
+  margin: 0 0 16px; font-size: 23px; line-height: 28px; font-weight: 700;
   color: var(--text-strong); letter-spacing: -.01em;
 }
 .set-rule { height: 1px; margin: 28px 0; background: var(--line-2); }
@@ -4304,15 +4327,22 @@ button.ap-row:hover .ap-more { color: var(--text); }
   display: flex; align-items: flex-start; gap: 12px;
   padding: 8px 0; cursor: pointer;
 }
+/* SELECTED is a solid disc with a white dot punched out of it, which is what the
+   reference draws. It used to be a 3px ring, a transparent gap and an 8px blurple
+   dot floating inside — much lighter visual weight, and blurple-on-blurple gave
+   the dot almost no contrast against the ring holding it. */
 .set-radio input[type="radio"] {
   -webkit-appearance: none; appearance: none;
   width: 20px; height: 20px; flex: 0 0 20px; margin: 1px 0 0;
   border-radius: 50%; border: 2px solid var(--nav-idle); background: none;
   display: grid; place-items: center; cursor: pointer;
 }
-.set-radio input[type="radio"]:checked { border-color: var(--slider); }
+.set-radio input[type="radio"]:hover { border-color: var(--text-strong); }
+.set-radio input[type="radio"]:checked {
+  border-color: var(--slider); background: var(--slider);
+}
 .set-radio input[type="radio"]:checked::after {
-  content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--slider);
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff;
 }
 .set-radio-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .set-radio-title { font-size: 14px; font-weight: 500; color: var(--text-strong); }
@@ -4326,19 +4356,22 @@ button.ap-row:hover .ap-more { color: var(--text); }
   padding: 14px 0; margin-top: 8px;
 }
 .set-toggle-label { font-size: 16px; font-weight: 500; color: var(--text-strong); }
+/* OFF is a dark well with a hairline round it — it reads as empty, which is what
+   off means. It used to be --track, a mid grey, and a filled grey pill reads as a
+   third state rather than as the absence of one. 48px wide, measured. */
 .switch {
-  width: 40px; height: 24px; flex: 0 0 40px; padding: 0;
-  border: 0; border-radius: 12px; cursor: pointer;
-  background: var(--track); position: relative;
-  transition: background .15s ease;
+  width: 48px; height: 24px; flex: 0 0 48px; padding: 0;
+  border: 1px solid #353539; border-radius: 12px; cursor: pointer;
+  background: #1c1c20; position: relative; box-sizing: border-box;
+  transition: background .15s ease, border-color .15s ease;
 }
 .switch-knob {
-  position: absolute; top: 4px; left: 4px;
+  position: absolute; top: 3px; left: 3px;
   width: 16px; height: 16px; border-radius: 50%; background: #fff;
   transition: transform .15s cubic-bezier(.2, .9, .3, 1);
 }
-.switch[aria-checked="true"] { background: var(--slider); }
-.switch[aria-checked="true"] .switch-knob { transform: translateX(16px); }
+.switch[aria-checked="true"] { background: var(--slider); border-color: var(--slider); }
+.switch[aria-checked="true"] .switch-knob { transform: translateX(24px); }
 @media (prefers-reduced-motion: reduce) {
   .switch, .switch-knob { transition: none; }
 }
@@ -4401,8 +4434,14 @@ button.ap-row:hover .ap-more { color: var(--text); }
   display: block; width: 100%; height: 8px; margin: 0;
   background: none; cursor: pointer;
 }
+/* THE TRAVELED HALF IS FILLED. A range input's track is one element, so the fill
+   is a hard-stopped gradient at --fill — a percentage app.js writes on every
+   `input` alongside the tick highlight. Without it the value could only be read
+   off the thumb's position, and both halves measured the same grey. */
 .set-slider input[type="range"]::-webkit-slider-runnable-track {
-  height: 8px; border-radius: 4px; background: var(--track);
+  height: 8px; border-radius: 4px;
+  background:
+    linear-gradient(to right, var(--slider) 0 var(--fill, 0%), var(--track) var(--fill, 0%) 100%);
 }
 .set-slider input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
@@ -4420,18 +4459,29 @@ button.ap-row:hover .ap-more { color: var(--text); }
 /* ---------- Accessibility: the live preview ----------------------------
    Real message rows through the real renderer, pinned to the top of the pane so
    a slider can be dragged while watching what it does to them. */
+/* ONE outlined box on the content background, with a muted caption above it — the
+   reference's shape. It used to be a filled card containing a header strip, a
+   divider and a nested darker panel: three surfaces where the reference has a
+   single outline, and the "Preview" label was white inside the card, so it read as
+   a heading rather than as the caption it is. */
+/* Sticky, so a slider can be dragged while watching what it does — which means it
+   has to be filled, or the controls scroll THROUGH it. --chat-2, matching the
+   settings sheet: it was --chat, one step darker, which drew a visible band across
+   the pane behind the caption. */
 .a11y-preview {
   position: sticky; top: 0; z-index: 3;
-  margin: -4px 0 22px; padding: 4px 0 12px;
-  background: var(--chat);
+  margin: -4px 0 26px; padding: 4px 0 12px;
+  background: var(--chat-2);
 }
 .a11y-preview-label {
-  font-size: 12px; font-weight: 700; letter-spacing: .02em;
-  color: var(--text-strong); margin-bottom: 8px;
+  font-size: 12px; font-weight: 600; letter-spacing: .01em;
+  color: var(--panel-sub); margin-bottom: 8px;
 }
 .a11y-preview-box {
-  padding: 12px 8px; border-radius: 8px;
-  background: var(--sunk); border: 1px solid var(--line);
+  /* Transparent, so the box is its outline and nothing else. 210px tall, measured,
+     which is what stops two message rows looking cramped in it. */
+  padding: 16px 8px; min-height: 210px; box-sizing: border-box;
+  border-radius: 8px; background: none; border: 1px solid #38383d;
   overflow: hidden;
 }
 /* The preview draws .msg rows, which are styled for the message column — this

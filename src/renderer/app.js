@@ -912,11 +912,28 @@
         'ticks-sat': { min: 0, max: 100, at: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], suffix: '%' }
     };
 
+    // The scale above a slider AND the slider's own progress fill, which are the
+    // same arithmetic — so they are written together and can never disagree.
+    //
+    // The fill has to be a variable rather than CSS: a range input's track is one
+    // element, so "blurple up to here, grey after" is a hard-stopped gradient, and
+    // only the value can say where the stop goes.
     function paintTicks(id, value) {
         const host = $(id);
         const spec = TICKS[id];
         if (!host || !spec) return;
         const span = spec.max - spec.min;
+
+        // The thumb is 16px and its centre travels between 8px and (width - 8),
+        // not 0 and 100% — so a naive percentage leaves the fill ahead of the
+        // thumb at the low end and behind it at the high end. Interpolating
+        // between 8px and calc(100% - 8px) keeps the stop under the thumb's
+        // centre at every value.
+        const t = span > 0 ? Math.max(0, Math.min(1, (value - spec.min) / span)) : 0;
+        const input = host.parentElement && host.parentElement.querySelector('input[type="range"]');
+        if (input) {
+            input.style.setProperty('--fill', `calc(8px + ${(t * 100).toFixed(2)}% - ${(t * 16).toFixed(2)}px)`);
+        }
         // Rebuilt only when it has to be: the marks never change, so dragging a
         // slider just moves which one is highlighted.
         if (!host.children.length) {
@@ -947,19 +964,37 @@
     // setting on this pane is demonstrated by the thing it actually changes. Two
     // fixed messages rather than the channel's own, because the pane has to look
     // the same on an empty board as on a busy one.
-    const A11Y_PREVIEW_POSTS = [
-        {
-            id: -101, name: 'Scarmonit', client_id: 'preview-a', user_id: -1,
-            body: 'what happened to all the beans',
-            created_at: 1700000000000, pinned: 0, reply_count: 0,
-            reactions: [{ emoji: '🫘', count: 3, who: [] }, { emoji: '🎉', count: 1, who: [] }]
-        },
-        {
-            id: -102, name: 'Scarmonit', client_id: 'preview-a', user_id: -1,
-            body: "here's a link https://scarmonit.com/messageboard and some **bold** text",
-            created_at: 1700000060000, pinned: 0, reply_count: 0, reactions: []
-        }
-    ];
+    // Built per render, not a module constant, because two of its fields have to be
+    // the reader's OWN:
+    //
+    //   * `user_id` is what avatarSrc() resolves a picture from. Hard-coded to -1 it
+    //     always fell back to generated initials, so the preview showed a coloured
+    //     "SC" circle while the message list, the sidebar and the profile header at
+    //     the top of this very pane all showed the real photograph.
+    //   * `who` on the first reaction includes this install, so that pill draws in
+    //     its REACTED state. With both empty, both pills rendered identically and
+    //     the preview could not show that the two states differ at all — which is
+    //     one of the things a preview of message appearance is for.
+    function a11yPreviewPosts() {
+        const me = settings.displayName || 'Scarmonit';
+        const uid = myUserId() || null;
+        return [
+            {
+                id: -101, name: me, client_id: 'preview-a', user_id: uid,
+                body: 'what happened to all the beans',
+                created_at: 1700000000000, pinned: 0, reply_count: 0,
+                reactions: [
+                    { emoji: '🫘', count: 3, who: [settings.clientId] },
+                    { emoji: '🎉', count: 1, who: [] }
+                ]
+            },
+            {
+                id: -102, name: me, client_id: 'preview-a', user_id: uid,
+                body: "here's a link https://scarmonit.com/messageboard and some **bold** text",
+                created_at: 1700000060000, pinned: 0, reply_count: 0, reactions: []
+            }
+        ];
+    }
 
     function renderA11yPreview() {
         const host = $('a11y-preview-msgs');
@@ -971,7 +1006,7 @@
         if (!pane || pane.hidden) return;
         host.innerHTML = '';
         let prev = null;
-        A11Y_PREVIEW_POSTS.forEach((p) => {
+        a11yPreviewPosts().forEach((p) => {
             // Through the real renderer, in the real density — grouped exactly as
             // the message list would group them.
             const row = renderMessage(p, prev);
@@ -979,6 +1014,9 @@
             prev = p;
         });
         highlightCodeBlocks(host);
+        // A picture that 404s takes itself off and the initials underneath show
+        // through — the same courtesy every other avatar in the app gets.
+        wireAvatarFallback(host);
     }
 
     // ---------- dialogs ---------------------------------------------------
