@@ -1444,7 +1444,9 @@ function registerIpc() {
     // pixels of caption-button plate hanging below the bar, in the wrong colour.
     const OVERLAY = {
         dark: { color: '#131316', symbolColor: '#e9ebf0' },
-        light: { color: '#eeeeef', symbolColor: '#31343b' }
+        // Tracks the light theme's --side and its --text; both moved when that
+        // theme stopped being an inversion of the dark one.
+        light: { color: '#eef0f3', symbolColor: '#3a3d43' }
     };
 
     // Whole-interface zoom, for the Accessibility slider and for Ctrl +/-/0.

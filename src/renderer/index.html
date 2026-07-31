@@ -1313,7 +1313,9 @@
             <input type="radio" name="set-theme" value="light">
             <span class="set-radio-body">
               <span class="set-radio-title">Light</span>
-              <span class="set-radio-sub">The same layout, inverted</span>
+              <!-- It said "The same layout, inverted", which was true and was the
+                   problem: the light theme has its own palette now. -->
+              <span class="set-radio-sub">The same layout in layered off-whites</span>
             </span>
           </label>
           <label class="set-radio">

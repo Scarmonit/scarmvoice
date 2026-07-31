@@ -387,6 +387,55 @@ the single 20 Hz tick that drives every meter, replacing a per-participant
 `requestAnimationFrame` running at 60 Hz (and stalling whenever the window was
 hidden).
 
+### Two themes, not one theme inverted
+
+The dark theme builds depth out of **shade**: the rail is the darkest column, the
+sidebars sit a step above it, the message column above that, and anything that
+floats — a menu, a modal, a popover — is lighter still. There is always more room
+above the surface you are on.
+
+A light theme has no such room. White is the ceiling, so the same ramp turned
+upside down produces exactly what it sounds like: a flat white app with near-black
+text. Which is what this one was — the settings pane described it as "the same
+layout, inverted", and it measured that way, seven pure-white surfaces with no
+hierarchy between them and `#06060a` on top.
+
+So the light palette is written from its own premises:
+
+- **The page is layered off-whites, none of them `#fff`** — rail `#e4e6ea`,
+  sidebars `#eef0f3`, message column `#fafbfc`, member list `#f4f6f8`. The member
+  list gets a step of its own that it does *not* have in the dark theme: two white
+  columns divided by a hairline read as one sheet.
+- **Only the things that float are white.** Modals, menus, popovers, tooltips, the
+  composer and the settings sheet are the paper; everything else is the page under
+  it. That is what makes a menu read as being *in front of* the app rather than as
+  another patch of the same surface — and it is why a card raised on a floating
+  surface (`--float-2`) is *darker* there and *lighter* in the dark theme. That one
+  inversion is deliberate and is asserted in the tests as the opposite of its dark
+  counterpart.
+- **No pure black anywhere.** Three real steps instead of one, measured against the
+  message column: headings 14.2:1, prose 12.2:1, labels 9.5:1, muted 7.2:1,
+  timestamps 4.7:1. The quiet end is deliberately still legible — copying the dark
+  theme's brightness *ratios* would have put channel names at 3:1.
+- **Status colours stay mid-tone.** The inversion had darkened every one of them
+  until a 10px presence dot read as a hole punched in the page.
+- **Shadows carry "this floats"**, since a floating surface can no longer be
+  lighter than the page — soft, wide, and tinted with the text near-black rather
+  than pure black, which at these alphas reads as dirt on the screen.
+
+**The root cause was never the values.** It was that a component with a colour it
+needed wrote that colour down: the pinned card's `#28282d`, the filter sheet's
+fields, the settings rail's selected pane at `#2e2e33`, the slider tick marks at
+`rgba(255,255,255,.3)`, the two popovers' outlines, four box-shadows, and — in JS,
+where no stylesheet could reach them at all — the generated avatar's `hsl(h,70%,62%)`
+and the profile banner's `hsl(h,32%,17%)`. Every one of those is a token now, with
+a value in each theme; the avatar and banner take their saturation and lightness
+from `--av-*` and `--banner-*` so the one colour that lands on every surface can
+answer to the theme. Two tests keep it that way: **no dark literal, and no
+white/black wash, may appear in an ordinary rule** — only in a theme block, or in
+the handful of surfaces that are black in both themes on purpose (video, the
+lightbox, the share picker).
+
 ### Why the network lives in the main process
 
 The board's session cookie is `HttpOnly`, `Secure`, and `SameSite=Lax`. The

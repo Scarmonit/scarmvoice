@@ -40,17 +40,28 @@
         return h;
     }
 
+    // The HUE is the only part that comes from the name. Saturation and lightness
+    // come from the stylesheet (--av-s1/--av-l1/--av-s2/--av-l2) so the one colour
+    // in this app that lands on every surface can answer to the theme: the same
+    // 70%-saturated disc that reads as friendly on a dark column is a shout on a
+    // light one. Written as var() with a fallback, so an avatar built before the
+    // stylesheet has loaded still gets the dark theme's values rather than none.
     function avatarStyle(name) {
         const h = hueOf(name || '?');
-        return `background:linear-gradient(135deg,hsl(${h},70%,62%),hsl(${(h + 40) % 360},75%,52%))`;
+        return 'background:linear-gradient(135deg,' +
+            `hsl(${h},var(--av-s1,70%),var(--av-l1,62%)),` +
+            `hsl(${(h + 40) % 360},var(--av-s2,75%),var(--av-l2,52%)))`;
     }
 
     // The same hue as the avatar, flat and much darker. A profile header with no
     // uploaded banner is a solid band in every client that has one — a saturated
     // two-stop sweep across the full width is not a shape a header ever takes,
     // and at 105px tall it drowned everything under it.
+    // Same story as avatarStyle: the hue is the person, the rest is the theme. At a
+    // fixed 32%/17% this is a near-black band, which is a profile header on a dark
+    // app and a bar of night across the top of a light one.
     function bannerStyle(name) {
-        return `background:hsl(${hueOf(name || '?')},32%,17%)`;
+        return `background:hsl(${hueOf(name || '?')},var(--banner-s,32%),var(--banner-l,17%))`;
     }
 
     function initials(name) {

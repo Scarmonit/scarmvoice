@@ -78,10 +78,126 @@ describe('the dark surface ramp', () => {
         expect(lum(hex('elev', dark))).toBeGreaterThan(lum(hex('float-2', dark)));
     });
 
-    it('does the same in the light theme, where it was inverted too', () => {
+    it('layers the light theme too — but NOT by mirroring the dark ramp', () => {
         const light = css.slice(css.indexOf(':root[data-theme="light"]'));
+        // The page still layers outside-in: rail deepest, then the sidebars, then
+        // the message column. This is the part that was missing entirely — every
+        // one of those was a flat white.
+        expect(lum(hex('side', light))).toBeGreaterThan(lum(hex('rail', light)));
+        expect(lum(hex('chat', light))).toBeGreaterThan(lum(hex('side', light)));
+        // The user dock is still raised out of the sidebar it sits in.
         expect(lum(hex('panel', light))).toBeGreaterThan(lum(hex('side', light)));
-        expect(lum(hex('float-2', light))).toBeGreaterThan(lum(hex('float', light)));
+        // …and the member list is its own step, which in the dark theme it is not:
+        // two white columns with a hairline between them read as one sheet.
+        expect(lum(hex('members', light))).toBeLessThan(lum(hex('chat', light)));
+        // A CARD ON PAPER INVERTS. In the dark theme --float-2 is a step lighter
+        // than --float, because there is always more room above a dark surface.
+        // White is the ceiling, so a card raised on white is a tint with an edge —
+        // mirroring the dark ramp here is what a naive inversion does, and it is
+        // why this assertion is the opposite of the dark one on purpose.
+        expect(lum(hex('float-2', light))).toBeLessThan(lum(hex('float', light)));
+    });
+
+    it('keeps pure white for the things that float, and nothing else', () => {
+        const light = css.slice(css.indexOf(':root[data-theme="light"]'), css.indexOf('/* The rail pill'));
+        const whites = [...light.matchAll(/(--[a-z0-9-]+):\s*#ffffff/g)].map((m) => m[1]);
+        // The composer, the floating surfaces and the settings sheet are paper.
+        // The PAGE — rail, sidebars, message column, member list, user dock — is
+        // not, which is the whole difference between this and an inversion.
+        // --on-accent is the text drawn ON the accent, not a surface.
+        expect(whites.sort()).toEqual(
+            ['--field', '--float', '--input', '--menu', '--on-accent', '--sheet']);
+    });
+
+    it('never uses a near-black for text', () => {
+        const light = css.slice(css.indexOf(':root[data-theme="light"]'), css.indexOf('/* The rail pill'));
+        ['text', 'text-strong', 'text-body', 'msg-text', 'author', 'muted', 'dim', 'meta']
+            .forEach((name) => {
+                // #06060a was the old --author and --text-strong: black in all but
+                // name. Dark GREY starts around 0x1c.
+                expect(lum(hex(name, light)), name).toBeGreaterThan(28);
+            });
+    });
+});
+
+// The root cause of a harsh light theme, checked directly rather than through its
+// symptoms: a colour written into the rule that needed it is a colour NO theme can
+// reach. Every one of these was a dark surface that stayed dark on white — the
+// pinned card, the filter sheet's fields, the settings rail's selected pane, the
+// slider tick marks, the two popovers' outlines.
+describe('every colour goes through a token', () => {
+    // Declarations, with the selector they belong to. Comments are blanked first so
+    // a hex quoted in prose is never mistaken for one that paints.
+    const declarations = () => {
+        const blanked = css.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+        const out = [];
+        const stack = [];
+        let buf = '';
+        for (const ch of blanked) {
+            if (ch === '{') { stack.push(buf.trim().replace(/\s+/g, ' ')); buf = ''; }
+            else if (ch === '}') { stack.pop(); buf = ''; }
+            else if (ch === ';') {
+                if (stack.length) out.push({ sel: stack[stack.length - 1], decl: buf.trim() });
+                buf = '';
+            } else buf += ch;
+        }
+        return out;
+    };
+    // A theme block is allowed literals — that is what it is for.
+    const isTheme = (sel) => /^:root/.test(sel) || /^html\.(high-contrast|desat)/.test(sel);
+    // …and so are the surfaces that are black in BOTH themes: video, the lightbox
+    // and the share picker are dark by nature, not by palette.
+    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox/;
+
+    const relLum = (hexStr) => {
+        const h = hexStr.length === 4
+            ? '#' + [...hexStr.slice(1)].map((c) => c + c).join('') : hexStr;
+        const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+            .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+    };
+
+    it('leaves no dark literal in an ordinary rule', () => {
+        const offenders = declarations()
+            .filter((d) => !isTheme(d.sel) && !BLACK_ON_PURPOSE.test(d.sel))
+            .filter((d) => (d.decl.match(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g) || [])
+                .some((c) => relLum(c) < 0.16))
+            .map((d) => d.sel + ' :: ' + d.decl);
+        expect(offenders).toEqual([]);
+    });
+
+    it('leaves no white or black WASH in an ordinary rule', () => {
+        // rgba(255,255,255,…) is a lift on a dark surface and nothing at all on a
+        // light one; rgba(0,0,0,…) is the same problem the other way up. Both
+        // belong in a token. Text and glyphs drawn ON a coloured fill are exempt:
+        // white on blurple is white in both themes.
+        const TEXT_ON_FILL = /color|fill|stroke/;
+        const offenders = declarations()
+            .filter((d) => !isTheme(d.sel) && !BLACK_ON_PURPOSE.test(d.sel))
+            .filter((d) => !TEXT_ON_FILL.test(d.decl.split(':')[0]))
+            .filter((d) => /(background|box-shadow)\s*:/.test(d.decl))
+            .filter((d) => /rgba?\(\s*(0,\s*0,\s*0|255,\s*255,\s*255)/.test(d.decl))
+            .map((d) => d.sel + ' :: ' + d.decl);
+        // The white knob on a switch and the white thumb on a slider are the two
+        // things that are white in both themes BY DESIGN — they are drawn on the
+        // control's own fill, exactly like text on a coloured button.
+        const allowed = /switch-knob|slider-thumb|input:checked|a11y-face|acct-qr|btn-danger-solid/;
+        expect(offenders.filter((o) => !allowed.test(o))).toEqual([]);
+    });
+
+    it('builds the generated avatar and banner from tokens, not literal hsl()', () => {
+        // The one colour in this app that lands on every surface, and it lived in
+        // JS: a 70%-saturated disc reads as friendly on a dark column and shouts on
+        // a light one, and no stylesheet could say so.
+        const lib = fs.readFileSync(path.join(RENDERER, 'lib.js'), 'utf8');
+        expect(lib).toMatch(/var\(--av-s1,\s*70%\)/);
+        expect(lib).toMatch(/var\(--av-l2,\s*52%\)/);
+        expect(lib).toMatch(/var\(--banner-s,\s*32%\)/);
+        const light = css.slice(css.indexOf(':root[data-theme="light"]'));
+        // Softer in the light theme, which is the whole point of it being a token.
+        const pct = (name, block) => Number(new RegExp('--' + name + ':\\s*(\\d+)%').exec(block)[1]);
+        expect(pct('av-s1', light)).toBeLessThan(pct('av-s1', dark));
+        expect(pct('banner-l', light)).toBeGreaterThan(pct('banner-l', dark));
     });
 });
 
@@ -103,16 +219,27 @@ describe('the settings card', () => {
         expect(sheet).toMatch(/place-items: start center/);
         // Dimmed, NOT blurred. Measured on the reference: text behind the panel
         // is as sharp as text inside it.
-        expect(sheet).toMatch(/background: rgba\(0, 0, 0, \.68\)/);
+        // Through --scrim, like every other overlay: a hard black at .68 over a
+        // light app is a blackout rather than a dim.
+        expect(sheet).toMatch(/background: var\(--scrim\)/);
+        expect(dark).toMatch(/--scrim: rgba\(0, 0, 0, \.72\)/);
         expect(sheet).toMatch(/backdrop-filter: none/);
     });
 
     it('floats above the app rather than reusing its shades', () => {
         // The panel was the same values as the main window, so it read as the
         // same layer. It is lighter than what is behind it now.
-        expect(/\.settings-modal \{[^}]*background: var\(--chat-2\)/.test(css)).toBe(true);
-        expect(/\.set-nav \{[^}]*background: var\(--chat\)/.test(css)).toBe(true);
+        // Its own pair of tokens, not --chat-2 and --chat borrowed: the RELATIONSHIP
+        // between those two (body raised, rail sunk) only holds in a dark theme, and
+        // reusing them put the light theme's rail above its own body.
+        expect(/\.settings-modal \{[^}]*background: var\(--sheet\)/.test(css)).toBe(true);
+        expect(/\.set-nav \{[^}]*background: var\(--sheet-nav\)/.test(css)).toBe(true);
+        expect(dark).toMatch(/--sheet:\s*var\(--chat-2\)/);
+        expect(dark).toMatch(/--sheet-nav:\s*var\(--chat\)/);
         expect(lum(hex('chat-2', dark))).toBeGreaterThan(lum(hex('chat', dark)));
+        // …and the light theme says the same thing with the opposite numbers.
+        const light = css.slice(css.indexOf(':root[data-theme="light"]'));
+        expect(lum(hex('sheet', light))).toBeGreaterThan(lum(hex('sheet-nav', light)));
     });
 
     it('gives the nav a column instead of a gutter', () => {
@@ -781,7 +908,10 @@ describe('panes are divided by a line, not by a darker neighbour', () => {
         // more separation than the reference uses, and it leaves no visible edge.
         // Two rules carry this selector; the grid-area one comes first.
         const rule = (css.match(/#members-panel \{[^}]*\}/g) || []).find((r) => r.includes('background'));
-        expect(rule).toMatch(/background:\s*var\(--chat\)/);
+        // Through --members, which IS --chat in the dark theme — the light theme
+        // needs a step here that the dark theme must not have.
+        expect(rule).toMatch(/background:\s*var\(--members\)/);
+        expect(dark).toMatch(/--members:\s*var\(--chat\)/);
         expect(rule).toMatch(/box-shadow:\s*inset 1px 0 0 var\(--line\)/);
     });
 
@@ -1261,7 +1391,8 @@ describe('the pinned popover, measured', () => {
     it('outlines itself with an explicit hairline, not --line', () => {
         // Over --float that token computes to #313136, eight points brighter than
         // the reference's #29292C — bright enough to read as a highlight.
-        expect(block()).toMatch(/border: 1px solid #29292c/);
+        expect(block()).toMatch(/border: 1px solid var\(--float-edge\)/);
+        expect(dark).toMatch(/--float-edge:\s*#29292c/);
         expect(block()).not.toMatch(/\.pinned-panel \{[^}]*border: 1px solid var\(--line\)/);
     });
 
@@ -1269,7 +1400,8 @@ describe('the pinned popover, measured', () => {
         // It used to be --float-2, which is ALSO the card colour, so the bar read
         // as raised out of the panel and level with the cards under it.
         const head = css.slice(css.indexOf('.pinned-head {'), css.indexOf('.pinned-title {'));
-        expect(head).toMatch(/background: var\(--float\); border-bottom: 1px solid #323237/);
+        expect(head).toMatch(/background: var\(--float\); border-bottom: 1px solid var\(--float-rule\)/);
+        expect(dark).toMatch(/--float-rule:\s*#323237/);
         expect(head).not.toMatch(/background: var\(--float-2\)/);
     });
 
@@ -1287,7 +1419,9 @@ describe('the pinned popover, measured', () => {
 
     it('gives a card its own fill, its own outline and a 78px floor', () => {
         const card = css.slice(css.indexOf('.pinned-item {'), css.indexOf('.pinned-avatar'));
-        expect(card).toMatch(/background: #28282d; border: 1px solid #35353b/);
+        expect(card).toMatch(/background: var\(--card\); border: 1px solid var\(--card-line\)/);
+        expect(dark).toMatch(/--card:\s*#28282d/);
+        expect(dark).toMatch(/--card-line:\s*#35353b/);
         expect(card).toMatch(/min-height: 78px/);
         expect(card).toMatch(/padding: 16px;/);
     });
@@ -1355,7 +1489,9 @@ describe('the filters modal, measured', () => {
         // the way round. It used to be var(--input) with a transparent border, and
         // --input is close enough to --float that the field had no visible edge.
         expect(fm()).toMatch(/\.fm-input \{[^}]*height: 40px/);
-        expect(fm()).toMatch(/\.fm-input \{[^}]*background: #202024; border: 1px solid #37373d/);
+        expect(fm()).toMatch(/\.fm-input \{[^}]*background: var\(--ctl-sunk\); border: 1px solid var\(--ctl-sunk-line\)/);
+        expect(dark).toMatch(/--ctl-sunk:\s*#202024/);
+        expect(dark).toMatch(/--ctl-sunk-line:\s*#37373d/);
     });
 
     it('has no rule between sections', () => {
@@ -1368,7 +1504,8 @@ describe('the filters modal, measured', () => {
     it('draws Add date as a real button the same height as a field', () => {
         // It was plain text on the modal's own fill: nothing there to press.
         expect(fm()).toMatch(/\.fm-add \{[^}]*height: 40px/);
-        expect(fm()).toMatch(/\.fm-add \{[^}]*background: #323237; border: 1px solid #35353b/);
+        expect(fm()).toMatch(/\.fm-add \{[^}]*background: var\(--ctl\); border: 1px solid var\(--ctl-line\)/);
+        expect(dark).toMatch(/--ctl:\s*#323237/);
     });
 
     it('raises the footer buttons OUT of the sheet', () => {
@@ -1376,13 +1513,13 @@ describe('the filters modal, measured', () => {
         // it sits on, so it was invisible as a button. Same elevation inversion as
         // the scrollbar and the pinned header.
         const foot = css.slice(css.indexOf('.fm-foot {'));
-        expect(foot).toMatch(/\.fm-foot button:not\(\.fm-link\) \{[^}]*background: #323237; border: 1px solid #35353b/);
+        expect(foot).toMatch(/\.fm-foot button:not\(\.fm-link\) \{[^}]*background: var\(--ctl\); border: 1px solid var\(--ctl-line\)/);
         expect(foot).toMatch(/\.fm-apply:disabled \{[^}]*opacity: \.5/);
     });
 
     it('gives every modal the reference s border and title size', () => {
         const modal = css.slice(css.indexOf('.modal {'), css.indexOf('.modal-body {'));
-        expect(modal).toMatch(/border: 1px solid #323237/);
+        expect(modal).toMatch(/border: 1px solid var\(--float-rule\)/);
         expect(modal).toMatch(/\.modal-head h2 \{[^}]*font-size: 20px/);
     });
 
@@ -1391,7 +1528,8 @@ describe('the filters modal, measured', () => {
         // bar down the edge of a conversation is chrome asking to be read, so it
         // hides. Here it is the only thing saying there is more below the fold.
         const bar = css.slice(css.indexOf('.modal-body::-webkit-scrollbar'));
-        expect(bar).toMatch(/background: rgba\(255, 255, 255, \.30\)/);
+        expect(bar).toMatch(/background: var\(--scrollbar-modal\)/);
+        expect(dark).toMatch(/--scrollbar-modal: rgba\(255, 255, 255, \.30\)/);
         expect(css).not.toMatch(/\.modal-body\.scrolling/);
     });
 });
@@ -1418,7 +1556,7 @@ describe('the threads popover, measured', () => {
         // It was 528 x 368, and the empty state is the whole point of the panel.
         expect(tp()).toMatch(/width: 602px/);
         expect(tp()).toMatch(/min-height: 450px/);
-        expect(tp()).toMatch(/border: 1px solid #29292c/);
+        expect(tp()).toMatch(/border: 1px solid var\(--float-edge\)/);
     });
 
     it('fills the header with the body shade, like the pinned one', () => {
@@ -1426,7 +1564,7 @@ describe('the threads popover, measured', () => {
         // colour — so the bar read as raised out of the panel. The reference keeps
         // it flush and separates it with the rule alone.
         expect(tp()).toMatch(/\.tp-head \{[^}]*height: 48px/);
-        expect(tp()).toMatch(/background: var\(--float\); border-bottom: 1px solid #323237/);
+        expect(tp()).toMatch(/background: var\(--float\); border-bottom: 1px solid var\(--float-rule\)/);
         expect(tp()).not.toMatch(/\.tp-head \{[^}]*var\(--float-2\)/);
         // The pinned popover's header must not drift back either.
         const ph = css.slice(css.indexOf('.pinned-head {'), css.indexOf('.pinned-title {'));
@@ -1439,7 +1577,7 @@ describe('the threads popover, measured', () => {
         // the same field treatment the Filters form needed.
         expect(tp()).toMatch(/\.tp-search \{[^}]*flex: 0 0 280px/);
         expect(tp()).toMatch(/\.tp-search \{[^}]*height: 32px/);
-        expect(tp()).toMatch(/\.tp-search \{[^}]*background: #202024; border: 1px solid #37373d/);
+        expect(tp()).toMatch(/\.tp-search \{[^}]*background: var\(--ctl-sunk\); border: 1px solid var\(--ctl-sunk-line\)/);
     });
 
     it('sizes the header glyph to 22, like the pinned popover s pin', () => {
@@ -1490,7 +1628,8 @@ describe('the settings sheet, measured', () => {
 
     it('insets the nav rail 16px, and fills the active pill at #2e2e33', () => {
         expect(sheet()).toMatch(/padding: 16px 16px 24px/);
-        expect(css).toMatch(/\.set-nav-item\.on \{ background: #2e2e33/);
+        expect(css).toMatch(/\.set-nav-item\.on \{ background: var\(--nav-active\)/);
+        expect(dark).toMatch(/--nav-active: #2e2e33/);
     });
 
     it('draws the profile avatar at 46px', () => {
@@ -1502,7 +1641,8 @@ describe('the settings sheet, measured', () => {
         // A transparent border on --sunk is not an edge. Same gap as the Filters
         // fields and the Threads search box.
         expect(sheet()).toMatch(/\.set-search \{[^}]*height: 40px/);
-        expect(sheet()).toMatch(/border: 1px solid #303035/);
+        expect(sheet()).toMatch(/border: 1px solid var\(--field-edge\)/);
+        expect(dark).toMatch(/--field-edge:\s*#303035/);
     });
 
     it('sets section headings at 23px', () => {
@@ -1537,7 +1677,9 @@ describe('the settings controls, measured', () => {
         // strongly as the blurple disc beside it. Both values measured off the
         // reference — and the interior is DARKER than the pane rather than a hole
         // in it. The old bright grey is the hover state now.
-        expect(css).toMatch(/\.set-radio input\[type="radio"\] \{[^}]*border: 2px solid #45454a; background: #1d1d21/);
+        expect(css).toMatch(/\.set-radio input\[type="radio"\] \{[^}]*border: 2px solid var\(--well-ring\); background: var\(--well\)/);
+        expect(dark).toMatch(/--well-ring:\s*#45454a/);
+        expect(dark).toMatch(/--well:\s*#1d1d21/);
         expect(css).toMatch(/\.set-radio input\[type="radio"\]:hover \{ border-color: var\(--nav-idle\); \}/);
     });
 
@@ -1545,7 +1687,13 @@ describe('the settings controls, measured', () => {
         // --track is a mid grey, and a filled grey pill reads as a third state
         // rather than as the absence of one. 48px wide, measured.
         expect(css).toMatch(/\.switch \{[^}]*width: 48px/);
-        expect(css).toMatch(/\.switch \{[^}]*border: 1px solid #353539[^}]*background: #1c1c20/);
+        expect(css).toMatch(/\.switch \{[^}]*border: 1px solid var\(--switch-off-line\)[^}]*background: var\(--switch-off\)/);
+        expect(dark).toMatch(/--switch-off-line:\s*#353539/);
+        expect(dark).toMatch(/--switch-off:\s*#1c1c20/);
+        // In the light theme the TRACK carries the off state instead: a white knob
+        // in a near-white well is a switch with nothing in it.
+        const light = css.slice(css.indexOf(':root[data-theme="light"]'));
+        expect(lum(hex('switch-off', light))).toBeLessThan(lum(hex('side', light)));
         expect(css).toMatch(/\.switch\[aria-checked="true"\] \.switch-knob \{ transform: translateX\(24px\); \}/);
     });
 
@@ -1553,14 +1701,18 @@ describe('the settings controls, measured', () => {
         // It was a filled card holding a header strip, a divider and a nested darker
         // panel — three surfaces where the reference has a single outline — and the
         // caption was white, so it read as a heading.
-        expect(css).toMatch(/\.a11y-preview-box \{[^}]*background: none; border: 1px solid #38383d/);
+        expect(css).toMatch(/\.a11y-preview-box \{[^}]*background: none; border: 1px solid var\(--outline\)/);
+        expect(dark).toMatch(/--outline:\s*#38383d/);
         expect(css).toMatch(/\.a11y-preview-box \{[^}]*min-height: 210px/);
         expect(css).toMatch(/\.a11y-preview-label \{[^}]*color: var\(--panel-sub\)/);
         // 16px, measured: at 12 the caption rendered 9px tall against the
         // reference's 12. The colour was already right.
         expect(css).toMatch(/\.a11y-preview-label \{[^}]*font-size: 16px/);
         // …and the sticky wrapper matches the sheet, or it draws a band across it.
-        expect(css).toMatch(/\.a11y-preview \{[^}]*background: var\(--chat-2\)/);
+        // The SHEET's colour, not --chat-2: this is what the controls scroll under,
+        // and those two are the same shade in the dark theme and different ones in
+        // the light theme, where the sheet is paper.
+        expect(css).toMatch(/\.a11y-preview \{[^}]*background: var\(--sheet\)/);
     });
 
     it('gives the preview a role-coloured username, as the reference does', () => {

@@ -16,6 +16,11 @@
   --rail:       #0c0c0e;   /* the background the user card floats on    (+2) */
   --side:       #121214;   /* server rail + channel and member sidebars (+2) */
   --chat:       #1a1a1e;   /* message column                            (+4) */
+  /* The member list. The SAME surface as the message column here, divided only by
+     a hairline — which is what the dark theme wants and what a light one cannot
+     have: two white columns with a hairline between them read as one sheet, so the
+     light block gives this a step of its own. */
+  --members:    var(--chat);
   --sunk:       #17171a;   /* a well cut INTO the chat surface: the search
                               field, and anything else that reads as an
                               inset rather than a raised control        (+3) */
@@ -30,6 +35,34 @@
   --float-2:    #2c2c31;   /* a card RAISED on a floating surface — the
                               action groups inside the account panel    (+5) */
   --elev:       #343439;   /* hover on a raised control                 (+5) */
+
+  /* ---- surfaces INSIDE a floating one -------------------------------------
+     A popover or a modal is already a surface, so the things sitting on it need
+     their own step — and each of these was measured off the reference for the
+     component that first needed it. They were literals in those rules, which is
+     the same as saying "this colour is correct in the dark theme and nowhere
+     else": the light theme could not reach them, so a filter sheet or a pinned
+     card stayed dark-grey on white. Every one of them is a token now, and the
+     light block gives each its own value rather than an inversion. */
+  --card:            #28282d;  /* a card raised on a floating surface */
+  --card-hover:      #2e2e34;
+  --card-line:       #35353b;
+  --card-line-hover: #3d3d44;
+  --ctl-sunk:        #202024;  /* a FIELD sunk into a floating surface */
+  --ctl-sunk-line:   #37373d;
+  --ctl-sunk-line-hi:#43434a;
+  --ctl:             #323237;  /* a BUTTON raised on a floating surface */
+  --ctl-hover:       #3a3a41;
+  --ctl-line:        #35353b;
+  --ctl-line-hover:  #45454d;
+  /* An inset well: the interior of an unselected radio, and an OFF switch. In
+     the dark theme these are darker than the pane; in the light theme a well is
+     still darker than its surface, which is the same idea rather than the same
+     number. */
+  --well:            #1d1d21;
+  --well-ring:       #45454a;
+  --switch-off:      #1c1c20;
+  --switch-off-line: #353539;
 
   --hover:      rgba(255, 255, 255, .045);
   /* The plate behind the channel you are reading. A translucent overlay, not a
@@ -46,6 +79,21 @@
   /* Kept as an alias: older rules and any future ones can still ask for a
      visible hairline by name. */
   --line-solid: rgba(255, 255, 255, .08);
+  /* OPAQUE hairlines, for the surfaces where a translucent one is wrong.
+     --line over --float computes eight points brighter than the reference's
+     outline, so the popovers and modals were drawing their edge as a highlight;
+     these are the measured values they used as literals instead. A translucent
+     line also cannot be tuned per theme, which is how a light modal ended up
+     outlined in dark grey. */
+  --float-edge:  #29292c;   /* the outline of a floating popover */
+  --float-rule:  #323237;   /* a rule INSIDE one, and the modal outline */
+  --field-edge:  #303035;   /* a field's own edge, on a pane */
+  --outline:     #38383d;   /* a box outlined on a pane (the a11y preview) */
+  /* The tick marks on a slider. White at low alpha reads over both halves of a
+     dark track and over NEITHER half of a light one, which is why this is a
+     token rather than the literal it was. */
+  --tick:        rgba(255, 255, 255, .3);
+  --tick-on:     rgba(255, 255, 255, .6);
 
   /* ---- text ---- */
   --text:  #e8e8ea;
@@ -105,6 +153,9 @@
   --code-text: #dcdce0;
   --spoiler: #2e2e33;
   --spoiler-hover: #383840;
+  /* A revealed spoiler keeps a faint plate so you can see what was hidden. It was
+     a white wash, which is nothing at all on a light surface. */
+  --spoiler-open: rgba(255, 255, 255, .06);
   --divider: rgba(0, 0, 0, .28);
   /* PURE BLACK at .72, measured against the reference's own backdrop.
      It was rgba(4,5,7,.82), and the tint is what made the dimming NON-UNIFORM: a
@@ -119,6 +170,11 @@
      — a groove rather than a handle. */
   --scrollbar: rgba(255, 255, 255, .13);
   --scrollbar-hover: rgba(255, 255, 255, .22);
+  /* A modal's scrollbar is much lighter than the sheet — see the note on
+     .modal-body. Its own pair, because a modal is a lighter surface than the app
+     behind it in one theme and a whiter one in the other. */
+  --scrollbar-modal: rgba(255, 255, 255, .30);
+  --scrollbar-modal-hover: rgba(255, 255, 255, .40);
   --rail-plate: linear-gradient(155deg, #2a2a30, #121215);
   --rail-plate-hover: linear-gradient(155deg, #34343c, #17171b);
 
@@ -131,6 +187,17 @@
   --accent-line: rgba(var(--accent-rgb), .40);
   --on-accent:   #04211f;
 
+  /* The generated avatar. A gradient built from a hash of the name (lib.js), which
+     was two literal hsl() stops in JS — so the one colour in the app that appears
+     on EVERY surface could not answer to the theme, and a set of 70%-saturated
+     discs that read as friendly on a dark column read as loud on a light one. The
+     stops are tokens now and the JS interpolates them. */
+  --av-s1: 70%; --av-l1: 62%;
+  --av-s2: 75%; --av-l2: 52%;
+  /* …and the flat band behind a profile header, which is the same colour with
+     the saturation dropped and the lightness taken most of the way down. */
+  --banner-s: 32%; --banner-l: 17%;
+
   --online-rgb:  35, 165, 90;
   --online:      #23a55a;
   /* Lighter and warmer than the presence green: this is text, on a surface,
@@ -141,6 +208,10 @@
      that say somebody is not here — there is no other signal, because an
      offline person has no presence row to carry one. */
   --offline:     #80848e;
+  /* How far an offline person's picture fades. A fraction, not a colour, so it
+     needs a theme of its own: 32% of a saturated disc over near-black still shows
+     its hue, and 32% over near-white is nothing at all. */
+  --offline-fade: .32;
   /* Was #f2455e, which leans magenta — the same tint correction the rest of
      the ramp got. This is the colour muted and deafened are drawn in. */
   --danger:      #f23f43;
@@ -177,9 +248,32 @@
   --bg-2:  var(--side);
   --panel-2: var(--float);
 
+  /* The settings sheet, which is a surface PAIR: a body and the rail beside it,
+     the rail recessed. It used to borrow --chat-2 and --chat for those, and the
+     relationship between that pair only holds in a dark theme — in a light one
+     the message column is nearly white and the panel tint is darker, so the rail
+     came out RAISED out of the body instead of sunk into it. */
+  --sheet:      var(--chat-2);
+  --sheet-nav:  var(--chat);
+  /* The settings rail's selected pane. A plate, not a tint: it has to hold its
+     own against a list of ten. */
+  --nav-active: #2e2e33;
+
+  /* A 1px lift (the user dock), a big soft drop (the soundboard), the thread
+     drawer's directional one, and the notification popover's drop-plus-ring.
+     All four were literals in their own rules, which is why a light theme could
+     not soften any of them — a shadow tuned for a dark app is a smudge on a
+     light one. */
+  --shadow-xs:     0 1px 3px rgba(0, 0, 0, .3);
+  --shadow-float:  0 12px 32px rgba(0, 0, 0, .45);
+  --shadow-drawer: -16px 0 44px rgba(0, 0, 0, .45);
+  --shadow-notif:  0 8px 16px rgba(0, 0, 0, .24), 0 0 0 1px rgba(0, 0, 0, .12);
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, .35);
   --shadow:    0 8px 24px rgba(0, 0, 0, .45);
   --shadow-lg: 0 20px 56px rgba(0, 0, 0, .6);
+  /* The two big popovers' own drop, which they carried as a literal. A shadow
+     this heavy is depth on a dark app and a smudge on a light one. */
+  --shadow-pop: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
 
   --radius: 10px;
   --tb: 31px;
@@ -229,6 +323,15 @@ body { display: flex; flex-direction: column; }
 button, input, select, textarea { font: inherit; color: inherit; }
 input, textarea, select { user-select: text; }
 button { font-family: inherit; }
+
+/* A THEMED focus ring, for everything that has not drawn one of its own.
+   Chromium's default is a black outline with a white inner line: on a dark
+   surface it is nearly invisible, and on a light one it is a hard black box —
+   which is what a keyboard-opened Settings sheet looked like, the close button
+   ringed in black the moment it took focus. Deliberately early in the file, so
+   every component that defines its own ring (the message list, the sliders, the
+   emoji grid) still overrides this one. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* The thumb is LIGHTER than what it sits on, which is the whole job of a
    scrollbar: it is the handle, not the groove.
@@ -736,7 +839,7 @@ button { font-family: inherit; }
   grid-area: user; position: relative;
   margin: 0 8px 8px; border-radius: 8px;
   background: var(--panel); border: 1px solid rgba(153, 153, 153, .04);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  box-shadow: var(--shadow-xs);
 }
 
 /* No JS toggles this container: it follows #voice-live, which the voice state
@@ -871,7 +974,7 @@ button { font-family: inherit; }
   margin-bottom: 8px; z-index: 40;
   background: var(--float); border: 1px solid var(--line);
   border-radius: 10px; padding: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  box-shadow: var(--shadow-float);
 }
 .soundboard[hidden] { display: none; }
 .sb-head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
@@ -1000,7 +1103,7 @@ button { font-family: inherit; }
 #members-panel {
   position: relative;      /* see .pane-resize */
   width: var(--w-members);
-  background: var(--chat);
+  background: var(--members);
   box-shadow: inset 1px 0 0 var(--line);
   display: flex; flex-direction: column;
   min-height: 0;
@@ -1060,7 +1163,7 @@ button { font-family: inherit; }
    the opposite of what their yellow dot said. The reference fades the
    absent and nobody else, which is also what lets the Offline section be
    skimmed past rather than read. */
-.vp.offline .av, .vp.offline .av-wrap { opacity: .32; }
+.vp.offline .av, .vp.offline .av-wrap { opacity: var(--offline-fade); }
 .vp.offline .vp-name { color: var(--dim); opacity: .72; }
 .vp.offline .vp-sub { opacity: .72; }
 .vp-invoice { flex: 0 0 auto; font-size: 11px; opacity: .9; margin-left: auto; }
@@ -1601,7 +1704,7 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 }
 .spoiler, .spoiler * { color: transparent !important; }
 .spoiler:hover { background: var(--spoiler-hover); }
-.spoiler.revealed { background: rgba(255, 255, 255, .06); cursor: auto; user-select: text; }
+.spoiler.revealed { background: var(--spoiler-open); cursor: auto; user-select: text; }
 .spoiler.revealed, .spoiler.revealed * { color: inherit !important; }
 
 /* ---------- inline message editor --------------------------------------- */
@@ -1962,7 +2065,7 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   min-width: 188px; max-width: 260px; padding: 6px 8px;
   background: var(--float); border: 1px solid var(--line);
   border-radius: 4px;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, .24), 0 0 0 1px rgba(0, 0, 0, .12);
+  box-shadow: var(--shadow-notif);
 }
 .notif-pop[hidden] { display: none; }
 .np-item {
@@ -2019,9 +2122,9 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   min-height: 450px; max-height: min(560px, calc(100vh - 120px));
   /* Explicit hairline, like the pinned popover's: over --float, --line computes to
      #313136, eight points brighter than the reference's #29292C. */
-  background: var(--float); border: 1px solid #29292c;
+  background: var(--float); border: 1px solid var(--float-edge);
   border-radius: 8px; overflow: hidden;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
+  box-shadow: var(--shadow-pop);
 }
 .threads-pop[hidden] { display: none; }
 .tp-head {
@@ -2030,7 +2133,7 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
      --float-2, which reads as a bar raised out of the panel; the pinned popover
      had the identical problem and this is the same correction. */
   height: 48px; box-sizing: border-box; padding: 0 16px;
-  background: var(--float); border-bottom: 1px solid #323237;
+  background: var(--float); border-bottom: 1px solid var(--float-rule);
 }
 .tp-title {
   display: inline-flex; align-items: center; gap: 10px; flex: 0 0 auto;
@@ -2048,9 +2151,9 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 .tp-search {
   flex: 0 0 280px; min-width: 0; display: flex; align-items: center; gap: 6px;
   height: 32px; box-sizing: border-box; padding: 0 8px; border-radius: 4px;
-  background: #202024; border: 1px solid #37373d;
+  background: var(--ctl-sunk); border: 1px solid var(--ctl-sunk-line);
 }
-.tp-search:hover { border-color: #43434a; }
+.tp-search:hover { border-color: var(--ctl-sunk-line-hi); }
 .tp-search:focus-within { border-color: var(--accent-line); }
 .tp-search .ico { width: 15px; height: 15px; flex: 0 0 15px; color: var(--dim); }
 .tp-search input {
@@ -2140,9 +2243,9 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   /* An explicit hairline rather than --line. Over --float that token computes to
      #313136, which is eight points brighter than the reference's #29292C and
      drew the panel's outline as a highlight. */
-  background: var(--float); border: 1px solid #29292c;
+  background: var(--float); border: 1px solid var(--float-edge);
   border-radius: 8px; overflow: hidden;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
+  box-shadow: var(--shadow-pop);
 }
 .pinned-head {
   flex: 0 0 auto;
@@ -2151,7 +2254,7 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   /* THE SAME shade as the body, separated only by the rule — measured off the
      reference. It used to be --float-2, which is also the card colour, so the bar
      read as raised out of the panel and level with the cards under it. */
-  background: var(--float); border-bottom: 1px solid #323237;
+  background: var(--float); border-bottom: 1px solid var(--float-rule);
   /* 22px, not 15. Measured against the reference's own title, the old size was
      ~30% small — and the pin beside it was 9x13 against it, which is what made the
      two look unrelated rather than like one piece of chrome.
@@ -2178,10 +2281,10 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   /* Measured: #28282D with its own 1px #35353B outline. It used to be --float-2
      (#2C2C31) with no border, which is also what the header was filled with — so
      card and header read as the same surface. */
-  background: #28282d; border: 1px solid #35353b; border-radius: 8px;
+  background: var(--card); border: 1px solid var(--card-line); border-radius: 8px;
 }
 .pinned-item:last-child { margin-bottom: 0; }
-.pinned-item:hover { background: #2e2e34; border-color: #3d3d44; }
+.pinned-item:hover { background: var(--card-hover); border-color: var(--card-line-hover); }
 .pinned-avatar {
   flex: 0 0 40px; width: 40px; height: 40px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
@@ -2388,7 +2491,7 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   position: absolute; top: 0; right: 0; bottom: 0; width: var(--drawer-w); z-index: 40;
   display: flex; flex-direction: column;
   background: var(--chat-2);
-  box-shadow: -16px 0 44px rgba(0, 0, 0, .45);
+  box-shadow: var(--shadow-drawer);
 }
 #thread-panel[hidden] { display: none; }
 .thread-head {
@@ -2494,7 +2597,7 @@ input[readonly] { opacity: .75; cursor: default; }
   /* An explicit hairline rather than --line, which over --float computes to
      #313136 — a point brighter than the reference's #323237 on every modal in
      the app. */
-  background: var(--float); border: 1px solid #323237;
+  background: var(--float); border: 1px solid var(--float-rule);
   border-radius: 12px; display: flex; flex-direction: column;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -2518,9 +2621,9 @@ input[readonly] { opacity: .75; cursor: default; }
    8px of visible track, as measured. */
 .modal-body::-webkit-scrollbar { width: 14px; }
 .modal-body::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, .30); background-clip: content-box;
+  background: var(--scrollbar-modal); background-clip: content-box;
 }
-.modal-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .40); background-clip: content-box; }
+.modal-body::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-modal-hover); background-clip: content-box; }
 
 /* ---------- settings ---------------------------------------------------- */
 /* A card on a dimmed app, not a takeover. Filling the window was the single
@@ -2537,7 +2640,7 @@ input[readonly] { opacity: .75; cursor: default; }
      panel is as sharp as text inside it, and the app drops to roughly a third
      of its brightness. Blur here costs a full-screen filter every frame and
      buys nothing the dim does not already do. */
-  background: rgba(0, 0, 0, .68);
+  background: var(--scrim);
   backdrop-filter: none;
 }
 .settings-modal {
@@ -2554,7 +2657,7 @@ input[readonly] { opacity: .75; cursor: default; }
   margin-top: calc(72px - var(--tb));
   height: calc(100% - 72px - (72px - var(--tb)));
   max-width: none; max-height: none;
-  background: var(--chat-2);
+  background: var(--sheet);
   border: 1px solid var(--line-2); border-radius: 8px;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -2568,7 +2671,7 @@ input[readonly] { opacity: .75; cursor: default; }
    exactly the pre-redesign shape. */
 .set-nav {
   grid-area: nav / nav / body / nav; min-height: 0; overflow-y: auto;
-  background: var(--chat);
+  background: var(--sheet-nav);
   display: flex; flex-direction: column;
   /* 16px, not 8: the reference insets its rail's rows twice as far from the
      sidebar edge, which is what stops the active pill touching it. */
@@ -2610,7 +2713,7 @@ input[readonly] { opacity: .75; cursor: default; }
   /* A visible edge, like the reference's — and like every other field in the app
      after the Filters pass. It was a transparent border on --sunk, so the box had
      no boundary of its own at all. */
-  background: var(--sunk); border: 1px solid #303035; outline: none;
+  background: var(--sunk); border: 1px solid var(--field-edge); outline: none;
   color: var(--text); font-size: 14px;
 }
 .set-search::placeholder { color: var(--dim); }
@@ -2645,7 +2748,7 @@ input[readonly] { opacity: .75; cursor: default; }
 .set-nav-item .ico { width: 18px; height: 18px; flex: 0 0 18px; stroke-width: 2; }
 .set-nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-nav-item:hover { background: var(--hover); color: var(--text); }
-.set-nav-item.on { background: #2e2e33; color: var(--text-strong); font-weight: 600; }
+.set-nav-item.on { background: var(--nav-active); color: var(--text-strong); font-weight: 600; }
 
 /* The open tab's own headings, listed under it — the reference does this, and in
    a pane as long as Accessibility or Notifications it is the only way to see
@@ -3444,100 +3547,206 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    ========================================================================== */
 
 :root[data-theme="light"] {
-  --rail:       #dededf;
-  --side:       #eeeeef;
-  --chat:       #ffffff;
-  --chat-2:     #f6f6f7;
-  --input:      #f4f4f5;
-  --sunk:       #ebebec;
-  --panel:      #ffffff;   /* raised out of --side, as in dark */
-  --float:      #f7f7f8;
-  --float-2:    #ffffff;   /* raised on --float, as in dark */
-  --elev:       #e6e6e8;
+  /* ---- surfaces ----------------------------------------------------------
+     Not the dark ramp turned upside down. A dark theme expresses depth by getting
+     LIGHTER as things come forward, and there is always more room above the
+     surface you are on. A light theme runs out: white is the ceiling. So this
+     palette does two things instead of one --
 
-  --hover:      rgba(0, 0, 0, .045);
-  --chan-active: rgba(90, 90, 100, .16);
-  --active:     rgba(0, 0, 0, .085);
-  --msg-hover:  rgba(0, 0, 0, .022);
-  --line:       rgba(0, 0, 0, .08);
-  --line-lo:    rgba(0, 0, 0, .05);
-  --line-2:     rgba(0, 0, 0, .14);
-  --line-solid: rgba(0, 0, 0, .12);
+       the PAGE is a set of layered off-whites, outside-in, none of them #fff:
+       the rail is the deepest, the sidebars sit above it, the message column
+       above that;
+       the things that FLOAT over the page - modals, menus, popovers, the
+       composer - are the white, and they are the only things that are.
 
-  --text:        #202124;
-  --text-strong: #06060a;
-  --text-body:   #2e2e32;
-  --muted:       #4e4e55;
-  --dim:         #76767c;
-  --panel-icon:  #5a5a61;
-  --ch-icon:     #6a6a71;
-  --nav-idle:    #6f6f76;
-  --speaker-ico: #7c7c83;
-  --day-sep:     #6f6f76;
-  --author:      #06060a;
-  /* Darkened for the light theme: the dark theme's orchid on white is unreadable. */
-  --preview-role: #8b46b0;
-  --meta:        #6f7079;
+     That is what makes a menu read as being in front of the app rather than as
+     another patch of the same sheet, and it is why nothing here is #ffffff except
+     the surfaces meant to look like paper lying on top of it. Blue minus red is
+     noted after each, kept within a few points of neutral as in the dark ramp: a
+     light surface shows a colour cast far more readily than a dark one. */
+  --rail:       #e4e6ea;   /* the background the user card floats on    (+6) */
+  --side:       #eef0f3;   /* server rail + channel and member sidebars (+5) */
+  --chat:       #fafbfc;   /* message column - off-white, never white   (+2) */
+  /* Its own step, unlike the dark theme where the member list is the message
+     column exactly. Two white columns divided by a hairline read as one sheet;
+     one point of shade AND the hairline read as two panels. */
+  --members:    #f4f6f8;                                          /*     (+4) */
+  --sunk:       #e7e9ed;   /* a well cut INTO a surface: the search field (+6) */
+  --input:      #ffffff;   /* the composer: paper, with a hairline round it */
+  --chat-2:     #f1f3f6;   /* panels layered on the message column      (+5) */
+  --panel:      #f8f9fb;   /* the user dock, raised out of the sidebar  (+3) */
+  --float:      #ffffff;   /* modals, menus, popovers, tooltips: paper */
+  /* A card raised ON paper. The one place the direction has to invert: in the
+     dark theme this is a step LIGHTER than --float, and there is nothing lighter
+     than white - so a card on white is a tint with an edge. */
+  --float-2:    #f2f4f7;
+  --elev:       #e6e9ed;   /* hover on a raised control */
+
+  --card:            #f4f6f8;
+  --card-hover:      #eceff3;
+  --card-line:       #e2e5ea;
+  --card-line-hover: #d3d7de;
+  --ctl-sunk:        #f1f3f6;
+  --ctl-sunk-line:   #dde0e6;
+  --ctl-sunk-line-hi:#c6cbd3;
+  --ctl:             #edf0f3;
+  --ctl-hover:       #e3e7ec;
+  --ctl-line:        #dadee4;
+  --ctl-line-hover:  #c8cdd5;
+  --well:            #e9ecf0;
+  --well-ring:       #c3c8d0;
+  /* An OFF switch cannot be a pale well here: the knob is white, and a white knob
+     in a near-white track is a switch with nothing in it. The TRACK carries the
+     state instead - a mid grey the knob sits clearly on top of. */
+  --switch-off:      #c4c9d1;
+  --switch-off-line: #b3b9c3;
+
+  /* Every wash is mixed from the same near-black as the text rather than from
+     pure black: a black wash over a slightly cool off-white greys it, and the
+     whole page goes flat. */
+  --hover:      rgba(20, 22, 28, .045);
+  --chan-active: rgba(88, 92, 104, .11);
+  --active:     rgba(20, 22, 28, .075);
+  --msg-hover:  rgba(20, 22, 28, .028);
+  --line:       rgba(18, 20, 26, .085);
+  --line-lo:    rgba(18, 20, 26, .05);
+  --line-2:     rgba(18, 20, 26, .13);
+  --line-solid: rgba(18, 20, 26, .11);
+  /* The opaque hairlines. A floating panel is white on an off-white page, so its
+     OUTLINE is what separates the two - softer than a border, firmer than
+     nothing. */
+  --float-edge: #e2e5ea;
+  --float-rule: #e8eaee;
+  --field-edge: #dde0e6;
+  --outline:    #e0e3e9;
+  --tick:       rgba(18, 20, 26, .22);
+  --tick-on:    rgba(18, 20, 26, .45);
+
+  /* ---- text ----
+     No pure black anywhere, and three real steps rather than one. Near-black on
+     off-white is the harshest pairing a light theme can make - the same contrast
+     as white-on-black with none of the softening a dark surface does for free.
+     Measured against --chat, which is where most of this is read:
+
+       author / heading  14.2:1      message prose  12.2:1
+       body              10.5:1      labels          9.5:1
+       muted              7.2:1      quiet           5.4:1
+       timestamps         4.7:1
+
+     The quiet end is deliberately still legible: the dark theme's --dim carries
+     channel names, and a light theme that copied its brightness ratio would have
+     put them at 3:1. */
+  --text:        #3a3d43;
+  --text-strong: #24262b;      /* author names, active channel */
+  --text-body:   #40434a;      /* message prose */
+  --muted:       #52565e;
+  --dim:         #5c5f67;
+  --panel-icon:  #52555c;
+  --ch-icon:     #585b63;
+  --nav-idle:    #5c5f67;
+  --speaker-ico: #6a6d75;
+  --day-sep:     #61646c;
+  --author:      #24262b;
+  /* The reference's own preview role colour, darkened until it carries on white:
+     the dark theme's orchid is a pale tint here and cannot be read. */
+  --preview-role: #8a4fb5;
+  --meta:        #676a72;
   --menu:        #ffffff;
-  --track:       #d4d4d8;
+  --track:       #d7dae0;
   --slider:      #4b55e0;
-  --msg-text:    #16161a;
-  --placeholder: #8e8e96;
+  --msg-text:    #2f3238;
+  --panel-name:  #2f3238;
+  --panel-sub:   #61646c;
+  --placeholder: #8b8f98;
 
   /* Inverted: a white lift on a white surface is invisible, and the reference
      darkens rather than lightens in its light theme. */
-  --sheen: linear-gradient(180deg, rgba(0, 0, 0, .028), rgba(0, 0, 0, 0) 60%);
+  --sheen: linear-gradient(180deg, rgba(0, 0, 0, .022), rgba(0, 0, 0, 0) 60%);
   --field:      #ffffff;
-  --field-line: rgba(0, 0, 0, .14);
-  --code-bg:    #f1f1f3;
-  --code-text:  #202024;
-  --spoiler:      #cbcbcf;
-  --spoiler-hover: #babac0;
-  --divider:    rgba(0, 0, 0, .09);
-  --scrim:      rgba(28, 30, 34, .45);
-  --scrollbar:  rgba(0, 0, 0, .22);
-  --scrollbar-hover: rgba(0, 0, 0, .34);
-  --rail-plate: linear-gradient(155deg, #ffffff, #dfe1e6);
-  --rail-plate-hover: linear-gradient(155deg, #ffffff, #eef0f3);
+  --field-line: rgba(18, 20, 26, .14);
+  --code-bg:    #eceff2;
+  --code-text:  #2f3238;
+  --spoiler:      #d7dae0;
+  --spoiler-hover: #c9cdd4;
+  --spoiler-open: rgba(18, 20, 26, .05);
+  --divider:    rgba(18, 20, 26, .08);
+  /* A modal over a light app should DIM it, not extinguish it - and the scrim is
+     tinted with the text near-black rather than pure black for the same reason
+     the washes are. */
+  --scrim:      rgba(30, 33, 40, .40);
+  --scrollbar:  rgba(18, 20, 26, .20);
+  --scrollbar-hover: rgba(18, 20, 26, .32);
+  --scrollbar-modal: rgba(18, 20, 26, .18);
+  --scrollbar-modal-hover: rgba(18, 20, 26, .28);
+  --rail-plate: linear-gradient(155deg, #ffffff, #dfe2e8);
+  --rail-plate-hover: linear-gradient(155deg, #ffffff, #eceff4);
 
-  /* Darkened so it still passes contrast as text and as a fill under white. */
-  --accent-rgb:  14, 145, 134;
-  --accent:      #0e9186;
-  --accent-hi:   #0a7a71;
-  --accent-lo:   #086a62;
-  --accent-soft: rgba(14, 145, 134, .12);
-  --accent-line: rgba(14, 145, 134, .42);
+  /* Softer discs. 70/75% saturation is a friendly colour on a dark column and a
+     shout on a light one, so both stops come down and the pair narrows. */
+  --av-s1: 54%; --av-l1: 60%;
+  --av-s2: 58%; --av-l2: 50%;
+  /* A tinted band, not a dark one: 17% lightness is a stripe of night across the
+     top of a white card. */
+  --banner-s: 30%; --banner-l: 84%;
+
+  /* Dark enough to carry as LINK TEXT on the message column (4.7:1) and to hold
+     white on it as a button fill (4.9:1). A teal that passes one of those tests
+     usually fails the other, which is why this is not the dark accent darkened by
+     eye. The washes are lighter than the dark theme's: a tint that reads as a
+     whisper on #1a1a1e is a stain on #fafbfc. */
+  --accent-rgb:  11, 127, 118;
+  --accent:      #0b7f76;
+  --accent-hi:   #096a63;
+  --accent-lo:   #085c56;
+  --accent-soft: rgba(11, 127, 118, .10);
+  --accent-line: rgba(11, 127, 118, .30);
   --on-accent:   #ffffff;
 
-  --online-rgb:  27, 142, 76;
-  --online:      #1b8e4c;
-  --voice-ok:    #2f7a3d;
-  --idle:        #a9761a;
-  --offline:     #82868d;
-  --danger:      #d32a2e;
-  --danger-hi:   #ad2124;
-  --danger-soft: rgba(211, 42, 46, .10);
-  --danger-line: rgba(211, 42, 46, .34);
-
-  /* The user dock's own type ramp. These were the light theme's one real hole:
-     --panel is #ffffff here, and the dark values (#d2d2d6 / #9c9ca2) are a
-     near-white on it — your own name in the bottom-left dock was drawn at about
-     1.4:1 and simply could not be read. --panel-sub carries every settings
-     hint as well, so it is pinned to the same family as --meta. */
-  --panel-name: #2f3035;
-  --panel-sub:  #6b6c74;
+  /* MID-TONE, not inky. The naive inversion darkened every status colour until a
+     10px presence dot read as a hole punched in the page; these sit at roughly
+     the dark theme's own weight, which is where a small saturated dot belongs on
+     white too. */
+  --online-rgb:  34, 150, 84;
+  --online:      #229654;
+  --voice-ok:    #3c8a52;
+  --idle:        #c08419;
+  --offline:     #8a8e96;
+  --offline-fade: .5;
+  --danger:      #d63c40;
+  --danger-hi:   #b8302f;
+  --danger-lo:   #b8393c;
+  --danger-plate: rgba(214, 60, 64, .10);
+  --danger-soft: rgba(214, 60, 64, .10);
+  --danger-line: rgba(214, 60, 64, .30);
 
   /* The destructive-but-reversible pair (Sign Out, Disable Account). The dark
      plate is a white wash, which vanishes on white, and the dark label is a
-     salmon tuned for a dark surface — together they came out as pale text on
-     no button at all. Darkened for both jobs. */
+     salmon tuned for a dark surface - together they came out as pale text on no
+     button at all. */
   --btn-secondary:      rgba(22, 22, 30, .07);
   --btn-secondary-hover: rgba(22, 22, 30, .12);
-  --danger-label:       #c0242a;
+  --danger-label:       #c22f33;
+  --danger-solid:       #cf383c;
+  --danger-solid-hover: #b93337;
 
-  --shadow-sm: 0 2px 8px rgba(16, 18, 24, .10);
-  --shadow:    0 6px 18px rgba(16, 18, 24, .14);
-  --shadow-lg: 0 16px 44px rgba(16, 18, 24, .20);
+  /* Shadows carry the whole of "this floats" here, because a floating surface can
+     no longer be lighter than the page. Soft, wide, and tinted with the same
+     near-black as the text: pure black at these alphas reads as dirt on the
+     screen rather than as a shadow. */
+  /* The sheet is the paper and its rail is the tint — the same reading as the
+     dark theme's, which needs the opposite pair of values to say it. */
+  --sheet:      #ffffff;
+  --sheet-nav:  #f2f4f7;
+  /* A plate the selected pane can be read on without going dark. */
+  --nav-active: #dfe3e9;
+  --shadow-xs:     0 1px 2px rgba(24, 28, 38, .07);
+  --shadow-float:  0 12px 32px rgba(24, 28, 38, .14), 0 3px 8px rgba(24, 28, 38, .08);
+  --shadow-drawer: -12px 0 32px rgba(24, 28, 38, .10);
+  --shadow-notif:  0 8px 16px rgba(24, 28, 38, .10), 0 0 0 1px rgba(18, 20, 26, .07);
+  --shadow-sm: 0 2px 6px rgba(24, 28, 38, .07), 0 1px 2px rgba(24, 28, 38, .06);
+  --shadow:    0 6px 18px rgba(24, 28, 38, .10), 0 2px 5px rgba(24, 28, 38, .07);
+  --shadow-lg: 0 16px 44px rgba(24, 28, 38, .16), 0 4px 12px rgba(24, 28, 38, .09);
+  --shadow-pop: 0 8px 20px rgba(24, 28, 38, .12), 0 2px 6px rgba(24, 28, 38, .08);
 }
 
 /* The rail pill and the unread pill are white-on-dark by nature; invert them. */
@@ -4391,7 +4600,7 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-radio input[type="radio"] {
   -webkit-appearance: none; appearance: none;
   width: 22px; height: 22px; flex: 0 0 22px; margin: 1px 0 0;
-  border-radius: 50%; border: 2px solid #45454a; background: #1d1d21;
+  border-radius: 50%; border: 2px solid var(--well-ring); background: var(--well);
   display: grid; place-items: center; cursor: pointer;
 }
 .set-radio input[type="radio"]:hover { border-color: var(--nav-idle); }
@@ -4418,8 +4627,8 @@ button.ap-row:hover .ap-more { color: var(--text); }
    third state rather than as the absence of one. 48px wide, measured. */
 .switch {
   width: 48px; height: 24px; flex: 0 0 48px; padding: 0;
-  border: 1px solid #353539; border-radius: 12px; cursor: pointer;
-  background: #1c1c20; position: relative; box-sizing: border-box;
+  border: 1px solid var(--switch-off-line); border-radius: 12px; cursor: pointer;
+  background: var(--switch-off); position: relative; box-sizing: border-box;
   transition: background .15s ease, border-color .15s ease;
 }
 .switch-knob {
@@ -4515,9 +4724,9 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-tick-mark {
   position: absolute; bottom: -12px; width: 1px; height: 16px;
   transform: translateX(-50%);
-  background: rgba(255, 255, 255, .3); pointer-events: none;
+  background: var(--tick); pointer-events: none;
 }
-.set-tick-mark.on { background: rgba(255, 255, 255, .6); }
+.set-tick-mark.on { background: var(--tick-on); }
 /* The track, the thumb and the fill are shared by every slider in the sheet —
    see "EVERY slider in the settings sheet" above. */
 
@@ -4542,7 +4751,9 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .a11y-preview {
   position: sticky; top: 0; z-index: 3;
   margin: -4px 0 26px; padding: 4px 0 12px;
-  background: var(--chat-2);
+  /* The SHEET's own colour, not --chat-2: this is what the controls scroll
+     under, so it has to be the surface it is sitting on. */
+  background: var(--sheet);
 }
 /* 16px, measured. At 12 the caption rendered 9px tall against the reference's 12 —
    the one thing about this label that was wrong; the colour already matched. */
@@ -4554,7 +4765,7 @@ button.ap-row:hover .ap-more { color: var(--text); }
   /* Transparent, so the box is its outline and nothing else. 210px tall, measured,
      which is what stops two message rows looking cramped in it. */
   padding: 16px 8px; min-height: 210px; box-sizing: border-box;
-  border-radius: 8px; background: none; border: 1px solid #38383d;
+  border-radius: 8px; background: none; border: 1px solid var(--outline);
   overflow: hidden;
 }
 /* The preview draws .msg rows, which are styled for the message column — this
@@ -5122,10 +5333,10 @@ html.win-hidden .up-bar i {
    row, which is what made the whole sheet look like settings. */
 .fm-input {
   width: 100%; height: 40px; padding: 0 11px; border-radius: 6px;
-  background: #202024; border: 1px solid #37373d; outline: none;
+  background: var(--ctl-sunk); border: 1px solid var(--ctl-sunk-line); outline: none;
   color: var(--text); font: inherit; font-size: 13.5px;
 }
-.fm-input:hover { border-color: #43434a; }
+.fm-input:hover { border-color: var(--ctl-sunk-line-hi); }
 .fm-input:focus-visible { border-color: var(--accent-line); }
 select.fm-input { cursor: pointer; }
 
@@ -5136,10 +5347,10 @@ select.fm-input { cursor: pointer; }
 .fm-add {
   display: flex; align-items: center; justify-content: center; gap: 7px;
   width: 100%; height: 40px; border-radius: 6px; cursor: pointer;
-  background: #323237; border: 1px solid #35353b;
+  background: var(--ctl); border: 1px solid var(--ctl-line);
   color: var(--text); font: inherit; font-size: 13.5px; font-weight: 500;
 }
-.fm-add:hover { background: #3a3a41; border-color: #45454d; }
+.fm-add:hover { background: var(--ctl-hover); border-color: var(--ctl-line-hover); }
 .fm-add .ico { width: 15px; height: 15px; }
 .fm-date-row { display: flex; align-items: center; gap: 8px; }
 .fm-date-row[hidden] { display: none; }
@@ -5169,10 +5380,10 @@ select.fm-input { cursor: pointer; }
    header: a control on a surface has to be raised out of it. */
 .fm-foot button:not(.fm-link) {
   height: 40px; padding: 0 18px; border-radius: 6px; cursor: pointer;
-  background: #323237; border: 1px solid #35353b; color: var(--text);
+  background: var(--ctl); border: 1px solid var(--ctl-line); color: var(--text);
   font: inherit; font-size: 13px; font-weight: 600;
 }
-.fm-foot button:not(.fm-link):hover { background: #3a3a41; border-color: #45454d; }
+.fm-foot button:not(.fm-link):hover { background: var(--ctl-hover); border-color: var(--ctl-line-hover); }
 .fm-apply {
   background: var(--accent) !important; border-color: var(--accent) !important;
   color: var(--on-accent) !important;
