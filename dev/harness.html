@@ -85,15 +85,33 @@ window.lounge = {
   share: { sources: fn([]), select: noop, cancel: noop }, voiceToken: fn({ success: false }),
   rt: { start: fn({ connected: false }), stop: fn({ connected: false }), wake: fn({ connected: false }),
         send: noop, notifyPosted: noop, sendTyping: noop, sendVoice: noop, onMessage: unsub, onStatus: unsub },
-  edit: { cut: noop, copy: noop, paste: noop, selectAll: noop, clipboard: fn({ text: false, image: false }) },
-  settings: { get: fn(() => ({
+  // onContext/undo/redo and the spellcheck pair arrived with the editing context
+  // menu; without them the boot path throws on the subscription and everything
+  // after it — the settings nav included — is never built.
+  edit: { cut: noop, copy: noop, paste: noop, selectAll: noop, undo: noop, redo: noop,
+          replaceMisspelling: noop, addToDictionary: fn(false), onContext: unsub,
+          clipboard: fn({ text: false, image: false }) },
+  // A REAL STORE, not a get/set pair that forgets. saveSettings() in app.js does
+  // `settings = await L.settings.set(patch)`, so a stub answering {} does not just
+  // fail to persist — it replaces the whole settings object with an empty one, and
+  // every setting-driven thing after the first change (the display name, the
+  // spacing, saturation, high contrast) reads undefined. Merge and answer with the
+  // merged store, which is what the main process does.
+  settings: (() => {
+    const store = {
       baseUrl: 'https://scarmonit.com', room: 'lounge', clientId: 'ctest',
       displayName: 'Scarmonit', channel: 'general', theme: 'dark', density: 'cozy',
       chatFontSize: 'medium', showMembers: true, catTextOpen: true, catVoiceOpen: true, catDmsOpen: true,
       localVolumes: {}, localMuted: {}, blocked: {}, mutedChannels: [], voiceMode: 'open',
       presence: 'online', micVolume: 1, outputVolume: 1, speakThreshold: 6,
       noiseSuppression: true, noiseSuppressionAI: true,
-      pttBinding: { type: 'key', code: 'Backquote' } })), set: fn({}) },
+      pttBinding: { type: 'key', code: 'Backquote' }
+    };
+    return {
+      get: async () => ({ ...store }),
+      set: async (patch) => { Object.assign(store, patch || {}); return { ...store }; }
+    };
+  })(),
   ptt: { apply: fn({ mode: 'native' }), available: fn(true), describe: fn('Backquote'), onChange: unsub },
   win: { minimize: noop, maximize: noop, close: noop, isFocused: fn(true), onFocus: unsub, onHidden: unsub },
   app: { version: fn('0.0.0-harness'), isElevated: fn(false), openLogs: fn(true), notify: fn(false),

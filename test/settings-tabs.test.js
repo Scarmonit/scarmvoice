@@ -106,6 +106,73 @@ describe('the live preview', () => {
         expect($('a11y-preview-msgs').querySelector('a')).toBeTruthy();
         expect($('a11y-preview-msgs').querySelectorAll('button.reaction').length).toBe(2);
     });
+
+    // TWO GROUPS, each with its own author header — the reference's preview, and
+    // the only arrangement in which "Space Between Message Groups" has anything to
+    // move. Passing the previous post to renderMessage grouped them (same author,
+    // seconds apart) and put both under one header.
+    it('draws two groups, not one grouped run', async () => {
+        nav('Accessibility').click();
+        await settle();
+        const host = $('a11y-preview-msgs');
+        expect(host.querySelectorAll('.msg')).toHaveLength(2);
+        expect(host.querySelectorAll('.msg.grouped')).toHaveLength(0);
+        // The header — name and time — is repeated on the second one.
+        expect(host.querySelectorAll('.msg-head')).toHaveLength(2);
+        expect(host.querySelectorAll('.msg-author')).toHaveLength(2);
+        // Both avatars are drawn; a grouped row hides its own.
+        expect(host.querySelectorAll('.msg-avatar')).toHaveLength(2);
+    });
+
+    // The two demonstrations the reference puts beside the messages: a stack of
+    // status faces, each a COLOUR AND A SHAPE, and a real button at the current
+    // text size.
+    it('carries the status faces and the example button', async () => {
+        nav('Accessibility').click();
+        await settle();
+        const host = $('a11y-preview-msgs');
+        const rows = host.querySelectorAll('.msg');
+        expect(host.querySelectorAll('.a11y-face')).toHaveLength(3);
+        ['online', 'idle', 'dnd'].forEach((c) =>
+            expect(host.querySelectorAll('.a11y-face.' + c).length, c).toBe(1));
+        // A different badge on each, which is the accessibility argument for badges.
+        ['idle', 'dnd', 'mobile'].forEach((c) =>
+            expect(host.querySelectorAll('.a11y-badge.' + c).length, c).toBe(1));
+        // Faces on the first message, button on the second — as the reference has it.
+        expect(rows[0].querySelector('.a11y-status')).toBeTruthy();
+        expect(rows[1].querySelector('.a11y-status')).toBeFalsy();
+        const btn = rows[1].querySelector('.a11y-aside .btn-primary');
+        expect(btn).toBeTruthy();
+        expect(btn.textContent).toBe('Example Button');
+        // Inert: nothing on this pane should be clickable by accident.
+        expect(btn.tabIndex).toBe(-1);
+    });
+
+    // Everything on the pane has to reach it while the control is still moving —
+    // that is what makes it a preview rather than a picture.
+    it('follows the settings as they change', async () => {
+        nav('Accessibility').click();
+        await settle();
+        const gapOf = () => $('a11y-preview-msgs').querySelectorAll('.msg')[1].style.marginTop;
+
+        await slide('set-font-px', 24);
+        expect(root().style.getPropertyValue('--chat-fs')).toBe('24px');
+        expect($('a11y-preview-msgs').querySelectorAll('.msg')).toHaveLength(2);
+
+        // The gap lands on the rows through --msg-gap rather than an inline style,
+        // so assert the variable the preview's own rule reads.
+        await slide('set-msg-gap', 24);
+        expect(root().style.getPropertyValue('--msg-gap')).toBe('24px');
+        expect(gapOf()).toBe('');
+
+        await slide('set-saturation', 0);
+        expect(root().classList.contains('desat')).toBe(true);
+        await slide('set-saturation', 100);
+        expect(root().classList.contains('desat')).toBe(false);
+
+        await slide('set-font-px', 16);
+        await slide('set-msg-gap', 16);
+    });
 });
 
 describe('Text Readability', () => {
@@ -221,6 +288,49 @@ describe('Visual Density', () => {
         // override comes off rather than pinning it to a pixel value.
         await slide('set-msg-gap', 16);
         expect(root().style.getPropertyValue('--msg-gap')).toBe('');
+    });
+
+    // The same problem the font slider had. Its stops are 0/4/8/16/24, so 12 and 20
+    // are values no tick names — and with step="4" and no snapping, going from 8 to
+    // 16 came to rest on 12 on the way.
+    it('snaps message-group spacing onto the stops the scale names', async () => {
+        for (let v = 0; v <= 24; v++) {
+            await slide('set-msg-gap', v);
+            expect([0, 4, 8, 16, 24], 'raw ' + v).toContain(Number($('set-msg-gap').value));
+            expect(h.settings.msgGroupGap, 'raw ' + v).toBe(Number($('set-msg-gap').value));
+        }
+        await slide('set-msg-gap', 12);
+        expect($('set-msg-gap').value).toBe('8');
+        await slide('set-msg-gap', 16);
+    });
+
+    // A KEYBOARD nudge has to move between the stops, which the browser cannot do
+    // on a snapping slider: it steps by `step`, and the snap then pulls the result
+    // back to the nearest allowed value — the one it started on, whenever the step
+    // lands halfway between two. Arrow-right from 12 on the font slider went
+    // 12 → 13 → 12 and stayed there.
+    it('walks the arrow keys along the stops rather than into a dead end', async () => {
+        const press = async (id, key) => {
+            $(id).dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+            await settle();
+            return $(id).value;
+        };
+        await slide('set-msg-gap', 0);
+        const up = [];
+        for (let i = 0; i < 5; i++) up.push(await press('set-msg-gap', 'ArrowRight'));
+        expect(up).toEqual(['4', '8', '16', '24', '24']);
+        const down = [];
+        for (let i = 0; i < 5; i++) down.push(await press('set-msg-gap', 'ArrowLeft'));
+        expect(down).toEqual(['16', '8', '4', '0', '0']);
+        // …and the setting follows the key, not just the thumb.
+        expect(h.settings.msgGroupGap).toBe(0);
+
+        await slide('set-font-px', 12);
+        expect(await press('set-font-px', 'ArrowRight')).toBe('14');
+        expect(await press('set-font-px', 'Home')).toBe('12');
+        expect(await press('set-font-px', 'End')).toBe('24');
+        await slide('set-font-px', 16);
+        await slide('set-msg-gap', 16);
     });
 
     // ON RELEASE, not while dragging. Zoom is the one slider whose effect is the

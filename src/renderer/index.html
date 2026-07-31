@@ -1426,7 +1426,12 @@
             <span class="set-slider-sub">Adjust the spacing between message groups.</span>
           </div>
           <div class="set-ticks" id="ticks-gap"></div>
-          <input type="range" id="set-msg-gap" min="0" max="24" step="4"
+          <!-- step="1", like the other two snapping sliders. The value is
+               constrained by the SNAP LIST in app.js (0/4/8/16/24), and a step
+               attribute re-snaps whatever that writes back — a coarse step here is a
+               second opinion waiting to disagree with it. It also puts the point
+               where one stop gives way to the next at the true midpoint. -->
+          <input type="range" id="set-msg-gap" min="0" max="24" step="1"
                  aria-label="Space between message groups">
         </div>
         <div class="set-slider">

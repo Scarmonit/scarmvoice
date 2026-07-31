@@ -1183,6 +1183,18 @@ debounced whole-file write. Double-click resets a panel; the arrow keys move it 
 (the handle is a focusable `role="separator"`, so a focus ring that did nothing
 would be worse than none).
 
+**It has to lose to the menus that hang over it.** `#chan-head` is
+`position: relative` with a `z-index`, which makes it a stacking context — so the
+search dropdown's own `z-index: 40` is spent *inside* the header and the header's
+number is the only one that counts against the rest of the app. At 5 it lost to
+this handle's 6: the drag line painted straight through the open filters list, and
+because whatever paints on top is what the pointer hits, hovering the list where
+the line crossed it grabbed the resizer and a drag there resized the panel. The
+header sits at 45 now, clearing the handle, the unread jump bar (25) and the thread
+drawer (40) — everything in the two columns the header spans and the menu hangs
+over. Nothing inside those columns can overlap the header itself; they start below
+it.
+
 ### The channel header's two popouts
 
 The bell and a new Threads button beside it, in the reference's order — threads,
@@ -1239,10 +1251,17 @@ conversation, and `webContents.setZoomFactor` for zoom. Two details worth keepin
   floating surface separately rather than to `<html>` — and *undone* on images and
   video, because the reference is explicit that it does not touch user content.
 - **The live Preview is the real renderer.** Two fixed messages through
-  `renderMessage()`, so the markdown, the link, the reactions and the grouping are
-  the same code the conversation uses — a slider can be dragged while watching
-  what it actually does. Built when that pane is shown, not kept in sync behind a
-  closed sheet.
+  `renderMessage()`, so the markdown, the link and the reactions are the same code
+  the conversation uses — a slider can be dragged while watching what it actually
+  does. Built when that pane is shown, not kept in sync behind a closed sheet.
+  They are rendered as **two groups**, each with its own author header: passing
+  the previous post let `renderMessage` group them (same author, seconds apart),
+  which put both under one header and left "Space Between Message Groups" with no
+  gap to move. Beside them sit the two things the reference demonstrates there and
+  the message column has no use for — a stack of three status faces, each a colour
+  **and** a shape, and the app's own primary button at the current text size. The
+  username is role-coloured (`--preview-role`) for the same reason: a coloured
+  name is one of the things this pane is asking about.
 
 System is the old Behaviour pane in the reference's shape, plus **hardware
 acceleration** — the one setting Chromium can only be told about before the app is

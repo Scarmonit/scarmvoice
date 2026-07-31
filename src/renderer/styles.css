@@ -70,6 +70,11 @@
   --day-sep:    #96979e;
   /* Author names and channel labels — a near-white that is not pure white. */
   --author:     #fbfbfb;
+  /* The role-coloured name in the Accessibility preview, sampled off the
+     reference's own. Only that preview uses it: this app has no role colours, and
+     the preview's job there is to show what one looks like under the colour and
+     saturation controls. */
+  --preview-role: #c297d8;
   /* Timestamps, category labels: the quietest text that is still text. */
   --meta:       #81828a;
   /* The audio menus sit a step above --float: a menu opened from the user card
@@ -1081,9 +1086,22 @@ button { font-family: inherit; }
   /* The search dropdown hangs off the header's bottom edge, so the header has
      to be what `position: absolute` resolves against. Without this it resolved
      against the viewport and `top: 100%` put the menu a whole screen below the
-     fold — open, correct, and nowhere anybody could see it. */
+     fold — open, correct, and nowhere anybody could see it.
+
+     ABOVE THE TWO COLUMNS IT SPANS, which is what the z-index is for. Setting one
+     at all makes this a stacking context, so .search-pop's own z-index: 40 is
+     spent INSIDE the header and the header's number is the only one that counts
+     against the rest of the app. At 5 it lost to the member list's drag-to-resize
+     strip (.pane-resize, z-index 6): the resize line painted straight through the
+     open filters list, and — because whatever paints on top is what the pointer
+     hits — hovering the list where the line crossed it grabbed the resizer and a
+     drag there resized the panel. It also lost to the unread jump bar (25) and the
+     thread drawer (40), both of which sit in the message column the menu hangs
+     over. 45 clears all three. Nothing INSIDE those columns can overlap the header
+     itself — they start below it — so this only ever settles what happens under
+     the header's own bottom edge, which is exactly where the dropdown lives. */
   position: relative;
-  z-index: 5;
+  z-index: 45;
 }
 .ch-hash { color: var(--muted); font-size: 26px; font-weight: 400; line-height: 1; }
 #chan-title {
@@ -3457,6 +3475,8 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --speaker-ico: #7c7c83;
   --day-sep:     #6f6f76;
   --author:      #06060a;
+  /* Darkened for the light theme: the dark theme's orchid on white is unreadable. */
+  --preview-role: #8b46b0;
   --meta:        #6f7079;
   --menu:        #ffffff;
   --track:       #d4d4d8;
@@ -4005,16 +4025,17 @@ button.ap-row:hover .ap-more { color: var(--text); }
    with a WHITE thumb is what makes the position readable — a thumb in the fill
    colour has almost no contrast against the fill it is sitting on. The fill
    itself comes from --fill, written by paintRangeFill. */
+/* EVERY slider in the settings sheet, drawn one way — and now at the same 4px the
+   popover above has always used.
+   There used to be two rules at equal specificity, one at 4px and a .set-slider one
+   at 8px, so which a control got depended on which appeared later in the file. The
+   8px one won, which made every bar in the sheet twice the reference's thickness:
+   one component, therefore five controls — Accessibility's four and Voice & Audio's
+   input and output volume. */
 .ap-slider input[type="range"],
-/* EVERY slider in the settings sheet, drawn one way.
-   There used to be two rules at equal specificity — this one at a 4px track, and a
-   .set-slider one at 8px — so which a control got depended on which appeared later
-   in the file. The Accessibility pane's four had a scale and a fill; Voice & Audio's
-   three had neither, and set --fill nowhere, so they sat permanently half filled at
-   the 50% default. */
 .settings-modal input[type="range"] {
   -webkit-appearance: none; appearance: none;
-  display: block; width: 100%; height: 8px; margin: 0;
+  display: block; width: 100%; height: 4px; margin: 0;
   background: none; outline: none; cursor: pointer;
 }
 /* THE TRAVELED HALF IS FILLED. A range input's track is one element, so the fill is
@@ -4022,19 +4043,24 @@ button.ap-row:hover .ap-more { color: var(--text); }
    alongside the tick highlight, positioned under the thumb's centre rather than at a
    naive percentage of the width. */
 .settings-modal input[type="range"]::-webkit-slider-runnable-track {
-  height: 8px; border-radius: 4px;
+  height: 4px; border-radius: 2px;
   background:
     linear-gradient(to right, var(--slider) 0 var(--fill, 0%), var(--track) var(--fill, 0%) 100%);
 }
+/* -6px, so a 16px thumb still straddles a 4px track: half the thumb (8) minus half
+   the track (2). The thumb is the grab target now that the bar is only 4px tall —
+   it overflows the input's box in both directions and stays hittable there, which
+   is how the reference's own 4px slider behaves. */
 .settings-modal input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  width: 16px; height: 16px; margin-top: -4px; border-radius: 50%;
+  width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
   background: #fff; border: 0; box-shadow: 0 2px 4px rgba(0, 0, 0, .3);
 }
 .settings-modal input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 
-/* The audio popover's own slider keeps the slimmer track: it is a 220px popover
-   over the user dock, not a settings pane. */
+/* The audio popover paints the same 4px bar a different way — two background
+   layers rather than one hard-stopped gradient — because its --fill is a plain
+   percentage from the volume popover rather than a thumb-centre length. */
 .ap-slider input[type="range"]::-webkit-slider-runnable-track {
   height: 4px; border-radius: 2px;
   background: linear-gradient(var(--slider), var(--slider)) 0 / var(--fill, 50%) 100% no-repeat,
@@ -4354,18 +4380,26 @@ button.ap-row:hover .ap-more { color: var(--text); }
    reference draws. It used to be a 3px ring, a transparent gap and an 8px blurple
    dot floating inside — much lighter visual weight, and blurple-on-blurple gave
    the dot almost no contrast against the ring holding it. */
+/* UNSELECTED IS NEARLY INVISIBLE, which is what lets the filled one win. The ring
+   was --nav-idle (#9A9AA0) on the pane's own background: a light-grey circle at
+   luminance ~153 against the reference's ~69, so an unselected option read almost
+   as strongly as the blurple disc beside it and the set had no obvious answer. Both
+   values measured off the reference — a dark ring, and an interior DARKER than the
+   pane rather than a hole in it. The old bright grey is the hover state now, which
+   is the one moment a "you can pick this" is worth that much contrast.
+   22px with an 8px dot, also measured: at 20/6 the selected state read soft. */
 .set-radio input[type="radio"] {
   -webkit-appearance: none; appearance: none;
-  width: 20px; height: 20px; flex: 0 0 20px; margin: 1px 0 0;
-  border-radius: 50%; border: 2px solid var(--nav-idle); background: none;
+  width: 22px; height: 22px; flex: 0 0 22px; margin: 1px 0 0;
+  border-radius: 50%; border: 2px solid #45454a; background: #1d1d21;
   display: grid; place-items: center; cursor: pointer;
 }
-.set-radio input[type="radio"]:hover { border-color: var(--text-strong); }
+.set-radio input[type="radio"]:hover { border-color: var(--nav-idle); }
 .set-radio input[type="radio"]:checked {
   border-color: var(--slider); background: var(--slider);
 }
 .set-radio input[type="radio"]:checked::after {
-  content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff;
+  content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff;
 }
 .set-radio-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .set-radio-title { font-size: 14px; font-weight: 500; color: var(--text-strong); }
@@ -4449,7 +4483,11 @@ button.ap-row:hover .ap-more { color: var(--text); }
    below it. The marks were missing entirely — the track was a plain bar with
    numbers floating over it, so every label named a position nothing on the track
    agreed with. 22px tall to hold both. */
-.set-ticks { position: relative; height: 22px; margin: 0 0 2px; }
+/* pointer-events: none on the whole scale, not just on the marks. Nothing in here
+   is interactive — and it sits directly over the top half of a 16px thumb on a 4px
+   bar, so with it hittable the thumb could only be grabbed from below its centre.
+   (It was already eating 4px of the thumb when the bar was 8px tall.) */
+.set-ticks { position: relative; height: 22px; margin: 0 0 2px; pointer-events: none; }
 .set-tick {
   position: absolute; top: 0; transform: translateX(-50%);
   font-size: 12px; font-weight: 600; color: var(--dim);
@@ -4460,15 +4498,26 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-tick.first { transform: none; }
 .set-tick.last { transform: translateX(-100%); }
 .set-tick.on { color: var(--text-strong); }
-/* A hairline standing on the track. Light enough to read over the grey half AND
-   over the blurple fill, which is why it is a translucent white rather than either
-   of those two colours. */
+/* A hairline THROUGH the bar, not a notch resting on it. Measured off the
+   reference: 1px wide, 16px tall, centred on the 4px track — so 6px of it stands
+   above the bar and 6px below, and the bar's own 4px is crossed rather than
+   avoided. It used to be 9px sitting on top of the track (bottom: 0 in a box that
+   ends where the input begins), which read as a row of little marks near the bar
+   instead of the full-height rules the reference draws at each value.
+
+   The geometry: this box's bottom edge is 2px above the input (its own
+   margin-bottom), the track fills the input's 4px, so bottom: -12px puts the mark
+   from 6px above the track's top to 6px below its bottom.
+
+   Absolutely positioned, so it paints over the track that follows it in the markup
+   — which is the point — and translucent white, so it reads over the grey half AND
+   over the blurple fill rather than only one of them. */
 .set-tick-mark {
-  position: absolute; bottom: 0; width: 1px; height: 9px;
+  position: absolute; bottom: -12px; width: 1px; height: 16px;
   transform: translateX(-50%);
-  background: rgba(255, 255, 255, .38); pointer-events: none;
+  background: rgba(255, 255, 255, .3); pointer-events: none;
 }
-.set-tick-mark.on { background: rgba(255, 255, 255, .72); }
+.set-tick-mark.on { background: rgba(255, 255, 255, .6); }
 /* The track, the thumb and the fill are shared by every slider in the sheet —
    see "EVERY slider in the settings sheet" above. */
 
@@ -4495,8 +4544,10 @@ button.ap-row:hover .ap-more { color: var(--text); }
   margin: -4px 0 26px; padding: 4px 0 12px;
   background: var(--chat-2);
 }
+/* 16px, measured. At 12 the caption rendered 9px tall against the reference's 12 —
+   the one thing about this label that was wrong; the colour already matched. */
 .a11y-preview-label {
-  font-size: 12px; font-weight: 600; letter-spacing: .01em;
+  font-size: 16px; font-weight: 600; letter-spacing: .01em;
   color: var(--panel-sub); margin-bottom: 8px;
 }
 .a11y-preview-box {
@@ -4511,6 +4562,81 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .a11y-msgs { font-size: var(--chat-fs); }
 .a11y-msgs .msg { padding-left: 12px; padding-right: 12px; }
 .a11y-msgs .msg-actions { display: none; }
+/* Nothing in here is hoverable, so the row highlight would only ever be a lie. */
+.a11y-msgs .msg:hover { background: none; }
+/* A ROLE-COLOURED NAME, which is the reference's preview and not this app's message
+   column: the point of showing it here is that a coloured username is one of the
+   things a reader with a colour sensitivity is being asked about. Measured off the
+   reference's own preview. */
+.a11y-msgs .msg-author { color: var(--preview-role); }
+
+/* ---- the two demonstrations beside the messages ------------------------
+   The reference's preview carries more than message rows: a stack of status faces
+   to the right of the first message and a button to the right of the second. Both
+   are there to be looked at while the sliders move — the faces are what the colour
+   and saturation controls act on, the button is a piece of real UI at the current
+   text size — so they are part of the preview rather than decoration on it.
+   margin-left:auto against .msg-body's flex:1 puts them on the trailing edge. */
+.a11y-aside { flex: 0 0 auto; margin-left: auto; padding-left: 12px; align-self: center; }
+.a11y-status { display: flex; flex-direction: column; gap: 6px; }
+/* A face: the colour IS the status, and the silhouette is the placeholder every
+   client draws for somebody with no picture. */
+.a11y-face {
+  position: relative; width: 30px; height: 30px; border-radius: 50%;
+  flex: 0 0 30px;
+}
+.a11y-face.online { background: var(--online); }
+.a11y-face.idle   { background: var(--idle); }
+.a11y-face.dnd    { background: var(--danger); }
+/* Head and shoulders in two shapes rather than an icon, so it scales with the
+   circle and needs no glyph of its own. */
+.a11y-face::before, .a11y-face::after {
+  content: ''; position: absolute; left: 50%; background: rgba(255, 255, 255, .92);
+}
+.a11y-face::before {
+  width: 9px; height: 9px; top: 6px; margin-left: -4.5px; border-radius: 50%;
+}
+.a11y-face::after {
+  width: 16px; height: 8px; bottom: 4px; margin-left: -8px;
+  border-radius: 8px 8px 0 0;
+}
+/* The status badge, punched out of the face rather than laid on top of it — the
+   ring is the pane's own background, which is what makes it read as a bite taken
+   out of the circle. Each one is a SHAPE as well as a colour: that is the whole
+   accessibility argument for status badges, and it is why the reference puts three
+   different ones here. */
+.a11y-badge {
+  position: absolute; right: -2px; bottom: -2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  box-shadow: 0 0 0 2.5px var(--chat-2);
+}
+/* Idle: a crescent, bitten by a circle of the background offset up and right. */
+.a11y-badge.idle { background: var(--idle); overflow: hidden; }
+.a11y-badge.idle::after {
+  content: ''; position: absolute; top: -3px; right: -3px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--chat-2);
+}
+/* Do not disturb: a bar. */
+.a11y-badge.dnd { background: var(--danger); display: grid; place-items: center; }
+.a11y-badge.dnd::after {
+  content: ''; width: 7px; height: 2px; border-radius: 1px; background: #fff;
+}
+/* On mobile: a handset, so it is the one badge that is not a circle at all. */
+.a11y-badge.mobile {
+  width: 9px; height: 13px; border-radius: 3px; background: var(--online);
+  right: -3px; bottom: -3px;
+}
+.a11y-badge.mobile::after {
+  content: ''; position: absolute; inset: 2px 1.5px 3px;
+  background: var(--chat-2); border-radius: 1px;
+}
+
+/* The button is the app's OWN primary button, not a picture of one — that is what
+   makes it a preview. Only the metrics are relaxed here, so it grows with "Text
+   size in chat" instead of sitting at a fixed 14px while the text beside it moves. */
+.a11y-msgs .btn-primary {
+  height: auto; padding: .55em 1.05em; font-size: .9em; white-space: nowrap;
+}
 
 /* ---------- System: keybinds -------------------------------------------- */
 .set-keybinds { display: flex; flex-direction: column; gap: 0; margin: 8px 0 4px; }

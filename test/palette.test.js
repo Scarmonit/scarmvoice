@@ -1526,7 +1526,19 @@ describe('the settings controls, measured', () => {
         // inside it — much lighter weight, and blurple-on-blurple left the dot with
         // almost no contrast against the ring holding it.
         expect(css).toMatch(/\.set-radio input\[type="radio"\]:checked \{\s*border-color: var\(--slider\); background: var\(--slider\);/);
-        expect(css).toMatch(/\.set-radio input\[type="radio"\]:checked::after \{[^}]*width: 6px; height: 6px[^}]*background: #fff/);
+        // 22px with an 8px dot, measured. At 20/6 the selected state read soft.
+        expect(css).toMatch(/\.set-radio input\[type="radio"\]:checked::after \{[^}]*width: 8px; height: 8px[^}]*background: #fff/);
+        expect(css).toMatch(/\.set-radio input\[type="radio"\] \{[^}]*width: 22px; height: 22px/);
+    });
+
+    it('keeps an UNSELECTED radio quiet enough for the filled one to win', () => {
+        // The ring was --nav-idle (#9A9AA0) on the pane's own background: luminance
+        // ~153 against the reference's ~69, so an unselected option read almost as
+        // strongly as the blurple disc beside it. Both values measured off the
+        // reference — and the interior is DARKER than the pane rather than a hole
+        // in it. The old bright grey is the hover state now.
+        expect(css).toMatch(/\.set-radio input\[type="radio"\] \{[^}]*border: 2px solid #45454a; background: #1d1d21/);
+        expect(css).toMatch(/\.set-radio input\[type="radio"\]:hover \{ border-color: var\(--nav-idle\); \}/);
     });
 
     it('draws an OFF switch as a dark well, not a grey pill', () => {
@@ -1544,7 +1556,54 @@ describe('the settings controls, measured', () => {
         expect(css).toMatch(/\.a11y-preview-box \{[^}]*background: none; border: 1px solid #38383d/);
         expect(css).toMatch(/\.a11y-preview-box \{[^}]*min-height: 210px/);
         expect(css).toMatch(/\.a11y-preview-label \{[^}]*color: var\(--panel-sub\)/);
+        // 16px, measured: at 12 the caption rendered 9px tall against the
+        // reference's 12. The colour was already right.
+        expect(css).toMatch(/\.a11y-preview-label \{[^}]*font-size: 16px/);
         // …and the sticky wrapper matches the sheet, or it draws a band across it.
         expect(css).toMatch(/\.a11y-preview \{[^}]*background: var\(--chat-2\)/);
+    });
+
+    it('gives the preview a role-coloured username, as the reference does', () => {
+        // This app has no role colours; the preview shows one because a coloured
+        // name is one of the things a reader with a colour sensitivity is being
+        // asked about here.
+        expect(css).toMatch(/\.a11y-msgs \.msg-author \{ color: var\(--preview-role\); \}/);
+        expect(css).toMatch(/--preview-role: #c297d8/);
+    });
+
+    it('draws a 4px slider track, not 8', () => {
+        // One component, therefore five controls: Accessibility's four and Voice &
+        // Audio's input and output volume all drew a bar twice the reference's.
+        expect(css).toMatch(/\.settings-modal input\[type="range"\] \{[^}]*height: 4px/);
+        expect(css).toMatch(/\.settings-modal input\[type="range"\]::-webkit-slider-runnable-track \{\s*height: 4px; border-radius: 2px/);
+        // A 16px thumb straddling a 4px track: half the thumb minus half the track.
+        expect(css).toMatch(/\.settings-modal input\[type="range"\]::-webkit-slider-thumb \{[^}]*margin-top: -6px/);
+    });
+
+    it('runs the tick marks THROUGH the bar rather than resting them on it', () => {
+        // Measured off the reference: 1px wide, 16px tall, centred on the 4px track,
+        // so 6px stands above the bar and 6px below. They were 9px sitting on top of
+        // it, which read as marks near the bar rather than rules crossing it.
+        expect(css).toMatch(/\.set-tick-mark \{\s*position: absolute; bottom: -12px; width: 1px; height: 16px/);
+        // The scale cannot take the pointer: it lies directly over the top half of
+        // the thumb, which could otherwise only be grabbed from below its centre.
+        expect(css).toMatch(/\.set-ticks \{[^}]*pointer-events: none/);
+    });
+
+    it('puts the channel header, and the menu hanging off it, above both columns', () => {
+        // The header is a stacking context, so .search-pop's own z-index is spent
+        // inside it and the header's number is the only one that counts. At 5 it lost
+        // to the member list's resize strip (6): the drag line painted through the
+        // open filters list and, because whatever paints on top is what the pointer
+        // hits, took the hover and the drag with it. It also lost to the unread jump
+        // bar (25) and the thread drawer (40).
+        // Two rules carry this selector — the grid placement one-liner and the
+        // block below it; the z-index lives in the second.
+        const head = css.match(/#chan-head \{[^}]*z-index: (\d+)/);
+        const z = Number(head[1]);
+        const handle = Number(css.match(/\.pane-resize \{[\s\S]*?z-index: (\d+)/)[1]);
+        expect(z).toBeGreaterThan(handle);
+        expect(z).toBeGreaterThan(40);
+        expect(css).toMatch(/\.search-pop \{[^}]*z-index: 40/);
     });
 });

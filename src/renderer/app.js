@@ -935,20 +935,29 @@
     //   suffix  what the label reads after the number
     //   snap    the value may ONLY rest on one of `at` (see snapSlider)
     //   defer   apply on release rather than while dragging (see the zoom listener)
+    //
+    // SNAP IS FOR THE STEPPED ONES ONLY — the sliders whose `at` list is the whole
+    // set of legal values. On the continuous ones (the two volumes, the speaking
+    // threshold) `at` is just where the labels go and every value between them is a
+    // real answer, so snapping there would throw away the control.
     const SLIDERS = {
         // 12-24 in the sizes the chat actually offers. NOT a uniform step, which is
         // why this one has to snap: at step="1" dragging from 16 towards 18 rested
         // on 17, a size no tick names.
         'set-font-px': { at: [12, 14, 15, 16, 18, 20, 24], suffix: 'px', snap: true },
-        // step="4" already makes every stop valid; the labels are a subset of them.
-        'set-msg-gap': { at: [0, 4, 8, 16, 24], suffix: 'px' },
+        // The same treatment, for the same reason: the stops are 0/4/8/16/24, so the
+        // 12 and the 20 in between are values no tick names. It had step="4" and no
+        // snap, which is what left 8 → 16 resting on 12 on the way.
+        'set-msg-gap': { at: [0, 4, 8, 16, 24], suffix: 'px', snap: true },
         // Chromium's own zoom stops. Non-uniform, so it snaps — and it is the one
         // slider whose effect is the whole window, so it waits for the mouse.
         'set-zoom': {
             at: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200],
             suffix: '', snap: true, defer: true
         },
-        'set-saturation': { at: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], suffix: '%' },
+        // Every one of its step="10" stops is a labelled value already; snapping is
+        // what KEEPS that true if the step attribute ever changes.
+        'set-saturation': { at: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], suffix: '%', snap: true },
         'set-invol': { at: [0, 50, 100, 150, 200], suffix: '%' },
         'set-outvol': { at: [0, 50, 100, 150, 200], suffix: '%' },
         'set-vad': { at: [1, 5, 10, 15, 20, 25, 30], suffix: '' }
@@ -1052,10 +1061,33 @@
         const spec = sliderSpec(input);
         const raw = Number(input.value);
         if (!spec || !spec.snap) return raw;
-        let best = spec.at[0];
-        spec.at.forEach((a) => { if (Math.abs(a - raw) < Math.abs(best - raw)) best = a; });
+        const best = spec.at[nearestIndex(spec, raw)];
         if (String(best) !== input.value) input.value = String(best);
         return best;
+    }
+
+    function nearestIndex(spec, v) {
+        let i = 0;
+        spec.at.forEach((a, n) => { if (Math.abs(a - v) < Math.abs(spec.at[i] - v)) i = n; });
+        return i;
+    }
+
+    // A keyboard nudge has to move BETWEEN the allowed values, which the browser's
+    // own arrow handling cannot do on a snapping slider: it steps by `step`, and
+    // snapSlider then pulls the result back to the nearest allowed value — which,
+    // when the step lands halfway between two of them, is the one it started on.
+    // Arrow-right from 12 on the font slider went 12 → 13 → back to 12: a dead end
+    // at every stop whose neighbours are an even number of steps away.
+    //
+    // Returns whether it handled the key, so the caller knows to suppress the
+    // browser's own move.
+    function nudgeSnap(input, delta) {
+        const spec = sliderSpec(input);
+        if (!spec || !spec.snap) return false;
+        const from = nearestIndex(spec, Number(input.value));
+        const to = Math.max(0, Math.min(spec.at.length - 1, from + delta));
+        input.value = String(spec.at[to]);
+        return true;
     }
 
     // Every registered slider, drawn and kept in step. Called once the sheet's
@@ -1071,6 +1103,23 @@
             const spec = sliderSpec(input);
             if (spec && spec.snap) {
                 input.addEventListener('input', () => snapSlider(input), true);
+                // The arrow keys, Home/End and Page Up/Down move along the LIST, not
+                // by `step`. The synthetic input/change is what the per-slider
+                // listeners are waiting for — without it the value would move and
+                // nothing would be saved or applied.
+                input.addEventListener('keydown', (e) => {
+                    if (e.altKey || e.ctrlKey || e.metaKey) return;
+                    const by = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 2, PageDown: -2 }[e.key];
+                    const before = input.value;
+                    if (by !== undefined) nudgeSnap(input, by);
+                    else if (e.key === 'Home') input.value = String(spec.at[0]);
+                    else if (e.key === 'End') input.value = String(spec.at[spec.at.length - 1]);
+                    else return;
+                    e.preventDefault();
+                    if (input.value === before) return;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                });
             }
             // The scale follows the thumb on every slider, whatever else it does.
             input.addEventListener('input', () => paintSlider(id));
@@ -1092,6 +1141,10 @@
     //     its REACTED state. With both empty, both pills rendered identically and
     //     the preview could not show that the two states differ at all — which is
     //     one of the things a preview of message appearance is for.
+    //
+    // `aside` is the demonstration that sits on the row's trailing edge — the
+    // reference puts the status faces beside the first message and a button beside
+    // the second, and both are things the controls on this pane act on.
     function a11yPreviewPosts() {
         const me = settings.displayName || 'Scarmonit';
         const uid = myUserId() || null;
@@ -1103,15 +1156,35 @@
                 reactions: [
                     { emoji: '🫘', count: 3, who: [settings.clientId] },
                     { emoji: '🎉', count: 1, who: [] }
-                ]
+                ],
+                aside: 'status'
             },
             {
                 id: -102, name: me, client_id: 'preview-a', user_id: uid,
                 body: "here's a link https://scarmonit.com/messageboard and some **bold** text",
-                created_at: 1700000060000, pinned: 0, reply_count: 0, reactions: []
+                created_at: 1700000060000, pinned: 0, reply_count: 0, reactions: [],
+                aside: 'button'
             }
         ];
     }
+
+    // The three status faces. A colour AND a shape each, which is the argument for
+    // status badges in the first place and the reason the reference shows all three
+    // here: whoever is reading this pane may not be able to tell the colours apart.
+    const A11Y_STATUS_HTML =
+        '<div class="a11y-aside"><div class="a11y-status" aria-hidden="true">' +
+        '<span class="a11y-face online"><i class="a11y-badge idle"></i></span>' +
+        '<span class="a11y-face idle"><i class="a11y-badge dnd"></i></span>' +
+        '<span class="a11y-face dnd"><i class="a11y-badge mobile"></i></span>' +
+        '</div></div>';
+
+    // The app's own primary button, so the preview shows the real thing growing with
+    // the text size rather than a picture of one. Not a real action: nothing on this
+    // pane should be clickable by accident, and a disabled button would demonstrate
+    // the wrong state, so it is inert and hidden from assistive tech instead.
+    const A11Y_BUTTON_HTML =
+        '<div class="a11y-aside"><button type="button" class="btn-primary" tabindex="-1" aria-hidden="true">' +
+        'Example Button</button></div>';
 
     function renderA11yPreview() {
         const host = $('a11y-preview-msgs');
@@ -1122,13 +1195,21 @@
         const pane = host.closest('.set-group');
         if (!pane || pane.hidden) return;
         host.innerHTML = '';
-        let prev = null;
         a11yPreviewPosts().forEach((p) => {
-            // Through the real renderer, in the real density — grouped exactly as
-            // the message list would group them.
-            const row = renderMessage(p, prev);
+            // Through the real renderer, in the real density.
+            //
+            // TWO GROUPS, not one — prev is null every time on purpose. Passing the
+            // previous post let renderMessage group them (same author, seconds
+            // apart), which put both under a single header and hid the two things
+            // this preview is here to show: a repeated author header, and the gap
+            // BETWEEN groups that the slider below sets. With one group there was
+            // nothing for "Space Between Message Groups" to move.
+            const row = renderMessage(p, null);
+            if (p.aside) {
+                row.insertAdjacentHTML('beforeend',
+                    p.aside === 'status' ? A11Y_STATUS_HTML : A11Y_BUTTON_HTML);
+            }
             host.appendChild(row);
-            prev = p;
         });
         highlightCodeBlocks(host);
         // A picture that 404s takes itself off and the initials underneath show
