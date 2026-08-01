@@ -330,7 +330,23 @@ body { display: flex; flex-direction: column; }
 
 button, input, select, textarea { font: inherit; color: inherit; }
 input, textarea, select { user-select: text; }
-button { font-family: inherit; }
+/* THE UA'S OWN BUTTON, off. Chromium's default is `border: 2px outset buttonface`
+   over a light plate: a raised 3D bevel, light on the top-left and PURE BLACK on
+   the bottom-right, which is a Windows 95 widget sitting in a flat dark app. Every
+   button in here that draws itself was already overriding both — so the ones that
+   showed it were the ones that set a background and a radius and simply never
+   thought about the border, and there is no way to notice that from the rule you
+   are writing. Reset once, here, rather than remembered 203 times.
+   Anything that wants a real border still gets one: a class beats an element. */
+button { font-family: inherit; background: none; border: 0; }
+
+/* For headings that a screen reader needs and the eye does not: the picker's
+   title is its placeholder, but a dialog with no accessible name is a dialog
+   nobody can identify. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 /* A THEMED focus ring, for everything that has not drawn one of its own.
    Chromium's default is a black outline with a white inner line: on a dark
@@ -5053,25 +5069,52 @@ html.win-hidden .up-bar i {
 /* ---- new-conversation picker -------------------------------------------
    One list, multi-select. Selecting one person is a DM and several is a
    group, so the control does not change shape between the two. */
-.dm-picker-card { width: min(440px, 92vw); }
-.dm-picker-list {
-  margin-top: 10px; max-height: 320px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 2px;
-  border: 1px solid var(--line); border-radius: 8px; padding: 6px;
-  background: var(--sunk);
+/* 560px, against the 440 it was — measured on the reference at 680 on a wider
+   window. A list you are meant to read twenty rows of needs the room. */
+.dm-picker-card { width: min(560px, 92vw); max-width: none; padding: 16px; }
+/* THE DOMINANT ELEMENT. 60px with 17px type, and a fill four points off the card
+   rather than twenty-four: a field that is nearly black inside a #242429 panel is
+   a hole in it, which is the same inversion the other search boxes had. */
+.dm-picker-card input#dm-picker-search {
+  width: 100%; height: 60px; margin: 0 0 12px; padding: 0 16px;
+  border-radius: 8px; background: var(--ctl-sunk); border: 1px solid var(--ctl-sunk-line);
+  color: var(--text); font-size: 17px;
 }
+.dm-picker-card input#dm-picker-search::placeholder { color: var(--dim); }
+.dm-picker-card input#dm-picker-search:focus { border-color: var(--accent-line); outline: none; }
+/* FLAT rows on the card itself — no well, no border. Twenty bordered boxes is
+   what made this read as a form rather than as a list of results. */
+.dm-picker-list {
+  margin: 0; max-height: 340px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.dm-pick-head {
+  padding: 10px 8px 4px; font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--dim); text-transform: uppercase;
+}
+.dm-pick-head:first-child { padding-top: 2px; }
+/* 34px, measured, against the 44 they were. */
 .dm-pick-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; padding: 8px 10px; border-radius: 6px;
-  background: transparent; color: var(--text); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; height: 34px; padding: 0 8px; border-radius: 4px;
+  background: none; color: var(--text); font-size: 14px; cursor: pointer;
   transition: background-color .05s ease;
 }
-.dm-pick-row:hover { background: var(--hover); }
+.dm-pick-row:hover, .dm-pick-row.cursor { background: var(--elev); }
 .dm-pick-row.on    { background: var(--chan-active); color: var(--text-strong); }
+.dm-pick-ico { flex: none; width: 18px; height: 18px; color: var(--dim); }
+.dm-pick-hash { font-size: 17px; line-height: 18px; text-align: center; font-weight: 400; }
+.dm-pick-av { flex: none; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 9px; font-weight: 800; color: var(--on-accent); }
 .dm-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-pick-name em { margin-left: 6px; font-style: normal; }
+/* What the row IS, on the trailing edge — the reference puts the parent server
+   there, and this puts the kind of place it is. */
+.dm-pick-where { margin-left: auto; flex: none; font-size: 12px; color: var(--meta); }
 .dm-pick-check { flex: none; width: 16px; text-align: center; color: var(--accent); }
 .dm-picker-empty { padding: 10px; }
+/* Under the list, where the reference puts its own hint. */
+.dm-picker-hint { margin: 10px 0 0 !important; font-size: 12.5px; }
 
 /* ---- group conversations ----------------------------------------------- */
 /* "mine or theirs" stops being a complete answer at three people, so a group
@@ -5235,10 +5278,13 @@ html.win-hidden .up-bar i {
   font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent);
 }
 /* Pinned to the bottom of the panel, as the reference does. */
+/* 16px of margin, which is 17 from the panel's edges once its border is counted
+   — measured. The label is 15/251 rather than 14/232: it is the only control in
+   this panel and it was reading like a caption. */
 #dm-prof-full {
-  margin: auto 12px 12px; flex: none; height: 40px; border-radius: 8px;
-  background: var(--btn-secondary); color: var(--text);
-  font-size: 14px; font-weight: 500; cursor: pointer;
+  margin: auto 16px 16px; flex: none; height: 40px; border-radius: 8px;
+  background: var(--btn-secondary); color: var(--author);
+  font-size: 15px; font-weight: 500; cursor: pointer;
   transition: background-color .05s ease;
 }
 #dm-prof-full:hover { background: var(--btn-secondary-hover); }

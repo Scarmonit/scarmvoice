@@ -14705,14 +14705,69 @@
     const dmPick = { all: [], chosen: new Set(), mode: 'create', thread: 0 };
     const DM_GROUP_MAX = 10;                  // server enforces the same cap
 
+    // A section heading in the picker's list.
+    function dmPickHead(box, text) {
+        const h = document.createElement('div');
+        h.className = 'dm-pick-head';
+        h.textContent = text;
+        box.appendChild(h);
+    }
+
+    // GO somewhere, rather than pick somebody. The button that opens this says
+    // "Find or start a conversation" — two verbs — and it only ever did the
+    // second: there was no way to reach #general from it. These rows are the
+    // first verb, and they act on click instead of toggling a selection, which is
+    // what keeps the two halves of the list legible.
+    //
+    // Left out entirely while adding people to an existing group: "jump to
+    // #general" is not an answer to "who else should be in this group".
+    function dmPickerJumps(q) {
+        if (dmPick.mode === 'add') return [];
+        const out = [];
+        (channels || []).forEach((c) => {
+            const name = typeof c === 'string' ? c : c.name;
+            if (!name || (q && !name.toLowerCase().includes(q))) return;
+            out.push({ kind: 'channel', name, where: 'Channel', go: () => switchChannel(name) });
+        });
+        (dmThreads || []).forEach((t) => {
+            const title = dmLabel(t);
+            if (!title || (q && !title.toLowerCase().includes(q))) return;
+            out.push({
+                kind: 'dm', name: title, where: t.isGroup ? 'Group' : 'Conversation',
+                go: () => openDm(t.id)
+            });
+        });
+        return out;
+    }
+
     function renderDmPicker() {
         const box = $('dm-picker-list');
         const q = ($('dm-picker-search').value || '').trim().toLowerCase();
         const shown = dmPick.all.filter((u) => !q || u.username.toLowerCase().includes(q));
+        const jumps = dmPickerJumps(q);
         box.innerHTML = '';
-        if (!shown.length) {
-            box.innerHTML = '<div class="hint dm-picker-empty">No one matches that.</div>';
+        if (!shown.length && !jumps.length) {
+            box.innerHTML = '<div class="hint dm-picker-empty">Nothing matches that.</div>';
         }
+        if (jumps.length) {
+            dmPickHead(box, 'Jump to');
+            jumps.slice(0, 8).forEach((j) => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'dm-pick-row';
+                // A channel is named by its hash, the way it is everywhere else in
+                // this app; a conversation by the @ the rail uses for the place.
+                row.innerHTML =
+                    (j.kind === 'channel'
+                        ? '<span class="dm-pick-ico dm-pick-hash">#</span>'
+                        : '<span class="dm-pick-ico">' + I('at') + '</span>') +
+                    `<span class="dm-pick-name">${esc(j.name)}</span>` +
+                    `<span class="dm-pick-where">${esc(j.where)}</span>`;
+                row.addEventListener('click', () => { closeDmPicker(); j.go(); });
+                box.appendChild(row);
+            });
+        }
+        if (shown.length) dmPickHead(box, dmPick.mode === 'add' ? 'Add to the group' : 'Start a conversation with');
         shown.forEach((u) => {
             const row = document.createElement('button');
             row.type = 'button';

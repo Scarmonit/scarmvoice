@@ -161,6 +161,48 @@ describe('the direct-messages place', () => {
         expect(css).toMatch(/\.dm-nav-row \{[^}]*background: none; border: 0/);
     });
 
+    // The UA's own button is `border: 2px outset buttonface` — a raised 3D bevel,
+    // light on the top-left and PURE BLACK on the bottom-right. Two buttons out of
+    // 203 were showing it, and they were the two that set a background and a radius
+    // and never thought about the border. There is no way to notice that from the
+    // rule you are writing, so it is reset once at the base.
+    it('turns off the browser s own button bevel, once', () => {
+        expect(css).toMatch(/^button \{ font-family: inherit; background: none; border: 0; \}$/m);
+        // …and nothing re-enables it by asking for an outset.
+        expect(css).not.toMatch(/border[^;:]*:\s*[^;]*outset/);
+    });
+
+    it('gives the picker an input that leads, and rows that are flat', () => {
+        // It was a 43px field under a 17px heading, filled 24 points darker than
+        // the card — a hole in the panel — over 44px bordered rows. The reference
+        // makes the input the panel and the rows plain text.
+        expect(css).toMatch(/\.dm-picker-card \{ width: min\(560px, 92vw\)/);
+        expect(css).toMatch(/input#dm-picker-search \{[^}]*height: 60px/);
+        expect(css).toMatch(/input#dm-picker-search \{[^}]*background: var\(--ctl-sunk\); border: 1px solid var\(--ctl-sunk-line\)/);
+        expect(css).toMatch(/\.dm-pick-row \{[^}]*height: 34px/);
+        expect(css).toMatch(/\.dm-pick-row \{[^}]*background: none/);
+        // the list itself is no longer a well with a border round it
+        expect(css).not.toMatch(/\.dm-picker-list \{[^}]*background: var\(--sunk\)/);
+    });
+
+    it('lets the finder actually FIND, not only start', () => {
+        // The button says "Find or start a conversation" — two verbs — and it only
+        // ever did the second: there was no way to reach #general from it.
+        const app = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        expect(app).toMatch(/function dmPickerJumps\(q\)/);
+        expect(app).toMatch(/kind: 'channel'[^}]*go: \(\) => switchChannel\(name\)/);
+        expect(app).toMatch(/go: \(\) => openDm\(t\.id\)/);
+        // …and not while adding people to a group, where "jump to #general" is not
+        // an answer to "who else should be in this".
+        expect(app).toMatch(/if \(dmPick\.mode === 'add'\) return \[\];/);
+        expect(css).toMatch(/\.dm-pick-head \{/);
+    });
+
+    it('sizes the profile panel s one button like the reference s', () => {
+        expect(css).toMatch(/#dm-prof-full \{[^}]*margin: auto 16px 16px[^}]*height: 40px/);
+        expect(css).toMatch(/#dm-prof-full \{[^}]*color: var\(--author\)[^}]*font-size: 15px/);
+    });
+
     it('reads the handle at full brightness, in both places it appears', () => {
         // It was --muted under the name, which turns the second half of somebody's
         // identity into a caption. --author is the token at the reference's 251.
