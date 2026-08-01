@@ -1249,6 +1249,11 @@ button { font-family: inherit; background: none; border: 0; }
 }
 #chan-meta { font-size: 12px; color: var(--dim); }
 .chan-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+/* Threads / bell / pins, as one moveable group. It sits in the channel header
+   and is relocated into #dm-actions-slot while a conversation is open, so the
+   gap between the three has to hold in both places — inherited from
+   .chan-actions it would collapse to .dm-head-actions' 2px on the way over. */
+.conv-actions { display: flex; align-items: center; gap: 4px; }
 /* Idle dimmer, active WHITE — and no plate. A tint plus a pill said "toggled"
    twice, in a colour that means something else everywhere else in the app. */
 .ch-btn { width: 32px; height: 32px; color: var(--ch-icon); }
@@ -1256,13 +1261,18 @@ button { font-family: inherit; background: none; border: 0; }
    the same direction as everything else along this header and the sidebar. */
 .ch-btn .ico { width: 22px; height: 22px; }
 .ch-btn:hover { background: none; color: var(--text-strong); }
-#chan-head .ch-btn.on { background: none; color: var(--text-strong); }
-#chan-head .ch-btn[aria-pressed="true"].on { background: none; }
+/* Not scoped to #chan-head. These three buttons LIVE in two headers now — the
+   same element, moved into #dm-actions-slot when you open a conversation — and
+   a selector naming one of them meant the open-panel highlight simply vanished
+   on the way over: the pinned panel could be up with nothing in the header
+   saying which button had opened it. */
+.ch-btn.on { background: none; color: var(--text-strong); }
+.ch-btn[aria-pressed="true"].on { background: none; }
 /* A button whose panel is OPEN goes white, the way the members toggle already
    did. The threads button and the bell both set aria-expanded and neither was
    styled for it, so their panel could be open with nothing in the header saying
    which button had opened it. */
-#chan-head .ch-btn[aria-expanded="true"] { background: none; color: var(--text-strong); }
+.ch-btn[aria-expanded="true"] { background: none; color: var(--text-strong); }
 /* A well cut into the header rather than a control raised out of it, with the
    magnifier trailing the placeholder — the field reads as a sentence you
    finish, not a button you press. */
@@ -4029,6 +4039,9 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 }
 .dm-count[hidden] { display: none; }
 .dm-head-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: none; }
+/* Where #conv-actions lands. A bare inline <span> would drop the three buttons
+   onto the text baseline instead of centring them with the rest of the row. */
+#dm-actions-slot { display: flex; align-items: center; }
 .dm-head-actions .icon-btn[hidden] { display: none; }
 /* The message column, not a chat transcript.
    The bubble rules that used to live here — right-aligned rounded fills for
@@ -5242,6 +5255,94 @@ html.win-hidden .up-bar i {
 }
 .dm-picker-card .dialog-actions #dm-picker-ok:disabled { opacity: .5; cursor: default; }
 
+/* ---- the New Message modal (the roster layout) --------------------------
+   The same overlay as the palette above, reshaped: a titled dialog with a
+   search box, board members as two-line rows with a checkbox on the trailing
+   edge, and a Cancel / Create Message pair that is always there because in this
+   layout you ARE clicking through.
+
+   Narrower and taller than the palette — 460 rather than 680 — because there is
+   no trailing "Channel" / "Conversation" column to make room for, and because a
+   list of people wants to be scanned down rather than across. */
+.dm-picker--roster .dm-picker-card {
+  width: min(460px, 92vw);
+  padding: 16px;
+  position: relative;
+}
+/* A DOM anchor, not a box. It marks where the head lands inside the card
+   (`slot.after(head)`), and an empty inline span would still be a thing the
+   flow has to think about. */
+#dm-picker-head-slot { display: none; }
+/* The head, once it has been moved inside the card. Left-aligned and stacked,
+   against the palette's centred single line. The padding keeps the title clear
+   of the ✕ in the corner. */
+.dm-picker--roster #dm-picker-head { margin: 0 0 12px; padding-right: 28px; }
+.dm-picker--roster .dm-picker-title {
+  margin: 0; text-align: left; font-size: 20px; font-weight: 700;
+}
+.dm-picker-sub { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.dm-picker-sub[hidden] { display: none; }
+/* The ✕, in the card's corner. The palette has no close button — Escape and a
+   backdrop click are the whole of it — but a modal you click through wants the
+   third way out where the eye already looks for it. */
+.dm-picker-x {
+  position: absolute; top: 12px; right: 12px;
+  width: 24px; height: 24px; color: var(--dim);
+}
+.dm-picker-x:hover { color: var(--text-strong); background: none; }
+.dm-picker-x[hidden] { display: none; }
+/* An ordinary field rather than the palette's 70px hero: here the box is one
+   control among several, not the thing you came for. */
+.dm-picker--roster .dm-picker-card input#dm-picker-search {
+  height: 40px; margin: 0 0 8px; padding: 0 12px; font-size: 15px;
+}
+.dm-picker-lead { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.dm-picker-lead[hidden] { display: none; }
+/* Taller than the palette's 240: this list is the body of the dialog. */
+.dm-picker--roster .dm-picker-list { max-height: 320px; gap: 2px; }
+/* 44px, for a two-line row with a 32px face. */
+.dm-pick-person { height: 44px; gap: 12px; padding: 0 8px; }
+.dm-pick-av-lg { width: 32px; height: 32px; font-size: 12px; }
+.dm-pick-ident {
+  display: flex; flex-direction: column; align-items: flex-start;
+  min-width: 0; line-height: 1.2; gap: 1px;
+}
+.dm-pick-person .dm-pick-name { font-size: 14px; font-weight: 600; color: var(--text-strong); max-width: 100%; }
+.dm-pick-handle {
+  font-size: 12px; color: var(--muted);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The checkbox. A real box on the trailing edge, not the palette's ✓ glyph:
+   this layout is a multi-select and the empty state has to be visible before
+   anything is picked, or there is nothing to say the row is selectable. */
+.dm-pick-box {
+  margin-left: auto; flex: none;
+  width: 20px; height: 20px; border-radius: 6px;
+  border: 1px solid var(--ctl-line-hover); background: none;
+  display: grid; place-items: center;
+}
+.dm-pick-person.on .dm-pick-box {
+  background: var(--slider); border-color: transparent;
+}
+.dm-pick-box::after {
+  content: ''; width: 10px; height: 6px;
+  border-left: 2px solid #fff; border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translate(1px, -1px);
+  opacity: 0;
+}
+.dm-pick-person.on .dm-pick-box::after { opacity: 1; }
+/* A selected row does NOT take the palette's filled background: the checkbox is
+   already saying it, and both together read as two different selections. */
+.dm-picker--roster .dm-pick-row.on { background: none; }
+.dm-picker--roster .dm-pick-row.on:hover,
+.dm-picker--roster .dm-pick-row.cursor { background: var(--elev); }
+/* The footer is part of this layout rather than something that appears with a
+   selection, so the palette's "hidden until there is something to confirm" rule
+   is turned off here — and the palette's key hints have nothing to teach in a
+   dialog you click through. */
+.dm-picker--roster .dm-picker-hint { display: none; }
+.dm-picker--roster .dm-picker-card .dialog-actions { margin-top: 16px; }
+
 /* ---- group conversations ----------------------------------------------- */
 /* "mine or theirs" stops being a complete answer at three people, so a group
    prints the speaker once per run. */
@@ -5336,7 +5437,24 @@ html.win-hidden .up-bar i {
    It keeps this open by default in a DM because in a DM the person IS the
    context — which is not true of a channel's member list. */
 #dm-body { flex: 1; min-height: 0; display: flex; }
-#dm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* position: relative and the drawer variables, because #thread-panel is MOVED
+   in here when you open a thread inside a conversation — the same element the
+   channel column uses, not a copy of it. It is `position: absolute`, so without
+   a positioned ancestor it would resolve against the viewport and hang over the
+   whole window; and without the two variables the shift rule below has nothing
+   to read. Both are declared on #main for the channel case (see the drawer
+   block up in the message-column section); this is the conversation's copy of
+   that contract, and the only thing either has to agree on is the names. */
+#dm-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  position: relative;
+  --drawer-w: min(420px, 62%); --drawer-shift: 0px;
+}
+#dm-main:has(> #thread-panel:not([hidden])) { --drawer-shift: var(--drawer-w); }
+/* The conversation narrows behind the drawer rather than sliding under it —
+   identical to what #main does for #messages-wrap and #composer. */
+#dm-main > #dm-messages,
+#dm-main > #dm-composer-slot { margin-right: var(--drawer-shift); }
 #dm-profile {
   flex: none; width: 302px; display: flex; flex-direction: column;
   /* --float-edge, not --line-2: over --panel that token computes to #37373A

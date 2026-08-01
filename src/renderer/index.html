@@ -134,7 +134,11 @@
             <span>Direct Messages</span>
             <span class="cat-arrow" data-icon="chevron-down"></span>
           </button>
-          <button type="button" class="cat-add" id="btn-new-dm" title="Start a conversation">
+          <!-- data-tip rather than title: this app draws its own tooltips (see
+               showTip), and a native one would arrive a second later, in the
+               wrong place, saying the same thing twice. -->
+          <button type="button" class="cat-add" id="btn-new-dm"
+                  data-tip="Create Message" aria-label="Create Message">
             <span class="ico" data-icon="plus"></span>
           </button>
         </div>
@@ -462,18 +466,33 @@
       <div class="chan-actions">
         <!-- Threads first, then the bell, then pins, then members — the
              reference's order, and it reads outward from "this conversation" to
-             "this channel" to "these people". -->
-        <button class="icon-btn ch-btn" id="btn-threads" data-tip="Threads" aria-label="Threads"
-                aria-expanded="false">
-          <span class="ico" data-icon="threads"></span>
-        </button>
-        <button class="icon-btn ch-btn" id="btn-chan-alerts" data-tip="Notification Settings" aria-label="Notification Settings"
-                aria-expanded="false">
-          <span class="ico" data-icon="bell"></span>
-        </button>
-        <button class="icon-btn ch-btn" id="btn-pinned" data-tip="Pinned Messages" aria-label="Pinned Messages">
-          <span class="ico" data-icon="pin"></span>
-        </button>
+             "this channel" to "these people".
+
+             The first three are THE CONVERSATION'S actions and live in their own
+             element, because a direct message needs the same three and gets them
+             by MOVING this node into #dm-actions-slot — the trick #composer and
+             #dm-list already use. A second set of buttons in the DM header would
+             need a second set of listeners, a second placement routine and a
+             second set of aria state, and the two would disagree within a week;
+             that divergence is exactly why DMs had no pins, no threads and no
+             notification settings in the first place. The same element cannot be
+             missing a feature the other one has.
+
+             Members stays behind: a channel has a member list, and a
+             conversation has the profile panel instead. -->
+        <div class="conv-actions" id="conv-actions">
+          <button class="icon-btn ch-btn" id="btn-threads" data-tip="Threads" aria-label="Threads"
+                  aria-expanded="false">
+            <span class="ico" data-icon="threads"></span>
+          </button>
+          <button class="icon-btn ch-btn" id="btn-chan-alerts" data-tip="Notification Settings" aria-label="Notification Settings"
+                  aria-expanded="false">
+            <span class="ico" data-icon="bell"></span>
+          </button>
+          <button class="icon-btn ch-btn" id="btn-pinned" data-tip="Pinned Messages" aria-label="Pinned Messages">
+            <span class="ico" data-icon="pin"></span>
+          </button>
+        </div>
         <button class="icon-btn ch-btn" id="btn-members" data-tip="Hide Member List" aria-label="Hide Member List" aria-pressed="true">
           <span class="ico" data-icon="users"></span>
         </button>
@@ -679,7 +698,10 @@
       <section class="side-section">
         <div class="cat-head">
           <span class="dm-side-label">Direct Messages</span>
-          <button type="button" class="cat-add" id="btn-new-dm-2" title="Start a conversation">
+          <!-- The same button in the other sidebar, so it says and does the same
+               thing. See #btn-new-dm above for why this is data-tip. -->
+          <button type="button" class="cat-add" id="btn-new-dm-2"
+                  data-tip="Create Message" aria-label="Create Message">
             <span class="ico" data-icon="plus"></span>
           </button>
         </div>
@@ -701,9 +723,15 @@
       <span id="dm-title">Direct message</span>
       <span id="dm-count" class="dm-count" hidden></span>
       <div class="dm-head-actions">
-        <!-- No pin button here on purpose. Pinning a DM needs a column and an
-             endpoint that do not exist, and a button that does nothing is the
-             bug I have already had to come back and fix twice. -->
+        <!-- Threads, Notification Settings and Pinned Messages arrive here — the
+             very same #conv-actions element the channel header holds, moved in
+             when you enter a conversation and moved back when you leave.
+             (There used to be a comment here explaining that a DM could not have
+             a pin button because pinning needed a column and an endpoint that
+             did not exist. It has both now — dm_messages.pinned and
+             /api/board/dm/pin — along with reactions, quote replies and threads,
+             so the three buttons are as real here as they are in a channel.) -->
+        <span id="dm-actions-slot"></span>
         <button type="button" class="icon-btn" id="dm-add" title="Add people" hidden>
           <span class="ico" data-icon="user-add"></span>
         </button>
@@ -1957,11 +1985,35 @@
        keystroke and the next thing you do is type. The reference sizes its own
        the same way, and ours had a 17px title and a 13px hint above a 43px box.
        The heading is the placeholder now. -->
-  <div class="dm-picker-wrap">
-  <h2 class="dm-picker-title" id="dm-picker-title">Search for channels, conversations or people</h2>
+  <!-- ONE overlay, two layouts.
+       • PALETTE (`create`) — "Find or start a conversation": channels,
+         conversations and people in one list, driven from the keyboard.
+       • ROSTER (`new`, `add`) — the New Message modal the + beside Direct
+         Messages opens: a title, a search box, board members with checkboxes,
+         and Cancel / Create Message.
+       They share the element, the selection state, the member directory and the
+       create path, and differ in layout and in whether jump rows are offered.
+       Two separate modals would be two things to keep the 10-member cap in. -->
+  <div class="dm-picker-wrap" id="dm-picker-wrap">
+  <!-- MOVED between the two layouts rather than written twice: above the card
+       for the palette, inside it for the roster modal. Same trick #composer,
+       #conv-actions and #thread-panel use — one element cannot be missing what
+       the other one has. -->
+  <div id="dm-picker-head">
+    <h2 class="dm-picker-title" id="dm-picker-title">Search for channels, conversations or people</h2>
+    <p class="dm-picker-sub" id="dm-picker-sub" hidden></p>
+  </div>
   <div class="dialog-card dm-picker-card">
+    <!-- Where the head lands in roster mode. First child, so it sits at the top
+         of the card. -->
+    <span id="dm-picker-head-slot"></span>
+    <button type="button" class="icon-btn dm-picker-x" id="dm-picker-close"
+            title="Close (Esc)" aria-label="Close" hidden>
+      <span class="ico" data-icon="x"></span>
+    </button>
     <input type="text" id="dm-picker-search" placeholder="Where would you like to go?"
            autocomplete="off" maxlength="40" aria-label="Find or start a conversation">
+    <p class="dm-picker-lead" id="dm-picker-lead" hidden></p>
     <div id="dm-picker-list" class="dm-picker-list"></div>
     <p class="hint dm-picker-hint" id="dm-picker-hint">Pick someone to message. Pick a few to start a group.</p>
     <div class="dialog-actions" id="dm-picker-actions" hidden>

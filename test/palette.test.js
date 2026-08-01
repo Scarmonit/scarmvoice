@@ -18,7 +18,15 @@ let css = '';
 let dark = '';
 
 beforeAll(() => {
-    css = fs.readFileSync(path.join(RENDERER, 'styles.css'), 'utf8');
+    // Newlines normalised, because several assertions in this file match across
+    // one — `css.lastIndexOf('@media (…) {\n  #me-bar')` among them — and this
+    // repo is checked out with core.autocrlf=true, so on Windows the file on
+    // disk has CRLF and every one of those needles silently found nothing.
+    // `lastIndexOf` then returned -1, `slice(-1)` returned the final newline,
+    // and the assertion failed against a one-character string with no hint as
+    // to why. What the stylesheet SAYS is the same either way; how git happened
+    // to check it out is not something a palette test should be able to see.
+    css = fs.readFileSync(path.join(RENDERER, 'styles.css'), 'utf8').replace(/\r\n/g, '\n');
     dark = css.slice(css.indexOf(':root {'), css.indexOf('* { box-sizing'));
 });
 
@@ -211,9 +219,11 @@ describe('the direct-messages place', () => {
         expect(app).toMatch(/function dmPickerJumps\(q\)/);
         expect(app).toMatch(/kind: 'channel'[^}]*go: \(\) => switchChannel\(name\)/);
         expect(app).toMatch(/go: \(\) => openDm\(t\.id\)/);
-        // …and not while adding people to a group, where "jump to #general" is not
-        // an answer to "who else should be in this".
-        expect(app).toMatch(/if \(dmPick\.mode === 'add'\) return \[\];/);
+        // …and not in the ROSTER layout — the New Message modal off the + and
+        // the Add People dialog — where "jump to #general" is not an answer to
+        // "who am I messaging?".
+        expect(app).toMatch(/if \(dmPickRoster\(\)\) return \[\];/);
+        expect(app).toMatch(/function dmPickRoster\(\) \{ return dmPick\.mode === 'new' \|\| dmPick\.mode === 'add'; \}/);
         expect(css).toMatch(/\.dm-pick-head \{/);
     });
 
@@ -1093,7 +1103,13 @@ describe('the channel header', () => {
     it('marks the active toggle by going white, not by adding a plate', () => {
         // A tint plus a pill said "toggled" twice, in a colour that means
         // something else everywhere else in the app.
-        expect(css).toMatch(/#chan-head \.ch-btn\.on \{ background: none; color: var\(--text-strong\); \}/);
+        //
+        // Unscoped, deliberately. Threads, the bell and pins are ONE element
+        // that lives in this header and moves into the conversation header
+        // (#dm-actions-slot) while a DM is open, so a rule naming #chan-head
+        // dropped the highlight on the way over — the panel could be open with
+        // nothing saying which button had opened it.
+        expect(css).toMatch(/\n\.ch-btn\.on \{ background: none; color: var\(--text-strong\); \}/);
         expect(css).toMatch(/\.ch-btn \{[^}]*color:\s*var\(--ch-icon\)/);
         expect(lum(hex('ch-icon', dark))).toBeLessThan(lum(hex('muted', dark)));
     });
@@ -1808,7 +1824,9 @@ describe('a header button whose panel is open', () => {
         // The threads button and the bell both set aria-expanded and neither was
         // styled for it, so a panel could be open with nothing in the header saying
         // which button had opened it. The members toggle already did this via .on.
-        expect(css).toMatch(/#chan-head \.ch-btn\[aria-expanded="true"\] \{[^}]*color: var\(--text-strong\)/);
+        // Unscoped for the same reason .ch-btn.on is — see the channel-header
+        // block above: these three buttons are shared with the DM header.
+        expect(css).toMatch(/\n\.ch-btn\[aria-expanded="true"\] \{[^}]*color: var\(--text-strong\)/);
     });
 });
 

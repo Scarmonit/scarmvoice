@@ -4,17 +4,22 @@
 // channel. Boots the real renderer signed in, opens a DM from the sidebar, and
 // drives the resulting rows.
 //
-// Both halves of this exist because a DM is drawn with the CHANNEL message
-// component — which is what gives it grouping, attachments and embeds for
-// nothing, and is also how it inherits behaviour that has no DM backing:
+// THE POINT OF THIS FILE IS THAT THE TWO ANSWERS ARE THE SAME ANSWER.
 //
-//   • the actions the component's own hover bar drops for a DM were still on
-//     the right-click menu, one click away, answering "Not found";
-//   • the actions that are delegated rather than per-row (open the image, save
-//     the attachment) were bound to #messages alone, so in a conversation they
-//     were bound to nothing at all.
+// A DM is drawn with the CHANNEL message component, which is what gives it
+// grouping, attachments and embeds for nothing. For a long time it also
+// inherited a set of actions with no DM backing — react, reply, threads and
+// pins all read and wrote the `posts` table — so the hover bar dropped the four
+// of them and the right-click menu went on offering them one click away,
+// answering "Not found". The fix was not to hide them in both places: it was to
+// give dm_messages the columns and the endpoints (dm/react, dm/pin,
+// dm/replies, reply_root_id, quote_id) that make all four real, so one
+// component can offer one set of actions wherever it is drawn.
 //
-// Neither is visible to a test that only ever looks at a channel.
+// So every test below that names an action asserts it is present in BOTH
+// places, and the control block at the bottom is what catches the two drifting
+// apart again. The one deliberate exception is moderation, which a private
+// conversation does not have — see the last test.
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,12 +39,20 @@ const THREAD = {
     user: THEM, members: [ME, THEM], unread: 0
 };
 
-// One text message from them, one image attachment from me.
+// One text message from them, one image attachment from me. Shaped the way
+// /api/board/dm/list returns them now: the same decorations a channel post
+// carries — pinned, reactions, reply counts — because that is what lets one
+// renderer draw either.
 const DM_MESSAGES = [
-    { id: 501, from: THEM.id, body: 'have a look at this', created_at: 1700000000000 },
+    {
+        id: 501, from: THEM.id, body: 'have a look at this', created_at: 1700000000000,
+        pinned: 0, reactions: [{ emoji: '👍', count: 1, who: ['dm-user-2'], users: [THEM.id] }],
+        reply_count: 2, last_reply_at: 1700000090000
+    },
     {
         id: 502, from: ME.id, body: '', created_at: 1700000060000,
-        att_key: 'r2/pic.png', att_name: 'pic.png', att_type: 'image/png', att_size: 2048
+        att_key: 'r2/pic.png', att_name: 'pic.png', att_type: 'image/png', att_size: 2048,
+        pinned: 1, reactions: [], reply_count: 0
     }
 ];
 
@@ -64,11 +77,19 @@ const board = vi.fn(async (p) => {
     if (p === 'dm/list') {
         return { success: true, thread: THREAD, messages: DM_MESSAGES };
     }
+    if (p === 'dm/pins') return { success: true, thread: THREAD.id, pins: [] };
+    if (p === 'dm/reply-threads') return { success: true, thread: THREAD.id, threads: [] };
+    if (p === 'dm/replies') return { success: true, root: 501, thread: THREAD.id, posts: [DM_MESSAGES[0]] };
     if (p === 'list') {
         return { success: true, posts: [POST, MY_POST], typing: [], voice: [], hasMore: false, maxId: 8 };
     }
     if (p === 'channels') return { success: true, channels: [{ name: 'general', unread: 0 }] };
-    if (p === 'presence') return { success: true, members: [] };
+    // The roster knows which install belongs to which account. Block is
+    // install-scoped, so this is what lets a conversation offer it at all —
+    // see blockTargetFor.
+    if (p === 'presence') {
+        return { success: true, members: [{ client_id: 'alice', user_id: THEM.id, name: 'Alice', status: 'online' }] };
+    }
     return { success: true };
 });
 
@@ -240,31 +261,144 @@ describe('a message inside a conversation', () => {
             'r2/pic.png', 'pic.png', undefined);
     });
 
-    it('offers nothing on right-click that a DM has no backing for', () => {
+    it('offers every message action a channel offers, on right-click', () => {
         rightClick(rowFor($('dm-messages'), 501));
         const labels = menuLabels();
-        // Every one of these reads or writes the posts table. The hover bar
-        // already dropped them; the menu was still handing them out.
-        expect(labels).not.toContain('Reply');
-        expect(labels).not.toContain('Reply in thread');
-        expect(labels).not.toContain('React…');
-        expect(labels).not.toContain('Pin');
-        expect(labels).not.toContain('Unpin');
-        // …and blocking, which would have filed the synthetic 'dm-user-2' id
-        // that nothing else in the app ever compares against.
-        expect(labels.some((l) => l.startsWith('Block'))).toBe(false);
+        // The four that used to be dropped here because they read and wrote the
+        // posts table. Each has a /api/board/dm/* endpoint behind it now.
+        expect(labels).toContain('Reply');
+        expect(labels).toContain('Reply in thread');
+        expect(labels).toContain('React…');
+        expect(labels).toContain('Pin');
+        expect(labels).toContain('Copy text');
+        // …and blocking, which used to be dropped because a DM row's client_id
+        // is the synthetic 'dm-user-2'. blockTargetFor resolves the real install
+        // off the roster instead.
+        expect(labels.some((l) => l.startsWith('Block'))).toBe(true);
     });
 
-    it('still offers what a DM really can do', () => {
-        rightClick(rowFor($('dm-messages'), 501));
-        expect(menuLabels()).toContain('Copy text');
+    it('offers the same actions on the hover bar as the menu', () => {
+        const row = rowFor($('dm-messages'), 501);
+        expect(row.querySelector('[data-act="react"]')).not.toBeNull();
+        expect(row.querySelector('[data-act="reply"]')).not.toBeNull();
+        expect(row.querySelector('[data-act="pin"]')).not.toBeNull();
+        expect(row.querySelector('[data-act="copy"]')).not.toBeNull();
+    });
 
+    it('says Unpin on a message that is already pinned', () => {
+        rightClick(rowFor($('dm-messages'), 502));
+        expect(menuLabels()).toContain('Unpin');
+        expect(rowFor($('dm-messages'), 502).classList.contains('pinned')).toBe(true);
+    });
+
+    it('pins through the DM endpoint, not the channel one', async () => {
+        board.mockClear();
+        rowFor($('dm-messages'), 501).querySelector('[data-act="pin"]').click();
+        await settle();
+        const call = board.mock.calls.find((c) => c[0] === 'dm/pin');
+        expect(call).toBeTruthy();
+        expect(call[1].body).toMatchObject({ id: 501, pinned: true });
+        // The channel endpoint would have been asked to update a post with that
+        // id, and told — correctly — that there is no such thing.
+        expect(board.mock.calls.some((c) => c[0] === 'pin')).toBe(false);
+    });
+
+    it('reacts through the DM endpoint, keyed by account', async () => {
+        board.mockClear();
+        // The existing reaction chip, which the shared renderer drew from the
+        // payload — proof the summary shape survives the DM path.
+        const chip = rowFor($('dm-messages'), 501).querySelector('.reaction');
+        expect(chip).toBeTruthy();
+        chip.click();
+        await settle();
+        const call = board.mock.calls.find((c) => c[0] === 'dm/react');
+        expect(call).toBeTruthy();
+        expect(call[1].body).toMatchObject({ id: 501, emoji: '👍' });
+        expect(board.mock.calls.some((c) => c[0] === 'react')).toBe(false);
+    });
+
+    it('opens a thread on a DM message, in the same drawer', async () => {
+        board.mockClear();
+        // The reply-count chip the shared renderer draws from reply_count.
+        const chip = rowFor($('dm-messages'), 501).querySelector('.msg-thread');
+        expect(chip).toBeTruthy();
+        chip.click();
+        await settle();
+        expect($('thread-panel').hidden).toBe(false);
+        // Inside the conversation, not behind it — the drawer is MOVED rather
+        // than duplicated, and living in #main it opened invisibly under the
+        // DM panel.
+        expect($('thread-panel').parentElement.id).toBe('dm-main');
+        expect(board.mock.calls.some((c) => c[0] === 'dm/replies')).toBe(true);
+        expect(board.mock.calls.some((c) => c[0] === 'thread')).toBe(false);
+        $('thread-close').click();
+        await settle();
+        expect($('thread-panel').hidden).toBe(true);
+    });
+
+    it("puts the header's three buttons in the conversation header", () => {
+        // The same element, moved. A copy would need copies of every listener
+        // and would be missing a feature within a month — which is the bug this
+        // whole change exists to remove.
+        expect($('conv-actions').closest('#dm-head')).not.toBeNull();
+        expect($('btn-pinned').closest('#dm-head')).not.toBeNull();
+        expect($('btn-threads').closest('#dm-head')).not.toBeNull();
+        expect($('btn-chan-alerts').closest('#dm-head')).not.toBeNull();
+    });
+
+    it('opens the pinned panel against the conversation', async () => {
+        board.mockClear();
+        $('btn-pinned').click();
+        await settle();
+        expect($('pinned-panel').hidden).toBe(false);
+        const call = board.mock.calls.find((c) => c[0] === 'dm/pins');
+        expect(call).toBeTruthy();
+        expect(call[1].query).toMatchObject({ thread: THREAD.id });
+        expect(board.mock.calls.some((c) => c[0] === 'pins')).toBe(false);
+        $('btn-pinned').click();
+        await settle();
+    });
+
+    it('opens the threads panel against the conversation', async () => {
+        board.mockClear();
+        $('btn-threads').click();
+        await settle();
+        expect($('threads-pop').hidden).toBe(false);
+        const call = board.mock.calls.find((c) => c[0] === 'dm/reply-threads');
+        expect(call).toBeTruthy();
+        expect(call[1].query).toMatchObject({ thread: THREAD.id });
+        expect(board.mock.calls.some((c) => c[0] === 'threads')).toBe(false);
+        $('btn-threads').click();
+        await settle();
+    });
+
+    it('opens notification settings for the conversation, not the channel behind it', () => {
+        $('btn-chan-alerts').click();
+        expect($('notif-pop').hidden).toBe(false);
+        // Named for what it acts on. Silencing a conversation must not silence
+        // #general, and the label is the only thing that says which it will do.
+        expect($('np-mute-label').textContent).toContain('Conversation');
+        $('btn-chan-alerts').click();
+    });
+
+    it('still offers what it always could', () => {
         // My own message: edit and delete both have a DM endpoint.
         rightClick(rowFor($('dm-messages'), 502));
         const mine = menuLabels();
         expect(mine).toContain('Edit message');
         expect(mine).toContain('Delete message');
         expect(mine).toContain('Save attachment…');
+    });
+
+    // The ONE thing a conversation deliberately does not inherit. Moderation is
+    // a power over a shared space; two people talking privately is not one, and
+    // a board admin able to rewrite what was said there would be a worse bug
+    // than any missing button. dm/message.js enforces the same rule server-side.
+    it('does not offer moderator edit or delete', () => {
+        rightClick(rowFor($('dm-messages'), 501));
+        const labels = menuLabels();
+        expect(labels).not.toContain('Edit (moderator)');
+        expect(labels).not.toContain('Delete (moderator)');
     });
 
     it('does not tell a channel you are typing in a conversation', async () => {
@@ -291,13 +425,19 @@ describe('the same message in a channel', () => {
         await settle();
     });
 
-    it('keeps every action the conversation dropped', () => {
+    it('offers exactly the same actions', () => {
         rightClick(rowFor($('messages'), 7));
         const labels = menuLabels();
         expect(labels).toContain('Reply');
         expect(labels).toContain('Reply in thread');
         expect(labels).toContain('React…');
+        expect(labels).toContain('Copy text');
         expect(labels.some((l) => l.startsWith('Block'))).toBe(true);
+    });
+
+    it("takes the header's three buttons back with it", () => {
+        expect($('conv-actions').closest('#chan-head')).not.toBeNull();
+        expect($('btn-pinned').closest('#dm-head')).toBeNull();
     });
 
     // Pinning is admin-or-owner server-side, and the menu used to offer it on

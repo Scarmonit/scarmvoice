@@ -196,6 +196,32 @@ board session is remembered for 30 days.
 - Typing indicators
 - Live updates over a WebSocket, with HTTP polling as an automatic fallback
 
+**Direct messages** — one-to-one and groups, and **everything above works in
+them**
+- **New Message** — the **+** beside *Direct Messages* (tooltip: *Create
+  Message*) opens a titled dialog: a search box over the board's members, each
+  row with their picture, the name they post under and the account under it, and
+  a checkbox. Tick one person to open the conversation you already have with
+  them, or several to start a group — up to 10, stated in the dialog rather than
+  refused afterwards. It is a **layout of the existing picker**, not a second
+  one; see [One picker, two layouts](#one-picker-two-layouts)
+- **Find or start a conversation** — the palette is still its own thing, and
+  still the one that jumps you to a channel
+- **The same header** — Threads, Notification Settings and Pinned Messages are
+  the *same three buttons*, moved into the conversation header rather than
+  rebuilt there. A conversation has its own pins, its own threads and its own
+  notification level, and none of them is the channel's
+- **The same message actions** — react, reply, reply in thread, pin, copy, save
+  attachment, edit, delete and block, from the hover bar or the right-click
+  menu, exactly as in a channel. Reply counts, reaction chips, quote blocks and
+  the *pinned* tag all render the same way, because they are the same component
+- **Threads inside a conversation** — a thread hangs off a message here too, and
+  opens in the same drawer, beside the conversation rather than underneath it
+- **Group conversations** — add people, name the group, leave it
+- **One exception, on purpose** — a moderator cannot edit or delete somebody
+  else's message in a private conversation, and the server refuses it too. See
+  [A DM is a channel message](#a-dm-is-a-channel-message)
+
 **Sounds** (same assets as the website, `src/renderer/sounds/`)
 - Join / leave chimes, armed only while you're in the call and with a 1.5 s
   settle window so the people already there don't each chime
@@ -962,6 +988,123 @@ conversation gets its own. The stash is dropped on sign-out, because thread ids
 are global rather than per-account and the next person to sign in on that
 machine must not find someone else's draft waiting in a conversation of theirs
 that happens to share the number.
+
+### A DM is a channel message
+
+For a long time it was one only on screen. A conversation has always been drawn
+with the channel message component — which is what gave it grouping,
+attachments, embeds and the day separator for nothing — but `posts` has
+`pinned`, `thread_root_id`, `quote_id` and a reactions table, and `dm_messages`
+had none of the four. React, reply, *reply in thread* and pin therefore had
+nowhere to write, so each was stripped out of the DM view one branch at a time:
+
+```js
+(dm ? '' : '<button class="msg-act" data-act="react" …')
+```
+
+Four of those, plus a right-click menu that had *not* been given the same
+treatment and went on offering all four anyway, one click away from a *Not
+found*. Meanwhile the header's Threads, Notification Settings and Pinned
+Messages buttons lived in `#chan-head` and simply did not exist in `#dm-head`.
+
+The fix is not four more buttons. It is that **the four things now exist**:
+`dm_messages.pinned`, `.reply_root_id` and `.quote_id`, a `dm_reactions` table,
+and a DM half for each channel endpoint — `dm/pin`, `dm/pins`, `dm/react`,
+`dm/replies`, `dm/reply-threads` — each shaped identically to its channel
+counterpart so no client needs a second renderer. `dm/send` takes `parentId`
+and `quoteId` the way `post.js` does.
+
+Three things in the client stopped being duplicated, all by the same move — the
+one `#composer` already used:
+
+- **`#conv-actions`** — Threads, the bell and pins as one element, relocated
+  into `#dm-actions-slot`. A second set of buttons would need a second set of
+  listeners, a second placement routine and a second set of `aria-expanded`
+  state, and would be missing a feature within a month.
+- **`#thread-panel`** — moved into `#dm-main`. It used to live in `#main` and
+  nowhere else, and `#dm-panel` is a later sibling at a higher `z-index`, so a
+  thread opened from a conversation drew *underneath* it; the old answer was to
+  close the conversation first.
+- **`dmAsPost()`** — the row mapper, lifted out of `renderDmMessages` so the
+  thread drawer, the pinned panel and the threads popout can all use it. Its
+  field names are the *channel's* (`pinned`, `reactions`, `reply_count`,
+  `quote`, `thread_root_id`), which is what lets one renderer draw either.
+
+`surfaceKey()` is the other half: a channel is named by its name, a conversation
+by `dm:<id>`, and the pinned panel, the threads panel and the notification level
+all ask that one question. Notification settings are stored under that key, so
+silencing a conversation does not silence the channel behind it — and a `dm:`
+key is deliberately kept out of the legacy `mutedChannels` list, which is read
+by clients that know nothing about conversations.
+
+Two rules are deliberately **not** copied from the channel:
+
+- **Who may pin.** `pin.js` is admin-or-author because a channel has roles. A
+  conversation has none — membership is its entire permission model — and *only
+  your own* would make the common case (pinning the address somebody just sent
+  you) impossible. So any member may pin anything in it, and `mayPin()` and
+  `dm/pin.js` agree on that.
+- **Moderator edit and delete.** Moderation is a power over a shared, public
+  space. Two people talking privately is not one, and a board admin able to
+  rewrite what was said there would be a worse bug than any missing button.
+  `dm/message.js` checks authorship as well as membership, and the menu does not
+  offer what the server would refuse.
+
+One consequence worth knowing about: since replies are now excluded from the
+conversation stream (as they always were from a channel's), the newest message
+in a conversation is no longer the newest *root*. Opening a conversation marks
+it read up to `MAX(id)` rather than to the last row on the page — otherwise a
+thread reply, which always has a higher id, would leave a badge that nothing in
+the column could clear.
+
+### One picker, two layouts
+
+Group conversations were already built end to end before there was a decent way
+to start one: `dm_threads.is_group` and `dm_members` on the server,
+`dm/create` taking a list of users, `dm/manage` for add / rename / leave, the
+group header with its Add People and Leave Group menu, `.dm-group` rows with a
+stack of faces in the sidebar, and a ten-person cap enforced by *both*
+`dm/create.js` and `dm/manage.js`. What was missing was the front door.
+
+So the **New Message** modal is not a new modal. `#dm-picker` has three modes
+and two layouts:
+
+| mode | layout | what it answers |
+|---|---|---|
+| `create` | palette | *where do I want to go?* — channels, conversations and people, keyboard-driven |
+| `new` | roster | *who am I messaging?* — the New Message dialog, off the **+** |
+| `add` | roster | the same dialog, pointed at a group that already exists |
+
+They share the element, the selection `Set`, the member directory, the
+in-flight guard on Create (a group create is **not** idempotent server-side, so
+a double-click used to make two identical groups) and the create path itself.
+`paintDmPickerChrome()` is the only thing that reads the mode: it swaps the
+layout class, moves the head, and writes every label. Splitting them into two
+dialogs would mean two places holding the cap, the dedupe and the guard — and
+the whole of the DM-parity work above exists because two implementations of one
+idea drift.
+
+The head — title plus subtitle — is **moved** between above the card (palette)
+and inside it (roster), the same one-element trick `#composer`,
+`#conv-actions` and `#thread-panel` use. There is exactly one
+`#dm-picker-title` in the document.
+
+Two adaptations away from the reference, both because this app is one board
+rather than a network of servers:
+
+- The list is **board members**, not friends. There is no friends system here,
+  so a line offering "friends or server members" would name a feature that does
+  not exist.
+- The two identity lines are the **display name this install is posting under**
+  (from presence, when the roster has seen them) over the **account username**.
+  This board has no separate profile name — the account username *is* the
+  display name — so when presence knows nothing, both lines are the account,
+  which is exactly what the reference shows for somebody who has not set a
+  display name either.
+
+The cap is counted as *already in the conversation + ticked*, not *me + ticked*:
+in `add` mode the second reading let you tick five more people into a group of
+eight and find out from the server.
 
 ### Window state and the lightbox
 

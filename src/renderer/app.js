@@ -2175,16 +2175,24 @@
         clearReply();            // the quoted message lives in the old channel
         cancelEdit();            // an editor left open would freeze renderMessages()
         if (threadOpen()) closeThread();
-        // The pinned panel is per-channel, and nothing ever repainted it on a
-        // switch: it sat over the new conversation still listing #general's
-        // messages, and clicking one yanked the reader into a channel they had
-        // just left. Closed rather than redrawn now that it is a popover — a
-        // panel you opened over one conversation is not an answer about the next
-        // one, and the reference closes it on a channel change too.
+        closeSurfacePanels();
+    }
+
+    // The three header panels each describe ONE place — this channel's pins,
+    // this place's threads, this place's notification level — so leaving the
+    // place has to close them. Nothing ever repainted the pinned panel on a
+    // switch: it sat over the new conversation still listing #general's
+    // messages, and clicking one yanked the reader into a channel they had just
+    // left. Closed rather than redrawn, because a panel you opened over one
+    // conversation is not an answer about the next one, and the reference
+    // closes all three on a switch too.
+    //
+    // Its own function because there are three ways to change place now, not
+    // one: switching channel, opening a conversation, and closing one. The
+    // channel switch was the only one that ever did this, which is how the
+    // panels ended up describing somewhere you were no longer looking.
+    function closeSurfacePanels() {
         if (!$('pinned-panel').hidden) togglePinned(false);
-        // Both header popouts are about the channel being left, for the same
-        // reason the pinned panel is: a thread list or a mute setting you opened
-        // over one conversation is not an answer about the next one.
         if (!$('notif-pop').hidden) closeNotifPop();
         if (!$('threads-pop').hidden) closeThreadsPop();
     }
@@ -3324,7 +3332,16 @@
 
         if (p.reactions && p.reactions.length) {
             parts.push('<div class="msg-reactions">' + p.reactions.map((r) => {
-                const mine = (r.who || []).includes(settings.clientId);
+                // Two identities, because the two tables key on different ones.
+                // A channel reaction is keyed by INSTALL (that table predates
+                // accounts and has to keep working for clients with no token); a
+                // DM reaction is keyed by ACCOUNT, because a DM cannot be sent
+                // without one and the same person on two devices is one reaction
+                // rather than two. Asking both is what lets one renderer draw
+                // either without knowing which table it came from.
+                const meId = myUserId();
+                const mine = (r.who || []).includes(settings.clientId) ||
+                    !!(meId && (r.users || []).includes(meId));
                 return `<button class="reaction${mine ? ' mine' : ''}" data-emoji="${esc(r.emoji)}">` +
                     `<span class="rx-emoji">${reactionGlyph(r.emoji)}</span><span class="rx-n">${r.count}</span></button>`;
             }).join('') + '</div>');
@@ -3339,20 +3356,23 @@
         // Hover actions. Edit and delete are yours-only, so they're omitted
         // entirely on other people's messages rather than shown and rejected.
         const mine = ownsPost(p);
-        // Reactions, replies and pins read and write the posts table. A DM is
-        // not a post, so in a conversation those three are dropped rather than
-        // shown and then answered with "Not found" — which is exactly how the
-        // delete button behaved before dm/message existed. Copy is local, and
-        // edit and delete now have a DM endpoint of their own.
+        // React, reply and pin used to be dropped here for a DM, because all
+        // three read and wrote the `posts` table and a direct message is not a
+        // post. That was a fact about the DATABASE, not about the idea:
+        // dm_messages carries `pinned`, `reply_root_id` and `quote_id` now,
+        // dm_reactions exists, and every one of these has a /api/board/dm/*
+        // endpoint behind it. So the bar is the same bar in both places, and the
+        // handlers below decide WHERE each action goes rather than WHETHER it is
+        // offered at all.
         const dm = !!p.isDm;
         parts.push('<div class="msg-actions">' +
-            (dm ? '' : '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>') +
-            (dm ? '' : '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>') +
+            '<button class="msg-act" data-act="react" title="Add a reaction">' + I('smile') + '</button>' +
+            '<button class="msg-act" data-act="reply" title="Reply">' + I('reply') + '</button>' +
             // Pinning somebody ELSE's message is admin-only server-side
             // (mayModifyPost, via pin.js), so offering the button to a member
             // produced a 403 toast on every message but their own. Gated exactly
             // the way edit and delete already are.
-            (dm || !mayPin(p) ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
+            (!mayPin(p) ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
             '<button class="msg-act" data-act="copy" title="Copy text">' + I('copy') + '</button>' +
             // Editing somebody ELSE's message is a real ability the server has
             // always allowed a moderator (mayModifyPost) and the UI never offered:
@@ -3427,13 +3447,13 @@
             const b = el.querySelector(`[data-act="${name}"]`);
             if (b) b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
         };
-        act('react', () => openEmojiPicker(el.querySelector('[data-act="react"]'), (em) => react(p.id, em)));
+        act('react', () => openEmojiPicker(el.querySelector('[data-act="react"]'), (em) => react(p, em)));
         // Inside the thread panel, replying means the thread composer.
         act('reply', () => {
             if (el.closest('#thread-list')) $('thread-input').focus();
             else setReplyTarget(p);
         });
-        act('pin', () => pinPost(p.id, !p.pinned));
+        act('pin', () => pinPost(p, !p.pinned));
         act('copy', () => copyMessage(p));
         act('edit', () => startEdit(p, el));
         act('delete', () => deletePost(p));
@@ -3461,10 +3481,10 @@
         renderPreviews(el.querySelector('.msg-previews'), p);
 
         el.querySelectorAll('.reaction').forEach((b) => {
-            b.addEventListener('click', () => react(p.id, b.dataset.emoji));
+            b.addEventListener('click', () => react(p, b.dataset.emoji));
         });
         const thread = el.querySelector('.msg-thread');
-        if (thread) thread.addEventListener('click', (e) => { e.stopPropagation(); openThread(p.id); });
+        if (thread) thread.addEventListener('click', (e) => { e.stopPropagation(); openThread(p.id, null, dmThreadOf(p)); });
         return el;
     }
 
@@ -3473,13 +3493,38 @@
     // authGone(), so an expired session kept a dead button being clicked
     // instead of taking the user back to the sign-in card the way every other
     // action does.
-    async function react(postId, emoji) {
-        const res = await L.board('react', {
-            method: 'POST', body: { postId, emoji, clientId: settings.clientId }
-        });
+    async function react(post, emoji) {
+        // Takes the MESSAGE, not its id: which endpoint this goes to depends on
+        // which table the row lives in, and an id alone cannot say. (It used to
+        // take an id, because for a long time there was only one answer.)
+        const p = (post && typeof post === 'object') ? post : { id: post };
+        const dm = !!p.isDm;
+        const res = dm
+            ? await L.board('dm/react', { method: 'POST', body: { id: p.id, emoji } })
+            : await L.board('react', {
+                method: 'POST', body: { postId: p.id, emoji, clientId: settings.clientId }
+            });
         if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not react', true);
-        loadMessages(false);
+        if (dm) refreshConversation(); else loadMessages(false);
+    }
+
+    // Everything a conversation is showing, after something in it changed: the
+    // message column, and the thread drawer when one is open over it. The
+    // channel path has loadMessages() for exactly this; every DM mutation was
+    // reloading one of the two and leaving the other stale.
+    async function refreshConversation() {
+        if (!dmOpen) return;
+        await loadDmMessages(true);
+        if (threadDm) await loadThread(true);
+    }
+
+    // Which conversation a message belongs to, or 0 for a channel post. A row
+    // drawn into the pinned panel or a threads list carries its own (dmThread);
+    // one drawn into the open conversation inherits it.
+    function dmThreadOf(p) {
+        if (!p || !p.isDm) return 0;
+        return p.dmThread || (dmOpen ? dmOpen.id : 0);
     }
 
     // Links open in the system browser. Attachments are saved through the
@@ -3683,7 +3728,7 @@
         // A DM is not a post. Everything above this — staging, the caption
         // rule, the upload loop — is shared; only the endpoint differs.
         if (forDm) {
-            const dres = await sendDm(body, forDm);
+            const dres = await sendDm(body, forDm, quoteId);
             if (!dres || !dres.success) {
                 input.value = body;              // give the text back
                 autosize();
@@ -4031,7 +4076,13 @@
 
         const attachment = { key: up.key, name: up.name, type: up.type, size: up.size };
         const res = dmThread
-            ? await L.board('dm/send', { method: 'POST', body: { thread: dmThread, body: caption || '', attachment } })
+            ? await L.board('dm/send', {
+                method: 'POST',
+                // The reply chip rides along here exactly as it does on the
+                // channel path below: an attachment sent as a reply used to
+                // arrive in a conversation with its quote silently dropped.
+                body: { thread: dmThread, body: caption || '', quoteId: quoteId || null, attachment }
+            })
             : await L.board('post', {
                 method: 'POST',
                 body: {
@@ -8640,8 +8691,12 @@
 
     function applyDensity() {
         const on = compactMode();
+        // Every list that draws .msg rows, because they ARE the same rows. The
+        // conversation column was missing from this and stayed cozy while the
+        // channel behind it went compact.
         $('messages').classList.toggle('compact', on);
         $('thread-list').classList.toggle('compact', on);
+        $('dm-messages').classList.toggle('compact', on);
     }
 
     // ---------- do not disturb, muted channels, blocked people -------------
@@ -8657,6 +8712,30 @@
     // the website, which still reads the binary list) must not resurrect a
     // channel someone deliberately silenced.
     const ALERT_MODES = ['all', 'mentions', 'none'];
+
+    // WHAT THE HEADER IS ABOUT.
+    //
+    // Threads, Notification Settings and Pinned Messages are one set of buttons
+    // over two kinds of place, so they need one way to say which place. A
+    // channel is named by its name; a conversation by 'dm:<id>'. Everything that
+    // used to read the module-level `channel` directly reads this instead, which
+    // is what stops the pinned panel showing #general's pins while you are
+    // reading a DM — and what makes a per-conversation notification level a
+    // stored setting rather than a fourth code path.
+    function surfaceKey() { return dmOpen ? 'dm:' + dmOpen.id : channel; }
+    function surfaceIsDm(key) { return String(key || '').indexOf('dm:') === 0; }
+    function surfaceDmId(key) {
+        return surfaceIsDm(key) ? (parseInt(String(key).slice(3), 10) || 0) : 0;
+    }
+    // What to CALL it, in a toast or an empty state. A channel gets its hash; a
+    // conversation gets the name it is listed under.
+    function surfaceLabel(key) {
+        const id = surfaceDmId(key);
+        if (!id) return '#' + key;
+        if (dmOpen && dmOpen.id === id) return dmOpen.title;
+        const t = dmThreads.find((x) => x.id === id);
+        return t ? dmLabel(t) : 'this conversation';
+    }
 
     function channelAlertMode(name) {
         if (!name) return 'all';
@@ -8744,7 +8823,7 @@
         if (!$('notif-pop').hidden) renderNotifPop();
         // Silently would be worse: the channel simply starts making noise again
         // and nobody knows why.
-        gone.forEach((k) => toast('#' + k + ' is no longer muted'));
+        gone.forEach((k) => toast(surfaceLabel(k) + ' is no longer muted'));
     }
     setInterval(() => { pruneExpiredMutes(); }, 30000);
 
@@ -8780,9 +8859,13 @@
         if (mode === 'all') delete alerts[name];
         else alerts[name] = mode;
 
-        // Keep the legacy list in step for older builds and the website.
+        // Keep the legacy list in step for older builds and the website — but
+        // only for a CHANNEL. `mutedChannels` is a list of channel names read by
+        // clients that know nothing about conversations, and writing 'dm:12'
+        // into it would have the website silence a channel that does not exist
+        // while the conversation went on chiming.
         const list = (settings.mutedChannels || []).filter((c) => c !== name);
-        if (mode === 'none') list.push(name);
+        if (mode === 'none' && !surfaceIsDm(name)) list.push(name);
 
         await saveSettings({ channelAlerts: alerts, mutedChannels: list });
         renderChannels();
@@ -8921,11 +9004,17 @@
         // The row says what it DOES, and carries what is currently true
         // underneath it — a muted channel's popout that still just said "Mute
         // Channel" would be the one place that could not tell you it was muted.
+        // "Mute Conversation" in a DM: the row names what it acts on, and
+        // "Mute Channel" over a conversation was the one label in the popout
+        // that could be read as "…the channel behind this".
+        const what = surfaceIsDm(name) ? 'Mute Conversation' : 'Mute Channel';
         $('np-mute-label').innerHTML = muted
-            ? 'Mute Channel<span class="np-sub-label">' + esc(remaining) + '</span>'
-            : 'Mute Channel';
+            ? what + '<span class="np-sub-label">' + esc(remaining) + '</span>'
+            : what;
         $('np-mute-label').classList.toggle('np-stacked', muted);
         $('np-unmute').hidden = !muted;
+        $('np-unmute').querySelector('.np-label').textContent =
+            surfaceIsDm(name) ? 'Unmute Conversation' : 'Unmute Channel';
 
         const radios = $('np-radios');
         const mode = channelAlertMode(name);
@@ -8963,8 +9052,8 @@
                 setChannelMute(name, d.ms);
                 closeNotifPop();
                 toast(d.ms === MUTE_FOREVER
-                    ? '#' + name + ' muted until you turn it back on'
-                    : '#' + name + ' muted ' + d.label.toLowerCase());
+                    ? surfaceLabel(name) + ' muted until you turn it back on'
+                    : surfaceLabel(name) + ' muted ' + d.label.toLowerCase());
             });
             sub.appendChild(b);
         });
@@ -8987,7 +9076,7 @@
     function openNotifPop(name, x, y, straightToSub) {
         pruneExpiredMutes();
         closeThreadsPop();
-        notifFor = name || channel;
+        notifFor = name || surfaceKey();
         const pop = $('notif-pop');
         pop.hidden = false;
         $('btn-chan-alerts').setAttribute('aria-expanded', 'true');
@@ -9025,7 +9114,7 @@
         const name = notifFor;
         setChannelMute(name, null);
         closeNotifPop();
-        toast('#' + name + ' unmuted');
+        toast(surfaceLabel(name) + ' unmuted');
     });
 
     $('channel-list').addEventListener('contextmenu', (e) => {
@@ -9418,8 +9507,31 @@
 
     // Pinning is the same rule as editing and deleting — admins anything, members
     // only their own — and pin.js enforces it. See the pin button in renderMessage.
+    //
+    // A CONVERSATION has no roles. Membership is its whole permission model
+    // (dm/pin.js says the same thing from the other side), everyone in it is an
+    // equal, and "only your own" would make the common case — pinning the
+    // address somebody just sent you — impossible. The client and the endpoint
+    // have to agree on this, or you get a button that 403s.
     function mayPin(p) {
+        if (p && p.isDm) return true;
         return can('message.pin') || ownsPost(p);
+    }
+
+    // WHICH INSTALL a Block would file, given a message.
+    //
+    // Blocking is install-scoped (settings.blocked keyed by client_id — see
+    // isBlocked), and a DM row's client_id is the synthetic 'dm-user-<id>' that
+    // stands in for an install a direct message does not have. Filing that would
+    // key a block nothing else in the app ever compares against, which is why
+    // Block used to be dropped from a conversation entirely. The ACCOUNT is
+    // known either way, so ask the roster for the real install instead — and
+    // return nothing when it has never seen them, so the menu hides the entry
+    // rather than offering one that would quietly do nothing.
+    function blockTargetFor(p) {
+        if (!p) return '';
+        if (p.isDm) return clientForUser(p.user_id) || '';
+        return p.client_id || '';
     }
 
     // "Did I write this?" — the cosmetic question, as opposed to ownsPost's
@@ -11588,16 +11700,17 @@
         // In a thread, "Reply" means the thread composer — quoting a reply back
         // into the same thread would just be noise.
         const inThread = !!el.closest('#thread-list');
-        // The same rule the hover action bar follows: reply, threads, reactions
-        // and pins all read and write the posts table, and a DM is not a post.
-        // The action bar dropped them; this menu — which right-clicking any
-        // message opens — kept offering all four, so they were still one click
-        // away and answered with "Not found" or, for React, with nothing at all.
+        // This menu and the hover action bar are the same set of actions reached
+        // two ways, and for a long time they disagreed about a conversation: the
+        // bar dropped reply, threads, reactions and pins because none of the four
+        // had a DM endpoint, and this menu went on offering all of them one click
+        // away, answering "Not found" or — for React — nothing at all.
         //
-        // Block goes too: a DM row's client_id is a synthetic 'dm-user-<id>'
-        // (see renderDmMessages), so blocking one filed a key nothing else in
-        // the app ever matches.
+        // Both offer everything now, because everything exists: dm/react,
+        // dm/pin, dm/replies and the reply/quote columns on dm_messages. What is
+        // still asked per item is WHERE it goes, never WHETHER to show it.
         const dm = !!p.isDm;
+        const dmThread = dmThreadOf(p);
 
         // ---- the two PERSON actions, as opposed to the message ones ----
         //
@@ -11613,28 +11726,40 @@
         // and that is a different conversation.
         const oneToOne = dm && !!dmOpen && !dmOpen.isGroup;
         const canDm = !!(account && p.user_id && !wroteByMe(p) && !oneToOne);
-        // Block is keyed by INSTALL id (settings.blocked) — see isBlocked — and
-        // a DM row's client_id is a synthetic 'dm-user-<id>' that nothing else
-        // in the app matches, so it stays out of a conversation entirely.
-        const canBlock = !dm && !mine && !!p.client_id;
+        // Block is keyed by INSTALL id (settings.blocked) — see isBlocked. A DM
+        // row's client_id is the synthetic 'dm-user-<id>', which is why this
+        // used to be dropped in a conversation; blockTargetFor asks the roster
+        // for the account's real install instead, and answers '' when it has
+        // never seen them, which hides the entry rather than filing a key
+        // nothing matches.
+        const blockCid = blockTargetFor(p);
+        const canBlock = !mine && !!blockCid;
 
         return [
-            !dm && (inThread
+            inThread
                 ? { label: 'Reply', icon: 'reply', onClick: () => $('thread-input').focus() }
-                : { label: 'Reply', icon: 'reply', onClick: () => setReplyTarget(p) }),
-            !dm && !inThread && { label: 'Reply in thread', icon: 'thread', onClick: () => openThread(p.id) },
+                : { label: 'Reply', icon: 'reply', onClick: () => setReplyTarget(p) },
+            !inThread && { label: 'Reply in thread', icon: 'thread', onClick: () => openThread(p.id, null, dmThread) },
             // Anchored at the cursor, since the menu itself is gone by then.
-            !dm && { label: 'React…', icon: 'smile', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p.id, em)) },
-            !dm && 'sep',
+            { label: 'React…', icon: 'smile', onClick: () => openEmojiPicker(pointAnchor(lastMenuAt.x, lastMenuAt.y), (em) => react(p, em)) },
+            'sep',
             { label: 'Copy text', icon: 'copy', onClick: () => copyMessage(p) },
             p.att_key && { label: 'Save attachment…', icon: 'download', onClick: () => saveAttachment(p.att_key, p.att_name) },
-            // Admins anything, members only their own — see mayPin.
-            !dm && mayPin(p) && { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p.id, !p.pinned) },
+            // Admins anything, members only their own, everybody inside a
+            // conversation — see mayPin.
+            mayPin(p) && { label: p.pinned ? 'Unpin' : 'Pin', icon: 'pin', onClick: () => pinPost(p, !p.pinned) },
             mine && 'sep',
             mine && { label: 'Edit message', icon: 'pencil', onClick: () => startEdit(p, el) },
             mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
-            // A DM's delete endpoint checks authorship as well as membership, so
-            // an admin acting on someone else's message would be refused.
+            // THE ONE THING THAT IS DELIBERATELY NOT AT PARITY.
+            //
+            // dm/message.js checks authorship as well as membership, so an admin
+            // acting on somebody else's message in a conversation they are in
+            // would be refused — and should be. Moderation is a power over a
+            // shared, public space; a private conversation between two people is
+            // not one, and a board admin being able to rewrite what was said in
+            // it would be a worse bug than the missing feature. This is the only
+            // channel action a DM does not get, and it is on purpose.
             // Editing and deleting somebody ELSE's message — the moderation
             // capability. Labelled "(moderator)" so it is never mistaken for the
             // ordinary edit of your own message; the edit is attributed on the
@@ -11653,7 +11778,7 @@
             },
             canBlock && {
                 label: 'Block ' + (p.name || 'this person'), icon: 'ban', danger: true,
-                onClick: () => blockPerson(p.client_id, p.name)
+                onClick: () => blockPerson(blockCid, p.name)
             }
         ];
     }
@@ -12203,8 +12328,10 @@
             if (p.isDm) {
                 // Reload the conversation, not the channel — loadMessages here
                 // would refresh whatever channel sits behind the DM view and
-                // leave the edited message on screen unchanged.
-                await loadDmMessages(true);
+                // leave the edited message on screen unchanged. refreshConversation
+                // also repaints the thread drawer, which is where the edited
+                // message actually was if it is a reply.
+                await refreshConversation();
                 loadDmThreads();
                 return toast('Message edited');
             }
@@ -12242,6 +12369,10 @@
             dmMsgs = dmMsgs.filter((x) => x.id !== p.id);
             renderDmMessages();
             loadDmThreads();          // the thread list shows the last message
+            // A deleted thread ROOT takes its replies with it server-side, so the
+            // drawer over it is now empty — loadThread closes it on an empty
+            // payload, which is what should happen. A deleted REPLY just leaves.
+            if (threadDm) await loadThread(true);
             return toast('Message deleted');
         }
 
@@ -13267,6 +13398,33 @@
         el.classList.add('flash');
     }
 
+    // The conversation's half of jumpToPost. Same three steps — page back until
+    // the row is loaded, scroll it into view, flash it — over the other column,
+    // because a pinned message in a DM is exactly as likely to be off-screen as
+    // one in a channel and the panel's Jump has to work in both.
+    async function jumpToDmMessage(target) {
+        const tid = dmThreadOf(target);
+        if (tid && (!dmOpen || dmOpen.id !== tid)) {
+            const t = dmThreads.find((x) => x.id === tid);
+            if (t) await openDm(t);
+        }
+        if (!dmOpen) return;
+        for (let page = 0; page < 6; page++) {
+            if (dmMsgs.some((m) => m.id === target.id)) break;
+            if (!dmHasMore) break;
+            await loadOlderDms();
+        }
+        const el = $('dm-messages').querySelector(`.msg[data-id="${target.id}"]`);
+        if (!el) {
+            toast('That message is further back than we can jump — try the website');
+            return;
+        }
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.classList.remove('flash');
+        void el.offsetWidth;                 // restart the animation
+        el.classList.add('flash');
+    }
+
     // ---------- threads ----------------------------------------------------
     // The server already models these: a reply carries parentId and the root's
     // thread_root_id, and /api/board/thread returns root + replies oldest-first.
@@ -13275,6 +13433,10 @@
     const THREAD_POLL_MS = 2500;
 
     let threadRootId = 0;
+    // The CONVERSATION this thread lives in, or 0 when it hangs off a channel
+    // message. One piece of state decides which endpoints the drawer reads and
+    // writes; everything below it is the same drawer either way.
+    let threadDm = 0;
     let threadPosts = [];
     let threadTimer = null;
     let threadSig = '';
@@ -13286,7 +13448,35 @@
     // Same contract as `drafts`: keyed by the surface it was typed into.
     const threadDrafts = new Map();
 
-    async function openThread(rootId, chan) {
+    // The one thread drawer, relocated — the trick #composer and #conv-actions
+    // already use, and for the same reason.
+    //
+    // #thread-panel used to live in #main and nowhere else, and #dm-panel is a
+    // later sibling at a higher z-index, so opening a thread from a conversation
+    // drew the drawer UNDERNEATH it: "Reply in thread" looked like a no-op, and
+    // openThread's answer was to close the conversation first. Moving the node
+    // into #dm-main keeps every listener, the composer inside it, and the exact
+    // appearance, because it IS the same drawer. A marker holds its place in
+    // #main so it goes back where it was rather than at the end.
+    let threadHome = null;
+
+    function moveThreadPanel(intoDm) {
+        const panel = $('thread-panel');
+        if (!panel) return;
+        if (!threadHome) {
+            threadHome = document.createComment('thread-panel');
+            panel.parentNode.insertBefore(threadHome, panel);
+        }
+        const host = $('dm-main');
+        if (intoDm && host) host.appendChild(panel);
+        else if (threadHome.parentNode) threadHome.parentNode.insertBefore(panel, threadHome.nextSibling);
+    }
+
+    // `dmThread` opens the thread inside a CONVERSATION rather than a channel.
+    // Callers that already know (a reply-count chip, the right-click menu, the
+    // pinned panel) pass it; everything that only ever deals in channels goes on
+    // passing two arguments and gets the old behaviour.
+    async function openThread(rootId, chan, dmThread) {
         if (!rootId) return;
         // Opening a thread OVER an open one is a switch, not a fresh open, so
         // the reply in progress has to be stashed exactly as closing it would.
@@ -13303,15 +13493,31 @@
         // not blank its box either, and the restore below deletes the map entry
         // on the way in, so a `rootId !== threadRootId` guard would still lose it.
         if (threadRootId) closeThread();
-        // A result from another channel: switch first so replies post to the
-        // right place and closing the thread lands somewhere sensible.
-        if (chan && chan !== channel) await switchChannel(chan);
 
-        // Both drawers occupy the same slot at the same z-index, and #dm-panel
-        // is later in the DOM — so with a DM open the thread would open
-        // invisibly underneath it and "Reply in thread" looked like a no-op.
-        // (openDm already does the reverse.)
-        if (dmPanelOpen()) closeDm();
+        const inDm = parseInt(dmThread, 10) || 0;
+        if (inDm) {
+            // A thread inside a conversation you are not looking at: open the
+            // conversation first, so replies go to the right place and closing
+            // the thread lands somewhere sensible. Same contract as the channel
+            // switch below.
+            if (!dmOpen || dmOpen.id !== inDm) {
+                const t = dmThreads.find((x) => x.id === inDm);
+                if (t) await openDm(t);
+                else { await loadDmThreads(); const t2 = dmThreads.find((x) => x.id === inDm); if (t2) await openDm(t2); }
+                if (!dmOpen || dmOpen.id !== inDm) return toast('That conversation is no longer available', true);
+            }
+        } else {
+            // A result from another channel: switch first so replies post to the
+            // right place and closing the thread lands somewhere sensible.
+            if (chan && chan !== channel) await switchChannel(chan);
+            // A CHANNEL thread cannot be read from inside a conversation: the
+            // drawer belongs to the column behind #dm-panel. (openDm does the
+            // reverse.) A DM thread has the opposite requirement, which is what
+            // moveThreadPanel is for.
+            if (dmPanelOpen()) closeDm();
+        }
+        threadDm = inDm;
+        moveThreadPanel(!!inDm);
 
         threadRootId = rootId;
         // AFTER the switchChannel above: that runs resetChannelView ->
@@ -13347,6 +13553,7 @@
         }
         $('thread-input').value = '';
         threadRootId = 0;
+        threadDm = 0;
         threadPosts = [];
         if (threadTimer) { clearInterval(threadTimer); threadTimer = null; }
         // An inline editor opened on a thread reply lives in this list. Hiding
@@ -13357,6 +13564,9 @@
         if (list.querySelector('.msg-edit')) editingId = null;
         list.innerHTML = '';
         $('thread-panel').hidden = true;
+        // Home, so the next open starts from a known place and #main's drawer
+        // shift is not left applied to a column with no drawer in it.
+        moveThreadPanel(false);
     }
 
     function threadOpen() { return !$('thread-panel').hidden; }
@@ -13393,15 +13603,25 @@
     async function loadThread(force) {
         if (!threadRootId) return;
         const root = threadRootId;
-        const res = await L.board('thread', { query: { root } });
-        if (root !== threadRootId) return;               // switched while in flight
+        const inDm = threadDm;
+        // Same drawer, same shape on screen, different table underneath — see
+        // dm/replies.js for why it is not called dm/thread.
+        const res = inDm
+            ? await L.board('dm/replies', { query: { root } })
+            : await L.board('thread', { query: { root } });
+        if (root !== threadRootId || inDm !== threadDm) return;   // switched while in flight
         if (authGone(res)) return;
         if (!res || !res.success) {
             threadError((res && res.error) || 'Could not load this thread.');
             return;
         }
 
-        threadPosts = res.posts || [];
+        // Mapped through the SAME function the conversation column uses, so a
+        // reply in a thread and a message in the conversation are the same shape
+        // and renderMessage needs no idea which list it is drawing into.
+        threadPosts = inDm
+            ? (res.posts || []).map((m) => dmAsPost(m))
+            : (res.posts || []);
         if (!threadPosts.length) { closeThread(); return; }   // root was deleted
         threadPosts.forEach((p) => addRosterName(p.name));
 
@@ -13455,6 +13675,28 @@
         if (!body || !threadRootId) return;
         $('thread-send').disabled = true;
         $('thread-input').value = '';
+
+        // A reply in a conversation's thread. `parentId` is what makes it a
+        // reply on both paths — dm/send.js resolves it to the root exactly as
+        // post.js does, and flattens a reply-to-a-reply into the same thread.
+        if (threadDm) {
+            const forThread = threadDm;
+            const dres = await L.board('dm/send', {
+                method: 'POST', body: { thread: forThread, body, parentId: threadRootId }
+            });
+            $('thread-send').disabled = false;
+            if (authGone(dres)) return;
+            if (!dres || !dres.success) {
+                $('thread-input').value = body;      // hand the text back
+                return toast((dres && dres.error) || 'Could not reply', true);
+            }
+            await loadThread(true);
+            $('thread-list').scrollTop = $('thread-list').scrollHeight;
+            await loadDmMessages(true);              // refresh the reply count
+            loadDmThreads();
+            $('thread-input').focus();
+            return;
+        }
 
         const res = await L.board('post', {
             method: 'POST',
@@ -13538,17 +13780,27 @@
         placeThreadsPop();
         $('threads-search').focus();
 
-        const forChannel = channel;
+        // Pinned for the length of the fetch, exactly as the channel was: you
+        // can leave a conversation while the request is in flight, and painting
+        // its threads into the panel afterwards would be the same bug.
+        const forSurface = surfaceKey();
+        const dmId = surfaceDmId(forSurface);
         let list = null;
         try {
-            const res = await L.board('threads', { query: { channel: forChannel } });
+            const res = dmId
+                ? await L.board('dm/reply-threads', { query: { thread: dmId } })
+                : await L.board('threads', { query: { channel: forSurface } });
             if (res && res.success && Array.isArray(res.threads)) list = res.threads;
         } catch (e) { /* fall through to the local derivation */ }
-        if (forChannel !== channel || !threadsPopOpen()) return;
+        if (forSurface !== surfaceKey() || !threadsPopOpen()) return;
         // Offline, or an older server with no such endpoint: what the loaded page
-        // can see is worth more than an error.
+        // can see is worth more than an error. Both columns carry reply_count on
+        // their roots, so the derivation is the same one over a different list.
         if (!list) {
-            list = posts.filter((p) => (p.reply_count || 0) > 0).map((p) => ({
+            const held = dmId
+                ? dmMsgs.map((m) => dmAsPost(m))
+                : posts;
+            list = held.filter((p) => (p.reply_count || 0) > 0).map((p) => ({
                 id: p.id,
                 name: p.name,
                 user_id: p.user_id,
@@ -13591,7 +13843,7 @@
                 e.innerHTML =
                     I('threads-empty', 'tp-empty-mark') +
                     '<div class="tp-empty-title">No threads found</div>' +
-                    `<div class="tp-empty-sub">Nothing in #${esc(channel)} matches “${esc(threadsFilter.trim())}”.</div>`;
+                    `<div class="tp-empty-sub">Nothing in ${esc(surfaceLabel(surfaceKey()))} matches “${esc(threadsFilter.trim())}”.</div>`;
                 body.appendChild(e);
                 return;
             }
@@ -13627,15 +13879,18 @@
                 `<div class="tp-item-meta">${esc(t.name || 'Someone')} · ` +
                 `${n} ${n === 1 ? 'reply' : 'replies'} · last ${esc(stampStr(t.last_reply_at))}</div>` +
                 '</div>';
+            const dmId = surfaceDmId(surfaceKey());
             row.addEventListener('click', () => {
                 closeThreadsPop();
-                openThread(t.id, channel);
+                openThread(t.id, dmId ? null : channel, dmId);
             });
             body.appendChild(row);
         });
     }
 
     async function createThreadFromPop() {
+        const forSurface = surfaceKey();
+        const dmId = surfaceDmId(forSurface);
         const forChannel = channel;
         // Through openDialog rather than askText so it can carry the explanation:
         // "create a thread" in this app means posting the message it hangs off,
@@ -13647,6 +13902,20 @@
             value: '', ok: 'Create', withInput: true, maxLength: 200
         });
         if (!body || !body.trim()) return;
+
+        // A thread hangs off a message in either place, so "create" means
+        // "post the opening message, then open its thread" in either place —
+        // only the endpoint the message goes to differs.
+        if (dmId) {
+            const dres = await L.board('dm/send', { method: 'POST', body: { thread: dmId, body: body.trim() } });
+            if (authGone(dres)) return;
+            if (!dres || !dres.success) return toast((dres && dres.error) || 'Could not start the thread', true);
+            closeThreadsPop();
+            await loadDmMessages(true);
+            loadDmThreads();
+            openThread(dres.id, null, dmId);
+            return;
+        }
 
         const res = await L.board('post', {
             method: 'POST',
@@ -13685,8 +13954,9 @@
         if (notifPopOpen()) { closeNotifPop(); return; }
         const r = $('btn-chan-alerts').getBoundingClientRect();
         const pop = $('notif-pop');
-        // Opened first so it can be measured, then anchored.
-        openNotifPop(channel, 0, 0);
+        // Whatever the header is currently about — the channel, or the
+        // conversation this same button has moved into.
+        openNotifPop(surfaceKey(), 0, 0);
         placeFixedPanel(pop, r);
     });
 
@@ -13706,23 +13976,42 @@
 
     // ---------- pinned ----------------------------------------------------
 
-    async function pinPost(id, pinned) {
+    // Takes the MESSAGE, for the same reason react() does: a channel post and a
+    // direct message can share an id and are pinned through different endpoints.
+    async function pinPost(post, pinned) {
+        const p = (post && typeof post === 'object') ? post : { id: post };
+        const id = p.id;
+        const dm = !!p.isDm;
         // The buttons are gated (see mayPin), but so is deletePost — a keyboard
         // shortcut, a stale menu or a repaint that raced a role change all reach
         // here without passing one, and the answer should be the reason rather
         // than a bare server 403.
         // Only when the row is loaded here; a pin from a page we do not hold falls
         // through to the server, which is the authority either way.
-        const target = posts.find((x) => x.id === id);
+        const target = dm ? p : posts.find((x) => x.id === id);
         if (target && !mayPin(target)) {
             return toast('Only admins can pin other people\'s messages', true);
         }
-        const res = await L.board('pin', { method: 'POST', body: { id, pinned, clientId: settings.clientId } });
+        const res = dm
+            ? await L.board('dm/pin', { method: 'POST', body: { id, pinned } })
+            : await L.board('pin', { method: 'POST', body: { id, pinned, clientId: settings.clientId } });
         if (authGone(res)) return;
         if (!res || !res.success) return toast((res && res.error) || 'Could not pin', true);
+
+        if (dm) {
+            // Reflect immediately in whichever list is holding the row, then
+            // refresh from the server — the same two steps the channel path takes.
+            const local = dmMsgs.find((x) => x.id === id);
+            if (local) local.pinned = pinned ? 1 : 0;
+            renderDmMessages();
+            if (!$('pinned-panel').hidden) renderPinned();
+            await refreshConversation();
+            return toast(pinned ? 'Pinned' : 'Unpinned');
+        }
+
         // Reflect immediately, then refresh from the server.
-        const p = posts.find((x) => x.id === id);
-        if (p) p.pinned = pinned ? 1 : 0;
+        const local = posts.find((x) => x.id === id);
+        if (local) local.pinned = pinned ? 1 : 0;
         renderMessages();
         if (!$('pinned-panel').hidden) renderPinned();
         await loadMessages(false);
@@ -13778,21 +14067,31 @@
         const list = $('pinned-list');
         list.innerHTML = '';
 
-        // The whole channel's pins from the server — not just whatever pages
-        // happen to be loaded. Falls back to loaded posts offline.
+        // The whole channel's — or the whole conversation's — pins from the
+        // server, not just whatever pages happen to be loaded. Falls back to what
+        // is loaded when the request fails.
         let pinned = null;
-        const forChannel = channel;
+        const forSurface = surfaceKey();
+        const dmId = surfaceDmId(forSurface);
         try {
-            const res = await L.board('pins', { query: { channel } });
+            const res = dmId
+                ? await L.board('dm/pins', { query: { thread: dmId } })
+                : await L.board('pins', { query: { channel: forSurface } });
             if (res && res.success && Array.isArray(res.pins)) pinned = res.pins;
         } catch (e) { /* fall through */ }
-        if (forChannel !== channel || $('pinned-panel').hidden) return;   // switched away meanwhile
-        if (!pinned) pinned = posts.filter((p) => p.pinned);
+        if (forSurface !== surfaceKey() || $('pinned-panel').hidden) return;   // switched away meanwhile
+        if (!pinned) {
+            pinned = dmId
+                ? dmMsgs.filter((m) => m.pinned).map((m) => dmAsPost(m)).reverse()
+                : posts.filter((p) => p.pinned);
+        }
         list.innerHTML = '';
         if (!pinned.length) {
             const e = document.createElement('div');
             e.className = 'pinned-empty';
-            e.textContent = 'No pinned messages in this channel yet.';
+            e.textContent = dmId
+                ? 'No pinned messages in this conversation yet.'
+                : 'No pinned messages in this channel yet.';
             list.appendChild(e);
             placePinned();      // an empty panel is a different height
             return;
@@ -13849,7 +14148,8 @@
             // A pinned thread reply lives in its thread, not the main list.
             const jump = () => {
                 togglePinned(false);
-                if (p.thread_root_id) openThread(p.thread_root_id, p.channel);
+                if (p.thread_root_id) openThread(p.thread_root_id, p.channel, dmThreadOf(p));
+                else if (p.isDm) jumpToDmMessage(p);
                 else jumpToPost(p);
             };
             // The whole card is still clickable — the reference's cards are — but
@@ -13866,7 +14166,7 @@
             const unpin = item.querySelector('.pinned-unpin');
             if (unpin) unpin.addEventListener('click', (e) => {
                 e.stopPropagation();
-                pinPost(p.id, false);
+                pinPost(p, false);
             });
             list.appendChild(item);
         });
@@ -14028,6 +14328,10 @@
         renderDmHead();
         $('dm-panel').hidden = false;
         moveComposer(true);
+        // The header's three buttons come with you, and whatever they were
+        // showing about the last place closes.
+        moveConvActions(true);
+        closeSurfacePanels();
         closeThread();
         dmMsgs = [];
         dmHasMore = false;
@@ -14467,6 +14771,13 @@
         // on the empty state with the list still there, which is what the
         // reference does; hiding the panel here dropped you back into whatever
         // channel was behind it.
+        // A thread inside the conversation being closed goes with it: the
+        // drawer is sitting INSIDE #dm-main, and leaving it there would strand
+        // it over the empty state (or, on the way out of DM mode, inside a
+        // hidden panel with the poll still running).
+        if (threadDm) closeThread();
+        moveConvActions(false);
+        closeSurfacePanels();
         if (!dmMode) $('dm-panel').hidden = true;
         $('dm-panel').classList.remove('is-group');
         $('dm-panel').classList.toggle('empty', dmMode);
@@ -14487,6 +14798,32 @@
     }
 
     function dmPanelOpen() { return !$('dm-panel').hidden; }
+
+    // Threads / Notification Settings / Pinned Messages, relocated into the
+    // conversation header and back — the same one-element trick #composer and
+    // #thread-panel use, and for the same reason: a second set of buttons would
+    // need a second set of listeners, a second placement routine and a second
+    // set of aria state, and would be missing a feature within a month. That
+    // divergence is the whole bug this change exists to remove.
+    //
+    // Only while a conversation is actually OPEN. In the DM view with nothing
+    // selected there is no place for the three of them to be about, and a bell
+    // that silences "nothing in particular" is worse than no bell.
+    let convActionsHome = null;
+
+    function moveConvActions(intoDm) {
+        const group = $('conv-actions');
+        if (!group) return;
+        if (!convActionsHome) {
+            convActionsHome = document.createComment('conv-actions');
+            group.parentNode.insertBefore(convActionsHome, group);
+        }
+        const slot = $('dm-actions-slot');
+        if (intoDm && slot) slot.appendChild(group);
+        else if (convActionsHome.parentNode) {
+            convActionsHome.parentNode.insertBefore(group, convActionsHome.nextSibling);
+        }
+    }
 
     async function loadDmMessages(force) {
         if (!dmOpen) return;
@@ -14580,6 +14917,62 @@
         box.querySelector('.dm-retry').addEventListener('click', () => loadDmMessages(true));
     }
 
+    // ONE direct-message row -> the shape renderMessage() expects.
+    //
+    // This used to be a closure inside renderDmMessages, which meant the
+    // conversation column was the only thing that could draw a DM. Three more
+    // places need to now — the thread drawer, the pinned panel and the threads
+    // popout's offline fallback — and a second copy of this mapping is exactly
+    // how the DM view drifted away from the channel view in the first place.
+    //
+    // The field names are the CHANNEL's, deliberately: pinned, reactions,
+    // reply_count, quote, thread_root_id and the four attachment columns all
+    // mean here what they mean on a post, which is why one renderer can draw
+    // either and neither can quietly lose a feature the other has.
+    function dmAsPost(m, conversation) {
+        const conv = conversation || dmOpen;
+        const nameOf = (id) => {
+            const u = ((conv && conv.members) || []).find((x) => x.id === id);
+            if (u) return u.username;
+            if (account && id === account.id) return account.username;
+            const d = dmDirectory[id];
+            return (d && d.username) || 'someone';
+        };
+        return {
+            id: m.id,
+            // client_id is what the grouping test compares, and DMs have no
+            // install id — the account id stands in, which is the right identity
+            // here anyway: the same person on two devices is still one speaker.
+            // (Block asks blockTargetFor instead, which resolves the real one.)
+            client_id: 'dm-user-' + (m.from || 0),
+            user_id: m.from || 0,
+            name: nameOf(m.from),
+            body: m.body,
+            created_at: m.created_at,
+            // The shared renderer draws "(edited)" from this. dm/list returns it
+            // now; older servers omit it, which reads as 0 and draws nothing.
+            edited_at: m.edited_at || 0,
+            pinned: m.pinned ? 1 : 0,
+            reactions: m.reactions || [],
+            reply_count: m.reply_count || 0,
+            last_reply_at: m.last_reply_at || 0,
+            // The renderer's name for "this is a reply, and to what".
+            thread_root_id: m.reply_root_id || 0,
+            quote: m.quote || null,
+            // Which table this row lives in, and which conversation — the two
+            // things every action needs in order to reach the right endpoint.
+            isDm: true,
+            dmThread: (conv && conv.id) || 0,
+            // Named as the channel list names them, so the shared renderer draws
+            // a DM attachment — image, file card, voice message — with no branch
+            // of its own.
+            att_key: m.att_key || '',
+            att_name: m.att_name || '',
+            att_type: m.att_type || '',
+            att_size: m.att_size || 0
+        };
+    }
+
     // Returns false when it declined to paint, so the caller knows not to treat
     // the payload as displayed — exactly as renderThread() does.
     function renderDmMessages() {
@@ -14628,37 +15021,6 @@
         // message, which is why it gets all of the above for nothing. So does
         // this now: map each message onto the shape renderMessage() expects and
         // hand it over.
-        const nameOf = (id) => {
-            const u = (dmOpen && dmOpen.members || []).find((x) => x.id === id);
-            if (u) return u.username;
-            return (account && id === account.id) ? account.username : 'someone';
-        };
-        // client_id is what the grouping test compares, and DMs have no install
-        // id — the account id stands in, which is the right identity here
-        // anyway: the same person on two devices is still one speaker.
-        const asPost = (m) => ({
-            id: m.id,
-            client_id: 'dm-user-' + (m.from || 0),
-            user_id: m.from || 0,
-            name: nameOf(m.from),
-            body: m.body,
-            created_at: m.created_at,
-            // The shared renderer draws "(edited)" from this. dm/list returns it
-            // now; older servers omit it, which reads as 0 and draws nothing.
-            edited_at: m.edited_at || 0,
-            pinned: 0,
-            // Lets the shared renderer drop the actions a DM has no backing
-            // for. Without it every one of them pointed at the posts table.
-            isDm: true,
-            // Named as the channel list names them, so the shared renderer
-            // draws a DM attachment — image, file card, voice message — with
-            // no branch of its own.
-            att_key: m.att_key || '',
-            att_name: m.att_name || '',
-            att_type: m.att_type || '',
-            att_size: m.att_size || 0
-        });
-
         // With older messages still on the server this is not the beginning of
         // anything, so say what it is instead — and give the mouse a way back
         // that does not depend on noticing that scrolling loads more.
@@ -14770,7 +15132,7 @@
                 sep.innerHTML = `<span>${esc(day)}</span>`;
                 box.appendChild(sep);
             }
-            const p = asPost(m);
+            const p = dmAsPost(m);
             box.appendChild(renderMessage(p, prev));
             prev = p;
         });
@@ -14785,13 +15147,28 @@
 
     // Text-only DM send, used by the shared composer. Attachments go through
     // uploadOne(), which posts to the same endpoint with a key.
-    async function sendDm(body, thread) {
-        const res = await L.board('dm/send', { method: 'POST', body: { thread, body } });
+    async function sendDm(body, thread, quoteId) {
+        // `quoteId` is the reply chip, which the one composer now carries into a
+        // conversation exactly as it carries it into a channel. dm/send.js
+        // refuses a quote pointing outside this conversation, so a stale chip
+        // sends the message and drops the quote rather than leaking a snippet.
+        const res = await L.board('dm/send', {
+            method: 'POST', body: { thread, body, quoteId: quoteId || null }
+        });
         if (!res || !res.success) return res;
         if (dmOpen && dmOpen.id === thread) {
+            // The echo carries the quote it was sent with, resolved from the row
+            // the chip pointed at, so the message does not appear without its
+            // quote block and then grow one when the poll catches up.
+            const q = quoteId ? dmMsgs.find((m) => m.id === quoteId) : null;
             dmMsgs.push({
                 id: res.id, body, created_at: res.created_at || Date.now(),
-                fromMe: true, from: account ? account.id : null
+                fromMe: true, from: account ? account.id : null,
+                quote_id: quoteId || 0,
+                quote: q ? {
+                    id: q.id, name: dmAsPost(q).name,
+                    body: (q.body || '').slice(0, 120), att_name: q.att_name || ''
+                } : null
             });
             renderDmMessages();
         }
@@ -14803,8 +15180,87 @@
     // One picker for both: one person selected makes a DM, several make a
     // group. Splitting it into "New DM" and "New Group" would ask the reader to
     // decide which they want before they have chosen who, which is backwards.
-    const dmPick = { all: [], chosen: new Set(), mode: 'create', thread: 0, cursor: 0 };
+    //
+    // THREE MODES, TWO LAYOUTS:
+    //   'create'  the PALETTE — "Find or start a conversation". Channels,
+    //             conversations and people in one keyboard-driven list.
+    //   'new'     the ROSTER  — the New Message modal the + beside Direct
+    //             Messages opens: a title, a search box, board members with
+    //             checkboxes, Cancel / Create Message.
+    //   'add'     the ROSTER again, pointed at a group that already exists.
+    //
+    // They share this state, the member directory, the ten-person cap, the
+    // in-flight guard and the create path; only the layout and whether jump rows
+    // are offered differ. A second modal would be a second place to keep every
+    // one of those — and group conversations already exist end to end
+    // (dm_threads.is_group, dm_members, dm/create, dm/manage, the group header
+    // and its Add/Leave menu), so there is nothing here to build a second time.
+    // `have` is how many people are in the conversation this picker is acting
+    // on BEFORE anything is ticked — one (me) when starting a new one, the whole
+    // group when adding to one. The ten-person cap counts them, and reading it
+    // as "me plus the ticks" let you tick five more into a group of eight and
+    // find out from the server.
+    const dmPick = { all: [], chosen: new Set(), mode: 'create', thread: 0, cursor: 0, have: 1 };
     const DM_GROUP_MAX = 10;                  // server enforces the same cap
+
+    // Which layout a mode wants. 'add' is the same dialog as 'new' pointed at a
+    // group that already exists, so it takes the same shape.
+    function dmPickRoster() { return dmPick.mode === 'new' || dmPick.mode === 'add'; }
+
+    // The head is ONE element with two homes: above the card for the palette,
+    // inside it for the roster modal. Moved rather than written twice, so the
+    // title and the subtitle cannot say different things in the two layouts.
+    let dmPickHeadHome = null;
+
+    function moveDmPickerHead(intoCard) {
+        const head = $('dm-picker-head');
+        if (!head) return;
+        if (!dmPickHeadHome) {
+            dmPickHeadHome = document.createComment('dm-picker-head');
+            head.parentNode.insertBefore(dmPickHeadHome, head);
+        }
+        const slot = $('dm-picker-head-slot');
+        if (intoCard && slot) slot.after(head);
+        else if (dmPickHeadHome.parentNode) {
+            dmPickHeadHome.parentNode.insertBefore(head, dmPickHeadHome.nextSibling);
+        }
+    }
+
+    // Everything about the picker that the MODE decides, in one place: where the
+    // head sits, what it says, what the box and the footer say, and which of the
+    // two layouts the CSS should draw. Split across the call sites, this is
+    // where a half-applied layout would come from.
+    function paintDmPickerChrome() {
+        const roster = dmPickRoster();
+        const add = dmPick.mode === 'add';
+        $('dm-picker-wrap').classList.toggle('dm-picker--roster', roster);
+        moveDmPickerHead(roster);
+        $('dm-picker-close').hidden = !roster;
+
+        $('dm-picker-title').textContent = roster
+            ? (add ? 'Add People' : 'New Message')
+            : 'Search for channels, conversations or people';
+        const sub = $('dm-picker-sub');
+        sub.hidden = !roster;
+        // The cap, said where it can still be acted on rather than as an error
+        // afterwards. It counts everyone in the conversation, me included, which
+        // is what dm/create.js enforces.
+        sub.textContent = roster ? 'Group DMs can have up to ' + DM_GROUP_MAX + ' members.' : '';
+
+        const lead = $('dm-picker-lead');
+        lead.hidden = !roster;
+        // "Board members", not "friends". This app is one board and has no
+        // friends list, so naming one would describe a feature that does not
+        // exist — the reference says "friends or server members" because it has
+        // both.
+        lead.textContent = roster
+            ? (add ? 'Add board members to this group.' : 'Add board members to a group DM.')
+            : '';
+
+        const box = $('dm-picker-search');
+        box.placeholder = roster ? 'Search' : 'Where would you like to go?';
+        box.setAttribute('aria-label', roster ? 'Search members' : 'Find or start a conversation');
+    }
 
     // Move the keyboard cursor, clamped, and keep it on screen. Rows are read out
     // of the DOM rather than tracked alongside it: the list is rebuilt on every
@@ -14845,7 +15301,9 @@
     // Left out entirely while adding people to an existing group: "jump to
     // #general" is not an answer to "who else should be in this group".
     function dmPickerJumps(q) {
-        if (dmPick.mode === 'add') return [];
+        // The palette's first verb, and only the palette's: "jump to #general"
+        // is not an answer to "who am I messaging?".
+        if (dmPickRoster()) return [];
         const out = [];
         (channels || []).forEach((c) => {
             const name = typeof c === 'string' ? c : c.name;
@@ -14868,14 +15326,62 @@
         return out;
     }
 
+    // What to CALL somebody in a member row.
+    //
+    // Two lines, the way the reference has them: the name they are posting under
+    // and the account underneath it. This board has no separate profile name —
+    // the account username IS the display name — but a display name set on an
+    // install rides along with presence, so when the roster has seen one it is
+    // the top line and the account is the bottom. When it has not, both lines
+    // are the account, which is exactly what the reference shows for somebody
+    // who has not set a display name either.
+    function dmPickIdentity(u) {
+        const seen = members.find((m) => m.user_id === u.id && m.name);
+        return { display: (seen && seen.name) || u.username, handle: u.username };
+    }
+
+    // A person, as the roster modal draws them: face, the two identity lines and
+    // a checkbox on the trailing edge. The palette draws the same people as
+    // one-line rows, because there they are one list among several.
+    function dmPickPersonRow(u, on) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'dm-pick-row dm-pick-person' + (on ? ' on' : '');
+        // A multi-select row IS a checkbox, so it is announced as one. The
+        // visual box has no <input> behind it and would otherwise be invisible
+        // to a screen reader.
+        row.setAttribute('role', 'checkbox');
+        row.setAttribute('aria-checked', on ? 'true' : 'false');
+        const who = dmPickIdentity(u);
+        row.innerHTML =
+            `<span class="dm-pick-av dm-pick-av-lg${avatarCls(u.id)}" style="${avatarStyle(who.display)}">` +
+            `${esc(initials(who.display))}${avatarImgHtml(u.id)}</span>` +
+            '<span class="dm-pick-ident">' +
+            `<span class="dm-pick-name">${esc(who.display)}</span>` +
+            `<span class="dm-pick-handle">${esc(who.handle)}</span>` +
+            '</span>' +
+            '<span class="dm-pick-box" aria-hidden="true"></span>';
+        wireAvatarFallback(row);
+        return row;
+    }
+
     function renderDmPicker() {
         const box = $('dm-picker-list');
+        const roster = dmPickRoster();
         const q = ($('dm-picker-search').value || '').trim().toLowerCase();
-        const shown = dmPick.all.filter((u) => !q || u.username.toLowerCase().includes(q));
+        // The roster searches BOTH lines, because the top one is what is on
+        // screen and the bottom one is what people know each other by.
+        const shown = dmPick.all.filter((u) => {
+            if (!q) return true;
+            if (!roster) return u.username.toLowerCase().includes(q);
+            const who = dmPickIdentity(u);
+            return who.display.toLowerCase().includes(q) || who.handle.toLowerCase().includes(q);
+        });
         const jumps = dmPickerJumps(q);
         box.innerHTML = '';
         if (!shown.length && !jumps.length) {
-            box.innerHTML = '<div class="hint dm-picker-empty">Nothing matches that.</div>';
+            box.innerHTML = '<div class="hint dm-picker-empty">' +
+                (roster ? 'No members match that.' : 'Nothing matches that.') + '</div>';
         }
         if (jumps.length) {
             dmPickHead(box, 'Jump to');
@@ -14898,22 +15404,33 @@
                 box.appendChild(row);
             });
         }
-        if (shown.length) dmPickHead(box, dmPick.mode === 'add' ? 'Add to the group' : 'Start a conversation with');
+        // The palette has to say which list this is, because it is one of
+        // several. The roster modal's list is the whole dialog, and the line
+        // above it has already said what it is for.
+        if (shown.length && !roster) dmPickHead(box, 'Start a conversation with');
         shown.forEach((u) => {
-            const row = document.createElement('button');
-            row.type = 'button';
             const on = dmPick.chosen.has(u.id);
+            let row;
+            if (roster) {
+                row = dmPickPersonRow(u, on);
+            } else {
+            row = document.createElement('button');
+            row.type = 'button';
             row.className = 'dm-pick-row' + (on ? ' on' : '');
             row.innerHTML = dmPickFace({ name: u.username, uid: u.id }) +
                 `<span class="dm-pick-name">${esc(u.username)}` +
                 (u.role === 'admin' ? ' <em class="hint">admin</em>' : '') + '</span>' +
                 `<span class="dm-pick-check">${on ? '✓' : ''}</span>`;
+            }
             // What Enter does on this row. Nothing picked yet and it is the common
             // case — one person — so it opens that conversation outright; with a
             // selection already going it toggles, because the reader is building a
             // group and Enter must not end that halfway through.
             row._pickGo = () => {
-                if (dmPick.mode !== 'add' && !dmPick.chosen.size) {
+                // In the roster modal Enter only ever TICKS the row. The dialog
+                // has a Create Message button, and messaging somebody because
+                // they happened to be under the cursor is not what Enter meant.
+                if (!roster && !dmPick.chosen.size) {
                     dmPick.chosen.add(u.id);
                     return $('dm-picker-ok').click();
                 }
@@ -14921,8 +15438,9 @@
             };
             row.addEventListener('click', () => {
                 if (dmPick.chosen.has(u.id)) dmPick.chosen.delete(u.id);
-                // The cap counts me too, which is why it is one fewer here.
-                else if (dmPick.chosen.size >= DM_GROUP_MAX - 1) {
+                // The cap counts everyone who will be in the conversation: the
+                // people already in it, plus me, plus the ticks.
+                else if (dmPick.chosen.size + dmPick.have >= DM_GROUP_MAX) {
                     return toast('A group can hold ' + DM_GROUP_MAX + ' people');
                 } else dmPick.chosen.add(u.id);
                 renderDmPicker();
@@ -14936,11 +15454,16 @@
         const n = dmPick.chosen.size;
         const ok = $('dm-picker-ok');
         ok.disabled = n === 0;
-        ok.textContent = n > 1 ? `Create Group DM (${n + 1})` : 'Create DM';
-        // The confirm pair belongs to the COMPOSER, so it appears when there is
-        // something to confirm. Until then the footer teaches the keys, because
-        // Enter is how this is meant to be driven.
-        $('dm-picker-actions').hidden = n === 0;
+        ok.textContent = roster
+            // One label whatever is selected: in this dialog the count is
+            // already on screen as ticked rows, and the button is the verb.
+            ? (dmPick.mode === 'add' ? 'Add People' : 'Create Message')
+            : (n > 1 ? `Create Group DM (${n + 1})` : 'Create DM');
+        // In the PALETTE the confirm pair belongs to the composer, so it appears
+        // when there is something to confirm and the footer teaches the keys
+        // until then. In the ROSTER modal it is part of the dialog: Cancel has
+        // to be reachable before anything has been picked.
+        $('dm-picker-actions').hidden = !roster && n === 0;
         $('dm-picker-hint').innerHTML = n > 1
             ? 'A group with you and ' + n + ' others.'
             : (n === 1
@@ -14953,9 +15476,14 @@
         $('dm-picker').hidden = true;
         dmPick.chosen.clear();
         dmPick.cursor = 0;
+        // Back to the palette's shape, and the head back to the palette's home,
+        // so the next open starts from a known state whichever mode it is in.
+        dmPick.mode = 'create';
+        paintDmPickerChrome();
     }
 
     $('dm-picker-cancel').addEventListener('click', closeDmPicker);
+    $('dm-picker-close').addEventListener('click', closeDmPicker);
     $('dm-picker-search').addEventListener('input', () => { dmPick.cursor = 0; renderDmPicker(); });
     // ARROWS AND ENTER, from the box you are typing in — you should never have to
     // leave it. Enter acts on the row under the cursor: a channel or a
@@ -15052,16 +15580,21 @@
         dmPick.chosen.clear();
         dmPick.mode = mode;
         dmPick.thread = thread || 0;
+        // `exclude` is the group's current membership on the 'add' path (see the
+        // #dm-add handler) and empty otherwise, where the only person already in
+        // the conversation is me.
+        dmPick.have = mode === 'add' ? Math.max(1, (exclude || []).length) : 1;
         $('dm-picker-search').value = '';
-        // The title is OUTSIDE the card now, so this has to name it rather than
-        // take the first h2 it finds — which is that title, and setting it to
-        // "New message" put the composer's old heading back over the palette.
-        $('dm-picker-title').textContent = mode === 'add'
-            ? 'Add people to the group'
-            : 'Search for channels, conversations or people';
+        // Which layout, what it is called, and what every label in it says — all
+        // decided from the mode in one function, so the two layouts cannot end
+        // up half-applied to each other.
+        paintDmPickerChrome();
         $('dm-picker-ok').disabled = true;
         $('dm-picker-list').innerHTML = '<div class="hint dm-picker-empty">Loading members…</div>';
         $('dm-picker').hidden = false;
+        // The footer exists from the first frame in the roster modal, so Cancel
+        // is inside the focus trap before anything has been picked.
+        $('dm-picker-actions').hidden = !dmPickRoster();
         trapFocus($('dm-picker'), { label: mode === 'add' ? 'Add people' : 'New message', initial: $('dm-picker-search') });
 
         const res = await L.board('account/users');
@@ -15085,7 +15618,11 @@
         renderDmPicker();
     }
 
-    $('btn-new-dm').addEventListener('click', () => openDmPicker('create', 0, []));
+    // The + beside Direct Messages opens the NEW MESSAGE modal, not the
+    // palette. The palette is still there behind "Find or start a conversation"
+    // and answers a different question — "where do I want to go?" — while this
+    // one answers "who am I messaging?", which is what a + on that header means.
+    $('btn-new-dm').addEventListener('click', () => openDmPicker('new', 0, []));
 
     $('dm-add').addEventListener('click', () => {
         if (!dmOpen || !dmOpen.isGroup) return;
@@ -15160,7 +15697,7 @@
     });
 
     $('dm-find').addEventListener('click', () => openDmPicker('create', 0, []));
-    $('btn-new-dm-2').addEventListener('click', () => openDmPicker('create', 0, []));
+    $('btn-new-dm-2').addEventListener('click', () => openDmPicker('new', 0, []));
     $('dm-nav-members').addEventListener('click', () => openDmPicker('create', 0, []));
 
     // Show or hide the profile column. Only meaningful for a pair — a group has
@@ -15187,7 +15724,14 @@
         // server, or a pair conversation, still resolves because the thread
         // list knows which thread that person's messages belong to.
         const tid = m.thread || (dmThreads.find((x) => !x.isGroup && x.user && x.user.id === m.from.id) || {}).id;
-        if (dmOpen && tid && dmOpen.id === tid) {
+        // A reply inside a thread belongs in the thread drawer, not in the
+        // conversation column — the same rule /api/board/dm/list follows when it
+        // keeps replies out of the stream. Appending one here would put it in
+        // both places until the next poll disagreed and it vanished again.
+        if (m.reply_root_id) {
+            if (threadDm === tid && threadRootId === m.reply_root_id) loadThread(true);
+            if (dmOpen && dmOpen.id === tid) loadDmMessages(true);   // the reply count moved
+        } else if (dmOpen && tid && dmOpen.id === tid) {
             // Open conversation: append and stop there. The event already
             // carries the body, and the re-fetch that used to follow read from a
             // replica that often hadn't seen the write yet — so the message we
@@ -15207,7 +15751,7 @@
                 });
                 renderDmMessages();
             }
-        } else {
+        } else if (!m.reply_root_id) {
             const t = tid ? dmThreads.find((x) => x.id === tid) : null;
             if (t) {
                 t.unread = (t.unread || 0) + 1;
@@ -15217,7 +15761,11 @@
                 loadDmThreads();
             }
         }
-        if (alertsAllowed(null)) {
+        // Keyed by the conversation, so the level set on the header's bell in a
+        // DM is the one that answers here. `null` was the old key: every
+        // conversation shared one answer, and setting a noisy group to Nothing
+        // silenced nothing at all.
+        if (alertsAllowed(tid ? 'dm:' + tid : null, namesIncludeMe(mentionNamesIn(m.body || '')))) {
             const conversationVisible = windowFocused && dmOpen && tid && dmOpen.id === tid;
             if (!conversationVisible) window.loungeSounds.playMessage();
             if (!windowFocused && settings.notifications !== false) {
