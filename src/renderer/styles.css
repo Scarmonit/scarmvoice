@@ -3609,20 +3609,43 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
    Message density
    ========================================================================== */
 
-#messages.compact .msg, #thread-list.compact .msg { margin-top: 0; padding-top: 1px; padding-bottom: 1px; }
-#messages.compact .msg-gutter, #thread-list.compact .msg-gutter { display: none; }
-#messages.compact .msg-head, #thread-list.compact .msg-head {
+/* THREE lists draw .msg rows, and all three have to be named here.
+   applyDensity() has put `.compact` on #dm-messages since a direct message
+   became the same row as a channel post — with, as its own comment says, the
+   express purpose of stopping the conversation column staying cozy while the
+   channel behind it went compact. The class landed; the rules never did, so
+   Compact simply did nothing in direct messages. */
+#messages.compact .msg,
+#thread-list.compact .msg,
+#dm-messages.compact .msg { margin-top: 0; padding-top: 1px; padding-bottom: 1px; }
+#messages.compact .msg-gutter,
+#thread-list.compact .msg-gutter,
+#dm-messages.compact .msg-gutter { display: none; }
+#messages.compact .msg-head,
+#thread-list.compact .msg-head,
+#dm-messages.compact .msg-head {
   display: inline-flex; vertical-align: baseline; margin-right: 8px; gap: 7px;
 }
-#messages.compact .msg-time, #thread-list.compact .msg-time { order: -1; opacity: .85; }
-#messages.compact .msg-text, #thread-list.compact .msg-text { display: inline; }
+#messages.compact .msg-time,
+#thread-list.compact .msg-time,
+#dm-messages.compact .msg-time { order: -1; opacity: .85; }
+#messages.compact .msg-text,
+#thread-list.compact .msg-text,
+#dm-messages.compact .msg-text { display: inline; }
 /* .msg-para is a block, so without this the body drops below the name and the
    line is not compact at all. Later paragraphs still break, as they should. */
 #messages.compact .msg-text > .msg-para:first-child,
-#thread-list.compact .msg-text > .msg-para:first-child { display: inline; }
-#messages.compact .msg-body::before, #thread-list.compact .msg-body::before { display: none; }
-#messages.compact .msg-quote, #thread-list.compact .msg-quote { display: block; }
-#messages.compact .day-sep { margin-top: 1em; margin-bottom: .4em; }
+#thread-list.compact .msg-text > .msg-para:first-child,
+#dm-messages.compact .msg-text > .msg-para:first-child { display: inline; }
+#messages.compact .msg-body::before,
+#thread-list.compact .msg-body::before,
+#dm-messages.compact .msg-body::before { display: none; }
+#messages.compact .msg-quote,
+#thread-list.compact .msg-quote,
+#dm-messages.compact .msg-quote { display: block; }
+/* The thread drawer has no day separators; the other two do. */
+#messages.compact .day-sep,
+#dm-messages.compact .day-sep { margin-top: 1em; margin-bottom: .4em; }
 
 /* ==========================================================================
    Settings — account card, mic meter, channel mutes, blocked list

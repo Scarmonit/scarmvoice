@@ -1693,6 +1693,24 @@ conversation, and `webContents.setZoomFactor` for zoom. Two details worth keepin
   handle it is supposed to end under, and none of their tick labels was ever lit —
   a scale that read as decoration beside four in Accessibility that all name the
   value they are on.
+- **Compact is two halves, and both have to name every list.** *Chat Message
+  Display → Compact* is delivered by the stylesheet (hide `.msg-gutter`, lay
+  `.msg-head` out inline) **and** by the renderer refusing to group, and neither
+  half works without the other: a grouped row has no `.msg-head` at all, so once
+  the gutter is gone it carries nothing identifying it. `renderMessages()` passes
+  `null` for `prev` in compact for exactly that reason.
+
+  Three lists draw `.msg` rows — `#messages`, `#thread-list` and `#dm-messages` —
+  and each half had missed a different one. `applyDensity()` has put `.compact` on
+  `#dm-messages` since a DM became the same row as a channel post, with the express
+  purpose of stopping the conversation staying cozy while the channel went compact;
+  the stylesheet never named it, so the setting did nothing there. `#thread-list`
+  *was* styled and grouped anyway, which is the worse of the two: its gutter is
+  `display: none`, so a run of replies from one person drew as naked text with no
+  author and no time. `test/message-density.test.js` asserts what each list grouped
+  in both densities, and matches the density block's selectors against all three
+  lists — the failure mode is a missing selector, not a wrong value, so it is
+  checked as text.
 - **The live Preview is the real renderer.** Two fixed messages through
   `renderMessage()`, so the markdown, the link and the reactions are the same code
   the conversation uses — a slider can be dragged while watching what it actually

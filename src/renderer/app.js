@@ -13890,9 +13890,19 @@
             (replies > 0 ? `${replies} ${replies === 1 ? 'reply' : 'replies'}` : 'no replies yet');
 
         list.innerHTML = '';
+        // NOTHING GROUPS IN COMPACT, here as in the channel column.
+        //
+        // Compact's whole definition is a timestamp and a name on every line,
+        // and the stylesheet implements it by hiding the gutter — which is the
+        // only place a GROUPED row carries either (renderMessage omits .msg-head
+        // entirely, and puts the hover timestamp in the gutter). renderMessages()
+        // passes null for exactly this reason; this list did not, so a run of
+        // replies from one person in compact mode drew as naked text with no
+        // author and no time on any line but the first.
+        const compact = compactMode();
         let prev = null;
         threadPosts.forEach((p, i) => {
-            const row = renderMessage(p, i === 0 ? null : prev);
+            const row = renderMessage(p, (compact || i === 0) ? null : prev);
             if (i === 0) row.classList.add('thread-root');
             list.appendChild(row);
             prev = p;
@@ -15451,6 +15461,10 @@
 
         let lastDay = '';
         let prev = null;
+        // Same rule the channel column and the thread drawer follow: compact
+        // draws a name and a timestamp on every line, and a grouped row has
+        // neither once the gutter is hidden. See renderThread().
+        const compact = compactMode();
         // The header's search box narrows what is on screen — the SAME box, the
         // same operators and the same matcher the channel column uses, over the
         // messages this conversation has loaded. Anything further back is the
@@ -15481,7 +15495,7 @@
                 box.appendChild(sep);
             }
             const p = dmAsPost(m);
-            box.appendChild(renderMessage(p, prev));
+            box.appendChild(renderMessage(p, compact ? null : prev));
             prev = p;
         });
         // Follow the live edge only if that's where the reader already was.
