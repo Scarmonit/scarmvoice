@@ -3249,11 +3249,11 @@ body.resizing-pane { user-select: none; }
   background: var(--float); border: 1px solid var(--float-rule);
   border-radius: 12px; box-shadow: var(--shadow-lg);
 }
-.pc-banner { height: 120px; border-radius: 12px 12px 0 0; }
+.pc-banner { height: 140px; border-radius: 12px 12px 0 0; }
 /* Over the banner's lower edge, cut out of the card — the same construction the
    side panel's face uses, one size up. */
 .pc-face {
-  position: absolute; top: 62px; left: 20px;
+  position: absolute; top: 82px; left: 20px;
   width: 108px; height: 108px; border-radius: 50%;
   border: 7px solid var(--float); background: var(--float);
 }
@@ -3279,7 +3279,13 @@ body.resizing-pane { user-select: none; }
 }
 .pc-handle { margin-top: 2px; font-size: 15px; font-weight: 500; color: var(--author); }
 .pc-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-.pc-msg { height: 32px; padding: 0 18px; border-radius: 4px; }
+/* .pc-actions in front, because .btn-primary sets height: 38px and sits later in
+   this file at the same specificity — so the button measured 39 with the border. */
+.pc-actions .pc-msg {
+  height: 32px; padding: 0 14px; border-radius: 4px;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.pc-actions .pc-msg .ico { width: 16px; height: 16px; }
 .pc-icon {
   width: 32px; height: 32px; flex: 0 0 32px; border-radius: 4px;
   display: grid; place-items: center; cursor: pointer;
@@ -3289,11 +3295,26 @@ body.resizing-pane { user-select: none; }
 .pc-icon .ico { width: 17px; height: 17px; }
 /* LABEL OVER VALUE, the way the side panel does it — not three labelled values
    run together on one line, which is a debug string with spaces in it. */
-.pc-facts { margin-top: 20px; display: flex; flex-direction: column; gap: 14px; }
+/* 28px between pairs and 7px inside one, measured: at 14 and 3 the three of them
+   ran together as a block rather than reading as separate facts. */
+.pc-facts { margin-top: 22px; display: flex; flex-direction: column; gap: 28px; }
 .pc-fact-k {
   font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--muted);
 }
-.pc-fact-v { margin-top: 3px; font-size: 15px; color: var(--msg-text); }
+.pc-fact-v { margin-top: 7px; font-size: 15px; color: var(--msg-text); }
+
+/* The private note. Flat until you touch it — a bordered box here would read as a
+   form field in a card that has none. */
+.pc-note { margin-top: 28px; }
+.pc-note-text {
+  display: block; width: 100%; margin-top: 7px; padding: 6px 8px;
+  background: none; border: 1px solid transparent; border-radius: 4px;
+  color: var(--msg-text); font: inherit; font-size: 14px; line-height: 1.4;
+  resize: none; outline: none;
+}
+.pc-note-text::placeholder { color: var(--dim); font-style: italic; }
+.pc-note-text:hover { background: var(--ctl-sunk); }
+.pc-note-text:focus { background: var(--ctl-sunk); border-color: var(--ctl-sunk-line); }
 .pc-x {
   position: absolute; top: 12px; right: 12px; z-index: 1;
   width: 30px; height: 30px; border-radius: 50%;
@@ -5211,6 +5232,15 @@ html.win-hidden .up-bar i {
 .dm-picker-card .dialog-actions button:hover:not(:disabled) {
   background: var(--ctl-hover); border-color: var(--ctl-line-hover);
 }
+/* …except the one that DOES the thing, which is a primary action and therefore
+   the same blurple as every other primary action in the app. */
+.dm-picker-card .dialog-actions #dm-picker-ok {
+  background: var(--slider); border-color: transparent; color: #fff;
+}
+.dm-picker-card .dialog-actions #dm-picker-ok:hover:not(:disabled) {
+  background: var(--slider); border-color: transparent; filter: brightness(1.1);
+}
+.dm-picker-card .dialog-actions #dm-picker-ok:disabled { opacity: .5; cursor: default; }
 
 /* ---- group conversations ----------------------------------------------- */
 /* "mine or theirs" stops being a complete answer at three people, so a group

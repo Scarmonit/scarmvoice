@@ -236,7 +236,15 @@ describe('the direct-messages place', () => {
         expect(html).not.toMatch(/id="profile-card"[\s\S]{0,900}>Cancel</);
         // The name is the SUBJECT of the view, not a 12px dialog title.
         expect(css).toMatch(/\.pc-name \{[^}]*font-size: 32px/);
-        expect(css).toMatch(/\.pc-banner \{ height: 120px/);
+        expect(css).toMatch(/\.pc-banner \{ height: 140px/);
+        // Its own metrics beat .btn-primary's, which is later in the file and
+        // equally specific — the button measured 39px tall until this was scoped.
+        expect(css).toMatch(/\.pc-actions \.pc-msg \{[^}]*height: 32px/);
+        // The action row is never a single button: an overflow carries the rest.
+        expect(fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8')).toContain('id="pc-more"');
+        // A private note, kept where "only visible to you" is literally true.
+        expect(app).toMatch(/userNotes/);
+        expect(app).not.toMatch(/L\.board\([^)]*note/i);
     });
 
     it('fills every primary button with one colour', () => {

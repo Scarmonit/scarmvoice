@@ -1929,10 +1929,25 @@
       <div class="pc-handle" id="pc-handle"></div>
       <!-- The prominent button DOES something. It is where Close used to sit. -->
       <div class="pc-actions">
-        <button type="button" class="btn-primary pc-msg" id="pc-message">Message</button>
+        <button type="button" class="btn-primary pc-msg" id="pc-message">
+          <span class="ico" data-icon="chat"></span><span>Message</span>
+        </button>
         <button type="button" class="pc-icon" id="pc-block" data-tip="Block" aria-label="Block"></button>
+        <!-- Everything else about this person, in one place — so the row is never
+             a single button with no route to anything. -->
+        <button type="button" class="pc-icon" id="pc-more" data-tip="More" aria-label="More actions">
+          <span class="ico" data-icon="more"></span>
+        </button>
       </div>
       <div class="pc-facts" id="pc-facts"></div>
+      <!-- Private, and genuinely private: it never leaves this machine. There is
+           no endpoint for it and there does not need to be — "only visible to you"
+           is exactly what a local setting is. -->
+      <div class="pc-note">
+        <label class="pc-fact-k" for="pc-note-text">Note (only visible to you)</label>
+        <textarea id="pc-note-text" class="pc-note-text" rows="2" maxlength="240"
+                  placeholder="Click to add a note"></textarea>
+      </div>
     </div>
   </div>
 </div>

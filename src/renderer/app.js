@@ -14273,11 +14273,67 @@
             };
         }
 
+        // EVERYTHING ELSE, in one place. Without it the action row is a single
+        // button and there is no route from a profile to anything at all.
+        $('pc-more').onclick = (e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            const items = [
+                { label: 'Copy user ID', icon: 'copy', onClick: () => {
+                    navigator.clipboard.writeText(String(u.id));
+                    toast('User id copied');
+                } }
+            ];
+            if (!mine) {
+                items.unshift({ label: 'Message', icon: 'chat', onClick: () => {
+                    closeProfileCard(); messageUser(u.id);
+                } });
+            }
+            if (cid) {
+                const b2 = isBlocked(cid);
+                items.push({
+                    label: b2 ? 'Unblock' : 'Block', icon: 'ban', danger: !b2,
+                    onClick: () => {
+                        closeProfileCard();
+                        if (b2) unblockPerson(cid); else blockPerson(cid, u.username);
+                    }
+                });
+            }
+            openCtxMenu(items, r.left - 120, r.bottom + 6);
+        };
+
+        // The private note. Local by nature — "only visible to you" is exactly what
+        // a setting is, and there is no endpoint for it to need.
+        const note = $('pc-note-text');
+        note.value = (settings.userNotes && settings.userNotes[u.id]) || '';
+        pcSaveNote = () => {
+            const notes = Object.assign({}, settings.userNotes || {});
+            const text = note.value.trim();
+            if (text === ((settings.userNotes || {})[u.id] || '')) return;
+            if (text) notes[u.id] = text; else delete notes[u.id];
+            return saveSettings({ userNotes: notes });
+        };
+        note.oninput = () => {
+            // On a pause, not on every keystroke: settings.set is an IPC round trip
+            // and a debounced whole-file write.
+            clearTimeout(pcNoteTimer);
+            pcNoteTimer = setTimeout(() => { pcNoteTimer = 0; pcSaveNote(); }, 400);
+        };
+
         $('profile-card').hidden = false;
         trapFocus($('profile-card'), { label: u.username, initial: $('pc-close') });
     }
 
+    let pcNoteTimer = 0;
+    // Set by openProfileCard, because what it saves depends on whose card is open.
+    let pcSaveNote = null;
+
     function closeProfileCard() {
+        // FLUSHED, not cancelled. A note typed and then closed inside the debounce
+        // window is the one edit in this card that has to survive the dialog, and
+        // re-firing the input handler would only start the timer again.
+        clearTimeout(pcNoteTimer);
+        pcNoteTimer = 0;
+        if (pcSaveNote) pcSaveNote();
         releaseFocus($('profile-card'));
         $('profile-card').hidden = true;
     }
