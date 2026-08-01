@@ -110,3 +110,52 @@ try {
 }
 
 console.log(`  published ${tag} — "${notes.title}" — with ${assets.join(', ')}`);
+
+// ---- tell the apps that are already running --------------------------------
+//
+// Everything above makes the release findable. This makes it found NOW.
+//
+// An installed app checks the feed on a five-minute sweep, which for something
+// somebody has had open all day is five minutes of running a version that has
+// been superseded — and before that it was three HOURS, which in practice meant
+// the update arrived at the next launch and "Check for updates" in Settings was
+// the only way to learn about it sooner.
+//
+// So the last thing a release does is say so: /api/board/release asks the
+// board's realtime object to broadcast a `release` nudge, every connected
+// client answers it by checking its own update feed, and the update pill
+// appears in about a second.
+//
+// BEST EFFORT, ALWAYS. This runs after the release is already live and public,
+// so nothing here can invalidate it — a missing token, an offline box or a 500
+// costs the announcement and nothing else, and the five-minute sweep picks the
+// release up regardless. A release that FAILED because a notification failed
+// would be a strictly worse trade.
+const ANNOUNCE_URL = process.env.SCARMVOICE_ANNOUNCE_URL || 'https://scarmonit.com/api/board/release';
+const token = process.env.SCARMVOICE_RELEASE_TOKEN || '';
+
+(async () => {
+    if (!token) {
+        console.log('  (no SCARMVOICE_RELEASE_TOKEN — running clients will pick this up ' +
+            'on their next check, within five minutes)');
+        return;
+    }
+    try {
+        const res = await fetch(ANNOUNCE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ version: pkg.version }),
+            signal: AbortSignal.timeout(10000)
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || !out.success) {
+            console.warn(`  announce failed (${res.status}${out.error ? ': ' + out.error : ''}) — ` +
+                'running clients will pick this up on their next check');
+            return;
+        }
+        console.log(`  announced v${pkg.version} to ${out.delivered || 0} connected client(s)`);
+    } catch (e) {
+        console.warn('  announce failed (' + ((e && e.message) || 'unknown') + ') — ' +
+            'running clients will pick this up on their next check');
+    }
+})();

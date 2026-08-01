@@ -342,7 +342,13 @@ describe('every colour goes through a token', () => {
         // The white knob on a switch and the white thumb on a slider are the two
         // things that are white in both themes BY DESIGN — they are drawn on the
         // control's own fill, exactly like text on a coloured button.
-        const allowed = /switch-knob|slider-thumb|input:checked|a11y-face|acct-qr|btn-danger-solid/;
+        //
+        // .ub-cta is the same case at banner scale: the update pill is filled in
+        // --slider, and everything inside it (the icon disc, the progress
+        // trough, the dismiss hover, the inverted button) is drawn ON that fill.
+        // A token would have to be "white over blurple", which is what these
+        // already are.
+        const allowed = /switch-knob|slider-thumb|input:checked|a11y-face|acct-qr|btn-danger-solid|ub-cta/;
         expect(offenders.filter((o) => !allowed.test(o))).toEqual([]);
     });
 

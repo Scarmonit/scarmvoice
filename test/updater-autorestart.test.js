@@ -1,14 +1,22 @@
-// Updates install themselves, and now they do it IMMEDIATELY.
+// WHEN a downloaded update installs, and who decides.
 //
-// There used to be a ten-second countdown with a "Not now" under it. Every
-// update therefore waited on somebody either ignoring it or missing it, and an
-// update nobody finished applying is an update that was never shipped. The rule
-// is now: downloaded means installed, and the app comes back on the new version.
+// At STARTUP the gate installs it before the app exists — nothing is open, so
+// there is nothing to interrupt (see update-gate.test.js).
 //
-// Exactly one thing may still hold it, and that one is worth the whole of this
-// file: a call in progress. Restarting mid-conversation drops you out of it,
-// which is a worse interruption than any update is worth — and the wait it
-// creates is bounded by the length of the call.
+// MID-SESSION it waits. It used to restart the app out from under whatever you
+// were doing, which is the exact thing the startup gate exists to avoid, and
+// the banner's only job was to narrate a restart that was already happening.
+// Now the bytes sit on disk, a pill says so at the top of the window, and ONE
+// CLICK installs and restarts. Nothing is lost by waiting: autoInstallOnAppQuit
+// is armed, so closing the app applies it whether the pill was clicked or not.
+//
+// `waitingFor` is how the pill knows what to say:
+//   'user'      ready, nothing in the way, waiting to be clicked
+//   'call'      ready, but a call is running — restarting drops you out of it
+//   'download'  clicked, and the bytes are still coming
+//
+// The countdown that used to sit in front of all this is gone and must not come
+// back; everCountedDown() below is what asserts that.
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { loadMain, resetMainModules } from './helpers/load.js';
 
@@ -48,25 +56,67 @@ afterEach(() => { vi.useRealTimers(); });
 // The countdown is gone, so no state this module ever publishes may carry one.
 const everCountedDown = () => sent.some((s) => typeof s.state.restartIn === 'number');
 
-describe('a downloaded update', () => {
-    it('installs at once, with no timer in front of it', async () => {
+describe('a downloaded update, mid-session', () => {
+    it('waits to be asked rather than restarting the app', async () => {
         fireDownloaded('9.9.9');
+        await vi.advanceTimersByTimeAsync(60_000);
+        // The whole point: it does NOT take the app away.
+        expect(stub().installs.length).toBe(0);
+        const s = updater.getState();
+        expect(s.status).toBe('ready');
+        expect(s.version).toBe('9.9.9');
+        expect(s.waitingFor).toBe('user');
+        expect(everCountedDown()).toBe(false);
+    });
+
+    it('installs on one click, and comes back on the new version', async () => {
+        fireDownloaded('9.9.9');
+        await flush();
+        updater.installNow();
         await flush();
         expect(stub().installs.length).toBe(1);
         // isSilent + isForceRunAfter: install quietly, come back up on the new
         // version rather than leaving the user staring at a closed app.
         expect(stub().installs[0]).toMatchObject({ isSilent: true, isForceRunAfter: true });
-        expect(everCountedDown()).toBe(false);
     });
 
-    it('cannot be talked out of it', async () => {
-        // Both of these used to hold the restart. Neither is a decision any more,
-        // and the IPC surface keeps them only so an older renderer still resolves.
+    it('keeps the two dead controls answering, without reviving them', async () => {
+        // Both of these used to hold a restart. Neither is a decision any more,
+        // and the IPC surface keeps them only so an older renderer still
+        // resolves — but neither may install anything by itself either.
         expect(updater.postpone()).toMatchObject({ ok: false, forced: true });
+        fireDownloaded('9.9.9');
+        await flush();
         updater.setAuto(false);
+        await flush();
+        expect(stub().installs.length).toBe(0);
+        expect(updater.getState().waitingFor).toBe('user');
+    });
+});
+
+describe('a click before the download has finished', () => {
+    it('is remembered, so one click stays one click', async () => {
+        // The pill appears as soon as an update is AVAILABLE, and a click then
+        // means what it means ten seconds later. Rather than a disabled button
+        // and a second press, the intent is held and acted on when the bytes
+        // land.
+        const r = updater.installNow();
+        expect(r).toMatchObject({ ok: true, pending: true });
+        expect(stub().installs.length).toBe(0);
+        expect(updater.getState().waitingFor).toBe('download');
+
         fireDownloaded('9.9.9');
         await flush();
         expect(stub().installs.length).toBe(1);
+    });
+
+    it('does not restart somebody who never asked', async () => {
+        // The mirror of the test above, and the reason it is worth having: an
+        // update that downloads on its own must not inherit a click that was
+        // never made.
+        fireDownloaded('9.9.9');
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(stub().installs.length).toBe(0);
     });
 });
 
@@ -83,13 +133,32 @@ describe('a call in progress', () => {
         expect(everCountedDown()).toBe(false);
     });
 
-    it('lets it through the moment the call ends', async () => {
+    it('offers it the moment the call ends, without restarting by itself', async () => {
         updater.setBusy(true);
         fireDownloaded('9.9.9');
         await flush();
         expect(stub().installs.length).toBe(0);
 
         updater.setBusy(false);
+        await vi.advanceTimersByTimeAsync(60_000);
+        // The call was the only thing in the way, so the pill stops blaming it —
+        // but the click is still the user's to make.
+        expect(stub().installs.length).toBe(0);
+        expect(updater.getState().waitingFor).toBe('user');
+    });
+
+    it('lets the person in the call overrule it', async () => {
+        // The pill says "Restart now" during a call, and it means it. Nothing
+        // else in the app may restart through a call — but somebody who reads
+        // "your call will end" and presses it anyway has made the one decision
+        // that is genuinely theirs, and refusing it would be a button that lies.
+        updater.setBusy(true);
+        fireDownloaded('9.9.9');
+        await flush();
+        expect(stub().installs.length).toBe(0);   // nothing automatic, ever
+        expect(updater.getState().waitingFor).toBe('call');
+
+        updater.installNow();
         await flush();
         expect(stub().installs.length).toBe(1);
     });

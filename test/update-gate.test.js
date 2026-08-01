@@ -188,22 +188,40 @@ describe('the launch check behind the window', () => {
         await verdict;
         updater.checkOnLaunch();
         const asked = stub().checks;
-        await flush(3 * 60 * 60 * 1000 + 1000);
+        // Five minutes, not the three HOURS this used to be. An app somebody
+        // leaves open all day should not be finding out about a release most of
+        // a working day late — and this is only the fallback anyway: a release
+        // pushes a `release` nudge down the realtime socket and the renderer
+        // turns that straight into a check.
+        await flush(5 * 60 * 1000 + 1000);
         expect(stub().checks).toBeGreaterThan(asked);
     });
 });
 
-describe('a mid-session update is unaffected', () => {
-    it('still installs itself when no gate is open', async () => {
-        // The gate is a startup thing. Everything the app already did about an
-        // update arriving hours into a session has to keep working.
+// The gate is a STARTUP thing, and the two halves answer differently on
+// purpose. Before the app exists there is nothing to interrupt, so it installs.
+// Once the app is up there is a person in the middle of something, so it waits
+// and offers — which is the same argument the gate itself is built on, applied
+// to the other end of the session. See updater-autorestart.test.js.
+describe('a mid-session update, with no gate open', () => {
+    it('does NOT install itself', async () => {
         updater.startDownload();
         fire('update-downloaded', { version: '9.9.9', releaseNotes: '' });
+        await flush();
+        expect(stub().installs.length).toBe(0);
+        expect(updater.getState().waitingFor).toBe('user');
+    });
+
+    it('installs when it is asked to', async () => {
+        updater.startDownload();
+        fire('update-downloaded', { version: '9.9.9', releaseNotes: '' });
+        await flush();
+        updater.installNow();
         await flush();
         expect(stub().installs.length).toBe(1);
     });
 
-    it('and still waits for a call to end', async () => {
+    it('says a call is what it is waiting for, while one is running', async () => {
         updater.setBusy(true);
         updater.startDownload();
         fire('update-downloaded', { version: '9.9.9', releaseNotes: '' });
@@ -213,7 +231,9 @@ describe('a mid-session update is unaffected', () => {
 
         updater.setBusy(false);
         await flush();
-        expect(stub().installs.length).toBe(1);
+        // Still nothing automatic — but it stops blaming a call that has ended.
+        expect(stub().installs.length).toBe(0);
+        expect(updater.getState().waitingFor).toBe('user');
     });
 });
 
@@ -262,7 +282,11 @@ describe('an update that is already downloaded', () => {
         expect(updater.getState().status).toBe('ready');
     });
 
-    it('still installs when the call ends', async () => {
+    it('is still installable after the call ends', async () => {
+        // The point of this block: a later 'checking' or 'error' event must not
+        // disarm an update whose bytes are already on disk. What proves it is
+        // that the install still WORKS afterwards — it just needs the click now
+        // rather than happening by itself.
         await held();
         fire('checking-for-update');
         fire('error', new Error('feed unreachable'));
@@ -270,7 +294,11 @@ describe('an update that is already downloaded', () => {
 
         updater.setBusy(false);
         await flush();
+        expect(updater.getState().status).toBe('ready');
+        expect(updater.getState().waitingFor).toBe('user');
 
+        updater.installNow();
+        await flush();
         expect(stub().installs).toHaveLength(1);
     });
 

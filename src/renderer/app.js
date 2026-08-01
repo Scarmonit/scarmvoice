@@ -6660,39 +6660,57 @@
 
     function hasNotes(s) { return !!(s && s.noteBlocks && s.noteBlocks.length); }
 
+    // ONE headline across every state that has something to click: "Update
+    // Available". A pill that renames itself between "Update available",
+    // "Downloading update" and "Update ready" is three notifications for one
+    // event, and only the last of them was ever pressable.
+    //
+    // The subline is where the detail goes, and the button always says what the
+    // click DOES, because the click means the same thing in all three: get this
+    // version. installNow() answers for a download still in flight (see
+    // updater.js), so there is no state in here where the pill is on screen and
+    // pressing it is the wrong move.
     const UPDATE_COPY = {
-        // `available` is two different situations wearing one name: an update
-        // whose download is about to start, and one whose download FAILED and
-        // fell back here. Saying "downloading" for the second was a lie the app
-        // told for up to three hours, until the periodic recheck happened to
-        // pick it up again — with the captured error never shown to anyone.
+        // `available` is two situations wearing one name: an update whose
+        // download is about to start, and one whose download FAILED and fell
+        // back here. Both are clickable; they differ in what they admit to.
         available: (s) => (s.stalled ? {
-            title: 'Update download failed',
-            sub: 'ScarmVoice ' + (s.version || '') + (s.error ? ' — ' + s.error : ''),
-            action: 'Try again'
+            title: 'Update Available',
+            sub: 'ScarmVoice ' + (s.version || '') + ' — download failed' + (s.error ? ': ' + s.error : ''),
+            action: 'Try again',
+            cta: true
         } : {
-            title: 'Update available',
-            sub: 'ScarmVoice ' + (s.version || '') + ' — downloading',
-            action: 'Downloading…'
+            title: 'Update Available',
+            sub: 'ScarmVoice ' + (s.version || ''),
+            action: s.waitingFor === 'download' ? 'Updating…' : 'Restart & Update',
+            cta: true
         }),
         downloading: (s) => ({
-            title: 'Downloading update',
-            sub: 'ScarmVoice ' + (s.version || '') + ' \u00b7 ' + (s.progress || 0) + '%',
-            action: 'Downloading\u2026'
+            title: 'Update Available',
+            sub: 'ScarmVoice ' + (s.version || '') + ' \u00b7 ' + (s.progress || 0) + '% downloaded',
+            action: s.waitingFor === 'download' ? 'Updating…' : 'Restart & Update',
+            cta: true
         }),
-        // Nothing here asks permission, and nothing here offers a delay: an
-        // update that is ready installs itself and the app comes back on the new
-        // version. This card is a statement of what is happening, and it is
-        // normally on screen for about a second.
         ready: (s) => {
             const v = 'ScarmVoice ' + (s.version || '');
-            // The one thing that can hold it: a call. Then the button is real,
-            // because restarting now is a choice only the person in the call
-            // can make.
+            // The one thing that can hold it: a call. Restarting drops you out
+            // of it, so the pill says what it is waiting for — and stays
+            // pressable, because restarting now is a choice only the person in
+            // the call can make.
             if (s.waitingFor === 'call') {
-                return { title: 'Update ready', sub: v + ' — installs when your call ends', action: 'Restart now' };
+                return {
+                    title: 'Update Available',
+                    sub: v + ' — ready, and waiting for your call to end',
+                    action: 'Restart now', cta: true
+                };
             }
-            return { title: 'Restarting to update', sub: v, action: 'Restarting…' };
+            // The normal mid-session case: downloaded, waiting to be clicked.
+            // It no longer restarts on its own — see scheduleAutoRestart.
+            return {
+                title: 'Update Available',
+                sub: v + ' — ready to install',
+                action: 'Restart & Update', cta: true
+            };
         }
     };
 
@@ -6731,12 +6749,15 @@
         $('ub-sub').textContent = c.sub;
         $('ub-sub').title = c.sub;
         $('ub-action').textContent = c.action;
-        // Pressable in the two cases where there is still something to do: an
-        // update held back by a call, and one whose download died and needs
-        // starting again. Everything else is narration.
-        const heldByCall = updateState.status === 'ready' && updateState.waitingFor === 'call';
-        const stalled = updateState.status === 'available' && !!updateState.stalled;
-        $('ub-action').disabled = !heldByCall && !stalled;
+        // Pressable in every state this pill is shown in. It used to be enabled
+        // only for an update held back by a call or one whose download had died
+        // — everything else was narration of a restart happening on its own,
+        // which is what this change replaces. The one moment it goes flat is
+        // after the click, while the install is on its way.
+        $('ub-action').disabled = updateState.waitingFor === 'download';
+        // A CALL TO ACTION, not a status line: filled, accented, and the whole
+        // pill is the target. This is the state the user is meant to notice.
+        $('update-banner').classList.toggle('ub-cta', !!c.cta);
         $('ub-progress').hidden = updateState.status !== 'downloading';
         if (updateState.status === 'downloading') {
             $('ub-bar').style.width = (updateState.progress || 0) + '%';
@@ -6745,21 +6766,25 @@
         showBanner();
     }
 
+    // ONE action, whatever the state. install() answers for an update that has
+    // not finished downloading by remembering the click and acting on it when
+    // the bytes land (see installNow in updater.js), so this does not have to
+    // know — and the user does not have to press anything twice.
     function applyUpdateAction() {
-        // "Restart now" on an update a call is holding back — everywhere else
-        // the app has already restarted itself.
-        if (updateState.status === 'ready') { L.update.install(); return; }
-        // …and "Download update", which the release-notes modal offers whenever
-        // the state is `available`. That button had no implementation at all:
-        // it closed the modal and returned here, which did nothing, so the one
-        // state it exists for — a download that errored back to `available`
-        // with nothing retrying it for three hours — had a visible, enabled
-        // control that could not start the download the IPC was already wired
-        // for.
-        if (updateState.status === 'available') L.update.download();
+        if (!UPDATE_COPY[updateState.status]) return;
+        L.update.install();
     }
 
     $('ub-action').addEventListener('click', applyUpdateAction);
+    // The whole pill is the target, not just the button on the end of it. A
+    // 90px button inside a 620px bar is a small thing to hit for the one action
+    // the bar exists to offer — except on the two controls that mean something
+    // else, which stop the click here.
+    $('update-banner').addEventListener('click', (e) => {
+        if (!$('update-banner').classList.contains('ub-cta')) return;
+        if (e.target.closest('#ub-dismiss, #ub-notes-toggle, #ub-action')) return;
+        applyUpdateAction();
+    });
     $('ub-dismiss').addEventListener('click', () => {
         dismissed = { version: updateVersionKey(updateState), ready: updateState.status === 'ready' };
         hideBanner();
@@ -7161,6 +7186,24 @@
                 // branch per variety of change.
                 loadDmThreads();
                 if (dmOpen && m.thread === dmOpen.id) loadDmMessages(true);
+                break;
+            case 'release':
+                // A NEW VERSION HAS JUST GONE LIVE.
+                //
+                // Broadcast by the board's realtime object the moment
+                // publish-release.js flips the GitHub release out of draft, so
+                // an app that has been open all day learns about it in about a
+                // second instead of on the next five-minute sweep. The event
+                // carries the version, but nothing here trusts it — it is a
+                // nudge, and electron-updater's own feed is the authority on
+                // what is actually installable.
+                //
+                // Ignored once there is already an update in hand: a second
+                // check would restart a download that is running, and the pill
+                // is on screen either way.
+                if (updateState.status !== 'downloading' && updateState.status !== 'ready') {
+                    L.update.check();
+                }
                 break;
             case 'voiceTakeover':
                 // The same account joined voice somewhere else — one voice
@@ -7643,6 +7686,13 @@
         if (account) {
             loadDmThreads();
             if (dmOpen) loadDmMessages(true);
+        }
+        // A resync means the app was away — restored from the tray, woken from
+        // sleep, or reconnected after the socket died. Any of those is a window
+        // in which a `release` broadcast went out with nobody here to hear it,
+        // and it is exactly the moment somebody is looking at the app again.
+        if (updateState.status !== 'downloading' && updateState.status !== 'ready') {
+            L.update.check();
         }
     });
 

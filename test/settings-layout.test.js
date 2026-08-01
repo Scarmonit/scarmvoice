@@ -97,9 +97,21 @@ describe('settings durability', () => {
         // and then force-kills, and a force-kill runs no 'will-quit'. That is
         // how a setting changed shortly before an update came back as its
         // default.
+        //
+        // Asserted by ORDER rather than by "within the first 900 characters of
+        // the function", which is what this used to do: installNow grew an
+        // early return for a click that arrives before the download has
+        // finished, and the flush — still correct, still on the path that
+        // actually quits — slid past the window and failed a test about
+        // something else entirely.
         const at = updaterjs.indexOf('function installNow');
         expect(at).toBeGreaterThan(-1);
-        expect(updaterjs.slice(at, at + 900)).toContain('store.flush()');
+        const body = updaterjs.slice(at);
+        const flush = body.indexOf('store.flush()');
+        const quit = body.indexOf('quitAndInstall');
+        expect(flush).toBeGreaterThan(-1);
+        expect(quit).toBeGreaterThan(-1);
+        expect(flush).toBeLessThan(quit);
     });
 
     it('flushes on the way out and on the way to the background', () => {

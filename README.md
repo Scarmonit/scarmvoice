@@ -240,11 +240,17 @@ them**
   the app starts**: launching checks the feed first, and if there is an update it
   is downloaded and installed behind a small "Updating…" window, then the app
   opens on the new version. Nothing signs in, connects or opens a microphone
-  until that has happened. An update that appears mid-session still installs
-  itself as before (waiting only for a call to end), with a non-blocking banner
-  carrying the version, release notes and progress. Downloads are
-  **differential** (only changed blocks), so a point release is a ~1 MB fetch,
-  not the full installer
+  until that has happened. Downloads are **differential** (only changed blocks),
+  so a point release is a ~1 MB fetch, not the full installer
+- **An update published while you are using it announces itself** — an **Update
+  Available** pill appears at the top of the window within a second or two, with
+  no *Check for Updates* to press. Publishing a release broadcasts down the
+  board's realtime socket and every open client checks at once; a five-minute
+  sweep (and a check on every wake) covers anyone who was not listening. One
+  click installs and reopens on the new version, and clicking while it is still
+  downloading is remembered rather than refused. Nothing restarts without being
+  asked — see [Telling a running app about a
+  release](#telling-a-running-app-about-a-release)
 - **Launch on system startup** (off by default) with a companion **Start
   minimized to the tray**, driven by `app.setLoginItemSettings`; the toggle
   reads the real OS state on open, so it's correct even if changed elsewhere
@@ -1062,6 +1068,70 @@ in a conversation is no longer the newest *root*. Opening a conversation marks
 it read up to `MAX(id)` rather than to the last row on the page — otherwise a
 thread reply, which always has a higher id, would leave a badge that nothing in
 the column could clear.
+
+### Telling a running app about a release
+
+The startup gate below answers "an update exists when you launch". This answers
+the other half: an update published while somebody is *using* the app.
+
+It used to be answered badly in both directions at once. Detection was a
+three-hour timer, so in practice the update arrived at the next launch and the
+*Check for Updates* button in Settings was the only way to learn about it
+sooner. And then, having taken three hours to notice, it **restarted the app by
+itself** — which is precisely what the startup gate exists to avoid, applied at
+the worst possible moment instead of the best one.
+
+**Detection is a push, with a poll behind it.** Publishing a release ends with:
+
+```
+scripts/publish-release.js
+  -> POST /api/board/release        (bearer RELEASE_TOKEN)
+  -> BoardRoom /announce            (broadcast, one allowlisted event type)
+  -> { t: 'release', version } to every open socket
+  -> each client calls its own updater.checkNow()
+```
+
+The nudge is **not evidence**. No client installs anything because the socket
+said so — it hands the nudge to electron-updater, which fetches `latest.yml`
+from the release and is the only thing that decides what is installable. So the
+worst a forged call achieves is making some clients re-check a feed they were
+going to re-check anyway. The token is therefore a rate-limiting measure rather
+than a security boundary, and it is still required, because an unauthenticated
+fan-out to every open socket is a free amplifier.
+
+The announce is **best effort, always**: it runs after the release is already
+live, so a missing token, an offline box or a 500 costs the announcement and
+nothing else. Behind it, `RECHECK_MS` is five minutes (down from three hours),
+and a check also runs on every resync — restored from the tray, woken from
+sleep, socket reconnected — which is exactly when a broadcast was missed.
+
+**Applying it is a click.** `scheduleAutoRestart()` no longer installs
+mid-session; it emits `waitingFor` and lets the pill offer:
+
+| `waitingFor` | what it means |
+|---|---|
+| `'user'` | downloaded, nothing in the way, waiting to be clicked |
+| `'call'` | downloaded, but a call is running — restarting would drop you out of it |
+| `'download'` | clicked, bytes still coming |
+
+`installNow()` answers for all three, which is what makes it one click rather
+than one-click-and-then-another: called before the download finishes it sets
+`installWhenReady` and `update-downloaded` acts on it. A click during a call
+**does** restart — the pill says *Restart now*, and refusing it would be a
+button that lies.
+
+Ignoring the pill stays safe: `autoInstallOnAppQuit` is armed at `load()`, so
+closing the app applies the update whether the pill was ever clicked or not.
+And updates found at **launch** are untouched — the gate installs those before
+the window exists, because there is nothing to interrupt yet.
+
+The pill itself is one headline, *Update Available*, across every state that has
+something to click. It used to rename itself between "Update available",
+"Downloading update" and "Update ready" — three notifications for one event, of
+which only the last was pressable. Filled in `--slider` and stretched across the
+top rather than the quiet float-coloured card the app narrates with, because
+this is the one state that is meant to be noticed, and the whole bar is the
+click target.
 
 ### One search, two places
 

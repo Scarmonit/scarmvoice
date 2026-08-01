@@ -404,38 +404,68 @@ function parseNotes(raw) {
 
 // ---- applying it --------------------------------------------------------
 
-const RECHECK_MS = 3 * 60 * 60 * 1000;   // a long session should still see updates
+// THE FALLBACK, not the mechanism. A release now pushes a `release` event down
+// the board's realtime socket the moment it goes live (see scripts/
+// publish-release.js -> /api/board/release -> the BoardRoom broadcast), and the
+// renderer turns that straight into checkNow() — so the normal case is seconds,
+// not minutes.
+//
+// This is what covers the cases the push cannot: a client that was asleep,
+// offline or not signed in when the broadcast went out, a socket on the HTTP
+// fallback, and a release published by something that never called the endpoint.
+// It was three HOURS, which for an app people leave open all day meant the
+// update usually arrived at the next launch and the "check for updates" button
+// in Settings was the only way to find out sooner.
+//
+// Five minutes is cheap: the feed is a ~400-byte latest.yml served from release
+// storage, not a GitHub API call, so this is not rate-limited and does not
+// count against anything.
+const RECHECK_MS = 5 * 60 * 1000;
 
 let busy = false;                // in a call — never restart through one
 let recheck = null;              // periodic check timer
+// "The user has asked for this update." Set by installNow() when the bytes are
+// not down yet, so one click means one click: the install runs by itself the
+// moment the download finishes rather than needing a second press.
+let installWhenReady = false;
 
 // Kept as a no-op shape so the two callers below read the same as before.
 function clearCountdown() { /* there is no countdown any more */ }
 
-// Apply a downloaded update. There is no longer a delay in front of this.
+// A downloaded update, MID-SESSION. (At startup the gate installs it before the
+// app exists — see gateInstall — and never reaches here.)
 //
-// It used to count ten seconds down with a "Not now" button under it, which
-// meant every update waited on someone either ignoring it or missing it. An
-// update that has already downloaded is not a proposal — the app is going to
-// restart into it either way, and doing that at once is both faster and more
-// honest than a timer that mostly runs out anyway.
+// This used to call installNow() outright: the app restarted itself out from
+// under whatever you were doing, and the banner's job was to narrate a restart
+// that was already happening. The startup gate exists precisely because that is
+// the wrong moment to do it — by then you are signed in, in a channel, possibly
+// mid-sentence — and the same argument applies to an update that lands an hour
+// into a session.
 //
-// The ONE thing still allowed to hold it back is a call in progress. Restarting
-// mid-conversation drops you out of it, which is a worse interruption than any
-// update is worth, and the wait is bounded by the length of the call — setBusy()
-// applies it the moment the call ends.
+// So mid-session the update WAITS, with the bytes already on disk, and says so
+// on a pill at the top of the window. One click installs and restarts. Nothing
+// is lost by waiting: autoInstallOnAppQuit is armed at load(), so closing the
+// app applies it regardless of whether the pill was ever clicked.
+//
+// `waitingFor` says WHO it is waiting for, which is what the pill reads to
+// decide what to offer:
+//   'call'  a call is in progress — restarting drops you out of it, and that is
+//           a worse interruption than any update is worth. setBusy() comes back
+//           here the moment the call ends.
+//   'user'  nothing is in the way; it is waiting to be clicked.
 function scheduleAutoRestart() {
     if (state.status !== 'ready') return;
 
-    if (busy) {
-        // Not an error and not a failure — just later. Saying so is better than
-        // a silent non-event that looks like the update stalled.
-        emit({ restartIn: null, waitingFor: 'call' });
+    // Asked for while it was still downloading: that click has already been
+    // made and does not need making again.
+    if (installWhenReady && !busy) {
+        installWhenReady = false;
+        emit({ restartIn: null, waitingFor: null });
+        installNow();
         return;
     }
 
-    emit({ restartIn: null, waitingFor: null });
-    installNow();
+    emit({ restartIn: null, waitingFor: busy ? 'call' : 'user' });
 }
 
 // There is no longer anything to postpone: a ready update installs at once,
@@ -450,7 +480,10 @@ function postpone() {
 function setBusy(inVoice) {
     const was = busy;
     busy = !!inVoice;
-    if (was && !busy) scheduleAutoRestart();   // call ended — resume
+    // Call ended. If the update was asked for while the call was running,
+    // scheduleAutoRestart installs it now; otherwise it flips 'call' to 'user'
+    // and the pill stops saying it is waiting on something that has finished.
+    if (was && !busy) scheduleAutoRestart();
     else if (!was && busy) { clearCountdown(); if (state.status === 'ready') emit({ restartIn: null, waitingFor: 'call' }); }
 }
 
@@ -500,10 +533,26 @@ function startDownload() {
     return { ok: true };
 }
 
-// Quit and install now (user clicked Restart to update).
+// Quit and install now (the user clicked the update pill).
+//
+// It also answers for an update that has NOT finished downloading, because the
+// pill appears the moment one is available and a click at that moment means the
+// same thing it means ten seconds later. Rather than a disabled button and a
+// second press once the bytes land, the intent is remembered and
+// update-downloaded acts on it — one click is one click.
 function installNow() {
     const u = load();
     if (!u) return { ok: false };
+    if (state.status !== 'ready') {
+        installWhenReady = true;
+        // autoDownload usually has this running already; this covers a download
+        // that errored back to 'available' and is sitting there stalled.
+        startDownload();
+        // Said out loud so the pill can show it is working rather than looking
+        // like a click that did nothing.
+        emit({ waitingFor: 'download' });
+        return { ok: true, pending: true };
+    }
     // Settings are written on a 250ms debounce, and the NSIS updater gives the
     // running app about a second before `taskkill`, then force-kills it — and a
     // force-kill runs no 'will-quit', so the pending write is simply lost. That

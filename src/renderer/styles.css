@@ -469,6 +469,48 @@ button { font-family: inherit; background: none; border: 0; }
 #update-banner[hidden] { display: none; }
 #update-banner.leaving { animation: ubOut .2s ease-in both; }
 
+/* THE CALL TO ACTION.
+   An update waiting to be clicked is not a status line, and the card above
+   reads as one: a float-coloured panel with a hairline, which sits quietly at
+   the top of a dark window and is easy to scroll past without registering.
+   Filled in the app's own accent, full width across the top, it is the one
+   thing on screen that is a different colour — which is the whole job.
+
+   The card shape is kept for anything that is genuinely narration; only the
+   states with something to press take this. */
+#update-banner.ub-cta {
+  align-self: stretch;
+  width: auto;
+  margin: 8px 12px 0;
+  background: var(--slider);
+  border-color: transparent;
+  color: #fff;
+  cursor: pointer;
+  /* A tint of its own colour rather than the generic drop shadow, so it reads
+     as lit rather than as raised. */
+  box-shadow: 0 4px 14px -6px var(--slider);
+}
+#update-banner.ub-cta:hover { filter: brightness(1.06); }
+/* Everything inside inherits the fill, so the muted/accent tokens the card uses
+   would be near-invisible on it. */
+#update-banner.ub-cta .ub-icon { background: rgba(255, 255, 255, .18); color: #fff; }
+#update-banner.ub-cta .ub-title { color: #fff; font-size: 14px; }
+#update-banner.ub-cta .ub-sub { color: rgba(255, 255, 255, .78); }
+#update-banner.ub-cta .ub-progress { background: rgba(255, 255, 255, .22); }
+#update-banner.ub-cta .ub-progress i { background: #fff; }
+#update-banner.ub-cta .ub-notes-toggle { color: rgba(255, 255, 255, .8); text-decoration-color: rgba(255, 255, 255, .4); }
+#update-banner.ub-cta .ub-notes-toggle:hover { color: #fff; }
+#update-banner.ub-cta .ub-x { color: rgba(255, 255, 255, .7); }
+#update-banner.ub-cta .ub-x:hover { background: rgba(255, 255, 255, .16); color: #fff; }
+/* The button inverts: white on the accent, which is the strongest contrast
+   available and marks it as the thing to press. */
+#update-banner.ub-cta .ub-btn {
+  background: #fff; border-color: transparent; color: var(--slider);
+  font-weight: 700;
+}
+#update-banner.ub-cta .ub-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .88); }
+#update-banner.ub-cta .ub-btn:disabled { background: rgba(255, 255, 255, .45); color: var(--slider); }
+
 @keyframes ubIn {
   from { opacity: 0; transform: translateY(-14px) scale(.98); }
   to   { opacity: 1; transform: none; }
