@@ -14224,17 +14224,62 @@
         // answers this without a round trip; when neither knows, say so rather
         // than guessing the commoner case.
         const known = dmDirectory[u.id] || roster.find((r) => r.id === u.id) || {};
-        const rows = [
-            ['Username', u.username],
-            ['Account id', String(u.id)],
-            ['Role', known.role ? (known.role === 'admin' ? 'Admin' : 'Member') : 'Unknown']
+        const status = statusForUser(u.id);
+        const role = known.role
+            ? known.role.charAt(0).toUpperCase() + known.role.slice(1)
+            : 'Unknown';
+
+        $('pc-banner').style.cssText = bannerStyle(u.username);
+        $('pc-face').innerHTML =
+            `<span class="av${avatarCls(u.id)}" style="${avatarStyle(u.username)}">` +
+            `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>` +
+            `<i class="presence${statusDot(status)}" aria-hidden="true"></i>`;
+        wireAvatarFallback($('pc-face'));
+        $('pc-name').textContent = u.username;
+        $('pc-handle').textContent = u.username;
+
+        // Only what we actually know, as label over value — the pattern the side
+        // panel already uses. Three labelled values joined with spaces was a debug
+        // string, and it told you less than the panel that opened it.
+        const facts = [
+            ['Status', STATUS_LABEL[status] || 'Unknown'],
+            ['Role on this board', role],
+            ['Account', 'Board member #' + u.id]
         ];
-        openDialog({
-            title: u.username,
-            message: rows.map((r) => r[0] + ': ' + r[1]).join('\n'),
-            ok: 'Close',
-            withInput: false
-        });
+        $('pc-facts').innerHTML = facts.map(([k, v]) =>
+            `<div class="pc-fact"><div class="pc-fact-k">${esc(k)}</div>` +
+            `<div class="pc-fact-v">${esc(v)}</div></div>`).join('');
+
+        // The prominent button DOES something. Messaging yourself is not a thing,
+        // so on your own card it is dropped rather than shown and refused.
+        const mine = !!(account && u.id === account.id);
+        const msg = $('pc-message');
+        msg.hidden = mine;
+        msg.onclick = () => { closeProfileCard(); messageUser(u.id); };
+
+        // Block is install-scoped — see crownFor and the conversation intro — so
+        // it appears only when there is an install to act on.
+        const cid = mine ? '' : clientForUser(u.id);
+        const block = $('pc-block');
+        block.hidden = !cid;
+        if (cid) {
+            const blocked = isBlocked(cid);
+            block.innerHTML = I(blocked ? 'check' : 'ban', 'ico');
+            block.setAttribute('data-tip', blocked ? 'Unblock' : 'Block');
+            block.setAttribute('aria-label', blocked ? 'Unblock' : 'Block');
+            block.onclick = () => {
+                closeProfileCard();
+                if (blocked) unblockPerson(cid); else blockPerson(cid, u.username);
+            };
+        }
+
+        $('profile-card').hidden = false;
+        trapFocus($('profile-card'), { label: u.username, initial: $('pc-close') });
+    }
+
+    function closeProfileCard() {
+        releaseFocus($('profile-card'));
+        $('profile-card').hidden = true;
     }
 
     // Direct messages as a PLACE, not a category inside a server's channel
@@ -14877,6 +14922,19 @@
         if (cur._pickGo) cur._pickGo();
     });
     $('dm-picker').addEventListener('click', (e) => { if (e.target === $('dm-picker')) closeDmPicker(); });
+
+    // The profile card closes the three ways every overlay in here does: its own
+    // ✕, the backdrop, and Escape.
+    $('pc-close').addEventListener('click', closeProfileCard);
+    $('profile-card').addEventListener('click', (e) => {
+        if (e.target === $('profile-card')) closeProfileCard();
+    });
+    $('profile-card').addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeProfileCard();
+    });
 
     $('dm-picker-ok').addEventListener('click', async () => {
         const users = [...dmPick.chosen];

@@ -3231,9 +3231,77 @@ body.resizing-pane { user-select: none; }
   background: var(--input); border: 0; color: var(--text);
 }
 .dialog-actions button:hover { background: var(--elev); }
-.dialog-actions #dialog-ok { background: var(--accent); border: 0; color: var(--on-accent); }
-.dialog-actions #dialog-ok:hover { background: var(--accent-hi); }
+/* BLURPLE, like .btn-primary — not teal. A filled primary button is a control,
+   and the app had two colours for one job: the Threads popover's Create and every
+   radio and slider in settings are --slider, while this one was --accent. The
+   accent stays what it is everywhere else: links, active state and the brand. */
+.dialog-actions #dialog-ok { background: var(--slider); border: 0; color: #fff; }
+.dialog-actions #dialog-ok:hover { filter: brightness(1.1); }
 .dialog-actions #dialog-ok.danger { background: var(--danger); color: #fff; }
+
+/* ---------- the full profile card ---------------------------------------
+   A CONTENT VIEW, not a decision: a banner, a face over its lower edge, the name
+   as the subject rather than as a dialog title, and label-over-value facts — the
+   same pattern the side panel already uses and this did not. It was the confirm
+   dialog reused, which is why it had a Cancel and a Close and no action at all. */
+.pc-card {
+  position: relative; width: min(520px, 92vw); max-height: 86vh; overflow-y: auto;
+  background: var(--float); border: 1px solid var(--float-rule);
+  border-radius: 12px; box-shadow: var(--shadow-lg);
+}
+.pc-banner { height: 120px; border-radius: 12px 12px 0 0; }
+/* Over the banner's lower edge, cut out of the card — the same construction the
+   side panel's face uses, one size up. */
+.pc-face {
+  position: absolute; top: 62px; left: 20px;
+  width: 108px; height: 108px; border-radius: 50%;
+  border: 7px solid var(--float); background: var(--float);
+}
+.pc-face .av {
+  width: 94px; height: 94px; border-radius: 50%; font-size: 34px;
+  display: grid; place-items: center; font-weight: 800; color: var(--on-accent);
+}
+.pc-face .presence {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--online); border: 6px solid var(--float);
+}
+.pc-face .presence.idle    { background: var(--idle); }
+.pc-face .presence.dnd     { background: var(--danger); }
+.pc-face .presence.offline { background: var(--offline); }
+.pc-body { padding: 62px 20px 20px; }
+/* THE SUBJECT of the view. It was a 12px dialog title, which made the person's
+   name the smallest thing in their own profile. */
+.pc-name {
+  margin: 0; font-size: 32px; line-height: 1.1; font-weight: 700;
+  letter-spacing: -.02em; color: var(--text-strong);
+  overflow-wrap: break-word;
+}
+.pc-handle { margin-top: 2px; font-size: 15px; font-weight: 500; color: var(--author); }
+.pc-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.pc-msg { height: 32px; padding: 0 18px; border-radius: 4px; }
+.pc-icon {
+  width: 32px; height: 32px; flex: 0 0 32px; border-radius: 4px;
+  display: grid; place-items: center; cursor: pointer;
+  background: var(--ctl); border: 1px solid var(--ctl-line); color: var(--text);
+}
+.pc-icon:hover { background: var(--ctl-hover); border-color: var(--ctl-line-hover); }
+.pc-icon .ico { width: 17px; height: 17px; }
+/* LABEL OVER VALUE, the way the side panel does it — not three labelled values
+   run together on one line, which is a debug string with spaces in it. */
+.pc-facts { margin-top: 20px; display: flex; flex-direction: column; gap: 14px; }
+.pc-fact-k {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--muted);
+}
+.pc-fact-v { margin-top: 3px; font-size: 15px; color: var(--msg-text); }
+.pc-x {
+  position: absolute; top: 12px; right: 12px; z-index: 1;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  background: rgba(0, 0, 0, .38); color: #fff;
+}
+.pc-x:hover { background: rgba(0, 0, 0, .55); }
+.pc-x .ico { width: 17px; height: 17px; }
 
 /* ---------- per-participant popover ------------------------------------
    Same floating surface as .ctx-menu — shade, radius, border, shadow — with a

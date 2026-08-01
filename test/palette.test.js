@@ -217,6 +217,37 @@ describe('the direct-messages place', () => {
         expect(css).toMatch(/\.dm-pick-head \{/);
     });
 
+    it('gives the full profile a view of its own, not the confirm dialog', () => {
+        const app = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+        // It WAS openDialog({ title, message, ok: 'Close' }) — a shell whose shape
+        // is title → body → Cancel/Confirm. That is a decision; a profile is a
+        // thing to look at, and it showed strictly less than the side panel that
+        // launched it plus an account id.
+        const fn = app.slice(app.indexOf('function openProfileCard'), app.indexOf('function closeProfileCard'));
+        expect(fn).not.toMatch(/openDialog\(/);
+        expect(fn).toMatch(/pc-name'\)\.textContent = u\.username/);
+        // Label OVER value, the way the side panel does it.
+        expect(fn).toMatch(/pc-fact-k/);
+        expect(fn).toMatch(/pc-fact-v/);
+        // The prominent button does something, and it is not a second dismiss.
+        expect(html).toContain('id="pc-message"');
+        expect(fn).toMatch(/messageUser\(u\.id\)/);
+        expect(html).not.toMatch(/id="profile-card"[\s\S]{0,900}>Cancel</);
+        // The name is the SUBJECT of the view, not a 12px dialog title.
+        expect(css).toMatch(/\.pc-name \{[^}]*font-size: 32px/);
+        expect(css).toMatch(/\.pc-banner \{ height: 120px/);
+    });
+
+    it('fills every primary button with one colour', () => {
+        // The app had two: .btn-primary and the Threads popover's Create are
+        // --slider, while the dialog's confirm was --accent — so a filled button
+        // meant blurple on one screen and teal on the next. The accent keeps
+        // everything else: links, active state, the brand.
+        expect(css).toMatch(/\.dialog-actions #dialog-ok \{ background: var\(--slider\)/);
+        expect(css).toMatch(/\.btn-primary \{[^}]*background: var\(--slider\)/);
+    });
+
     it('sizes the profile panel s one button like the reference s', () => {
         expect(css).toMatch(/#dm-prof-full \{[^}]*margin: auto 16px 16px[^}]*height: 40px/);
         expect(css).toMatch(/#dm-prof-full \{[^}]*color: var\(--author\)[^}]*font-size: 15px/);
@@ -256,7 +287,10 @@ describe('every colour goes through a token', () => {
     const isTheme = (sel) => /^:root/.test(sel) || /^html\.(high-contrast|desat)/.test(sel);
     // …and so are the surfaces that are black in BOTH themes: video, the lightbox
     // and the share picker are dark by nature, not by palette.
-    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox/;
+    // …and the controls that sit ON one: a ✕ over somebody's banner needs a dark
+    // plate whatever the theme, because what is behind it is a colour, not a
+    // surface.
+    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox|\.pc-x/;
 
     const relLum = (hexStr) => {
         const h = hexStr.length === 4

@@ -1912,6 +1912,31 @@
 <!-- Start a conversation. One person selected is a DM; several is a group —
      the same picker either way, because "new DM" and "new group" are the same
      decision made at different sizes. -->
+<!-- The full profile. NOT the confirm dialog with a name in its title: that shell
+     is title → body → Cancel/Confirm, which is a decision, and a profile is a
+     thing to look at. It used to render three facts as one concatenated line and
+     offer two buttons that both dismissed it — strictly less than the side panel
+     that launched it, plus an account id. -->
+<div id="profile-card" class="overlay" hidden>
+  <div class="pc-card" role="dialog" aria-modal="true" aria-labelledby="pc-name">
+    <button type="button" class="pc-x" id="pc-close" aria-label="Close">
+      <span class="ico" data-icon="x"></span>
+    </button>
+    <div class="pc-banner" id="pc-banner"></div>
+    <div class="pc-face" id="pc-face"></div>
+    <div class="pc-body">
+      <h2 class="pc-name" id="pc-name"></h2>
+      <div class="pc-handle" id="pc-handle"></div>
+      <!-- The prominent button DOES something. It is where Close used to sit. -->
+      <div class="pc-actions">
+        <button type="button" class="btn-primary pc-msg" id="pc-message">Message</button>
+        <button type="button" class="pc-icon" id="pc-block" data-tip="Block" aria-label="Block"></button>
+      </div>
+      <div class="pc-facts" id="pc-facts"></div>
+    </div>
+  </div>
+</div>
+
 <div id="dm-picker" class="overlay" hidden>
   <!-- The INPUT is the panel, not a field under a heading: this opens on a
        keystroke and the next thing you do is type. The reference sizes its own
