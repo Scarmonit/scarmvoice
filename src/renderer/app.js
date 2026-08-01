@@ -7424,6 +7424,18 @@
         // #login — so left open it paints over the sign-in card and its Tab
         // trap keeps the password field unreachable.
         closeFiltersModal();
+        // The profile card is the same shape of surface and was missed when it
+        // shipped: .overlay, a sibling of #app, focus-trapped, and later in the
+        // document than every one of the above — so a session that expired while
+        // it was open left somebody's face and name over the sign-in form with
+        // Tab confined to it. Worse than the other two, because trapFocus()
+        // early-returns for an element it still holds: the trap was never
+        // released, so every later open of the card silently did no focus
+        // management at all for the rest of the session.
+        //
+        // It also FLUSHES the private note, which is debounced by 400ms — the
+        // one thing on that card the user has typed.
+        closeProfileCard();
         hideTip();
         // A dialog left open never settles its promise, so whatever was
         // awaiting it is abandoned mid-flight rather than cancelled.
@@ -8255,9 +8267,25 @@
         $('row-ptt').style.display = ptt ? '' : 'none';
         const inv = settings.micVolume === undefined ? 1 : Number(settings.micVolume);
         $('set-invol').value = String(Math.round(inv * 100));
-        paintRangeFill($('set-invol'));
-        paintRangeFill($('set-outvol'));
-        paintRangeFill($('set-vad'));
+        // paintSlider, NOT paintRangeFill — these three are IN the settings sheet.
+        //
+        // The two write --fill in different units on purpose, because the two
+        // stylesheets read it differently: .ap-slider (the audio popovers) paints
+        // two background layers from a plain percentage, while
+        // .settings-modal input[type=range] hard-stops a gradient at a THUMB-CENTRE
+        // LENGTH — see thumbAt(), which exists because a naive percentage runs
+        // ahead of the thumb at the low end and behind it at the high end by half
+        // the thumb's width. These three were painted with the popover's unit, so
+        // the filled half of the track sat up to 8px away from the thumb it is
+        // supposed to end under, everywhere except dead centre.
+        //
+        // It also cost them their scale: paintSlider is the only thing that lights
+        // the tick a value is nearest, so Input Volume, Output Volume and the
+        // speaking threshold drew a row of labelled marks with none of them lit
+        // while the four sliders in Accessibility all lit theirs.
+        paintSlider('set-invol');
+        paintSlider('set-outvol');
+        paintSlider('set-vad');
     }
 
     async function setInputProfile(mode) {
@@ -11085,7 +11113,12 @@
 
     // The pane's own microphone slider, the same setting the caret menu holds.
     $('set-invol').addEventListener('input', async (e) => {
-        paintRangeFill(e.target);
+        // paintSlider for the same reason paintVoicePane uses it: this slider is
+        // in the settings sheet, whose track reads --fill as a thumb-centre
+        // length. It survived on ordering alone — initSliders() registers a
+        // paintSlider listener of its own further down the file, which happened
+        // to run second and overwrite the wrong unit within the same tick.
+        paintSlider('set-invol');
         await saveSettings({ micVolume: Number(e.target.value) / 100 });
         paintAudioPanels();
     });

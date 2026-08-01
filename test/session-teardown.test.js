@@ -138,3 +138,54 @@ describe('a session that ends with something floating over the app', () => {
         expect($('dm-list').querySelectorAll('.dm-row').length).toBe(0);
     });
 });
+
+describe('a session that ends with a profile card open', () => {
+    beforeEach(() => { document.documentElement.innerHTML = ''; });
+
+    // The card arrived after closeFloatingUi() was written and was never added
+    // to it. It is `.overlay`, a sibling of #app, and LATER in the document than
+    // #login — so it paints over the sign-in form — and it is focus-trapped,
+    // which is the half that cannot be clicked past: trapFocus() early-returns
+    // for an element it still holds, so a trap that is never released disables
+    // focus management for every later open of that overlay.
+    async function openCard(app) {
+        await app.lounge.board('dm/threads');
+        $('rail-dms').click();
+        await settle(10);
+        const view = [...document.querySelectorAll('.dm-intro-act')]
+            .find((b) => b.textContent === 'View Profile');
+        expect(view, 'no View Profile button in the conversation intro').toBeTruthy();
+        view.click();
+        await settle(4);
+    }
+
+    it('takes the card down with the rest of the floating UI', async () => {
+        const state = { dead: false };
+        const app = await bootRenderer({ board: router(state, [PAIR]) });
+        await openCard(app);
+        expect($('profile-card').hidden).toBe(false);
+
+        await expireSession(state, app);
+
+        expect($('profile-card').hidden).toBe(true);
+    });
+
+    it('RELEASES its focus trap rather than just hiding it', async () => {
+        const state = { dead: false };
+        const app = await bootRenderer({ board: router(state, [PAIR]) });
+        await openCard(app);
+        // trapFocus stamps this on the way in and releaseFocus takes it off, so
+        // it is the one observable difference between "closed" and "released" —
+        // and releasing is the half that matters: trapFocus() early-returns for
+        // an element it still holds, so a trap left armed silently disables focus
+        // management for every later open of the card.
+        expect($('profile-card').getAttribute('aria-modal')).toBe('true');
+
+        await expireSession(state, app);
+
+        expect($('profile-card').hidden).toBe(true);
+        expect($('profile-card').getAttribute('aria-modal')).toBe(null);
+        // …and the caret is back where the sign-in form needs it.
+        expect(document.activeElement && document.activeElement.id).toBe('login-pw');
+    });
+});

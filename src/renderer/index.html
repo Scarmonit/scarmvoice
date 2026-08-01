@@ -297,162 +297,6 @@
   </div>
   </div>
 
-  <!-- Connection details. Everything in here is read off getStats() — the
-       transport's own measurements — and anything it has not measured is shown
-       as unknown rather than as a plausible number. -->
-  <div id="conn-pop" class="conn-pop" hidden role="dialog" aria-label="Connection details">
-    <div class="cp-tab">Connection</div>
-    <div class="cp-graph">
-      <svg id="cp-plot" viewBox="0 0 300 88" preserveAspectRatio="none" aria-hidden="true"></svg>
-      <div class="cp-axis"><span>100</span><span>50</span><span>0</span></div>
-      <div class="cp-times" id="cp-times"></div>
-    </div>
-    <div class="cp-route" id="cp-route">-</div>
-    <dl class="cp-stats">
-      <div><dt>Average ping</dt><dd id="cp-avg">-</dd></div>
-      <div><dt>Last ping</dt><dd id="cp-last">-</dd></div>
-      <div><dt>Outbound packet loss rate</dt><dd id="cp-loss">-</dd></div>
-    </dl>
-    <p class="cp-note">
-      You may notice delayed audio at 250 ms or higher. You may sound robotic if
-      your packet loss rate is over 10%. If the problem persists, disconnect and
-      try again.
-    </p>
-    <div class="cp-actions">
-      <button type="button" class="keycap" id="cp-copy">
-        <span class="ico" data-icon="copy"></span><span>Debug Info</span>
-      </button>
-      <button type="button" class="keycap" id="cp-logs">
-        <span class="ico" data-icon="doc"></span><span>Open Logs</span>
-      </button>
-    </div>
-    <div class="cp-crypt" id="cp-crypt"></div>
-  </div>
-
-  <!-- The two audio panels the carets open. Not context menus: they carry
-       sliders and a checkbox, which a list of items cannot express. -->
-  <div id="mic-pop" class="audio-pop" hidden role="dialog" aria-label="Input settings">
-    <button type="button" class="ap-row ap-pick" id="ap-input-device">
-      <span class="ap-rowtext">
-        <span class="ap-title">Input Device</span>
-        <span class="ap-value" id="ap-input-device-value">Windows Default</span>
-      </span>
-      <span class="ico ap-more" data-icon="chevron"></span>
-    </button>
-    <button type="button" class="ap-row ap-pick" id="ap-input-profile">
-      <span class="ap-rowtext">
-        <span class="ap-title">Input Profile</span>
-        <span class="ap-value" id="ap-input-profile-value">Standard</span>
-      </span>
-      <span class="ico ap-more" data-icon="chevron"></span>
-    </button>
-    <div class="ap-sep"></div>
-    <div class="ap-row ap-slider">
-      <span class="ap-title">Input Volume</span>
-      <input type="range" id="ap-input-volume" min="0" max="200" step="1" aria-label="Input volume">
-    </div>
-    <!-- A live meter, so "is my microphone working" can be answered without
-         leaving the menu. Fed by the shared AudioContext, and only while the
-         panel is open — an open capture is not something to leave running. -->
-    <div class="ap-row ap-level">
-      <span class="ap-title">Input Level</span>
-      <div class="ap-meter" id="ap-meter" role="img" aria-label="Microphone level"></div>
-    </div>
-    <div class="ap-sep"></div>
-    <label class="ap-row ap-check">
-      <span class="ap-title">Push to Talk</span>
-      <input type="checkbox" id="ap-ptt">
-    </label>
-    <button type="button" class="ap-row ap-foot" id="ap-input-settings">
-      <span class="ap-title">Voice Settings</span>
-      <span class="ico" data-icon="gear"></span>
-    </button>
-  </div>
-
-  <div id="spk-pop" class="audio-pop" hidden role="dialog" aria-label="Output settings">
-    <button type="button" class="ap-row ap-pick" id="ap-output-device">
-      <span class="ap-rowtext">
-        <span class="ap-title">Output Device</span>
-        <span class="ap-value" id="ap-output-device-value">Windows Default</span>
-      </span>
-      <span class="ico ap-more" data-icon="chevron"></span>
-    </button>
-    <div class="ap-sep"></div>
-    <div class="ap-row ap-slider">
-      <span class="ap-title">Output Volume</span>
-      <input type="range" id="ap-output-volume" min="0" max="200" step="1" aria-label="Output volume">
-    </div>
-    <div class="ap-sep"></div>
-    <button type="button" class="ap-row ap-foot" id="ap-output-settings">
-      <span class="ap-title">Voice Settings</span>
-      <span class="ico" data-icon="gear"></span>
-    </button>
-  </div>
-
-  <!-- Account panel, anchored above the me-bar. Positioned by JS so it can
-       never be clipped by the sidebar's own overflow. -->
-  <div id="me-popover" class="me-pop" hidden role="dialog" aria-label="Account">
-    <div class="mep-banner" id="mep-banner"></div>
-    <span class="mep-av-wrap">
-      <span class="mep-avatar" id="mep-avatar"></span>
-      <i class="mep-presence" id="mep-presence" aria-hidden="true"></i>
-    </span>
-    <!-- Beside the avatar rather than under the name, with a tail of circles
-         pointing back at it: it belongs to the person, not to the menu. Empty
-         it is still a target — an invitation to write one is the only way
-         anybody discovers the field exists. -->
-    <button type="button" class="mep-bubble" id="mep-custom">
-      <span class="ico mep-bubble-add" data-icon="plus"></span>
-      <span class="mep-bubble-text" id="mep-custom-text"></span>
-    </button>
-    <div class="mep-card">
-      <div class="mep-names">
-        <div class="mep-name" id="mep-name">Anonymous</div>
-        <div class="mep-handle" id="mep-handle"></div>
-      </div>
-      <!-- Two cards, not one list with a rule through it: the divider inside a
-           card separates two rows that belong together, and the gap between the
-           cards separates the groups. -->
-      <div class="mep-menu">
-        <button type="button" class="mep-item" id="mep-edit">
-          <span class="ico" data-icon="pencil"></span><span>Edit Profile</span>
-        </button>
-        <div class="mep-sep"></div>
-        <button type="button" class="mep-item mep-status-row" id="mep-status" aria-haspopup="menu">
-          <i class="presence" id="mep-status-dot" aria-hidden="true"></i>
-          <span id="mep-status-label">Online</span>
-          <span class="ico mep-more" data-icon="chevron"></span>
-        </button>
-      </div>
-      <div class="mep-menu" id="mep-menu-account">
-        <button type="button" class="mep-item" id="mep-switch">
-          <span class="ico" data-icon="users"></span><span>Switch Accounts</span>
-        </button>
-        <div class="mep-sep"></div>
-        <button type="button" class="mep-item" id="mep-copy-id">
-          <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
-        </button>
-        <!-- Signing out lived only at the bottom of Settings, which is a strange
-             place to look for it: this panel is the account, so the way out of
-             the account belongs here. It is the FULL sign-out — board session
-             and account both — which is why it is separated from "Switch
-             Accounts" above it and drawn as the destructive one. -->
-        <div class="mep-sep"></div>
-        <button type="button" class="mep-item danger" id="mep-logout">
-          <span class="ico" data-icon="external"></span><span>Log Out</span>
-        </button>
-      </div>
-      <!-- Only while there is a call to leave. Its own card, below the account
-           one: leaving voice is not an account action, and the panel opens over
-           the very bar whose hang-up glyph is the only other way out. -->
-      <div class="mep-menu" id="mep-menu-voice" hidden>
-        <button type="button" class="mep-item danger" id="mep-leave-voice">
-          <span class="ico" data-icon="phone-hangup"></span><span>Leave Voice</span>
-        </button>
-      </div>
-    </div>
-  </div>
-
   <!-- Outside #main, because it spans the member list as well: a header that
        stops at the chat column leaves the member list with a divider running the
        whole window height and the search field in the wrong column. -->
@@ -2108,6 +1952,174 @@
 
 <!-- Shared right-click menu, used by messages and by the expanded image. -->
 <div id="ctx-menu" class="ctx-menu" hidden></div>
+
+<!-- THE FOUR PANELS THAT HANG OFF THE USER DOCK AND THE VOICE PANEL.
+
+     Body-level, like every other floating surface in this app, and they have to
+     be: all four are position:fixed and are placed from getBoundingClientRect(),
+     which is viewport-relative. Inside #app that held only by luck — Accessibility
+     -> Saturation puts a filter on #app, a filter makes an element the containing
+     block for its fixed descendants, and all four then resolved against #app
+     instead of the viewport. Measured: every one of them opened 31px lower than
+     asked (the title bar height, and more again with the update pill showing), so
+     panels that open UPWARD out of the bottom bar came down over the control that
+     opened them. Out here there is nothing between them and the viewport. -->
+
+<!-- Connection details. Everything in here is read off getStats() — the
+     transport's own measurements — and anything it has not measured is shown
+     as unknown rather than as a plausible number. -->
+<div id="conn-pop" class="conn-pop" hidden role="dialog" aria-label="Connection details">
+  <div class="cp-tab">Connection</div>
+  <div class="cp-graph">
+    <svg id="cp-plot" viewBox="0 0 300 88" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <div class="cp-axis"><span>100</span><span>50</span><span>0</span></div>
+    <div class="cp-times" id="cp-times"></div>
+  </div>
+  <div class="cp-route" id="cp-route">-</div>
+  <dl class="cp-stats">
+    <div><dt>Average ping</dt><dd id="cp-avg">-</dd></div>
+    <div><dt>Last ping</dt><dd id="cp-last">-</dd></div>
+    <div><dt>Outbound packet loss rate</dt><dd id="cp-loss">-</dd></div>
+  </dl>
+  <p class="cp-note">
+    You may notice delayed audio at 250 ms or higher. You may sound robotic if
+    your packet loss rate is over 10%. If the problem persists, disconnect and
+    try again.
+  </p>
+  <div class="cp-actions">
+    <button type="button" class="keycap" id="cp-copy">
+      <span class="ico" data-icon="copy"></span><span>Debug Info</span>
+    </button>
+    <button type="button" class="keycap" id="cp-logs">
+      <span class="ico" data-icon="doc"></span><span>Open Logs</span>
+    </button>
+  </div>
+  <div class="cp-crypt" id="cp-crypt"></div>
+</div>
+
+<!-- The two audio panels the carets open. Not context menus: they carry
+     sliders and a checkbox, which a list of items cannot express. -->
+<div id="mic-pop" class="audio-pop" hidden role="dialog" aria-label="Input settings">
+  <button type="button" class="ap-row ap-pick" id="ap-input-device">
+    <span class="ap-rowtext">
+      <span class="ap-title">Input Device</span>
+      <span class="ap-value" id="ap-input-device-value">Windows Default</span>
+    </span>
+    <span class="ico ap-more" data-icon="chevron"></span>
+  </button>
+  <button type="button" class="ap-row ap-pick" id="ap-input-profile">
+    <span class="ap-rowtext">
+      <span class="ap-title">Input Profile</span>
+      <span class="ap-value" id="ap-input-profile-value">Standard</span>
+    </span>
+    <span class="ico ap-more" data-icon="chevron"></span>
+  </button>
+  <div class="ap-sep"></div>
+  <div class="ap-row ap-slider">
+    <span class="ap-title">Input Volume</span>
+    <input type="range" id="ap-input-volume" min="0" max="200" step="1" aria-label="Input volume">
+  </div>
+  <!-- A live meter, so "is my microphone working" can be answered without
+       leaving the menu. Fed by the shared AudioContext, and only while the
+       panel is open — an open capture is not something to leave running. -->
+  <div class="ap-row ap-level">
+    <span class="ap-title">Input Level</span>
+    <div class="ap-meter" id="ap-meter" role="img" aria-label="Microphone level"></div>
+  </div>
+  <div class="ap-sep"></div>
+  <label class="ap-row ap-check">
+    <span class="ap-title">Push to Talk</span>
+    <input type="checkbox" id="ap-ptt">
+  </label>
+  <button type="button" class="ap-row ap-foot" id="ap-input-settings">
+    <span class="ap-title">Voice Settings</span>
+    <span class="ico" data-icon="gear"></span>
+  </button>
+</div>
+
+<div id="spk-pop" class="audio-pop" hidden role="dialog" aria-label="Output settings">
+  <button type="button" class="ap-row ap-pick" id="ap-output-device">
+    <span class="ap-rowtext">
+      <span class="ap-title">Output Device</span>
+      <span class="ap-value" id="ap-output-device-value">Windows Default</span>
+    </span>
+    <span class="ico ap-more" data-icon="chevron"></span>
+  </button>
+  <div class="ap-sep"></div>
+  <div class="ap-row ap-slider">
+    <span class="ap-title">Output Volume</span>
+    <input type="range" id="ap-output-volume" min="0" max="200" step="1" aria-label="Output volume">
+  </div>
+  <div class="ap-sep"></div>
+  <button type="button" class="ap-row ap-foot" id="ap-output-settings">
+    <span class="ap-title">Voice Settings</span>
+    <span class="ico" data-icon="gear"></span>
+  </button>
+</div>
+
+<!-- Account panel, anchored above the me-bar. Positioned by JS so it can
+     never be clipped by the sidebar's own overflow. -->
+<div id="me-popover" class="me-pop" hidden role="dialog" aria-label="Account">
+  <div class="mep-banner" id="mep-banner"></div>
+  <span class="mep-av-wrap">
+    <span class="mep-avatar" id="mep-avatar"></span>
+    <i class="mep-presence" id="mep-presence" aria-hidden="true"></i>
+  </span>
+  <!-- Beside the avatar rather than under the name, with a tail of circles
+       pointing back at it: it belongs to the person, not to the menu. Empty
+       it is still a target — an invitation to write one is the only way
+       anybody discovers the field exists. -->
+  <button type="button" class="mep-bubble" id="mep-custom">
+    <span class="ico mep-bubble-add" data-icon="plus"></span>
+    <span class="mep-bubble-text" id="mep-custom-text"></span>
+  </button>
+  <div class="mep-card">
+    <div class="mep-names">
+      <div class="mep-name" id="mep-name">Anonymous</div>
+      <div class="mep-handle" id="mep-handle"></div>
+    </div>
+    <!-- Two cards, not one list with a rule through it: the divider inside a
+         card separates two rows that belong together, and the gap between the
+         cards separates the groups. -->
+    <div class="mep-menu">
+      <button type="button" class="mep-item" id="mep-edit">
+        <span class="ico" data-icon="pencil"></span><span>Edit Profile</span>
+      </button>
+      <div class="mep-sep"></div>
+      <button type="button" class="mep-item mep-status-row" id="mep-status" aria-haspopup="menu">
+        <i class="presence" id="mep-status-dot" aria-hidden="true"></i>
+        <span id="mep-status-label">Online</span>
+        <span class="ico mep-more" data-icon="chevron"></span>
+      </button>
+    </div>
+    <div class="mep-menu" id="mep-menu-account">
+      <button type="button" class="mep-item" id="mep-switch">
+        <span class="ico" data-icon="users"></span><span>Switch Accounts</span>
+      </button>
+      <div class="mep-sep"></div>
+      <button type="button" class="mep-item" id="mep-copy-id">
+        <span class="ico" data-icon="copy"></span><span>Copy User ID</span>
+      </button>
+      <!-- Signing out lived only at the bottom of Settings, which is a strange
+           place to look for it: this panel is the account, so the way out of
+           the account belongs here. It is the FULL sign-out — board session
+           and account both — which is why it is separated from "Switch
+           Accounts" above it and drawn as the destructive one. -->
+      <div class="mep-sep"></div>
+      <button type="button" class="mep-item danger" id="mep-logout">
+        <span class="ico" data-icon="external"></span><span>Log Out</span>
+      </button>
+    </div>
+    <!-- Only while there is a call to leave. Its own card, below the account
+         one: leaving voice is not an account action, and the panel opens over
+         the very bar whose hang-up glyph is the only other way out. -->
+    <div class="mep-menu" id="mep-menu-voice" hidden>
+      <button type="button" class="mep-item danger" id="mep-leave-voice">
+        <span class="ico" data-icon="phone-hangup"></span><span>Leave Voice</span>
+      </button>
+    </div>
+  </div>
+</div>
 
 <div id="audio-sink" hidden></div>
 <!-- A live region, because this element is the app's ONLY channel for "that

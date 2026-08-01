@@ -311,7 +311,10 @@ Three tiers, each covering what the one below it can't reach:
   against elements that must exist by that id — runs here.
 - **E2E** (`test/e2e/`) — launches the actual Electron app. It covers the
   "silently does nothing" failures that live in main.js's window and session
-  wiring, where a missing permission makes a promise *hang* rather than reject.
+  wiring, where a missing permission makes a promise *hang* rather than reject —
+  and the ones that need **layout**, which jsdom has none of. A `position: fixed`
+  panel drawn 31px out of place because an ancestor grew a CSS filter is invisible
+  to every rect in the other two tiers, because every rect in them is zero.
 
 > `npm run test:e2e` refuses to run while ScarmVoice is open: a second instance
 > fights over the user-data lock and the system-wide uiohook, which hard-crashes
@@ -1299,6 +1302,29 @@ mis-click from closing the whole app. Starting lower puts the lightbox toolbar
 ~49 px clear of the controls, keeps the window draggable while an image is open,
 and both the overlay and its toolbar are explicitly `-webkit-app-region: no-drag`.
 
+### Everything that floats comes down with the session
+
+`#dialog`, `#lightbox`, `#picker`, `#notes`, `#dm-picker`, `#popover`,
+`#profile-card`, `#filters-modal`, `#settings` and `#ctx-menu` are **siblings** of
+`#app`, not children — so hiding `#app` does nothing to any of them. An expired
+session left whatever was open drawn over the sign-in form, and several of them
+are focus-trapped, which is the half that cannot be clicked past: `trapFocus()`
+early-returns for an element it already holds, so a trap that is never *released*
+quietly disables focus management for every later open of that overlay.
+
+`closeFloatingUi()` is the one place that answers for all of them, and it is a
+list, so it too went stale: the **profile card** arrived after it was written and
+was never added. A session that ended with somebody's full profile open left
+their name and face over the password field with Tab confined to the card. It
+also takes the private note on that card with it — the field is debounced by
+400 ms, and closing is what flushes it.
+
+Two of the entries are not cosmetic at all. The input panel's level meter holds
+its own `getUserMedia` stream — the *third* microphone in the renderer, after the
+call's and the mic test's — and the connection panel repaints on a three-second
+interval that nothing else clears, so every session used to leave one more
+running. `test/session-teardown.test.js` covers the set.
+
 ### Realtime liveness (the "tray for an hour" bug)
 
 A WebSocket can go **half-open**: the peer vanishes (sleep, or a NAT/conntrack
@@ -1629,6 +1655,44 @@ conversation, and `webContents.setZoomFactor` for zoom. Two details worth keepin
   for every descendant, for no visual gain. It is also applied to `#app` and each
   floating surface separately rather than to `<html>` — and *undone* on images and
   video, because the reference is explicit that it does not touch user content.
+
+  A filter also makes the element the **containing block for its `position: fixed`
+  descendants**, which is why the surfaces are listed rather than filtered from the
+  root — and four of them were on the wrong side of that line. `#me-popover`,
+  `#mic-pop`, `#spk-pop` and `#conn-pop` were children of `#app`, are all
+  `position: fixed`, and are all placed from `getBoundingClientRect()`, which is
+  viewport-relative. Measured in a real renderer: with the slider anywhere below
+  100% they were drawn 31px lower than asked — one title bar, and more again with
+  the update pill showing — and every one of them opens *upward* out of the bottom
+  bar, so it came down over the control that opened it. They are siblings of `#app`
+  now, like every other floating surface, and `test/e2e/fixed-panels.spec.js`
+  launches the app and measures them, because jsdom does no layout and 1,100 unit
+  tests could not see this.
+
+  Applying it surface by surface makes it a **list**, and a list goes stale. This
+  one had: the **title bar** (on screen at all times, and holding the realtime dot
+  in green, amber or red), the **update pill** (deliberately the most saturated
+  thing in the window when it has something to offer — and it sprang back to full
+  colour under the pointer, because `filter` is one property and its own hover
+  brightness *replaced* the saturate rather than adding to it), and the
+  **profile popover** (the only floating surface with neither `.overlay` nor a
+  bespoke selector of its own, carrying a presence dot, a generated avatar hue and
+  a red Block). `test/palette.test.js` now matches the selector list against
+  `index.html`, so the next surface added to `<body>` cannot slip through the same
+  way. The title bar is filtered through its *contents* rather than as itself: it
+  is the element carrying `-webkit-app-region: drag`, and "almost certainly fine"
+  is not a trade worth making for a colour when the failure mode is a window that
+  has quietly stopped being movable.
+- **The sliders are all drawn by one function, and have to be.** `--fill` means
+  two different things in two stylesheets — the audio popovers paint two
+  background layers from a plain percentage, while the settings sheet hard-stops
+  a gradient at a **thumb-centre length** (`thumbAt()`, which exists because a
+  naive percentage runs ahead of the thumb at the low end and behind it at the
+  high end by half the thumb's width). Voice & Audio's three were painted with the
+  popover's unit, so the filled half of the track stopped up to 8px away from the
+  handle it is supposed to end under, and none of their tick labels was ever lit —
+  a scale that read as decoration beside four in Accessibility that all name the
+  value they are on.
 - **The live Preview is the real renderer.** Two fixed messages through
   `renderMessage()`, so the markdown, the link and the reactions are the same code
   the conversation uses — a slider can be dragged while watching what it actually
@@ -1974,6 +2038,17 @@ Grouping follows the reference: Idle and Do Not Disturb sit *inside* Online,
 told apart by the colour of their dot. They are here, just busy or away from the
 keyboard. Only Offline is separated out, and only Offline is faded — dimming
 somebody idle said the opposite of what their yellow dot said.
+
+**Told apart by the colour of their dot** is a claim the stylesheet has to keep,
+and in one place it did not. Six surfaces draw a presence dot from the same
+`statusDot()` / `presenceDotClass()` expressions; five of them had a rule for
+every answer, and the per-participant popover had `idle` alone — so its base
+green stood for Do Not Disturb *and* for Offline. Clicking somebody in the
+Offline section opened a panel calling them online, an inch from the grey dot on
+the row it had just opened from. That is the exact complaint `openPopover()`'s
+`known` argument was added to fix: the JS had been passing `'offline'` the whole
+time with nothing to draw it. `test/palette.test.js` now checks every dot family
+against every state it can be handed.
 
 ### The wire says `away`. Everything else says Idle.
 

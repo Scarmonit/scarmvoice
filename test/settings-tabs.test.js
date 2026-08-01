@@ -245,6 +245,32 @@ describe('Text Readability', () => {
         });
     });
 
+    it('paints every one of them in the unit its own stylesheet reads', () => {
+        // "Not empty" was too weak, and Voice & Audio's three were failing it in a
+        // way it could not see: they were painted with paintRangeFill, which
+        // writes a plain percentage for the AUDIO POPOVERS — .ap-slider paints two
+        // background layers from one. The settings sheet hard-stops a gradient at a
+        // THUMB-CENTRE LENGTH instead (see thumbAt), so a percentage put the end of
+        // the fill up to 8px away from the thumb it is supposed to finish under,
+        // everywhere except dead centre of the track.
+        ['set-font-px', 'set-msg-gap', 'set-zoom', 'set-saturation',
+            'set-invol', 'set-outvol', 'set-vad'].forEach((id) => {
+            expect($(id).style.getPropertyValue('--fill'), id).toMatch(/^calc\(8px \+ /);
+        });
+    });
+
+    it('lights the tick each of them is nearest', () => {
+        // The other half of the same mistake: paintSlider is the only thing that
+        // marks a tick, so the three that were painted the other way drew a row of
+        // labelled marks with none of them lit — a scale that looked like
+        // decoration beside four that all named the value they were on.
+        ['set-font-px', 'set-msg-gap', 'set-zoom', 'set-saturation',
+            'set-invol', 'set-outvol', 'set-vad'].forEach((id) => {
+            const lit = [...$(id).previousElementSibling.querySelectorAll('.set-tick.on')];
+            expect(lit.length, id).toBe(1);
+        });
+    });
+
     it('underlines links only when asked', async () => {
         expect(root().classList.contains('underline-links')).toBe(false);
         await flip('set-underline');

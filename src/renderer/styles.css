@@ -3411,7 +3411,17 @@ body.resizing-pane { user-select: none; }
   width: 12px; height: 12px; border-radius: 50%;
   background: var(--online); border: 3px solid var(--float);
 }
+/* Three states, not one. openPopover writes statusDot(status) here, which is the
+   same expression the member list, the profile card and both DM profile dots
+   use — and every one of those has all three rules. This one had `idle` alone,
+   so the base green stood for Do Not Disturb AND for Offline: clicking somebody
+   in the Offline section of the member list opened a popover claiming they were
+   online, a pixel from the grey dot on the row it opened from. That is the exact
+   complaint the `known` argument in openPopover() was added to fix — the JS has
+   been passing 'offline' the whole time with nothing to draw it. */
 .pop-presence.idle { background: var(--idle); }
+.pop-presence.dnd { background: var(--danger); }
+.pop-presence.offline { background: var(--offline); }
 .pop-id { min-width: 0; display: flex; flex-direction: column; }
 .pop-name {
   font-weight: 700; font-size: 14px; color: var(--text);
@@ -5873,10 +5883,38 @@ select.fm-input { cursor: pointer; }
    #app, not <html>: applying it to the root would take the popouts and modals
    with it (they are position:fixed children of <body>) and, worse, a filter on
    an ancestor makes `fixed` resolve against IT rather than the viewport. The
-   floating surfaces are listed separately for that reason. */
+   floating surfaces are listed separately for that reason.
+
+   Which makes this list a LIABILITY, and it had already gone stale: every
+   visible child of <body> has to appear here or it keeps its full colour while
+   everything around it loses it, and three of them did not. The title bar — the
+   one surface always on screen, and the one carrying the realtime dot in green,
+   amber or red. The update pill, which is deliberately the most saturated thing
+   in the window when it has something to offer. And the profile popover, the
+   only floating surface with neither `.overlay` nor a bespoke selector of its
+   own, carrying a presence dot, a generated avatar hue and a red Block. Somebody
+   turning saturation down is turning down exactly those colours.
+   test/palette.test.js now matches this list against index.html, so the next
+   surface added to <body> cannot slip through the same way. */
+/* The title bar is filtered through its CONTENTS rather than as itself, and it
+   is the one surface here that has to be: #titlebar is the element carrying
+   `-webkit-app-region: drag`, and a filter on it is the one edit in this change
+   that could plausibly cost something no screenshot would show — a window that
+   has quietly stopped being movable. (Chromium collects draggable regions from
+   layout geometry, which a filter does not change, so it is almost certainly
+   fine; "almost certainly" is not a trade worth making for a colour.) Nothing is
+   lost by going one level in: all the colour in the bar is the realtime dot and
+   its pill, and the bar's own background is --side, which the surface ramp holds
+   within five points of neutral. */
+html.desat #titlebar > *,
+html.desat #update-banner,
 html.desat #app,
 html.desat #login,
 html.desat .overlay,
+html.desat .popover,
+html.desat .me-pop,
+html.desat .audio-pop,
+html.desat .conn-pop,
 html.desat .pinned-panel,
 html.desat .threads-pop,
 html.desat .notif-pop,
@@ -5885,6 +5923,11 @@ html.desat #lightbox,
 html.desat .toast {
   filter: saturate(var(--sat, 1));
 }
+/* `filter` is one property, not a stack of them: a more specific rule REPLACES
+   the saturate rather than adding to it. #update-banner.ub-cta:hover sets a
+   brightness of its own and outranks the selector above, so without this the
+   pill sprang back to full colour under the pointer. */
+html.desat #update-banner.ub-cta:hover { filter: brightness(1.06) saturate(var(--sat, 1)); }
 /* …and NOT over the content people posted. The reference is explicit that
    saturation does not affect images, video or other user content, and a filter
    on an ancestor cannot be undone by a descendant — so these get it back. */

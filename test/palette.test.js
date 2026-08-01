@@ -11,6 +11,12 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// This file runs in the `node` environment — nothing else in it needs a DOM, and
+// switching the whole suite to jsdom for one assertion would put every other
+// measurement in here behind a layout engine that cannot measure anything. The
+// saturation check below has to ask the markup which surfaces exist, so it
+// parses index.html itself.
+import { JSDOM } from 'jsdom';
 
 const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer');
 
@@ -552,8 +558,15 @@ describe('the caret glyph', () => {
         // A rotated glyph keeps its unrotated box, so the box and the ink
         // disagree about where the centre is. Both me-bar carets use the drawn
         // one — as does the server header's, which is the same mark.
-        const bar = html.slice(html.indexOf('id="me-bar"'), html.indexOf('id="mic-pop"'));
-        expect((bar.match(/data-icon="chevron-down"/g) || []).length).toBe(2);
+        //
+        // Asked of the PARSED document rather than of a slice between two
+        // markers in the file. The slice bounded on `id="mic-pop"`, which only
+        // worked while that panel happened to sit right after the me-bar in the
+        // source — and it does not any more, because a position:fixed panel has
+        // no business inside #app.
+        const doc = new JSDOM(html).window.document;
+        const bar = doc.getElementById('me-bar');
+        expect(bar.querySelectorAll('[data-icon="chevron-down"]').length).toBe(2);
         expect(/\.me-ctl \.me-ctl-caret \.ico \{[^}]*rotate/.test(css)).toBe(false);
     });
 
@@ -616,9 +629,13 @@ describe('the account panel', () => {
     });
 
     it('is laid out as cards, in the reference is order', () => {
+        // Parsed, not sliced between two markers in the file: the slice ran from
+        // `id="me-popover"` to `<main id="main">`, which quietly became an empty
+        // string the moment the panel stopped living inside #app — and an empty
+        // string satisfies rather less than it looks like it does.
         const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
-        const pop = html.slice(html.indexOf('id="me-popover"'), html.indexOf('<main id="main">'));
-        const groups = pop.split('class="mep-menu"').slice(1);
+        const pop = new JSDOM(html).window.document.getElementById('me-popover');
+        const groups = [...pop.querySelectorAll('.mep-menu')];
         // Two standing cards, plus a third that only exists during a call and
         // holds the single row that leaves it.
         expect(groups.length).toBe(3);
@@ -626,10 +643,11 @@ describe('the account panel', () => {
         // the CARDS is what separates the groups. The voice card is the
         // exception: one row, nothing to divide it from.
         groups.slice(0, 2).forEach((g) => {
-            expect((g.match(/class="mep-item/g) || []).length).toBeGreaterThanOrEqual(2);
-            expect(g).toContain('mep-sep');
+            expect(g.querySelectorAll('.mep-item').length).toBeGreaterThanOrEqual(2);
+            expect(g.querySelector('.mep-sep')).toBeTruthy();
         });
-        const order = [...pop.matchAll(/id="(mep-edit|mep-status|mep-switch|mep-copy-id)"/g)].map((m) => m[1]);
+        const order = [...pop.querySelectorAll('#mep-edit, #mep-status, #mep-switch, #mep-copy-id')]
+            .map((el) => el.id);
         expect(order).toEqual(['mep-edit', 'mep-status', 'mep-switch', 'mep-copy-id']);
     });
 
@@ -1999,5 +2017,116 @@ describe('the settings controls, measured', () => {
         expect(z).toBeGreaterThan(handle);
         expect(z).toBeGreaterThan(40);
         expect(css).toMatch(/\.search-pop \{[^}]*z-index: 40/);
+    });
+});
+
+describe('the saturation setting', () => {
+    // Saturation is applied as a filter on each top-level surface rather than on
+    // <html>, because a filter on an ancestor makes `position: fixed` resolve
+    // against IT instead of the viewport — see the note in styles.css.
+    //
+    // The price of that is a LIST, and a list is a thing that goes stale. It had:
+    // the title bar, the update pill and the profile popover were all absent, so
+    // turning saturation down left the realtime dot, the accented update pill and
+    // a presence dot at full colour while everything around them lost it. That is
+    // the opposite of what the setting is for.
+    //
+    // So the list is checked against the markup rather than trusted.
+    const desatSelectors = () => {
+        const i = rules.indexOf('filter: saturate(var(--sat');
+        expect(i, 'no html.desat saturate rule in the stylesheet').toBeGreaterThan(-1);
+        const head = rules.slice(0, i);
+        const open = head.lastIndexOf('{');
+        return head.slice(head.lastIndexOf('}', open) + 1, open)
+            .split(',')
+            .map((s) => s.trim().replace(/^html\.desat\s+/, ''))
+            .filter(Boolean);
+    };
+
+    it('reaches every visible surface in the window', () => {
+        const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
+        const doc = new JSDOM(html).window.document;
+        const covered = desatSelectors().join(',');
+
+        // A surface counts as reached either directly, or through ALL of its
+        // children — which is how the title bar is done, because it is the
+        // element carrying `-webkit-app-region: drag` and a filter belongs one
+        // level inside it rather than on it. "All", not "any": covering one child
+        // and leaving its siblings full-colour is the bug, not the fix.
+        const reached = (el) => el.matches(covered) ||
+            (el.children.length > 0 && [...el.children].every((c) => c.matches(covered)));
+
+        const missed = [...doc.body.children]
+            .filter((el) => el.tagName !== 'SCRIPT')
+            // #audio-sink holds the call's hidden <audio> elements. There is no
+            // colour in it to turn down.
+            .filter((el) => el.id !== 'audio-sink')
+            .filter((el) => !reached(el))
+            .map((el) => '#' + el.id);
+
+        expect(missed).toEqual([]);
+    });
+
+    it('keeps the update pill desaturated under the pointer', () => {
+        // `filter` is ONE property, not a stack: a more specific rule replaces
+        // the saturate rather than adding to it, and #update-banner.ub-cta:hover
+        // sets a brightness of its own that outranks the list above. Without the
+        // saturate repeated there, the pill sprang back to full colour on hover —
+        // which is exactly when somebody is looking at it.
+        expect(rules).toMatch(
+            /html\.desat #update-banner\.ub-cta:hover \{\s*filter: brightness\(1\.06\) saturate\(var\(--sat, 1\)\);/);
+    });
+
+    it('gives posted media its colour back wherever it is drawn', () => {
+        // The other half of the same rule: a filter on an ancestor cannot be
+        // undone by a descendant, so images and video have to be handed the
+        // inverse explicitly.
+        expect(rules).toMatch(/html\.desat \.msg-att img/);
+        expect(rules).toMatch(/html\.desat video \{[\s\S]*?filter: saturate\(var\(--unsat, 1\)\)/);
+    });
+});
+
+describe('presence dots', () => {
+    // Every surface that draws one is fed by one of two expressions in app.js,
+    // and each has a fixed set of answers:
+    //
+    //   statusDot(status)        '' | idle | dnd | offline   — somebody ELSE
+    //   presenceDotClass(mode)   '' | idle | dnd | invisible — yourself
+    //
+    // The empty string is the base rule's own colour, so what has to exist is a
+    // rule per NON-empty answer. .pop-presence had `idle` and nothing else, which
+    // left the base green standing for Do Not Disturb and for Offline — a popover
+    // that said "online" about somebody the row behind it was drawing grey.
+    const FAMILIES = [
+        ['.vp .presence', ['idle', 'dnd', 'offline']],
+        ['.pop-presence', ['idle', 'dnd', 'offline']],
+        ['.pc-face .presence', ['idle', 'dnd', 'offline']],
+        ['#dm-prof-face .presence', ['idle', 'dnd', 'offline']],
+        ['.dm-prof-status .presence', ['idle', 'dnd', 'offline']],
+        ['.me-presence', ['idle', 'dnd', 'invisible']],
+        ['.mep-presence', ['idle', 'dnd', 'invisible']],
+        ['.mep-status-row .presence', ['idle', 'dnd', 'invisible']],
+        ['.ctx-item .ctx-dot', ['idle', 'dnd', 'invisible']]
+    ];
+
+    it('give every state its own rule, in every place one is drawn', () => {
+        const missing = [];
+        FAMILIES.forEach(([base, states]) => {
+            states.forEach((state) => {
+                // The selectors are grouped several ways in the sheet, so this
+                // asks whether `base.state` appears as a selector at all rather
+                // than matching one particular arrangement of commas.
+                const needle = base + '.' + state;
+                if (!rules.includes(needle)) missing.push(needle);
+            });
+        });
+        expect(missing).toEqual([]);
+    });
+
+    it('draws each state as its own token rather than a literal', () => {
+        // The three that mean something: away, busy, and gone. Every one of them
+        // is a variable, so high contrast and the light theme move them together.
+        expect(rules).toMatch(/\.pop-presence\.dnd \{ background: var\(--danger\); \}/);
+        expect(rules).toMatch(/\.pop-presence\.offline \{ background: var\(--offline\); \}/);
     });
 });
