@@ -3894,7 +3894,13 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
      DM's own, two message boxes stacked with different placeholders. Columns
      stay 3-5, so the user dock in row 3 is untouched. */
   grid-row: 1 / 4;
-  z-index: 40;
+  /* ABOVE #chan-head, which is 45. This panel REPLACES the whole right-hand side
+     while you are in a conversation — its own header included — so a header that
+     outranks it leaves the last text channel's name and its channel icons sitting
+     over a DM. That is exactly what happened when the channel header went to 45 to
+     get the search dropdown over the member list's resize strip: this was 40, and
+     the regression showed as "the header didn't switch to DM mode". */
+  z-index: 50;
   display: flex; flex-direction: column;
   min-width: 0; min-height: 0;
   background: var(--chat);
@@ -5143,8 +5149,11 @@ html.win-hidden .up-bar i {
   margin: 0 0 18px; font-size: 32px; line-height: 1.1; font-weight: 700;
   letter-spacing: -0.02em; color: var(--text-strong);
 }
+/* 251, like the reference's — it was --text (232). The name and the handle are
+   one identity, and the second line reading dimmer than the first turns it into a
+   caption. */
 .dm-intro-handle {
-  margin: -14px 0 26px; font-size: 18px; font-weight: 500; color: var(--text);
+  margin: -14px 0 26px; font-size: 18px; font-weight: 500; color: var(--author);
   letter-spacing: -0.01em;
 }
 .dm-intro-sub { margin: 0; font-size: 15px; color: var(--muted); }
@@ -5161,7 +5170,10 @@ html.win-hidden .up-bar i {
 #dm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #dm-profile {
   flex: none; width: 302px; display: flex; flex-direction: column;
-  background: var(--panel); border-left: 1px solid var(--line-2);
+  /* --float-edge, not --line-2: over --panel that token computes to #37373A
+     against the reference's #2C2C30, so the panel's edge read as a highlight
+     rather than as a seam. */
+  background: var(--panel); border-left: 1px solid var(--float-edge);
   position: relative; overflow-y: auto;
 }
 #dm-profile[hidden] { display: none; }
@@ -5191,7 +5203,10 @@ html.win-hidden .up-bar i {
 
 #dm-prof-body { padding: 34px 16px 16px; display: flex; flex-direction: column; gap: 2px; }
 #dm-prof-name { font-size: 20px; font-weight: 700; color: var(--text-strong); }
-#dm-prof-handle { font-size: 13px; color: var(--muted); }
+/* FULL brightness, under the name — the reference draws the handle at 251 and
+   ours was --muted (173), which read as a caption rather than as the second half
+   of somebody's name. --author is the token at exactly that value. */
+#dm-prof-handle { font-size: 13px; color: var(--author); }
 /* Named as well as coloured. A dot alone is a convention you have to already
    know; this panel has the room to just say it. */
 .dm-prof-status {
@@ -5209,22 +5224,41 @@ html.win-hidden .up-bar i {
 .dm-prof-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #dm-prof-meta { margin-top: 14px; display: flex; flex-direction: column; gap: 4px; }
 #dm-prof-meta .pm-label {
-  font-size: 12px; font-weight: 700; color: var(--text-strong);
+  font-size: 13px; font-weight: 700; color: var(--text-strong);
   text-transform: none; letter-spacing: 0;
 }
-#dm-prof-meta .pm-value { font-size: 13px; color: var(--muted); }
+/* Measured at 240 on the reference against our 175: this is a fact about the
+   person, not a hint about the label above it. */
+#dm-prof-meta .pm-value { font-size: 13px; color: var(--msg-text); }
 #dm-prof-meta .pm-badge {
   align-self: flex-start; margin-top: 2px; padding: 1px 6px; border-radius: 4px;
   font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent);
 }
 /* Pinned to the bottom of the panel, as the reference does. */
 #dm-prof-full {
-  margin: auto 12px 12px; flex: none; height: 38px; border-radius: 8px;
+  margin: auto 12px 12px; flex: none; height: 40px; border-radius: 8px;
   background: var(--btn-secondary); color: var(--text);
   font-size: 14px; font-weight: 500; cursor: pointer;
   transition: background-color .05s ease;
 }
 #dm-prof-full:hover { background: var(--btn-secondary-hover); }
+
+/* The relationship controls, in the block itself — the reference puts them right
+   under the sentence rather than behind a menu. Only the ones this app really
+   has: there are no friends here to remove, and "no servers in common" is not a
+   fact about a board with one server in it. */
+.dm-intro-actions {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 14px;
+}
+.dm-intro-act {
+  height: 32px; padding: 0 14px; border-radius: 4px; cursor: pointer;
+  background: var(--btn-secondary); border: 0; color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 500;
+  transition: background-color .05s ease;
+}
+.dm-intro-act:hover { background: var(--btn-secondary-hover); }
+.dm-intro-act.danger { color: var(--danger-label); }
 
 /* Message avatar: still short of the reference's 40 after the last bump, so
    measured again and set from the rendered value rather than guessed. */
@@ -5249,22 +5283,35 @@ html.win-hidden .up-bar i {
 }
 #dm-sidebar[hidden] { display: none; }
 #dm-side-head { flex: none; padding: 10px 10px 6px; }
+/* A BUTTON that reads like one. It was a 28px well in --sunk with dim,
+   left-aligned text, which reads as a filter field you type into — and it is not,
+   it opens a picker. The reference draws it as a filled 32px control with its
+   label centred at full brightness, and that is the difference between "this
+   narrows the list" and "click to start something". */
 #dm-find {
-  width: 100%; height: 28px; padding: 0 8px; border-radius: 4px;
-  background: var(--sunk); color: var(--dim);
-  font-size: 13px; text-align: left; cursor: pointer;
+  width: 100%; height: 32px; padding: 0 8px; border-radius: 4px;
+  background: var(--input); color: var(--author);
+  font-size: 13px; font-weight: 500; text-align: center; cursor: pointer;
 }
+#dm-find:hover { background: var(--elev); }
 #dm-find:hover { background: var(--hover); color: var(--muted); }
 #dm-nav { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+/* background:none and border:0 are not decoration here — this is a <button>, and
+   without them the UA's own button face paints, which put a light plate at the top
+   of the conversation list in the dark theme. */
 .dm-nav-row {
   display: flex; align-items: center; gap: 12px;
-  height: 38px; padding: 0 8px; border-radius: 4px;
+  width: 100%; height: 38px; padding: 0 8px; border-radius: 4px;
+  background: none; border: 0; text-align: left;
   color: var(--muted); font-size: 15px; font-weight: 500; cursor: pointer;
 }
 .dm-nav-row:hover { background: var(--hover); color: var(--text); }
+/* The SAME label as the server sidebar's categories — Title Case at 13.5, not
+   11px all-caps. Both sidebars sit in the same column and swap for each other, so
+   two different heading styles is the one comparison a person makes for free. */
 .dm-side-label {
-  flex: 1; padding: 0 8px; font-size: 12px; font-weight: 700;
-  color: var(--dim); text-transform: uppercase; letter-spacing: .02em;
+  flex: 1; padding: 0 8px; font-size: 13.5px; font-weight: 500;
+  color: var(--meta); text-transform: none; letter-spacing: 0;
 }
 /* Conversations are no longer a category inside the server's channel list. */
 #dm-section { display: none; }

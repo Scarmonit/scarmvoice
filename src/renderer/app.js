@@ -347,6 +347,18 @@
         const v = voicePresence.find((x) => x.client_id === cid && x.user_id);
         return (v && v.user_id) || 0;
     }
+    // The other direction, for the places that hold an ACCOUNT and need the
+    // install: blocking is install-scoped (it is a local mute, not a server-side
+    // relationship), so anything offering Block from an account has to resolve one
+    // first — and offer nothing when it cannot, which is what the profile popover
+    // already does.
+    function clientForUser(uid) {
+        if (!uid) return '';
+        const m = members.find((x) => x.user_id === uid && x.client_id);
+        if (m) return m.client_id;
+        const v = voicePresence.find((x) => x.user_id === uid && x.client_id);
+        return (v && v.client_id) || '';
+    }
     function avatarSrc(uid) {
         const key = uid && avatarMap[uid];
         return key ? L.fileUrl(key) : '';
@@ -14148,7 +14160,9 @@
             `<i class="presence${statusDot(status)}" aria-hidden="true"></i>`;
         wireAvatarFallback($('dm-prof-face'));
         $('dm-prof-name').textContent = u.username;
-        $('dm-prof-handle').textContent = '@' + u.username;
+        // No '@'. The reference shows the bare handle, and the prefix was the
+        // same decoration the profile popout carried until it was measured.
+        $('dm-prof-handle').textContent = u.username;
         paintDmProfileStatus();
 
         // Only what we actually know. The reference shows "Member Since" from a
@@ -14577,7 +14591,7 @@
         // with a caption rather than a person.
         const handle = dmOpen && dmOpen.isGroup
             ? (dmOpen.members || []).length + ' members'
-            : '@' + who;
+            : who;
         intro.innerHTML =
             `<div class="dm-intro-face">${head}</div>` +
             `<h2 class="dm-intro-name">${esc(who)}</h2>` +
@@ -14587,6 +14601,42 @@
                 : 'This is the beginning of your direct message history with <b>' + esc(who) + '</b>.') +
             '</p>';
         box.appendChild(intro);
+
+        // THE ACTIONS ROW, under the sentence, where the reference puts it — but
+        // carrying what this app actually has rather than what that one does.
+        // There are no friends here to remove and no other server to have members
+        // in common with; there is a profile, and there is Block.
+        //
+        // Block is install-scoped (a local mute, not a server-side relationship),
+        // so it needs an install id and is left out when none is known — the same
+        // gate the profile popover uses, rather than a button that would quietly
+        // do nothing.
+        const acts = document.createElement('div');
+        acts.className = 'dm-intro-actions';
+        const act = (label, danger, onClick) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'dm-intro-act' + (danger ? ' danger' : '');
+            b.textContent = label;
+            b.addEventListener('click', onClick);
+            acts.appendChild(b);
+            return b;
+        };
+        if (dmOpen && !dmOpen.isGroup && others[0]) {
+            const them = others[0];
+            act('View Profile', false, () => openProfileCard(them));
+            const cid = clientForUser(them.id);
+            if (cid) {
+                const blocked = isBlocked(cid);
+                act(blocked ? 'Unblock' : 'Block', !blocked,
+                    () => (blocked ? unblockPerson(cid) : blockPerson(cid, them.username)));
+            }
+        } else if (dmOpen && dmOpen.isGroup) {
+            // A group's one real action is the one its own menu offers.
+            act('Leave Group', true, () => $('dm-more').click());
+        }
+        if (acts.children.length) intro.appendChild(acts);
+
         wireAvatarFallback(intro);
         if (window.ScarmIcons) window.ScarmIcons.hydrate(intro);
         }

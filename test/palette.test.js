@@ -125,6 +125,54 @@ describe('the dark surface ramp', () => {
 // reach. Every one of these was a dark surface that stayed dark on white — the
 // pinned card, the filter sheet's fields, the settings rail's selected pane, the
 // slider tick marks, the two popovers' outlines.
+describe('the direct-messages place', () => {
+    // THE REGRESSION GUARD. #dm-panel replaces the whole right-hand side while a
+    // conversation is open — its own header included — so it has to outrank the
+    // channel header. When #chan-head went to 45 (to get the search dropdown over
+    // the member list's resize strip) this panel was still on 40, and the symptom
+    // was the last text channel's name and its channel icons sitting over a DM.
+    it('puts the conversation panel above the channel header', () => {
+        const dm = Number(/#dm-panel \{[\s\S]*?z-index: (\d+)/.exec(css)[1]);
+        const head = Number(/#chan-head \{[^}]*z-index: (\d+)/.exec(css)[1]);
+        expect(dm).toBeGreaterThan(head);
+    });
+
+    it('draws the finder as a button, not as a filter field', () => {
+        // 28px of --sunk with dim left-aligned text reads as something you type
+        // into; it opens a picker. Filled, 32px, centred, at full brightness.
+        expect(css).toMatch(/#dm-find \{[^}]*height: 32px/);
+        expect(css).toMatch(/#dm-find \{[^}]*background: var\(--input\); color: var\(--author\)/);
+        expect(css).toMatch(/#dm-find \{[^}]*text-align: center/);
+    });
+
+    it('heads the conversation list the way the server sidebar heads its categories', () => {
+        // Both sidebars occupy the same column and swap for each other, so two
+        // different heading styles is the one comparison a person makes for free.
+        const label = /\.dm-side-label \{[^}]*\}/.exec(css)[0];
+        const cat = /\.cat-toggle \{[^}]*\}/.exec(css)[0];
+        const size = (r) => /font-size: ([\d.]+)px/.exec(r)[1];
+        expect(size(label)).toBe(size(cat));
+        expect(label).not.toMatch(/text-transform: uppercase/);
+    });
+
+    it('resets the nav rows own button face', () => {
+        // A <button> with no background paints the UA's, which put a light plate
+        // at the top of the conversation list in the dark theme.
+        expect(css).toMatch(/\.dm-nav-row \{[^}]*background: none; border: 0/);
+    });
+
+    it('reads the handle at full brightness, in both places it appears', () => {
+        // It was --muted under the name, which turns the second half of somebody's
+        // identity into a caption. --author is the token at the reference's 251.
+        expect(css).toMatch(/#dm-prof-handle \{ font-size: 13px; color: var\(--author\); \}/);
+        expect(css).toMatch(/\.dm-intro-handle \{[^}]*color: var\(--author\)/);
+        // …and no '@' in front of it, in either.
+        const app = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        expect(app).not.toMatch(/dm-prof-handle'\)\.textContent = '@'/);
+        expect(app).not.toMatch(/: '@' \+ who;/);
+    });
+});
+
 describe('every colour goes through a token', () => {
     // Declarations, with the selector they belong to. Comments are blanked first so
     // a hex quoted in prose is never mistaken for one that paints.
