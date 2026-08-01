@@ -5895,6 +5895,20 @@
     // dot's resting colour.
     const statusDot = (s) => (s === 'online' ? '' : ' ' + s);
 
+    // The crown beside a name in the member list. The reference marks the server's
+    // OWNER, and this board has one — the tier above admin, and the only role that
+    // can touch an account. NOT admins: there can be several of those, and a list
+    // with three crowns in it says nothing.
+    // Roles live in the account directory, which is the only place they exist, so a
+    // roster row with no account behind it (a guest install) never gets one.
+    function crownFor(uid) {
+        if (!uid) return '';
+        const u = roster.find((x) => x.id === uid);
+        if (!u || u.role !== 'owner') return '';
+        return '<span class="vp-crown" title="Board owner" aria-label="Board owner">' +
+            I('crown') + '</span>';
+    }
+
     // What the presence table currently says about one ACCOUNT. Anyone it has
     // never heard of is offline — which is the same answer for somebody who
     // signed out an hour ago and somebody who has never opened the app.
@@ -6028,7 +6042,8 @@
                 '</span>' +
                 // No "(you)": your own avatar is right there, and the suffix cost
                 // the name the width it needed.
-                '<span class="vp-body"><span class="vp-name">' + esc(r.name) + '</span>' +
+                '<span class="vp-body"><span class="vp-name-row"><span class="vp-name">' +
+                esc(r.name) + '</span>' + crownFor(r.uid) + '</span>' +
                 (sub
                     ? `<span class="vp-sub${p ? ' in-voice' : ''}">${p ? I('volume', 'ico vp-sub-ico') : ''}${esc(sub)}</span>`
                     : '') + '</span>' +
@@ -7807,24 +7822,56 @@
         return tipEl;
     }
 
+    // 7px of gap and a 7px caret, both measured off the reference — so the body
+    // stands 14px off the thing it names and the caret's apex stops 7px short of it.
+    const TIP_CARET = 7;
+    const TIP_GAP = 7;
+
     function showTip(target) {
         const text = target.getAttribute('data-tip');
         if (!text) return;
         const el = tipNode();
         tipFor = target;
         el.textContent = text;
+        // Measured after it has text, and with the previous placement cleared, or
+        // a tip that was last shown sideways measures with the wrong metrics.
+        el.classList.remove('below', 'right');
         el.hidden = false;
-        // Measured after it has text, then clamped into the window.
         const t = target.getBoundingClientRect();
         const r = el.getBoundingClientRect();
+
+        // SIDEWAYS ON A VERTICAL STACK. The rail is a column of servers, so a tip
+        // opening downward lands exactly where the next one sits — hovering a
+        // server covers the server under it, which is the one thing a tooltip must
+        // not do. To the right is the only direction with free space in a column,
+        // and it is what the reference does for this rail and this rail only:
+        // along a horizontal row (the channel header's icons) down is still right.
+        const sideways = !!(target.closest && target.closest('#rail'));
+
+        if (sideways) {
+            const left = t.right + TIP_CARET + TIP_GAP;
+            // Only if it fits — a narrow window falls back to the vertical rule
+            // rather than hanging the tip off the edge of the screen.
+            if (left + r.width + 6 <= window.innerWidth) {
+                let top = t.top + (t.height - r.height) / 2;
+                top = Math.max(POP_TITLEBAR + 4, Math.min(top, window.innerHeight - r.height - 6));
+                el.classList.add('right');
+                el.style.left = Math.round(left) + 'px';
+                el.style.top = Math.round(top) + 'px';
+                // Vertically, for this placement: the caret tracks the TARGET's
+                // middle, so a tip pushed away from the window edge still points at
+                // the icon rather than at where the icon would have been.
+                el.style.setProperty('--tip-arrow', Math.round(t.top + t.height / 2 - top) + 'px');
+                return;
+            }
+        }
+
         let left = t.left + (t.width - r.width) / 2;
         left = Math.max(6, Math.min(left, window.innerWidth - r.width - 6));
-        // 6, not 9: the arrow is 5px, so a wider gap leaves it pointing across
-        // empty space rather than at the thing it names.
-        let top = t.top - r.height - 6;
+        let top = t.top - r.height - (TIP_CARET + TIP_GAP);
         // No room above (the target is up against the title bar) — go below.
         const below = top < POP_TITLEBAR + 4;
-        if (below) top = t.bottom + 6;
+        if (below) top = t.bottom + TIP_CARET + TIP_GAP;
         el.classList.toggle('below', below);
         el.style.left = Math.round(left) + 'px';
         el.style.top = Math.round(top) + 'px';
@@ -9706,22 +9753,6 @@
     $('acct-password').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); acctSubmit('login'); }
     });
-    $('btn-acct-logout').addEventListener('click', async () => {
-        await teardownSession();
-        await L.account.logout();
-        account = null;
-        dmThreads = [];
-        closeDm();
-        renderAccountCard();
-        renderDmSection();
-        // Accounts are mandatory: without one, back to the gate (the board
-        // session itself stays valid, so it's a one-field hop back in).
-        closeSettings();
-        $('app').hidden = true;
-        showAccountStep();
-        toast('Signed out of your board account');
-    });
-
     // ---- account removal ----
     // Two steps, in this order: say plainly what is about to happen, and only
     // then ask for the password. Asking first trains people to type it before
@@ -10428,6 +10459,29 @@
             if (head) heads.push({ head, mine });
         });
 
+        // LAST IN THE LIST, and the only red thing in it — the reference's own
+        // arrangement. It used to be two buttons buried in the Account pane: one in
+        // Password & Security that signed out of the account only, and one in a
+        // section of its own that signed out of everything. Two buttons a scroll
+        // apart, both called "Sign out", doing different things. This is the second
+        // of those; the first is still reachable as "Switch Accounts" in the panel
+        // over your own name, which is what it always was.
+        const out = document.createElement('button');
+        out.type = 'button';
+        out.className = 'set-nav-item set-nav-logout';
+        out.id = 'btn-logout';
+        const outIco = document.createElement('span');
+        outIco.className = 'ico';
+        outIco.dataset.icon = 'logout';
+        out.appendChild(outIco);
+        const outLabel = document.createElement('span');
+        outLabel.className = 'set-nav-label';
+        outLabel.textContent = 'Log Out';
+        out.appendChild(outLabel);
+        // Appended further down, AFTER the search's empty-state row, so it is the
+        // last thing in the column — built here so its glyph is hydrated with the
+        // rest of the nav's.
+
         window.ScarmIcons.hydrate(nav);
         // Painted here as well as on open: the nav is built once, and the panel
         // has to be right the first time it is shown.
@@ -10550,6 +10604,13 @@
         navEmpty.className = 'set-nav-empty';
         navEmpty.hidden = true;
         inner.appendChild(navEmpty);
+        // …and the way out under it, pinned to the bottom. Left OUT of `items`, so
+        // a search that matches nothing hides every destination and leaves this
+        // one — which is the reference's behaviour and the right one: it is not a
+        // destination, and it is the one thing you should never have to find.
+        inner.appendChild(out);
+        // Its own hydrate: the nav's ran before this was attached.
+        window.ScarmIcons.hydrate(out);
 
         search.addEventListener('input', () => {
             const q = search.value.trim().toLowerCase();
@@ -11230,10 +11291,15 @@
     bindKeyRecorder(['set-mute-key', 'set-mute-key-2'], 'muteBinding');
     bindKeyRecorder(['set-deafen-key', 'set-deafen-key-2'], 'deafenBinding');
 
-    // "Sign out" means out of EVERYTHING — board session and account — so the
-    // next sign-in walks both steps again. One function, because it is now
-    // offered from two places (Settings, and the account panel over your name)
+    // "Log Out" means out of EVERYTHING — board session and account — so the next
+    // sign-in walks both steps again. One function, because it is offered from two
+    // places (the bottom of the settings nav, and the account panel over your name)
     // and half a sign-out is worse than none.
+    //
+    // The account-ONLY sign-out that used to sit beside it in Password & Security
+    // is gone: two buttons a scroll apart, both called "Sign out", doing different
+    // things. That one still exists where it reads as what it is — "Switch
+    // Accounts", in the panel over your own name.
     async function signOutEverything() {
         await teardownSession();
         await L.account.logout();
@@ -11249,6 +11315,8 @@
         $('login-pw').focus();
     }
 
+    // The nav's own Log Out, built by buildSettingsNav — which runs before this,
+    // so the button exists by the time this binds.
     $('btn-logout').addEventListener('click', signOutEverything);
 
     // The same thing from the account panel. Asked first: this one sits two

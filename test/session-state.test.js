@@ -82,7 +82,9 @@ describe('the direct-messages place', () => {
         await settle();
         expect($('sidebar').hidden).toBe(true);          // in DMs
 
-        $('btn-acct-logout').click();
+        // The account-only sign-out, from the panel over your own name — Settings'
+        // copy of it is gone, and this is where it reads as what it is.
+        $('mep-switch').click();
         await settle();
 
         // The channel sidebar is reachable again without hunting for the way

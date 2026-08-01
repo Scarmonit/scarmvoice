@@ -955,7 +955,6 @@
           <div class="acct-board" id="acct-signed" hidden>
             <span class="acct-signed-as">Signed in as <b id="acct-user"></b> <em class="hint" id="acct-role"></em></span>
             <button type="button" class="keycap" id="btn-acct-2fa">Enable 2FA</button>
-            <button type="button" class="keycap" id="btn-acct-logout">Sign out</button>
           </div>
           <div class="acct-board acct-2fa-setup" id="acct-2fa-setup" hidden>
             <div id="acct-2fa-qr" class="acct-qr"></div>
@@ -1015,16 +1014,6 @@
              account we have resolved; this one is the way OUT, and the moment it
              matters most is the moment something has gone wrong enough that
              `account` came back null. -->
-        <div class="row stack acct-removal">
-          <div class="acct-removal-row">
-            <div class="acct-removal-text">
-              <b>Sign out</b>
-              <span class="hint">Signs you out of your account and of ScarmVoice itself.
-                Signing back in takes the shared password and then your account.</span>
-            </div>
-            <button type="button" class="btn-danger-soft" id="btn-logout">Sign Out</button>
-          </div>
-        </div>
         <!-- Account removal. Two separate actions rather than one with a
              checkbox, because they are not degrees of the same thing: one is
              reversible by signing back in and the other cannot be undone at

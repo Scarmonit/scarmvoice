@@ -1080,8 +1080,59 @@ describe('the window shell', () => {
         // At --muted the two were close enough to flatten the distinction.
         expect(/\.chan \{[^}]*color: var\(--dim\)/.test(css)).toBe(true);
         expect(lum(hex('dim', dark))).toBeLessThan(lum(hex('muted', dark)));
-        // And the header hash is a marker beside the name, not a second name.
-        expect(css).toMatch(/\.ch-hash \{ color: var\(--muted\)/);
+        // And the header hash is a marker beside the name, not a second name —
+        // --dim, measured off the reference's own (~125 against our 126). At
+        // --muted (173) it sat close enough to the white name to read as one
+        // phrase, which is what it looked like in every capture.
+        expect(css).toMatch(/\.ch-hash \{ color: var\(--dim\)/);
+        expect(lum(hex('dim', dark))).toBeLessThan(lum(hex('muted', dark)));
+    });
+
+    // A round of measurements against the reference, all leaning the same way:
+    // the sidebar and the header ran 4-5% small, and the empty-channel block ran
+    // large. Pinned as declarations because the numbers came from a real browser.
+    it('sizes the sidebar and header type against the reference', () => {
+        // 16px, not 15: the channel row measured ~5% short in both ink height and
+        // width for the same string.
+        expect(css).toMatch(/\.chan \{[^}]*font-size: 16px/);
+        // The member name was ~15% small.
+        expect(css).toMatch(/#members-list \.vp \.vp-name \{[^}]*font-size: 16px/);
+        // …and the header's icons ~10%.
+        expect(css).toMatch(/\.ch-btn \.ico \{ width: 22px; height: 22px; \}/);
+    });
+
+    it('sizes the empty-channel block against the reference', () => {
+        // The heading was cap-27 against the reference's 23 — pure scale, now that
+        // the two faces measure the same width-to-height ratio.
+        expect(css).toMatch(/\.ci-title \{[^}]*font-size: 30\.5px/);
+        // A SMALLER disc with a BIGGER glyph in it: 36-in-68 (0.53) against the 34-in-80
+        // (0.43) it was, which is the reference's proportion.
+        expect(css).toMatch(/\.ci-mark \{[^}]*width: 68px; height: 68px/);
+        expect(css).toMatch(/\.ci-mark \{[^}]*font-size: 61px/);
+        // Its own fill, four points above the panels layered on the column.
+        expect(css).toMatch(/\.ci-mark \{[^}]*background: var\(--mark\)/);
+        expect(dark).toMatch(/--mark:\s*#242428/);
+    });
+
+    it('marks the OWNER in the member list, as the reference does', () => {
+        const src = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
+        const icons = fs.readFileSync(path.join(RENDERER, 'icons.js'), 'utf8');
+        expect(icons).toMatch(/crown: '<path fill="currentColor"/);
+        // Gated on the ROLE, from the account directory — the only place roles
+        // exist — and never on a roster row with no account behind it. The OWNER,
+        // not admins: there can be several of those, and a list with three crowns
+        // in it says nothing.
+        expect(src).toMatch(/function crownFor\(uid\) \{\s*if \(!uid\) return '';/);
+        expect(src).toMatch(/u\.role !== 'owner'\) return ''/);
+        expect(src).not.toMatch(/crownFor[\s\S]{0,300}'admin'/);
+        expect(css).toMatch(/\.vp-crown \{[^}]*color: var\(--crown\)/);
+        // Its own token, not --idle borrowed: one is a presence colour and the
+        // other is a badge.
+        expect(dark).toMatch(/--crown:\s*#ecab34/);
+        const light = css.slice(css.indexOf(':root[data-theme="light"]'));
+        expect(lum(hex('crown', light))).toBeLessThan(lum(hex('crown', dark)));
+        // The name ellipsises before the badge is pushed off the row.
+        expect(css).toMatch(/\.vp-name-row \{[^}]*min-width: 0/);
     });
 
     it('publishes your own deafen state to your own row', () => {

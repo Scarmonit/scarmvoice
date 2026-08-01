@@ -71,9 +71,10 @@ window.lounge = {
     if (p === 'dm/create') return { success: true, thread: DM_THREADS[1] };
     if (p === 'dm/message') return { success: true, body: 'edited' };
     if (p === 'dm/manage') return { success: true, title: 'Renamed group', members: DM_THREADS[1].members, left: true };
+    // XIAIX owns this board, so the member list's crown is in every capture.
     if (p === 'account/users') return { success: true, users: [
       { id: 2, username: 'Parker', role: 'member' },
-      { id: 3, username: 'XIAIX', role: 'member' },
+      { id: 3, username: 'XIAIX', role: 'owner' },
       { id: 4, username: 'Teebob', role: 'member' }
     ] };
     return { success: true, posts: POSTS, channels: [{ name: 'general' }, { name: 'random' }], typing: [], voice: [] };
@@ -126,7 +127,7 @@ window.lounge = {
     me: fn({ success: true, user: { id: 1, username: 'Scarmonit', role: 'admin' } }),
     users: fn({ success: true, users: [
       { id: 2, username: 'Parker', role: 'member' },
-      { id: 3, username: 'XIAIX', role: 'member' }
+      { id: 3, username: 'XIAIX', role: 'owner' }
     ] })
   },
   fileUrl: (k) => 'about:blank#' + encodeURIComponent(k)

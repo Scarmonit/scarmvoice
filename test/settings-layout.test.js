@@ -23,18 +23,25 @@ function section(title) {
 }
 
 describe('signing out', () => {
-    it('lives under Account', () => {
-        expect(section('Account')).toContain('id="btn-logout"');
-    });
-
-    it('is not under About, where it used to be', () => {
-        // About is otherwise pure information; the most consequential button in
-        // the sheet had no business being the only control in it.
+    it('is not a control in any pane', () => {
+        // It lived under About once, then under Account — as TWO buttons a scroll
+        // apart, both called "Sign out", one of them signing out of the account
+        // only. It is one button now, at the bottom of the nav where the reference
+        // puts it, so no pane carries one.
+        expect(html).not.toContain('id="btn-logout"');
+        expect(html).not.toContain('btn-acct-logout');
+        expect(section('Account')).not.toContain('Sign out');
         expect(section('About')).not.toContain('btn-logout');
     });
 
-    it('is wired exactly once', () => {
-        expect(html.split('id="btn-logout"').length - 1).toBe(1);
+    it('is built by the nav, exactly once, and signs out of everything', () => {
+        const app = appjs;
+        expect(app.split("out.id = 'btn-logout'").length - 1).toBe(1);
+        expect(app).toMatch(/set-nav-item set-nav-logout/);
+        expect(app).toMatch(/\$\('btn-logout'\)\.addEventListener\('click', signOutEverything\)/);
+        // The account-only path it replaced still exists where it reads as what it
+        // is, in the panel over your own name.
+        expect(app).toMatch(/\$\('mep-switch'\)\.addEventListener/);
     });
 });
 

@@ -181,6 +181,14 @@
             '<path d="M6 6.6l1 13.2a1 1 0 0 0 1 .9h8a1 1 0 0 0 1-.9l1-13.2"/>',
         users: '<circle cx="9" cy="7.8" r="3.4"/><path d="M2.8 20a6.2 6.2 0 0 1 12.4 0"/>' +
             '<circle cx="17.6" cy="9" r="2.6"/><path d="M16 20a5.8 5.8 0 0 1 5.4-4.6"/>',
+        // An open door with an arrow leaving through it — the reference's Log Out.
+        logout: '<path d="M9.4 20.2H5.2a1.4 1.4 0 0 1-1.4-1.4V5.2a1.4 1.4 0 0 1 1.4-1.4h4.2"/>' +
+            '<path d="M15.6 16.4l4.4-4.4-4.4-4.4"/><path d="M20 12H9.4"/>',
+        // FILLED, unlike everything else here: it is drawn at 12px beside a name,
+        // and a stroked crown at that size is four hairlines and a smudge. The
+        // fill comes from the rule, so it still takes its colour from the theme.
+        crown: '<path fill="currentColor" stroke="none" d="M3 18.4h18l1.6-10.2-5.4 3.6L12 4.4' +
+            'l-5.2 7.4-5.4-3.6zM3 20h18v1.6H3z"/>',
         // Paper plane, drawn rather than filled so it matches everything else.
         send: '<path d="M21.4 3.4L10.6 14.2"/><path d="M21.4 3.4l-6.8 18-3.9-8.1-8.1-3.9z"/>',
         paperclip: '<path d="M20.6 11.7l-8.8 8.8a4.9 4.9 0 0 1-6.9-6.9l9-9a3.4 3.4 0 0 1 4.8 4.8l-8.9 8.9' +

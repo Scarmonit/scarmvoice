@@ -534,6 +534,33 @@ describe('me-bar tooltips', () => {
         expect(errors).toEqual([]);
     });
 
+    // SIDEWAYS ON THE RAIL. It is a column of servers, so a tip opening downward
+    // lands exactly where the next one sits — hovering a server covered the server
+    // under it. To the right is the only direction with free space in a column, and
+    // it is what the reference does for this rail and no other row.
+    it('opens a rail tooltip beside the icon, not over the next server', () => {
+        over($('rail-dms'));
+        const tip = document.querySelector('.tip');
+        expect(tip.classList.contains('right')).toBe(true);
+        expect(tip.classList.contains('below')).toBe(false);
+        out($('rail-dms'));
+    });
+
+    it('keeps the vertical placement for a horizontal row of icons', () => {
+        // Down is right along the channel header: nothing sits under those.
+        over($('btn-pinned'));
+        const tip = document.querySelector('.tip');
+        expect(tip.classList.contains('right')).toBe(false);
+        out($('btn-pinned'));
+        // …and the placement is cleared between targets, or a tip last shown
+        // beside the rail keeps measuring itself with the wrong metrics.
+        over($('rail-dms'));
+        expect(document.querySelector('.tip').classList.contains('right')).toBe(true);
+        over($('btn-pinned'));
+        expect(document.querySelector('.tip').classList.contains('right')).toBe(false);
+        out($('btn-pinned'));
+    });
+
     it('reuses one node rather than leaving a trail of them', () => {
         over($('btn-mute'));
         over($('btn-deafen'));
@@ -569,7 +596,10 @@ describe('me-bar tooltips', () => {
 
 describe('the settings screen', () => {
     const $ = (id) => document.getElementById(id);
-    const nav = () => [...document.querySelectorAll('.set-nav-item')];
+    // The destinations. Log Out is a .set-nav-item too — it sits in the same
+    // column with the same metrics, which is the point — but it goes nowhere, so
+    // nothing that asks "which panes are reachable" should count it.
+    const nav = () => [...document.querySelectorAll('.set-nav-item:not(.set-nav-logout)')];
     const shown = () => [...document.querySelectorAll('.set-group')]
         .filter((g) => !g.hidden).map((g) => g.querySelector('h3').textContent);
     const type = (q) => {
@@ -588,6 +618,25 @@ describe('the settings screen', () => {
             .toEqual(['User Settings', 'App Settings']);
         // Every destination has a glyph; a nav of bare words is what it used to be.
         expect(nav().every((b) => b.querySelector('svg'))).toBe(true);
+    });
+
+    it('pins Log Out to the bottom of the nav, in red, with a door', () => {
+        // It used to be two buttons buried in the Account pane, a scroll apart,
+        // both called "Sign out" and doing different things: one signed out of the
+        // account only, the other out of everything. This is the second of those,
+        // where the reference puts it; the first is "Switch Accounts" in the panel
+        // over your own name, which is what it always was.
+        const out = document.getElementById('btn-logout');
+        expect(out).toBeTruthy();
+        expect(out.classList.contains('set-nav-logout')).toBe(true);
+        expect(out.textContent.trim()).toBe('Log Out');
+        expect(out.querySelector('svg')).toBeTruthy();
+        // LAST — after every destination, and after the last group's sub-entries.
+        const items = [...document.querySelectorAll('.set-nav-in > *')];
+        expect(items[items.length - 1]).toBe(out);
+        // …and the Account pane no longer carries one of its own.
+        expect(document.querySelectorAll('#settings [id="btn-logout"]').length).toBe(1);
+        expect(document.getElementById('btn-acct-logout')).toBeNull();
     });
 
     it('shows exactly one section at a time', () => {

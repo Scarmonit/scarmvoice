@@ -44,6 +44,10 @@
      else": the light theme could not reach them, so a filter sheet or a pinned
      card stayed dark-grey on white. Every one of them is a token now, and the
      light block gives each its own value rather than an inversion. */
+  /* The disc behind the # at the top of an empty channel. Measured at #242428 —
+     a step above the panels layered on the column, and not a surface any other
+     token names. */
+  --mark:            #242428;
   --card:            #28282d;  /* a card raised on a floating surface */
   --card-hover:      #2e2e34;
   --card-line:       #35353b;
@@ -204,6 +208,10 @@
      reporting that a connection is healthy — not a 10px dot on a photograph. */
   --voice-ok:    #67af74;
   --idle:        #dfa32c;
+  /* The owner/admin crown in the member list, sampled off the reference's own
+     (#ecab34). Kept apart from --idle: one is a presence colour and the other is
+     a badge, and retuning either should not move the other. */
+  --crown:       #ecab34;
   /* Offline. A dot in this colour and a dimmed row are the only two things
      that say somebody is not here — there is no other signal, because an
      offline person has no presence row to carry one. */
@@ -700,7 +708,9 @@ button { font-family: inherit; }
   /* Dim, so the one you are reading is the only bright row. At --muted the
      active and inactive rows were close enough to flatten the distinction. */
   color: var(--dim); text-align: left; cursor: pointer;
-  font-size: 15px; font-weight: 500;
+  /* 16px, measured: at 15 the row ran ~5% short of the reference's, both in ink
+     height and in width, for the same string. */
+  font-size: 16px; font-weight: 500;
 }
 .chan:hover { background: var(--hover); color: var(--text); }
 .chan.active { background: var(--chan-active); color: var(--text-strong); }
@@ -1137,11 +1147,17 @@ button { font-family: inherit; }
    the call is the most interesting thing a row can say, and at the far edge it
    read as decoration. */
 .vp-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+/* The name and the crown share a line, and the NAME is what ellipsises: a long
+   name should eat itself before it pushes the badge off the row. */
+.vp-name-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.vp-crown { flex: 0 0 12px; display: inline-flex; color: var(--crown); }
+.vp-crown .ico { width: 12px; height: 12px; }
 #members-list .vp .vp-name {
   /* A hundred points dimmer than it was. A member list is a list of people who
      are there, not a list of things to read — at full brightness it was pulling
      the eye off the conversation. */
-  color: var(--dim); font-size: 14px; font-weight: 500;
+  /* 16px, measured: the reference's name is ~15% taller than ours was. */
+  color: var(--dim); font-size: 16px; font-weight: 500;
 }
 #members-list .vp:hover .vp-name, #members-list .vp.speaking .vp-name { color: var(--muted); }
 /* Your own row is not more important than anyone else's here — .me brightens
@@ -1206,7 +1222,11 @@ button { font-family: inherit; }
   position: relative;
   z-index: 45;
 }
-.ch-hash { color: var(--muted); font-size: 26px; font-weight: 400; line-height: 1; }
+/* --dim, not --muted. The reference draws this a hundred points below the channel
+   name beside it — it is the marker that says what KIND of channel this is, not
+   part of the title. At --muted (173) ours sat close enough to the name to read as
+   one phrase; --dim (126) lands on the reference's own value. */
+.ch-hash { color: var(--dim); font-size: 26px; font-weight: 400; line-height: 1; }
 #chan-title {
   font-size: 15.5px; font-weight: 700; margin: 0; color: var(--text-strong);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1216,7 +1236,9 @@ button { font-family: inherit; }
 /* Idle dimmer, active WHITE — and no plate. A tint plus a pill said "toggled"
    twice, in a colour that means something else everywhere else in the app. */
 .ch-btn { width: 32px; height: 32px; color: var(--ch-icon); }
-.ch-btn .ico { width: 20px; height: 20px; }
+/* 22px. Measured against the reference's cluster, ours came out ~10% small —
+   the same direction as everything else along this header and the sidebar. */
+.ch-btn .ico { width: 22px; height: 22px; }
 .ch-btn:hover { background: none; color: var(--text-strong); }
 #chan-head .ch-btn.on { background: none; color: var(--text-strong); }
 #chan-head .ch-btn[aria-pressed="true"].on { background: none; }
@@ -1557,22 +1579,26 @@ button { font-family: inherit; }
    where justify-content: flex-end is not. */
 #messages > :first-child { margin-top: auto; }
 .chan-intro { padding: 40px 16px 0; max-width: 720px; }
+/* 68px, measured, with a glyph that fills MORE of it rather than less: the
+   reference's hash is 36 wide in a 68 circle (0.53) and ours was 34 in an 80
+   (0.43), so the disc was oversized and the mark inside it undersized at the same
+   time. 61px of type puts the glyph at 36. */
 .ci-mark {
   display: grid; place-items: center;
-  width: 80px; height: 80px; margin-bottom: 18px;
-  border-radius: 50%; background: var(--chat-2);
-  color: var(--text-strong); font-size: 58px; font-weight: 400; line-height: 1;
+  width: 68px; height: 68px; margin-bottom: 18px;
+  border-radius: 50%; background: var(--mark);
+  color: var(--text-strong); font-size: 61px; font-weight: 400; line-height: 1;
 }
 /* A shade tighter than default. Our stack resolves to Segoe UI, which is wider
    per character than the reference's face — so at a matched cap height the line
    still runs longer unless the tracking comes in. */
 .ci-title {
-  /* 36px with tighter tracking rather than 40. Segoe UI is about a quarter
-     wider than the reference's face at a matched cap height — see the note in
-     .ci-sub — so a heading set to the same height runs a quarter longer. This
-     splits the difference; matching the width exactly would mean a visibly
-     shorter heading. */
-  margin: 0 0 8px; font-size: 36px; line-height: 1.14; font-weight: 800;
+  /* 30.5px, which puts the cap height at 23 against the reference's 23. It was
+     36 (cap 27) — a compromise struck when the two faces still measured
+     differently and a matched height ran a quarter long. The width-to-height
+     ratio agrees within 3% now, so the remaining gap was pure scale and there is
+     nothing left to split the difference on. */
+  margin: 0 0 8px; font-size: 30.5px; line-height: 1.14; font-weight: 800;
   color: var(--text-strong); letter-spacing: -.03em;
 }
 /* The width gap here is the typeface, not a fallback: every element in the
@@ -2749,6 +2775,14 @@ input[readonly] { opacity: .75; cursor: default; }
 .set-nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-nav-item:hover { background: var(--hover); color: var(--text); }
 .set-nav-item.on { background: var(--nav-active); color: var(--text-strong); font-weight: 600; }
+/* The way OUT, last in the list and the only red thing in it — the reference's
+   arrangement. It is a nav item so it sits in the same column and inherits the
+   same metrics; only the colour says it is not a destination. A margin above it
+   rather than a rule: the gap is what separates it from the panes, and a line
+   would read as one more group heading. */
+.set-nav-logout { margin-top: 10px; color: var(--danger-label); }
+.set-nav-logout:hover { background: var(--danger-soft); color: var(--danger-label); }
+.set-nav-logout .ico { color: var(--danger-label); }
 
 /* The open tab's own headings, listed under it — the reference does this, and in
    a pane as long as Accessibility or Notifications it is the only way to see
@@ -3582,6 +3616,7 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --float-2:    #f2f4f7;
   --elev:       #e6e9ed;   /* hover on a raised control */
 
+  --mark:            #eaedf1;
   --card:            #f4f6f8;
   --card-hover:      #eceff3;
   --card-line:       #e2e5ea;
@@ -3710,6 +3745,8 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --online:      #229654;
   --voice-ok:    #3c8a52;
   --idle:        #c08419;
+  /* Deeper on white, where the dark theme's gold is a pale smear. */
+  --crown:       #c08a1c;
   --offline:     #8a8e96;
   --offline-fade: .5;
   --danger:      #d63c40;
@@ -4317,31 +4354,59 @@ button.ap-row:hover .ap-more { color: var(--text); }
 /* ---------- tooltips ---------------------------------------------------- */
 /* Replaces `title`, which has a multi-second delay, no styling, and draws an
    OS bubble that ignores the theme entirely. */
+/* 36px tall on a 15px label, measured: the type was 13 and the box 30, and the
+   label sat low in it (10 above, 7 below) rather than centred. A 16px line box
+   inside 9px of padding and the 1px outline comes to 36, and puts the ink ~11px
+   from the top edge and ~10 from the bottom — the reference's own symmetry. */
 .tip {
   position: fixed; z-index: 600;
-  max-width: 260px; padding: 7px 10px;
-  background: var(--float); color: var(--text);
+  max-width: 260px; padding: 9px 11px;
+  background: var(--float); color: var(--msg-text);
+  /* An OUTLINE, like every other floating surface in here. Over the rail its fill
+     alone is enough; over a lighter surface it had no edge at all — and in the
+     light theme a white tip on white paper is nothing but its shadow. */
+  border: 1px solid var(--float-rule);
   border-radius: 6px; box-shadow: var(--shadow-lg);
-  font-size: 13px; font-weight: 600; line-height: 1.2;
+  font-size: 15px; font-weight: 600; line-height: 16px;
   white-space: nowrap; pointer-events: none;
   animation: tip-in .09s ease-out;
 }
 .tip[hidden] { display: none; }
 @keyframes tip-in { from { opacity: 0; transform: translateY(3px); } }
 @media (prefers-reduced-motion: reduce) { .tip { animation: none; } }
-/* The arrow is offset to the TARGET's centre (--tip-arrow), so a tip clamped
-   against the window edge still points at the thing it names. */
+/* A ROTATED SQUARE, not a border triangle. A triangle cannot carry the 1px
+   outline the body now has, and half the diagonal of a 10px square is 7.07 — the
+   caret depth measured on the reference, against the 4px nub this was. Its centre
+   sits ON the body's edge, so the inner half covers the body's border and the
+   outer half is the pointer.
+   Offset to the TARGET's centre (--tip-arrow), so a tip clamped against the window
+   edge still points at the thing it names. */
 .tip::after {
-  content: ""; position: absolute; top: 100%; left: var(--tip-arrow, 50%);
-  margin-left: -5px; border: 5px solid transparent;
-  border-top-color: var(--float);
+  content: ""; position: absolute;
+  width: 10px; height: 10px; background: var(--float);
+  transform: rotate(45deg);
+  /* Above the target: the caret hangs off the bottom edge, pointing down. Only
+     the two OUTWARD edges take the outline. */
+  bottom: -5px; left: var(--tip-arrow, 50%); margin-left: -5px;
+  border-right: 1px solid var(--float-rule);
+  border-bottom: 1px solid var(--float-rule);
 }
-/* The arrow is 5px, so anything more than that between tip and target leaves it
-   pointing across a gap instead of at something. */
 .tip.below::after {
-  top: auto; bottom: 100%;
-  border-top-color: transparent; border-bottom-color: var(--float);
+  bottom: auto; top: -5px;
+  border: 0;
+  border-left: 1px solid var(--float-rule);
+  border-top: 1px solid var(--float-rule);
 }
+/* Beside the target — the rail. */
+.tip.right::after {
+  bottom: auto; left: -5px; margin-left: 0;
+  top: var(--tip-arrow, 50%); margin-top: -5px;
+  border: 0;
+  border-left: 1px solid var(--float-rule);
+  border-bottom: 1px solid var(--float-rule);
+}
+@keyframes tip-in-side { from { opacity: 0; transform: translateX(-3px); } }
+.tip.right { animation-name: tip-in-side; }
 
 
 /* ---------- voice panel motion ------------------------------------------ */
