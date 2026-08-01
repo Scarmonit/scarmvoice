@@ -176,13 +176,32 @@ describe('the direct-messages place', () => {
         // It was a 43px field under a 17px heading, filled 24 points darker than
         // the card — a hole in the panel — over 44px bordered rows. The reference
         // makes the input the panel and the rows plain text.
-        expect(css).toMatch(/\.dm-picker-card \{ width: min\(560px, 92vw\)/);
-        expect(css).toMatch(/input#dm-picker-search \{[^}]*height: 60px/);
+        expect(css).toMatch(/\.dm-picker-card \{ width: min\(680px, 92vw\)/);
+        expect(css).toMatch(/input#dm-picker-search \{[^}]*height: 70px/);
+        expect(css).toMatch(/input#dm-picker-search \{[^}]*font-size: 20px/);
         expect(css).toMatch(/input#dm-picker-search \{[^}]*background: var\(--ctl-sunk\); border: 1px solid var\(--ctl-sunk-line\)/);
         expect(css).toMatch(/\.dm-pick-row \{[^}]*height: 34px/);
         expect(css).toMatch(/\.dm-pick-row \{[^}]*background: none/);
         // the list itself is no longer a well with a border round it
         expect(css).not.toMatch(/\.dm-picker-list \{[^}]*background: var\(--sunk\)/);
+    });
+
+    it('marks the row Enter would act on, and keeps the others quiet', () => {
+        // Nothing said which row was live: every one measured the card's own
+        // colour, so a palette that is meant to be driven from the keyboard gave
+        // the keyboard nothing to aim at. The rows are muted and the cursor row
+        // carries the contrast, which is the only arrangement where a highlight
+        // reads as "this one".
+        expect(css).toMatch(/\.dm-pick-row \{[^}]*color: var\(--muted\)/);
+        expect(css).toMatch(/\.dm-pick-row:hover, \.dm-pick-row\.cursor \{ background: var\(--elev\); color: var\(--text-strong\); \}/);
+    });
+
+    it('raises the picker s own footer buttons out of the card', () => {
+        // They were --input on --float: two points DARKER than the thing they sit
+        // on, which is the same elevation inversion the Filters sheet's footer had.
+        expect(css).toMatch(/\.dm-picker-card \.dialog-actions button \{\s*background: var\(--ctl\)/);
+        // …and they are hidden until there is something to confirm.
+        expect(css).toMatch(/\.dm-picker-card \.dialog-actions\[hidden\] \{ display: none; \}/);
     });
 
     it('lets the finder actually FIND, not only start', () => {

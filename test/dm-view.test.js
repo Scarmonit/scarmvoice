@@ -58,6 +58,8 @@ const board = vi.fn(async (p, opts) => {
     if (p === 'list') return { success: true, posts: [POST], typing: [], voice: [], hasMore: false, maxId: 501 };
     if (p === 'channels') return { success: true, channels: [{ name: 'general', unread: 0 }] };
     if (p === 'presence') return { success: true, members: [] };
+    // The palette asks for the directory when it opens.
+    if (p === 'account/users') return { success: true, users: [THEM, THIRD] };
     return { success: true };
 });
 
@@ -274,6 +276,66 @@ describe('the profile column', () => {
         // Left up, this opened the aside still holding the LAST pair
         // conversation's profile — Alice's name and face over a group chat.
         expect($('dm-prof-toggle').hidden).toBe(true);
+    });
+});
+
+// The palette behind "Find or start a conversation". It has to be drivable from
+// the keyboard alone — a palette you have to reach for the mouse in is not one —
+// and it carries two kinds of row that Enter must treat differently: a place to
+// GO, and a person to START a conversation with.
+describe('the find-or-start palette', () => {
+    const rows = () => [...document.querySelectorAll('#dm-picker-list .dm-pick-row')];
+    const key = (k) => {
+        $('dm-picker-search').dispatchEvent(
+            new window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    };
+    const open = async () => { $('dm-find').click(); await settle(30); };
+
+    it('pre-selects the first row, so Enter always has an answer', async () => {
+        await open();
+        const r = rows();
+        expect(r.length).toBeGreaterThan(1);
+        expect(r[0].classList.contains('cursor')).toBe(true);
+        expect(r.filter((x) => x.classList.contains('cursor'))).toHaveLength(1);
+    });
+
+    it('moves the cursor with the arrows, and clamps at both ends', async () => {
+        await open();
+        key('ArrowDown');
+        expect(rows()[1].classList.contains('cursor')).toBe(true);
+        key('ArrowUp');
+        expect(rows()[0].classList.contains('cursor')).toBe(true);
+        key('ArrowUp');                                   // already at the top
+        expect(rows()[0].classList.contains('cursor')).toBe(true);
+        key('End');
+        expect(rows()[rows().length - 1].classList.contains('cursor')).toBe(true);
+        key('ArrowDown');                                 // already at the bottom
+        expect(rows()[rows().length - 1].classList.contains('cursor')).toBe(true);
+        key('Home');
+        expect(rows()[0].classList.contains('cursor')).toBe(true);
+    });
+
+    it('goes where the cursor is when you press Enter', async () => {
+        await open();
+        // The first section is "Jump to", and its first row is a channel.
+        expect(rows()[0].textContent).toContain('general');
+        key('Enter');
+        await settle(30);
+        // It closed and left the conversation for the channel.
+        expect($('dm-picker').hidden).toBe(true);
+    });
+
+    it('shows the confirm pair only while somebody is picked', async () => {
+        await open();
+        expect($('dm-picker-actions').hidden).toBe(true);
+        // …and the hint teaches the keys rather than describing a button.
+        expect($('dm-picker-hint').textContent).toContain('Enter');
+        // Picked through the list rather than through Enter, which on a FIRST
+        // pick opens that conversation outright instead of composing a group.
+        rows()[rows().length - 1].click();
+        await settle(30);
+        expect($('dm-picker-actions').hidden).toBe(false);
+        expect($('dm-picker-hint').textContent).toContain('group');
     });
 });
 

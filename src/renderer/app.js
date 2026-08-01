@@ -14702,8 +14702,30 @@
     // One picker for both: one person selected makes a DM, several make a
     // group. Splitting it into "New DM" and "New Group" would ask the reader to
     // decide which they want before they have chosen who, which is backwards.
-    const dmPick = { all: [], chosen: new Set(), mode: 'create', thread: 0 };
+    const dmPick = { all: [], chosen: new Set(), mode: 'create', thread: 0, cursor: 0 };
     const DM_GROUP_MAX = 10;                  // server enforces the same cap
+
+    // Move the keyboard cursor, clamped, and keep it on screen. Rows are read out
+    // of the DOM rather than tracked alongside it: the list is rebuilt on every
+    // keystroke, and a parallel index is the thing that goes stale.
+    function dmPickRows() { return [...$('dm-picker-list').querySelectorAll('.dm-pick-row')]; }
+    function dmPickCursor(i) {
+        const rows = dmPickRows();
+        if (!rows.length) { dmPick.cursor = 0; return null; }
+        dmPick.cursor = Math.max(0, Math.min(i, rows.length - 1));
+        rows.forEach((r, n) => r.classList.toggle('cursor', n === dmPick.cursor));
+        const cur = rows[dmPick.cursor];
+        if (cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+        return cur;
+    }
+
+    // A 20px face for a picker row, from whatever the row knows about the person:
+    // a name is enough for the generated disc, and a user id gets the photograph.
+    function dmPickFace(who) {
+        if (!who || !who.name) return '<span class="dm-pick-ico">' + I('at') + '</span>';
+        return `<span class="dm-pick-av${avatarCls(who.uid)}" style="${avatarStyle(who.name)}">` +
+            `${esc(initials(who.name))}${avatarImgHtml(who.uid)}</span>`;
+    }
 
     // A section heading in the picker's list.
     function dmPickHead(box, text) {
@@ -14732,8 +14754,13 @@
         (dmThreads || []).forEach((t) => {
             const title = dmLabel(t);
             if (!title || (q && !title.toLowerCase().includes(q))) return;
+            // A pair is the other person's face; a group has no one face, so it
+            // takes the name's own generated disc.
+            const other = t.user || (t.members || []).find((m) => !account || m.id !== account.id);
             out.push({
                 kind: 'dm', name: title, where: t.isGroup ? 'Group' : 'Conversation',
+                face: t.isGroup ? { name: title, uid: 0 }
+                    : { name: (other && other.username) || title, uid: other && other.id },
                 go: () => openDm(t.id)
             });
         });
@@ -14756,14 +14783,17 @@
                 row.type = 'button';
                 row.className = 'dm-pick-row';
                 // A channel is named by its hash, the way it is everywhere else in
-                // this app; a conversation by the @ the rail uses for the place.
+                // this app. A conversation gets the PERSON'S OWN FACE — a flat @
+                // beside somebody's name is the one thing in this list that says
+                // nothing, and the avatar is what makes a row scannable.
                 row.innerHTML =
                     (j.kind === 'channel'
                         ? '<span class="dm-pick-ico dm-pick-hash">#</span>'
-                        : '<span class="dm-pick-ico">' + I('at') + '</span>') +
+                        : dmPickFace(j.face)) +
                     `<span class="dm-pick-name">${esc(j.name)}</span>` +
                     `<span class="dm-pick-where">${esc(j.where)}</span>`;
                 row.addEventListener('click', () => { closeDmPicker(); j.go(); });
+                row._pickGo = () => { closeDmPicker(); j.go(); };
                 box.appendChild(row);
             });
         }
@@ -14773,9 +14803,21 @@
             row.type = 'button';
             const on = dmPick.chosen.has(u.id);
             row.className = 'dm-pick-row' + (on ? ' on' : '');
-            row.innerHTML = `<span class="dm-pick-name">${esc(u.username)}` +
+            row.innerHTML = dmPickFace({ name: u.username, uid: u.id }) +
+                `<span class="dm-pick-name">${esc(u.username)}` +
                 (u.role === 'admin' ? ' <em class="hint">admin</em>' : '') + '</span>' +
                 `<span class="dm-pick-check">${on ? '✓' : ''}</span>`;
+            // What Enter does on this row. Nothing picked yet and it is the common
+            // case — one person — so it opens that conversation outright; with a
+            // selection already going it toggles, because the reader is building a
+            // group and Enter must not end that halfway through.
+            row._pickGo = () => {
+                if (dmPick.mode !== 'add' && !dmPick.chosen.size) {
+                    dmPick.chosen.add(u.id);
+                    return $('dm-picker-ok').click();
+                }
+                row.click();
+            };
             row.addEventListener('click', () => {
                 if (dmPick.chosen.has(u.id)) dmPick.chosen.delete(u.id);
                 // The cap counts me too, which is why it is one fewer here.
@@ -14786,23 +14828,54 @@
             });
             box.appendChild(row);
         });
+        // THE CURSOR. The first row is pre-selected, so a typed query already has
+        // an answer under Enter — which is the whole point of a palette.
+        dmPickCursor(dmPick.cursor);
+
         const n = dmPick.chosen.size;
         const ok = $('dm-picker-ok');
         ok.disabled = n === 0;
         ok.textContent = n > 1 ? `Create Group DM (${n + 1})` : 'Create DM';
-        $('dm-picker-hint').textContent = n > 1
+        // The confirm pair belongs to the COMPOSER, so it appears when there is
+        // something to confirm. Until then the footer teaches the keys, because
+        // Enter is how this is meant to be driven.
+        $('dm-picker-actions').hidden = n === 0;
+        $('dm-picker-hint').innerHTML = n > 1
             ? 'A group with you and ' + n + ' others.'
-            : 'Pick someone to message. Pick a few to start a group.';
+            : (n === 1
+                ? 'One more to make it a group.'
+                : '<b>Enter</b> to go · <b>↑ ↓</b> to move · <b>Esc</b> to close · pick a few people to start a group');
     }
 
     function closeDmPicker() {
         releaseFocus($('dm-picker'));
         $('dm-picker').hidden = true;
         dmPick.chosen.clear();
+        dmPick.cursor = 0;
     }
 
     $('dm-picker-cancel').addEventListener('click', closeDmPicker);
-    $('dm-picker-search').addEventListener('input', renderDmPicker);
+    $('dm-picker-search').addEventListener('input', () => { dmPick.cursor = 0; renderDmPicker(); });
+    // ARROWS AND ENTER, from the box you are typing in — you should never have to
+    // leave it. Enter acts on the row under the cursor: a channel or a
+    // conversation is a place to go, a person is a conversation to start.
+    $('dm-picker-search').addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            dmPickCursor(dmPick.cursor + (e.key === 'ArrowDown' ? 1 : -1));
+            return;
+        }
+        if (e.key === 'Home' || e.key === 'End') {
+            e.preventDefault();
+            dmPickCursor(e.key === 'Home' ? 0 : dmPickRows().length - 1);
+            return;
+        }
+        if (e.key !== 'Enter') return;
+        const cur = dmPickRows()[dmPick.cursor];
+        if (!cur) return;
+        e.preventDefault();
+        if (cur._pickGo) cur._pickGo();
+    });
     $('dm-picker').addEventListener('click', (e) => { if (e.target === $('dm-picker')) closeDmPicker(); });
 
     $('dm-picker-ok').addEventListener('click', async () => {
@@ -14866,7 +14939,12 @@
         dmPick.mode = mode;
         dmPick.thread = thread || 0;
         $('dm-picker-search').value = '';
-        $('dm-picker').querySelector('h2').textContent = mode === 'add' ? 'Add people' : 'New message';
+        // The title is OUTSIDE the card now, so this has to name it rather than
+        // take the first h2 it finds — which is that title, and setting it to
+        // "New message" put the composer's old heading back over the palette.
+        $('dm-picker-title').textContent = mode === 'add'
+            ? 'Add people to the group'
+            : 'Search for channels, conversations or people';
         $('dm-picker-ok').disabled = true;
         $('dm-picker-list').innerHTML = '<div class="hint dm-picker-empty">Loading members…</div>';
         $('dm-picker').hidden = false;

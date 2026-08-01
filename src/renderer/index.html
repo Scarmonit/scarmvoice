@@ -1917,16 +1917,18 @@
        keystroke and the next thing you do is type. The reference sizes its own
        the same way, and ours had a 17px title and a 13px hint above a 43px box.
        The heading is the placeholder now. -->
+  <div class="dm-picker-wrap">
+  <h2 class="dm-picker-title" id="dm-picker-title">Search for channels, conversations or people</h2>
   <div class="dialog-card dm-picker-card">
-    <h2 class="sr-only">Find or start a conversation</h2>
     <input type="text" id="dm-picker-search" placeholder="Where would you like to go?"
            autocomplete="off" maxlength="40" aria-label="Find or start a conversation">
     <div id="dm-picker-list" class="dm-picker-list"></div>
     <p class="hint dm-picker-hint" id="dm-picker-hint">Pick someone to message. Pick a few to start a group.</p>
-    <div class="dialog-actions">
+    <div class="dialog-actions" id="dm-picker-actions" hidden>
       <button type="button" id="dm-picker-cancel">Cancel</button>
       <button type="button" id="dm-picker-ok" disabled>Create DM</button>
     </div>
+  </div>
   </div>
 </div>
 
