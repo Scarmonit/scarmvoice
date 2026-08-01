@@ -218,7 +218,13 @@ describe('the direct-messages place', () => {
         const app = fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
         expect(app).toMatch(/function dmPickerJumps\(q\)/);
         expect(app).toMatch(/kind: 'channel'[^}]*go: \(\) => switchChannel\(name\)/);
-        expect(app).toMatch(/go: \(\) => openDm\(t\.id\)/);
+        // The THREAD, not its id. This assertion used to spell out `openDm(t.id)`
+        // and so pinned the bug in place: openDm reads id, title, isGroup and
+        // members off the row, and a bare number has none of them — the
+        // conversation opened with no id at all, so dm/list was asked for
+        // nothing and the sidebar highlighted no row. dm-view.test.js drives
+        // the row for real; this only holds the call site to the shape.
+        expect(app).toMatch(/go: \(\) => openDm\(t\)/);
         // …and not in the ROSTER layout — the New Message modal off the + and
         // the Add People dialog — where "jump to #general" is not an answer to
         // "who am I messaging?".

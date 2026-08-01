@@ -1120,6 +1120,14 @@ than one-click-and-then-another: called before the download finishes it sets
 **does** restart — the pill says *Restart now*, and refusing it would be a
 button that lies.
 
+A download that **dies** clears `waitingFor` with it. `'download'` is the flag
+that greys the pill's button out, and a failed download flips the copy to
+*download failed … Try again* — so left set through the failure it drew that
+label on a control that would not answer, with the retry reachable only by
+clicking the bar around the dead button. The click itself is still remembered
+(`installWhenReady` survives the error), so a retry that succeeds installs
+without a second press.
+
 Ignoring the pill stays safe: `autoInstallOnAppQuit` is armed at `load()`, so
 closing the app applies the update whether the pill was ever clicked or not.
 And updates found at **launch** are untouched — the gate installs those before
@@ -1186,6 +1194,16 @@ Three operators mean something local:
   and it is **translated** at the request rather than passed through, so the
   DM request does not say `scope=channel` and quietly work.
 
+And a hit **goes where it came from**. Every result carries its own `thread`,
+which is already what `dmResultTitle()` reads to put a conversation's name on
+the row — so `dmThreadOf()` reads it too, and `jumpToDmMessage()` opens that
+conversation before it starts paging back. Without it every hit resolved to
+whichever conversation happened to be open: harmless under *This conversation*,
+wrong for every row *All conversations* returns. The row named one place and
+then refused to go there, paged back through the wrong history, and ended on
+"that message is further back than we can jump". `jumpToPost()` has switched
+**channel** for exactly this since the archive existed; this is its other side.
+
 ### One picker, two layouts
 
 Group conversations were already built end to end before there was a decent way
@@ -1234,6 +1252,16 @@ rather than a network of servers:
 The cap is counted as *already in the conversation + ticked*, not *me + ticked*:
 in `add` mode the second reading let you tick five more people into a group of
 eight and find out from the server.
+
+The palette's **Jump to** rows act rather than select, and the two kinds act
+differently: a channel row calls `switchChannel(name)`, a conversation row calls
+`openDm(thread)` — the row the thread list already hands out, never its id.
+`openDm()` reads the id, the title, `isGroup` and the members straight off that
+object, so a bare number left all four `undefined`: the conversation opened
+titled "Conversation", `dm/list` was asked for no thread at all, and no row in
+the sidebar could mark itself as the open one. It is the only way into a
+conversation that is not a click on the conversation itself, which is why it
+went unnoticed for six releases.
 
 ### Window state and the lightbox
 

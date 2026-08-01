@@ -3522,9 +3522,20 @@
     // Which conversation a message belongs to, or 0 for a channel post. A row
     // drawn into the pinned panel or a threads list carries its own (dmThread);
     // one drawn into the open conversation inherits it.
+    //
+    // `thread` is the third case, and it is the one an ARCHIVE HIT carries: a
+    // /api/board/dm/search result names its conversation in that field, which
+    // is why dmResultTitle already reads it to label the row. Without it here,
+    // every hit fell through to "whichever conversation is open" — so with the
+    // scope toggle on All Conversations, a result from somewhere else said one
+    // name on the row and then refused to go there: jumpToDmMessage saw a
+    // thread id equal to the one already open, never switched, paged back
+    // through the wrong history and ended on "that message is further back than
+    // we can jump". The channel half has always switched channel for exactly
+    // this (see jumpToPost); this is its missing other side.
     function dmThreadOf(p) {
         if (!p || !p.isDm) return 0;
-        return p.dmThread || (dmOpen ? dmOpen.id : 0);
+        return p.dmThread || p.thread || (dmOpen ? dmOpen.id : 0);
     }
 
     // Links open in the system browser. Attachments are saved through the
@@ -15580,7 +15591,15 @@
                 kind: 'dm', name: title, where: t.isGroup ? 'Group' : 'Conversation',
                 face: t.isGroup ? { name: title, uid: 0 }
                     : { name: (other && other.username) || title, uid: other && other.id },
-                go: () => openDm(t.id)
+                // The THREAD, not its id. openDm takes the row the list already
+                // hands out — id, title, isGroup and members — and reads all
+                // four off it. Handed a bare number it read `undefined` for
+                // every one of them: the conversation opened titled
+                // "Conversation", dm/list was asked for no thread at all, the
+                // sidebar highlighted nothing, and there was no way to tell
+                // which conversation you were supposedly in. Every other caller
+                // in this file passes the object; this was the one that did not.
+                go: () => openDm(t)
             });
         });
         return out;

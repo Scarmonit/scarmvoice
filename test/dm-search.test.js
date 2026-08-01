@@ -25,7 +25,12 @@ const $ = (id) => document.getElementById(id);
 
 const ME = { id: 1, username: 'Me', role: 'member' };
 const THEM = { id: 2, username: 'alice', role: 'member' };
+// A SECOND conversation, because "All conversations" is a scope this box
+// offers and a result set that can only ever come from one conversation cannot
+// exercise it.
+const THIRD = { id: 3, username: 'bob', role: 'member' };
 const THREAD = { id: 40, title: 'alice', isGroup: false, user: THEM, members: [ME, THEM], unread: 0 };
+const OTHER = { id: 41, title: 'bob', isGroup: false, user: THIRD, members: [ME, THIRD], unread: 0 };
 
 const DM_MESSAGES = [
     { id: 501, from: THEM.id, body: 'the logo is attached', created_at: 1700000000000, pinned: 0, reactions: [] },
@@ -37,15 +42,29 @@ const DM_MESSAGES = [
     { id: 503, from: ME.id, body: 'thanks, got it', created_at: 1700000120000, pinned: 0, reactions: [] }
 ];
 
+// Both hits carry `thread` — the conversation they came from — which is the
+// field dm/search answers with and the one dmResultTitle already reads to put
+// a name on the row. The second one belongs to the OTHER conversation, which
+// is what an All Conversations search returns and what clicking one has to be
+// able to reach.
 const ARCHIVE = [{
     id: 480, name: 'alice', user_id: 2, client_id: 'dm-user-2',
     body: 'an older mention of the logo', att_name: '', created_at: 1699990000000,
     thread_root_id: 0, isDm: true, thread: 40, isGroup: false, title: ''
+}, {
+    id: 481, name: 'bob', user_id: 3, client_id: 'dm-user-3',
+    body: 'the logo bob sent, in another conversation', att_name: '', created_at: 1699980000000,
+    thread_root_id: 0, isDm: true, thread: 41, isGroup: false, title: ''
 }];
 
-const board = vi.fn(async (p) => {
-    if (p === 'dm/threads') return { success: true, threads: [THREAD] };
-    if (p === 'dm/list') return { success: true, thread: THREAD, messages: DM_MESSAGES };
+const board = vi.fn(async (p, opts) => {
+    if (p === 'dm/threads') return { success: true, threads: [THREAD, OTHER] };
+    if (p === 'dm/list') {
+        // Answer for the thread that was actually asked for, so a test can tell
+        // "it switched conversations" from "it stayed where it was".
+        const want = (opts && opts.query && opts.query.thread) === OTHER.id ? OTHER : THREAD;
+        return { success: true, thread: want, messages: want === THREAD ? DM_MESSAGES : [] };
+    }
     if (p === 'dm/search') return { success: true, results: ARCHIVE, scope: 'conversation', thread: 40 };
     if (p === 'dm/pins') return { success: true, thread: 40, pins: [] };
     if (p === 'dm/reply-threads') return { success: true, thread: 40, threads: [] };
@@ -53,7 +72,7 @@ const board = vi.fn(async (p) => {
     if (p === 'list') return { success: true, posts: [], typing: [], voice: [], hasMore: false, maxId: 0 };
     if (p === 'channels') return { success: true, channels: [{ name: 'general', unread: 0 }] };
     if (p === 'presence') return { success: true, members: [] };
-    if (p === 'account/users') return { success: true, users: [ME, THEM] };
+    if (p === 'account/users') return { success: true, users: [ME, THEM, THIRD] };
     return { success: true };
 });
 
@@ -301,6 +320,36 @@ describe('the archive half', () => {
         expect(call[1].query.q).toBe('logo');
         $('search-clear').click();
         await settle();
+    });
+
+    // The scope toggle offers All Conversations, so a hit can belong to a
+    // conversation other than the one on screen — and the row already names it.
+    // Clicking it has to GO there. It did not: the hit's own `thread` was never
+    // read, so every result resolved to whichever conversation happened to be
+    // open. A row saying "bob" left you in the alice conversation, paged back
+    // through the wrong history, and ended on "that message is further back
+    // than we can jump". The channel half has switched channel for this all
+    // along (jumpToPost); this is its other side.
+    it('jumps into the conversation a hit actually came from', async () => {
+        await type('logo');
+        await settle(20);
+        const hits = $('search-results').querySelectorAll('.search-result');
+        expect(hits.length).toBe(2);
+        expect(hits[0].querySelector('.sr-ch').textContent).toBe('alice');
+        expect(hits[1].querySelector('.sr-ch').textContent).toBe('bob');
+
+        board.mockClear();
+        hits[1].click();
+        await settle(30);
+
+        // It asked for the OTHER conversation, and the whole view followed.
+        const call = board.mock.calls.find((c) =>
+            c[0] === 'dm/list' && c[1] && c[1].query && c[1].query.thread === OTHER.id);
+        expect(call).toBeTruthy();
+        expect($('dm-title').textContent).toBe('bob');
+        const active = $('dm-list').querySelector('.dm-row.active');
+        expect(active).toBeTruthy();
+        expect(active.textContent).toContain('bob');
     });
 });
 

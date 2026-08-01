@@ -31,6 +31,13 @@ function fireDownloaded(version) {
     (stub().handlers['update-downloaded'] || []).forEach((fn) => fn({ version, releaseNotes: '' }));
 }
 
+// A download that dies mid-stream — a dropped connection, a 5xx from release
+// storage. Distinct from checkForUpdates() rejecting, which is the feed being
+// unreachable before anything started.
+function fireError(message) {
+    (stub().handlers.error || []).forEach((fn) => fn(new Error(message)));
+}
+
 // Let installNow()'s setImmediate run.
 const flush = () => vi.advanceTimersByTimeAsync(1);
 
@@ -117,6 +124,54 @@ describe('a click before the download has finished', () => {
         fireDownloaded('9.9.9');
         await vi.advanceTimersByTimeAsync(60_000);
         expect(stub().installs.length).toBe(0);
+    });
+});
+
+describe('a download that dies after it was clicked', () => {
+    it('stops holding the button flat under the word Try again', async () => {
+        // Clicking while the bytes are still coming is the documented flow, and
+        // it sets waitingFor:'download' so the button reads "Updating…" and goes
+        // inert. If the download then FAILS the pill's copy changes to "download
+        // failed … Try again" — and the flag used to survive that, so the
+        // control under that word stayed disabled and the only way to retry was
+        // to click the bar around it.
+        updater.installNow();
+        expect(updater.getState().waitingFor).toBe('download');
+
+        fireError('ENOTFOUND objects.githubusercontent.com');
+        await flush();
+
+        const s = updater.getState();
+        expect(s.status).toBe('available');
+        expect(s.stalled).toBe(true);
+        expect(s.waitingFor).toBeNull();
+    });
+
+    it('still remembers the click, so the retry needs no second press', async () => {
+        updater.installNow();
+        fireError('socket hang up');
+        await flush();
+
+        // The failure clears what the pill is WAITING on, never what the user
+        // asked for.
+        fireDownloaded('9.9.9');
+        await flush();
+        expect(stub().installs.length).toBe(1);
+    });
+
+    it('leaves a ready update alone when a later check errors', async () => {
+        // The mirror: this error did not happen to a download, so nothing about
+        // the pill's state is its business.
+        fireDownloaded('9.9.9');
+        await flush();
+        expect(updater.getState().waitingFor).toBe('user');
+
+        fireError('rate limited');
+        await flush();
+        const s = updater.getState();
+        expect(s.status).toBe('ready');
+        expect(s.stalled).toBe(false);
+        expect(s.waitingFor).toBe('user');
     });
 });
 

@@ -325,6 +325,37 @@ describe('the find-or-start palette', () => {
         expect($('dm-picker').hidden).toBe(true);
     });
 
+    // The palette's OTHER kind of jump row. A channel row was covered above; a
+    // conversation row was not, and it was the one that was broken: it handed
+    // openDm() the thread's id where every other caller hands it the thread,
+    // so `thread.id` read undefined and the conversation that opened had no id,
+    // no members and no title of its own.
+    it('opens the conversation itself when you pick one from Jump to', async () => {
+        await open();
+        const row = rows().find((r) => {
+            const w = r.querySelector('.dm-pick-where');
+            return w && w.textContent === 'Conversation';
+        });
+        expect(row).toBeTruthy();
+        expect(row.textContent).toContain('Alice');
+
+        board.mockClear();
+        row.click();
+        await settle(30);
+
+        // Asked for THIS conversation, by id — the thing a bare number could
+        // not carry.
+        const call = board.mock.calls.find((c) => c[0] === 'dm/list');
+        expect(call).toBeTruthy();
+        expect(call[1].query.thread).toBe(PAIR.id);
+        // …and the sidebar marks it as the open one, which it can only do by
+        // comparing that id against the rows it drew.
+        const active = $('dm-list').querySelector('.dm-row.active');
+        expect(active).toBeTruthy();
+        expect(active.textContent).toContain('Alice');
+        expect($('dm-title').textContent).toBe('Alice');
+    });
+
     it('shows the confirm pair only while somebody is picked', async () => {
         await open();
         expect($('dm-picker-actions').hidden).toBe(true);

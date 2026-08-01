@@ -137,6 +137,18 @@ function load() {
             // installing it, for a failure that had nothing to do with it.
             status: stalled ? 'available' : (downloaded ? 'ready' : 'error'),
             stalled,
+            // A download that DIED is no longer one anybody is waiting on.
+            //
+            // installNow() sets waitingFor:'download' when the pill is clicked
+            // before the bytes have landed — which is a documented, encouraged
+            // thing to do — and the renderer disables the pill's button while
+            // that flag is set. Left behind through a failure, the pill then
+            // said "download failed … Try again" over a button that was greyed
+            // out and would not answer: the retry it was naming was reachable
+            // only by clicking the bar AROUND the dead control. The click
+            // itself is still remembered (installWhenReady), so a retry that
+            // succeeds still installs without a second press.
+            waitingFor: stalled ? null : state.waitingFor,
             error: (err && err.message) || 'update failed'
         });
         // An update we cannot fetch must never be a launch we cannot make.
