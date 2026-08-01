@@ -12642,7 +12642,20 @@
     // routinely spans several. See postFrom() in lib.js.
     function peopleInView() {
         const byLabel = new Map();
-        posts.forEach((p) => {
+        // The people in THIS place. In a conversation that is its members and
+        // whoever has spoken in it; in a channel it is whoever has spoken there.
+        // Offering #general's talkers as `from:` candidates while reading a DM
+        // is answering a question about somewhere else.
+        const seen = dmOpen ? dmMsgs.map((m) => dmAsPost(m)) : posts;
+        if (dmOpen) {
+            ((dmOpen.members) || []).forEach((u) => {
+                if (!u || !u.username) return;
+                byLabel.set(u.username, {
+                    label: u.username, names: new Set([u.username]), userIds: new Set([u.id])
+                });
+            });
+        }
+        seen.forEach((p) => {
             const name = p.name || 'Anonymous';
             if (!byLabel.has(name)) byLabel.set(name, { label: name, names: new Set(), userIds: new Set() });
             const e = byLabel.get(name);
@@ -12652,6 +12665,10 @@
         // Anyone with an account but nothing on screen belongs in the list too:
         // "from: somebody who has not spoken lately" is a reasonable thing to
         // ask, and offering only the recent talkers answers a different question.
+        // …except inside a conversation, where the only people who can ever have
+        // written anything are the ones in it — the whole board would be a list
+        // of names that are guaranteed to match nothing.
+        if (dmOpen) return byLabel;
         roster.forEach((u) => {
             if (u.banned || byLabel.has(u.username)) return;
             byLabel.set(u.username, {
@@ -12765,17 +12782,25 @@
 
     // The single entry point for any filter change: re-renders the (filtered)
     // list and restores scroll when the filters go inactive.
+    //
+    // WHICHEVER list is on screen. The operators are the same operators over the
+    // same message shape — postMatchesFilter in lib.js takes a post and knows
+    // nothing about where it came from, and dmAsPost() produces exactly that
+    // shape — so a conversation needs no filtering logic of its own. It had one
+    // anyway: a substring match on `body`, which is `text:` and none of the
+    // other nine.
     function applyFilter() {
         const active = filterActive();
-        if (active && filterScrollTop === null) filterScrollTop = $('messages').scrollTop;
-        renderMessages();
+        const box = dmOpen ? $('dm-messages') : $('messages');
+        if (active && filterScrollTop === null) filterScrollTop = box.scrollTop;
+        if (dmOpen) renderDmMessages(); else renderMessages();
         if (!active) {
             if (filterScrollTop !== null) {
                 const t = filterScrollTop; filterScrollTop = null;
-                requestAnimationFrame(() => { $('messages').scrollTop = t; settleScroll(); });
+                requestAnimationFrame(() => { box.scrollTop = t; if (!dmOpen) settleScroll(); });
             }
         }
-        settleScroll();
+        if (!dmOpen) settleScroll();
     }
 
     // ---------- the filters dropdown --------------------------------------
@@ -12871,11 +12896,26 @@
                     })));
             } else if (at.key === 'in') {
                 pop.appendChild(popHead('In'));
-                channels.filter((c) => c.name.includes(typed)).slice(0, 8).forEach((c) =>
-                    pop.appendChild(popRow({
-                        icon: 'doc', title: '#' + c.name, hint: '',
-                        onPick: () => pickOperator('in', c.name)
-                    })));
+                // `in:` names a place, and which places exist depends on where
+                // you are. In a channel that is the channel list; in a
+                // conversation it is the conversations you are in — offering
+                // #general there would pin the archive search to a channel from
+                // a box that is searching direct messages.
+                if (dmOpen) {
+                    dmThreads
+                        .filter((t) => dmLabel(t).toLowerCase().includes(typed))
+                        .slice(0, 8)
+                        .forEach((t) => pop.appendChild(popRow({
+                            icon: 'at', title: dmLabel(t), hint: '',
+                            onPick: () => pickOperator('in', dmLabel(t))
+                        })));
+                } else {
+                    channels.filter((c) => c.name.includes(typed)).slice(0, 8).forEach((c) =>
+                        pop.appendChild(popRow({
+                            icon: 'doc', title: '#' + c.name, hint: '',
+                            onPick: () => pickOperator('in', c.name)
+                        })));
+                }
             } else if (at.key === 'pinned') {
                 pop.appendChild(popHead('Pinned'));
                 [['true', 'Only pinned'], ['false', 'Anything but pinned']].forEach(([v, label]) =>
@@ -12939,23 +12979,25 @@
         sel.value = chosen || '';
     }
 
+    // The form's In select — channels in a channel, conversations in a
+    // conversation. The same list the dropdown's `in:` offers, because they
+    // write the same operator into the same box.
     function fillChannelSelect(sel, chosen) {
         sel.innerHTML = '';
         const any = document.createElement('option');
         any.value = '';
-        any.textContent = 'Any channel';
+        any.textContent = dmOpen ? 'Any conversation' : 'Any channel';
         sel.appendChild(any);
-        channels.forEach((c) => {
+        const add = (value, label) => {
             const o = document.createElement('option');
-            o.value = c.name;
-            o.textContent = '#' + c.name;
+            o.value = value;
+            o.textContent = label;
             sel.appendChild(o);
-        });
+        };
+        if (dmOpen) dmThreads.forEach((t) => add(dmLabel(t), dmLabel(t)));
+        else channels.forEach((c) => add(c.name, '#' + c.name));
         if (chosen && ![...sel.options].some((o) => o.value === chosen)) {
-            const o = document.createElement('option');
-            o.value = chosen;
-            o.textContent = '#' + chosen;
-            sel.appendChild(o);
+            add(chosen, dmOpen ? chosen : '#' + chosen);
         }
         sel.value = chosen || '';
     }
@@ -13184,6 +13226,18 @@
 
     let searchScope = 'channel';
     let searchSeq = 0;
+    // What the scope toggle SAYS, in each place. 'channel' is "here" and 'all'
+    // is "everywhere", and the two places name those differently.
+    const SCOPE_LABEL = {
+        channel: { channel: 'This channel', all: 'All channels' },
+        dm: { channel: 'This conversation', all: 'All conversations' }
+    };
+    function paintSearchScope() {
+        $('search-scope').textContent = SCOPE_LABEL[dmOpen ? 'dm' : 'channel'][searchScope];
+        $('search-scope').title = dmOpen
+            ? 'Search this conversation, or every conversation you are in'
+            : 'Search this channel, or every channel';
+    }
     // How many hits one request asks for. Named because renderSearchResults has to
     // know it to tell a complete answer from a truncated one.
     const SEARCH_LIMIT = 40;
@@ -13195,7 +13249,7 @@
 
     $('search-scope').addEventListener('click', () => {
         searchScope = searchScope === 'channel' ? 'all' : 'channel';
-        $('search-scope').textContent = searchScope === 'all' ? 'All channels' : 'This channel';
+        paintSearchScope();
         runSearch();
     });
 
@@ -13228,14 +13282,37 @@
         // what it says. Naming a channel also pins the scope to it; "in this
         // one, across all of them" is not a question.
         const inChan = filter.inChannel || null;
-        const res = await L.board('search', {
-            query: {
-                q,
-                channel: inChan || channel,
-                scope: inChan ? 'channel' : searchScope,
-                limit: SEARCH_LIMIT
-            }
-        });
+        // The same question, of the archive that holds what is on screen. A
+        // conversation's messages are not in `posts` and never were, so asking
+        // /api/board/search from a DM searched the channels behind it and
+        // returned hits nobody in that conversation had written — which is why
+        // the DM box never had an archive at all.
+        //
+        // `in:` pins the scope in both places, for the same reason: "in this
+        // one, across all of them" is not a question.
+        const res = dmOpen
+            ? await L.board('dm/search', {
+                query: {
+                    q,
+                    thread: inChan ? (dmThreadIdForLabel(inChan) || dmOpen.id) : dmOpen.id,
+                    // `searchScope` holds 'channel' for "here", because that is
+                    // the word the channel endpoint uses. Here, "here" is a
+                    // conversation — translated rather than passed through, so
+                    // the request says what it means. (dm/search.js treats
+                    // anything but 'all' as one conversation, so this was
+                    // working and lying at the same time, which is worse.)
+                    scope: (!inChan && searchScope === 'all') ? 'all' : 'conversation',
+                    limit: SEARCH_LIMIT
+                }
+            })
+            : await L.board('search', {
+                query: {
+                    q,
+                    channel: inChan || channel,
+                    scope: inChan ? 'channel' : searchScope,
+                    limit: SEARCH_LIMIT
+                }
+            });
         if (seq !== searchSeq) return;
         if (authGone(res)) return;
         // A FAILED search is not an empty one, and hiding the panel made the two
@@ -13246,6 +13323,16 @@
         // the thread panel and the DM list already do.
         if (!res || !res.success) { searchError(res, q); return; }
         renderSearchResults(res.results || [], q);
+    }
+
+    // `in:` carries a conversation by the NAME it is listed under, because that
+    // is what somebody types and what the dropdown offers. The endpoint wants an
+    // id, and this is the only place the two meet.
+    function dmThreadIdForLabel(label) {
+        const want = String(label || '').trim().toLowerCase();
+        if (!want) return 0;
+        const t = dmThreads.find((x) => dmLabel(x).toLowerCase() === want);
+        return t ? t.id : 0;
     }
 
     function searchError(res, q) {
@@ -13276,6 +13363,17 @@
         return sameDay
             ? timeStr(ts)
             : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + timeStr(ts);
+    }
+
+    // What to call the conversation a DM hit came from. The server returns the
+    // raw stored title (empty for a one-to-one, which is named after the person
+    // on the other end) plus the thread id; dmLabel resolves the rest from the
+    // list this client already has.
+    function dmResultTitle(r) {
+        const t = dmThreads.find((x) => x.id === r.thread);
+        if (t) return dmLabel(t);
+        if (r.title) return r.title;
+        return r.isGroup ? 'Group' : 'Conversation';
     }
 
     function searchTime(ts) {
@@ -13326,7 +13424,12 @@
             nm.textContent = wroteByMe(r) ? 'You' : (r.name || 'Anonymous');
             const ch = document.createElement('span');
             ch.className = 'sr-ch';
-            ch.textContent = '#' + r.channel + (r.thread_root_id ? ' · thread' : '');
+            // A channel names itself with a hash; a conversation names itself
+            // after whoever is in it, resolved from the list this client already
+            // holds rather than by asking the server for the members of every
+            // thread in the result.
+            ch.textContent = (r.isDm ? dmResultTitle(r) : '#' + r.channel) +
+                (r.thread_root_id ? ' · thread' : '');
             const tm = document.createElement('span');
             tm.className = 'sr-time';
             tm.textContent = searchTime(r.created_at);
@@ -13349,8 +13452,11 @@
                 // nothing on screen to say why, and no obvious way back.
                 // jumpToPost already did this; the thread branch did not.
                 clearSearch();
-                // A reply lives in its thread, not the main list.
-                if (r.thread_root_id) openThread(r.thread_root_id, r.channel);
+                // A reply lives in its thread, not the main list — in either
+                // place. dmThreadOf() answers 0 for a channel hit, which is what
+                // openThread takes to mean "this is a channel thread".
+                if (r.thread_root_id) openThread(r.thread_root_id, r.channel, dmThreadOf(r));
+                else if (r.isDm) jumpToDmMessage(r);
                 else jumpToPost(r);
             });
             box.appendChild(it);
@@ -13360,14 +13466,28 @@
     }
     // In a filtered view, clicking a matching message (not an interactive part)
     // clears the filters and jumps to it among its neighbours — full context.
+    const IGNORE_JUMP = 'button, a, input, textarea, select, .reaction, .msg-actions, ' +
+        'img[data-lightbox], .att-save, .yt-card, .link-card, audio, video';
     $('messages').addEventListener('click', (e) => {
         if (!filterActive()) return;
-        if (e.target.closest('button, a, input, textarea, select, .reaction, .msg-actions, img[data-lightbox], .att-save, .yt-card, .link-card, audio, video')) return;
+        if (e.target.closest(IGNORE_JUMP)) return;
         const row = e.target.closest('.msg');
         if (!row) return;
         const id = parseInt(row.dataset.id, 10);
         const p = posts.find((x) => x.id === id);
         if (p) jumpToPost(p);
+    });
+    // The same gesture in a conversation, which used to do nothing there — the
+    // listener was bound to #messages alone, so a filtered DM was a list you
+    // could look at and not get out of.
+    $('dm-messages').addEventListener('click', (e) => {
+        if (!filterActive() || !dmOpen) return;
+        if (e.target.closest(IGNORE_JUMP)) return;
+        const row = e.target.closest('.msg');
+        if (!row) return;
+        const id = parseInt(row.dataset.id, 10);
+        const m = dmMsgs.find((x) => x.id === id);
+        if (m) jumpToDmMessage(dmAsPost(m));
     });
 
     // Walk back through history until the post is loaded, then flash it.
@@ -13403,6 +13523,9 @@
     // because a pinned message in a DM is exactly as likely to be off-screen as
     // one in a channel and the panel's Jump has to work in both.
     async function jumpToDmMessage(target) {
+        // Drop any active filters so the message shows among its neighbours —
+        // the same first step jumpToPost takes, and for the same reason.
+        if (filterActive()) { filterScrollTop = null; clearSearch(); }
         const tid = dmThreadOf(target);
         if (tid && (!dmOpen || dmOpen.id !== tid)) {
             const t = dmThreads.find((x) => x.id === tid);
@@ -14186,10 +14309,10 @@
     // the profile panel gets the rest from here — populated whenever the picker
     // loads the directory, and left empty rather than guessed if it never has.
     const dmDirectory = {};
-    // Declared with the other DM state, not beside its listener: renderDmMessages
-    // reads it, and a `let` further down the file is in its temporal dead zone
-    // until that line runs.
-    let dmFilter = '';
+    // `dmFilter` used to be declared here — the conversation's own private
+    // substring match, the whole of what DM search was. There is no second
+    // filter state any more: the ONE `filter` object at the top of this file is
+    // what narrows both lists, through the one matcher in lib.js.
     let dmOpen = null;                // { id, username } of the open conversation
     let dmMsgs = [];
     // dm/list has always paged — it takes `before` and answers `hasMore` — and
@@ -14328,9 +14451,15 @@
         renderDmHead();
         $('dm-panel').hidden = false;
         moveComposer(true);
-        // The header's three buttons come with you, and whatever they were
-        // showing about the last place closes.
+        // The header's three buttons and the search UI come with you, and
+        // whatever they were showing about the last place closes. The query goes
+        // too: `from:alice has:image` narrowed a channel, and carrying it into a
+        // conversation would open it already filtered by criteria the reader did
+        // not type here.
         moveConvActions(true);
+        moveSearchUi(true);
+        clearSearch();
+        paintSearchScope();
         closeSurfacePanels();
         closeThread();
         dmMsgs = [];
@@ -14777,6 +14906,9 @@
         // hidden panel with the poll still running).
         if (threadDm) closeThread();
         moveConvActions(false);
+        moveSearchUi(false);
+        clearSearch();
+        paintSearchScope();
         closeSurfacePanels();
         if (!dmMode) $('dm-panel').hidden = true;
         $('dm-panel').classList.remove('is-group');
@@ -14810,6 +14942,57 @@
     // selected there is no place for the three of them to be about, and a bell
     // that silences "nothing in particular" is worse than no bell.
     let convActionsHome = null;
+
+    // THE SEARCH UI, relocated — the box, its dropdown and the results panel.
+    //
+    // All three are one control and they move together, because they are
+    // positioned against each other: .search-pop hangs off the header that holds
+    // the box, and #search-panel is the strip under it. Left behind in
+    // #chan-head they were painted UNDER #dm-panel (45 against 50), which is why
+    // Ctrl+F in a conversation used to need a special case that focused a
+    // different field entirely.
+    //
+    // This is what replaces #dm-search-input: not a better second box, but the
+    // first box, here.
+    let searchHome = null;
+    let searchPopHome = null;
+    let searchPanelHome = null;
+
+    function moveSearchUi(intoDm) {
+        const box = $('search-box');
+        const pop = $('search-pop');
+        const panel = $('search-panel');
+        if (!box || !pop || !panel) return;
+        if (!searchHome) {
+            searchHome = document.createComment('search-box');
+            box.parentNode.insertBefore(searchHome, box);
+            searchPopHome = document.createComment('search-pop');
+            pop.parentNode.insertBefore(searchPopHome, pop);
+            searchPanelHome = document.createComment('search-panel');
+            panel.parentNode.insertBefore(searchPanelHome, panel);
+        }
+        const back = (el, home) => {
+            if (home.parentNode) home.parentNode.insertBefore(el, home.nextSibling);
+        };
+        if (intoDm) {
+            const slot = $('dm-search-slot');
+            const head = $('dm-head');
+            const main = $('dm-main');
+            if (!slot || !head || !main) return;
+            slot.appendChild(box);
+            // A sibling of the slot rather than a child of it: the dropdown is
+            // positioned against the HEADER (top: 100%, right: 16px), the way it
+            // is in #chan-head.
+            head.appendChild(pop);
+            // First in the column, so the results strip sits directly under the
+            // header and above the conversation — where it sits in #main.
+            main.insertBefore(panel, main.firstChild);
+        } else {
+            back(box, searchHome);
+            back(pop, searchPopHome);
+            back(panel, searchPanelHome);
+        }
+    }
 
     function moveConvActions(intoDm) {
         const group = $('conv-actions');
@@ -14917,6 +15100,18 @@
         box.querySelector('.dm-retry').addEventListener('click', () => loadDmMessages(true));
     }
 
+    // The conversation's half of displayedPosts(): blocked people hidden, then
+    // the search filters applied — through the SAME matcher, because a DM row
+    // mapped by dmAsPost IS the shape that matcher takes.
+    function displayedDms() {
+        const blocked = Object.keys(blockedMap()).length;
+        const base = blocked
+            ? dmMsgs.filter((m) => !isBlocked(clientForUser(m.from)))
+            : dmMsgs;
+        if (!filterActive()) return base;
+        return base.filter((m) => postMatchesFilter(dmAsPost(m)));
+    }
+
     // ONE direct-message row -> the shape renderMessage() expects.
     //
     // This used to be a closure inside renderDmMessages, which meant the
@@ -15021,6 +15216,15 @@
         // message, which is why it gets all of the above for nothing. So does
         // this now: map each message onto the shape renderMessage() expects and
         // hand it over.
+        // What the box says it found, on the box, exactly as the channel column
+        // reports it (see renderMessages) — and the rows become clickable, since
+        // clicking one clears the filters and jumps to it in context.
+        const filtering = filterActive();
+        const matches = filtering ? displayedDms().length : 0;
+        box.classList.toggle('filtering', filtering);
+        $('search-box').dataset.count = filtering
+            ? (matches + (matches === 1 ? ' match' : ' matches')) : '';
+
         // With older messages still on the server this is not the beginning of
         // anything, so say what it is instead — and give the mouse a way back
         // that does not depend on noticing that scrolling loads more.
@@ -15036,8 +15240,11 @@
         // the conversation to the bottom of the column (see #dm-messages >
         // .dm-intro), so a short conversation sits above the composer instead of
         // stranded at the top with a screen of nothing under it.
-        // Only when this really IS the start of the history — see above.
-        const intro = dmHasMore ? null : document.createElement('div');
+        // Only when this really IS the start of the history — see above — and
+        // never under a filter: a filtered list is a result, not a beginning,
+        // and the channel column drops its own welcome block for the same
+        // reason.
+        const intro = (dmHasMore || filtering) ? null : document.createElement('div');
         if (intro) {
         intro.className = 'chan-intro dm-intro';
         const others = (dmOpen && dmOpen.members || []).filter((u) => !account || u.id !== account.id);
@@ -15106,16 +15313,19 @@
 
         let lastDay = '';
         let prev = null;
-        // The header's search box narrows what is on screen. Only what has been
-        // loaded — see the listener — so an empty result means "not in the part
-        // of this conversation you have open", not "nowhere".
-        const shown = dmFilter
-            ? dmMsgs.filter((m) => (m.body || '').toLowerCase().includes(dmFilter))
-            : dmMsgs;
-        if (dmFilter && !shown.length) {
+        // The header's search box narrows what is on screen — the SAME box, the
+        // same operators and the same matcher the channel column uses, over the
+        // messages this conversation has loaded. Anything further back is the
+        // archive's job, and the results panel below answers that.
+        const shown = displayedDms();
+        if (filtering && !shown.length) {
+            // The channel column's wording, because it is the same answer to the
+            // same question — including the part about loading further back,
+            // which is as true here as it is there.
             const e = document.createElement('div');
-            e.className = 'dm-empty';
-            e.textContent = 'Nothing matching “' + dmFilter + '” in the messages loaded here.';
+            e.className = 'empty-state';
+            e.textContent = 'No loaded messages match these filters.' +
+                (dmHasMore ? ' Load earlier messages to search further back.' : '');
             box.appendChild(e);
             return true;
         }
@@ -15709,13 +15919,11 @@
         renderDmProfile();
     });
 
-    // Filters the messages already loaded. It is not a server-side search —
-    // there is no DM search endpoint — so it says so rather than pretending to
-    // reach further back than the conversation currently holds.
-    $('dm-search-input').addEventListener('input', (e) => {
-        dmFilter = (e.target.value || '').trim().toLowerCase();
-        renderDmMessages();
-    });
+    // The conversation's search listener USED to live here: a substring match
+    // on the bodies already loaded, with no operators, no dropdown, no More
+    // filters and no archive behind it. It is gone with the box it was bound to
+    // — #search-box moves into this header now (see moveSearchUi), so a
+    // conversation gets the channel's search rather than an imitation of it.
 
     // Realtime delivery — pushed by the server the moment the sender posts.
     function onDmEvent(m) {
@@ -15840,15 +16048,16 @@
             // there was no way back to the box that now had the focus.
             if (trapped.size) return;
             e.preventDefault();
-            // The header box belongs to the channel column, and #dm-panel is
-            // painted OVER that column — so in direct messages Ctrl+F focused a
-            // field nobody could see, opened a dropdown nobody could see, and
-            // filtered a channel list nobody was looking at. Search the thing on
-            // screen instead.
-            if (dmMode) {
-                const box = $('dm-search-input');
-                if (box) { box.focus(); box.select(); return; }
-            }
+            // ONE box. It used to belong to the channel column, and #dm-panel is
+            // painted over that column, so in direct messages Ctrl+F focused a
+            // field nobody could see — which is what the second DM search box
+            // was there to work around. The box moves into the conversation
+            // header now, so this needs no special case.
+            //
+            // Except one: in the DM view with no conversation open there is
+            // nothing on screen to search, and the box is back in the channel
+            // header behind the panel. Do nothing rather than focus it.
+            if (dmMode && !dmOpen) return;
             searchInput().focus();
             searchInput().select();
             openSearchPop();

@@ -741,10 +741,14 @@
         <button type="button" class="icon-btn" id="dm-prof-toggle" title="Show profile" aria-pressed="true">
           <span class="ico" data-icon="user-add"></span>
         </button>
-        <div class="dm-search">
-          <input type="text" id="dm-search-input" placeholder="Search" autocomplete="off" maxlength="60">
-          <span class="ico" data-icon="search"></span>
-        </div>
+        <!-- Where #search-box lands — the SAME box the channel header holds,
+             moved in with #conv-actions. There used to be a second input here
+             with a 60-character cap, no operators, no dropdown, no More filters
+             and no archive: it substring-matched the messages that happened to
+             be loaded and said so. Two search UIs over the same message
+             component is the divergence this app keeps having to undo, and a
+             lookalike can always be missing something the original has. -->
+        <span id="dm-search-slot"></span>
         <button type="button" class="icon-btn" id="dm-close" title="Close (Esc)">
           <span class="ico" data-icon="x"></span>
         </button>

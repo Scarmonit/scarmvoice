@@ -207,6 +207,12 @@ them**
   one; see [One picker, two layouts](#one-picker-two-layouts)
 - **Find or start a conversation** — the palette is still its own thing, and
   still the one that jumps you to a channel
+- **The same search** — the header's search bar *moves into* the conversation,
+  so a DM gets the real one: every operator, the filters dropdown, **More
+  filters**, the match count, and an archive search over the whole conversation
+  (**This conversation** / **All conversations**). `from:` and `mentions:` offer
+  the people in that conversation and `in:` offers your conversations; see
+  [One search, two places](#one-search-two-places)
 - **The same header** — Threads, Notification Settings and Pinned Messages are
   the *same three buttons*, moved into the conversation header rather than
   rebuilt there. A conversation has its own pins, its own threads and its own
@@ -1056,6 +1062,59 @@ in a conversation is no longer the newest *root*. Opening a conversation marks
 it read up to `MAX(id)` rather than to the last row on the page — otherwise a
 thread reply, which always has a higher id, would leave a badge that nothing in
 the column could clear.
+
+### One search, two places
+
+A conversation had `#dm-search-input`: a 60-character field that lowercased the
+box and ran `body.includes(…)` over the messages already loaded. That is
+`text:` and none of the other nine operators, with no dropdown, no **More
+filters** and no archive behind it — and no way for any of that to arrive,
+because every improvement to the real search went into the other box. The same
+divergence as the pins, the threads and the bell, in the one component whose
+whole job is to answer questions.
+
+Nothing was re-added to it. It was deleted, and three elements moved:
+
+- **`#search-box`** into `#dm-search-slot` in the conversation header
+- **`#search-pop`** into `#dm-head` — the dropdown is `top: 100%; right: 16px`
+  against the header holding the box, so it has to travel with it (and
+  `#dm-head` gets `position: relative` to be that anchor)
+- **`#search-panel`**, the results strip, into `#dm-main`
+
+All three used to sit in `#chan-head` / `#main`, which `#dm-panel` paints over
+at a higher `z-index`. That is *why* the second box existed: `Ctrl+F` in a
+conversation focused a field nobody could see, so it was special-cased to focus
+the other one instead. That special case is gone.
+
+The filtering half needed no new logic at all. `postMatchesFilter()` in
+`lib.js` takes a post and knows nothing about where it came from, and
+`dmAsPost()` already produces exactly that shape — so `applyFilter()` renders
+whichever list is on screen and the one `filter` object narrows both.
+`displayedDms()` mirrors `displayedPosts()`, down to the match count on the
+box, the suppressed intro and the wording of the empty state.
+
+The archive half is the only part that is genuinely two things, because the
+messages live in two tables: `/api/board/dm/search` is the DM half of
+`/api/board/search`, returning rows under the same field names so one results
+row can draw either. **The permission model is the join** — every row comes
+back through `dm_members`, so a search can only ever reach conversations the
+caller is in; it is written as a JOIN rather than a subquery so it cannot be
+loosened later without somebody noticing.
+
+Three operators mean something local:
+
+- `from:` and `mentions:` offer the conversation's members and its speakers,
+  not the whole board. Inside a conversation the only people who *can* have
+  written anything are the ones in it, so the roster fallback is skipped —
+  otherwise the list is names guaranteed to match nothing.
+- `in:` names a conversation rather than a channel, and pins the archive scope
+  to it. It carries the name the conversation is listed under, because that is
+  what the dropdown offers and what somebody would type;
+  `dmThreadIdForLabel()` is the single place that becomes an id.
+- The scope toggle says *This conversation* / *All conversations*. The internal
+  value is still `'channel'` for "here" — the word the channel endpoint uses —
+  and it is **translated** at the request rather than passed through, so the
+  DM request does not say `scope=channel` and quietly work.
 
 ### One picker, two layouts
 

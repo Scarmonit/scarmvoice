@@ -1690,7 +1690,10 @@ button { font-family: inherit; background: none; border: 0; }
   100% { background: transparent; }
 }
 /* In a filtered view, matched messages are jump-to-context clickable. */
-#messages.filtering .msg { cursor: pointer; }
+/* Either list, when it is filtered: clicking a row clears the filters and
+   jumps to it in context, so it has to look clickable in both. */
+#messages.filtering .msg,
+#dm-messages.filtering .msg { cursor: pointer; }
 
 /* ---------- message formatting ------------------------------------------
    Mirrors the website's board.css so a message reads the same in both
@@ -4027,6 +4030,13 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   padding: 0 8px 0 16px;
   background: var(--chat);
   border-bottom: 1px solid var(--line);
+  /* The anchor for .search-pop, which is `top: 100%; right: 16px` against the
+     header holding the box — exactly as it is in #chan-head. #search-pop is
+     moved in here with the box (see moveSearchUi); without a positioned
+     ancestor the dropdown would resolve against the page and open somewhere
+     near the top-left of the window. */
+  position: relative;
+  z-index: 45;
 }
 #dm-head > .ico { color: var(--ch-icon); flex: none; }
 #dm-title {
@@ -5452,8 +5462,11 @@ html.win-hidden .up-bar i {
 }
 #dm-main:has(> #thread-panel:not([hidden])) { --drawer-shift: var(--drawer-w); }
 /* The conversation narrows behind the drawer rather than sliding under it —
-   identical to what #main does for #messages-wrap and #composer. */
+   identical to what #main does for #messages-wrap and #composer. #search-panel
+   is in this list for the same reason it is in #main's: its right-aligned
+   controls sit under the drawer otherwise, focusable and unclickable. */
 #dm-main > #dm-messages,
+#dm-main > #search-panel,
 #dm-main > #dm-composer-slot { margin-right: var(--drawer-shift); }
 #dm-profile {
   flex: none; width: 302px; display: flex; flex-direction: column;
@@ -5609,15 +5622,13 @@ html.win-hidden .up-bar i {
 .dm-nothing { margin: auto; }
 #dm-panel.empty #dm-messages { display: flex; }
 
-/* Header search, matched to the channel header's field. */
-.dm-search { position: relative; display: flex; align-items: center; }
-.dm-search input {
-  width: 150px; height: 26px; padding: 0 26px 0 8px; border-radius: 4px;
-  background: var(--sunk); border: 0; outline: none;
-  color: var(--text); font-size: 13px;
-}
-.dm-search input::placeholder { color: var(--dim); }
-.dm-search .ico { position: absolute; right: 6px; color: var(--dim); pointer-events: none; }
+/* Header search.
+   There was a `.dm-search` block here — a second field, 150px, "matched to the
+   channel header's field" and gradually not. It is gone: #search-box itself is
+   moved into #dm-search-slot, so the conversation header has the channel's
+   search, its dropdown, its operators and its archive, and .ch-search is the
+   only place any of that is styled. */
+#dm-search-slot { display: flex; align-items: center; }
 
 /* ---------- release history (Settings > About) ---------------------------
    One <details> per version. Collapsing is the browser's, so there is no
