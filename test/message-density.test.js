@@ -143,6 +143,46 @@ describe('compact — a name and a time on every line', () => {
     });
 });
 
+// The gesture somebody actually performs: the setting is flipped while the
+// thing it changes is ON SCREEN. That is a different code path from booting
+// into a density — applyDensity() toggles the class, and only the channel
+// column has a caller that repaints it afterwards. The other two rebuild
+// wholesale from a poll that returns early on an unchanged payload, so left to
+// themselves they keep the grouping they were drawn with while wearing the new
+// class: rows with the gutter hidden and no .msg-head to replace it.
+describe('flipping the setting with the lists already open', () => {
+    async function flipToCompact() {
+        const box = document.querySelector('input[name="set-msgdisplay"][value="compact"]');
+        box.checked = true;
+        box.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await settle();
+    }
+
+    it('regroups the conversation column at once', async () => {
+        await bootRenderer({ board, user: ME, settings: { density: 'cozy' } });
+        $('dm-list').querySelector('.dm-row').click();
+        await settle();
+        expect(groupedCount(snapshot('dm-messages'))).toBe(1);   // as drawn, cozy
+
+        await flipToCompact();
+        const after = snapshot('dm-messages');
+        expect(groupedCount(after)).toBe(0);
+        expectEveryRowNamed(after, 'dm-messages');
+    });
+
+    it('regroups the thread drawer at once', async () => {
+        await bootRenderer({ board, user: ME, settings: { density: 'cozy' } });
+        document.querySelector(`.msg[data-id="${ROOT.id}"] .msg-thread`).click();
+        await settle();
+        expect(groupedCount(snapshot('thread-list'))).toBe(2);   // as drawn, cozy
+
+        await flipToCompact();
+        const after = snapshot('thread-list');
+        expect(groupedCount(after)).toBe(0);
+        expectEveryRowNamed(after, 'thread-list');
+    });
+});
+
 describe('the stylesheet names every list that carries the class', () => {
     let rules = '';
     beforeAll(() => {

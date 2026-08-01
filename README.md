@@ -1711,6 +1711,18 @@ conversation, and `webContents.setZoomFactor` for zoom. Two details worth keepin
   in both densities, and matches the density block's selectors against all three
   lists — the failure mode is a missing selector, not a wrong value, so it is
   checked as text.
+
+  Density is therefore not just a class, and `applyDensity()` has to **repaint**
+  the two lists that will not repaint themselves. The channel column is fine —
+  every caller follows with `renderMessages()`, which diffs by a signature that
+  already carries the density — but `renderThread()` and `renderDmMessages()`
+  rebuild wholesale from polls that short-circuit on an unchanged payload
+  (`loadThread` and `loadDmMessages` both compare a signature first). Flipping
+  the setting with a conversation or a thread open therefore applied the new
+  class to rows that were grouped under the old one, and left them that way
+  until somebody happened to say something. Both repaints self-guard on being
+  open, and both drawers are `hidden` in the markup, so the `applyChrome()` call
+  during startup reaches neither.
 - **The live Preview is the real renderer.** Two fixed messages through
   `renderMessage()`, so the markdown, the link and the reactions are the same code
   the conversation uses — a slider can be dragged while watching what it actually

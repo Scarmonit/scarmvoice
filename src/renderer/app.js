@@ -8810,6 +8810,23 @@
         $('messages').classList.toggle('compact', on);
         $('thread-list').classList.toggle('compact', on);
         $('dm-messages').classList.toggle('compact', on);
+        // …AND REPAINT THE TWO THAT WILL NOT REPAINT THEMSELVES.
+        //
+        // Density is not just a class: grouping is decided at RENDER time, and
+        // a grouped row has no .msg-head, so once compact hides the gutter it
+        // has neither a name nor a time. The channel column is fine — every
+        // caller of this follows with renderMessages(), which diffs by a
+        // signature that already carries the density — but the other two rebuild
+        // wholesale from a poll that SHORT-CIRCUITS on an unchanged payload
+        // (loadThread and loadDmMessages both compare a signature first). So
+        // flipping the setting with a conversation or a thread open left the
+        // class applied to rows that were grouped under the old one, and left
+        // them that way until somebody happened to say something.
+        //
+        // Both self-guard on being open, and both are hidden at boot, so the
+        // applyChrome() call during startup reaches neither.
+        if (threadOpen()) renderThread();
+        if (dmPanelOpen()) renderDmMessages();
     }
 
     // ---------- do not disturb, muted channels, blocked people -------------
