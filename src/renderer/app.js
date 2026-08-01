@@ -2980,7 +2980,7 @@
         if (s.length <= SIG_INLINE_MAX) return s;
         let h = 5381;
         for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) | 0;
-        return s.length + ':' + h + ':' + s.slice(0, 64) + ' ' + s.slice(-64);
+        return s.length + ':' + h + ':' + s.slice(0, 64) + '\u0000' + s.slice(-64);
     }
 
     // Everything that can change how one message draws. Two posts with equal
@@ -3037,8 +3037,17 @@
         box.classList.toggle('filtering', active);
         // The count belongs to the box that produced it now, not to a strip
         // that no longer exists.
-        $('search-box').dataset.count = active
-            ? (list.length + (list.length === 1 ? ' match' : ' matches')) : '';
+        //
+        // …and only while THIS column is the one being searched. There is one
+        // search box and it MOVES into the conversation header when one is open
+        // (see moveSearchUi), where renderDmMessages owns the count — but this
+        // list goes on repainting behind the panel on its own poll, so it used to
+        // overwrite a conversation's "3 matches" with the channel's a few seconds
+        // later, over a list nobody could see.
+        if (!dmOpen) {
+            $('search-box').dataset.count = active
+                ? (list.length + (list.length === 1 ? ' match' : ' matches')) : '';
+        }
 
         // Build the desired sequence of rows: each is a key, a signature, and a
         // factory that is only called when the row has to be (re)built.
@@ -8614,10 +8623,25 @@
 
     const DEFAULT_SIDEBAR_W = 300, DEFAULT_MEMBERS_W = 264;
 
+    // The handles are wired ONCE, and the widths re-clamped on every entry.
+    //
+    // initPaneResizing() runs from enterApp(), which runs again on every
+    // sign-in — and the elements it binds to outlive the session, so a sign-out
+    // and back in left two sets of listeners on the same three handles, three
+    // after the next. The drag path survives that (the second mover sees the
+    // width the first just wrote and returns), but the KEYBOARD path does not:
+    // each duplicate reads the width its predecessor has already written and adds
+    // the step again, so one arrow press moved the panel by two steps, then
+    // three. Every settings write was duplicated with it.
+    let paneHandlesWired = false;
+
     function initPaneResizing() {
         settings.sidebarWidth = clampSidebar(settings.sidebarWidth || DEFAULT_SIDEBAR_W, 0);
         settings.membersWidth = clampMembers(settings.membersWidth || DEFAULT_MEMBERS_W, 0);
         applyPaneWidths();
+
+        if (paneHandlesWired) return;
+        paneHandlesWired = true;
 
         ['sidebar-resize', 'dm-sidebar-resize'].forEach((idAttr) => {
             makeResizable(idAttr, 1,
@@ -15170,7 +15194,27 @@
             ? dmMsgs.filter((m) => !isBlocked(clientForUser(m.from)))
             : dmMsgs;
         if (!filterActive()) return base;
-        return base.filter((m) => postMatchesFilter(dmAsPost(m)));
+        // `in:` NAMES A CONVERSATION HERE, not a channel.
+        //
+        // The shared matcher answers it by comparing the operator against a
+        // post's `channel`, and a DM row has none — so it rejected every one of
+        // them. Both the dropdown and More filters offer the conversations you
+        // are in, the one on screen included, so picking it emptied the column
+        // ("No loaded messages match these filters") while the archive panel
+        // underneath went on returning hits from that very conversation.
+        //
+        // Answered here, where the conversation's identity is known: the loaded
+        // messages ARE this conversation's, so the operator passes when it names
+        // this one and matches nothing when it names another — which is the same
+        // thing `in:` means in a channel, and the same thing an unresolvable name
+        // means everywhere else in this box.
+        let f = filter;
+        if (filter.inChannel) {
+            const id = dmThreadIdForLabel(filter.inChannel);
+            if (!dmOpen || !id || id !== dmOpen.id) return [];
+            f = Object.assign({}, filter, { inChannel: null });
+        }
+        return base.filter((m) => window.ScarmLib.postMatchesFilter(dmAsPost(m), f, settings.displayName));
     }
 
     // ONE direct-message row -> the shape renderMessage() expects.

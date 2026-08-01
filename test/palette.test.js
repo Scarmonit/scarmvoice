@@ -16,6 +16,12 @@ const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 let css = '';
 let dark = '';
+// The same stylesheet with its COMMENTS taken out, for the handful of
+// assertions that ask what the sheet does rather than what it says. Several of
+// those comments quote the declaration they exist to warn about — the base
+// reset's quotes `border: 2px outset buttonface` verbatim — so a rule matched
+// against the raw text can be satisfied, or contradicted, by prose.
+let rules = '';
 
 beforeAll(() => {
     // Newlines normalised, because several assertions in this file match across
@@ -28,6 +34,7 @@ beforeAll(() => {
     // to check it out is not something a palette test should be able to see.
     css = fs.readFileSync(path.join(RENDERER, 'styles.css'), 'utf8').replace(/\r\n/g, '\n');
     dark = css.slice(css.indexOf(':root {'), css.indexOf('* { box-sizing'));
+    rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
 });
 
 const hex = (name, block) => {
@@ -176,8 +183,11 @@ describe('the direct-messages place', () => {
     // rule you are writing, so it is reset once at the base.
     it('turns off the browser s own button bevel, once', () => {
         expect(css).toMatch(/^button \{ font-family: inherit; background: none; border: 0; \}$/m);
-        // …and nothing re-enables it by asking for an outset.
-        expect(css).not.toMatch(/border[^;:]*:\s*[^;]*outset/);
+        // …and nothing re-enables it by asking for an outset. Against the
+        // DECLARATIONS, not the raw file: the comment above this test quotes the
+        // very thing it forbids, and so does the reset's own comment in the
+        // stylesheet — matched against those, the rule can never hold.
+        expect(rules).not.toMatch(/border[^;:]*:\s*[^;]*\boutset\b/);
     });
 
     it('gives the picker an input that leads, and rows that are flat', () => {

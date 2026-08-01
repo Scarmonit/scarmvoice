@@ -223,6 +223,30 @@ describe('the handles as controls', () => {
         expect(sideW()).toBe(340);
     });
 
+    // The handles are wired ONCE, however many times a session starts.
+    //
+    // initPaneResizing() runs from enterApp(), and enterApp() runs again on every
+    // sign-in — but the handles are markup that outlives the session, so a
+    // sign-out and back in left two sets of listeners on the same three of them.
+    // Dragging survived it (the second mover saw the width the first had just
+    // written and returned), and the keyboard did not: each duplicate read that
+    // width and added the step again, so one press moved the panel two steps,
+    // then three.
+    it('still moves one step per press after signing out and back in', async () => {
+        await boot();
+        $('btn-logout').click();
+        await settle(30);
+        expect($('login').hidden).toBe(false);
+
+        $('login-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+        await settle(40);
+        expect($('app').hidden).toBe(false);
+        expect(sideW()).toBe(300);
+
+        $('sidebar-resize').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        expect(sideW()).toBe(310);
+    });
+
     it('takes the member list the other way, matching its edge', async () => {
         await boot();
         // Its handle faces the messages, so Left widens it.

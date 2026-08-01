@@ -79,6 +79,13 @@ const board = vi.fn(async (p, opts) => {
 const shownIds = () =>
     Array.from($('dm-messages').querySelectorAll('.msg')).map((el) => parseInt(el.dataset.id, 10));
 
+// The realtime relay, captured below. A `posted` nudge for the channel behind
+// the conversation is the shortest honest route to "the channel column
+// repainted while a conversation is on screen" — the same thing its own poll
+// does every minute. (onResync is no good for it: that callback reloads the
+// CONVERSATION too, so it hides exactly the interleaving being tested.)
+let rtMessage = null;
+
 async function settle(n = 14) {
     for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
 }
@@ -127,7 +134,8 @@ beforeAll(async () => {
             stop: vi.fn(async () => ({ connected: false })),
             wake: vi.fn(async () => ({ connected: false })),
             send: noop, notifyPosted: noop, sendTyping: vi.fn(), sendVoice: noop,
-            onMessage: unsub, onStatus: unsub
+            onMessage: (cb) => { rtMessage = cb; return noop; },
+            onStatus: unsub
         },
         edit: {
             cut: noop, copy: noop, paste: noop, selectAll: noop,
@@ -269,6 +277,45 @@ describe('the search box in a conversation', () => {
         // …and drops the "this is the beginning of your history" block, because
         // a filtered list is a result and not a beginning.
         expect($('dm-messages').querySelector('.dm-intro')).toBeNull();
+    });
+
+    // `in:` NAMES A CONVERSATION in here, and the dropdown and More filters
+    // both offer the conversations you are in — the one on screen included. The
+    // shared matcher answers the operator by comparing it against a post's
+    // `channel`, which a DM row does not have, so it rejected every message:
+    // picking this very conversation emptied the column while the archive panel
+    // underneath went on returning hits from it.
+    it('answers in: with the conversation it names', async () => {
+        await type('in:alice');
+        expect(shownIds()).toEqual([501, 502, 503]);
+        expect($('dm-messages').querySelector('.empty-state')).toBeNull();
+    });
+
+    it('…and matches nothing when in: names a different one', async () => {
+        // Which is what `in:` means in a channel too: the loaded messages are
+        // this conversation's, so naming another narrows to nothing rather than
+        // quietly searching the wrong place.
+        await type('in:bob');
+        expect(shownIds()).toEqual([]);
+        expect($('dm-messages').querySelector('.empty-state')).not.toBeNull();
+    });
+
+    // ONE search box, two lists that can both repaint it. The conversation is on
+    // screen, but the channel column behind it keeps polling — and it used to
+    // write its own match count over the conversation's a few seconds later,
+    // about a list nobody could see.
+    it('keeps its match count when the channel behind it repaints', async () => {
+        await type('thanks');
+        expect($('search-box').dataset.count).toBe('1 match');
+        // Somebody posts in the channel this panel is drawn over. The renderer
+        // refetches that column and repaints it — out of sight — and used to
+        // stamp its own match count onto the box the conversation is using.
+        if (rtMessage) rtMessage({ t: 'posted', channel: 'general', cid: 'someone', name: 'Someone' });
+        // Past the refresh coalescing window, which is a real timer.
+        await new Promise((r) => setTimeout(r, 400));
+        await settle(20);
+        expect($('search-box').dataset.count).toBe('1 match');
+        expect(shownIds()).toEqual([503]);
     });
 
     it('clears back to the whole conversation', async () => {

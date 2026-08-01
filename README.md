@@ -1204,6 +1204,26 @@ then refused to go there, paged back through the wrong history, and ended on
 "that message is further back than we can jump". `jumpToPost()` has switched
 **channel** for exactly this since the archive existed; this is its other side.
 
+`in:` is also answered **locally**, and that is the one operator the shared
+matcher cannot answer here. `postMatchesFilter()` resolves it by comparing the
+name against a post's `channel`, and a direct message has none — so it rejected
+every row in the list. Both the dropdown and **More filters** offer the
+conversations you are in, the one on screen included, so picking it emptied the
+column ("No loaded messages match these filters") while the archive panel
+underneath went on returning hits from that very conversation. `displayedDms()`
+answers it instead, where the conversation's identity is known: the loaded
+messages *are* this conversation's, so the operator passes when it names this
+one and matches nothing when it names another — the same thing `in:` means in a
+channel, and the same thing an unresolvable name means everywhere else in the
+box.
+
+And the **match count on the box** belongs to whichever list is being searched.
+There is one `#search-box` and it moves, but the channel column behind the panel
+keeps polling and repainting on its own timer — so `renderMessages()` used to
+stamp the channel's count over the conversation's a few seconds later, about a
+list nobody could see. It writes the count only while no conversation is open;
+`renderDmMessages()` owns it the rest of the time.
+
 ### One picker, two layouts
 
 Group conversations were already built end to end before there was a decent way
@@ -1531,6 +1551,16 @@ produces one move event per frame and `settings.set` is an IPC round trip plus a
 debounced whole-file write. Double-click resets a panel; the arrow keys move it too
 (the handle is a focusable `role="separator"`, so a focus ring that did nothing
 would be worse than none).
+
+**Wired once, clamped every time.** `initPaneResizing()` runs from `enterApp()`,
+which runs again on every sign-in — and the handles are markup that outlives the
+session, so signing out and back in left two sets of listeners on the same three
+of them, three after the next. Dragging survived it: the second mover reads the
+width the first has just written, sees no change and returns. The keyboard did
+not — each duplicate reads that width and adds the step again, so one arrow press
+moved the panel two steps, then three, and every settings write was duplicated
+with it. The widths are still re-clamped on every entry (a window that changed
+size between sessions has to be answered); only the listeners are one-time.
 
 **It has to lose to the menus that hang over it.** `#chan-head` is
 `position: relative` with a `z-index`, which makes it a stacking context — so the
