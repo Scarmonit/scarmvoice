@@ -153,11 +153,13 @@ describe('the direct-messages place', () => {
     // the member list's resize strip) this panel was still on 40, and the symptom
     // was the last text channel's name and its channel icons sitting over a DM.
     it('puts the conversation panel above the channel header', () => {
-        // ANCHORED. Edit Layout adds `#app[data-panels="swapped"] #dm-panel`,
-        // which ends in the same selector text — unanchored, this matched that
-        // rule instead and then scanned forward to the next z-index in the file,
-        // which belongs to something else entirely.
-        const dm = Number(/^#dm-panel \{[\s\S]*?z-index: (\d+)/m.exec(css)[1]);
+        // The rule that actually SETS one. #dm-panel is declared twice — once in
+        // the app shell for its grid placement, once here for everything else —
+        // so a regex that takes the first match scans past the placement rule
+        // and picks up the next z-index in the file, which belongs to something
+        // else entirely.
+        const block = (css.match(/#dm-panel \{[^}]*\}/g) || []).find((r) => r.includes('z-index'));
+        const dm = Number(/z-index: (\d+)/.exec(block)[1]);
         const head = Number(/#chan-head \{[^}]*z-index: (\d+)/.exec(css)[1]);
         expect(dm).toBeGreaterThan(head);
     });
@@ -1240,8 +1242,12 @@ describe('the window shell', () => {
         // A header that stops at the chat column leaves the member list divided
         // from the title bar to the floor, and puts the search field a whole
         // column left of where it belongs.
-        expect(css).toMatch(/"rail side head head"/);
-        expect(css).toMatch(/"rail side main members"/);
+        // The areas are named for REGIONS now, not for the section that happens
+        // to be in one — Edit Layout can put any section in any of them — but
+        // the shape being asserted is the same: the header spans the chat column
+        // and whatever sits to its right.
+        expect(css).toMatch(/"rail\s+zleft head head"/);
+        expect(css).toMatch(/"rail\s+zleft main zright"/);
         expect(css).toMatch(/#chan-head \{ grid-area: head; \}/);
         // Which is only possible with the header OUTSIDE #main.
         const main = html().slice(html().indexOf('<main id="main">'));

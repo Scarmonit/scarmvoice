@@ -1815,6 +1815,14 @@
         <span class="ico" data-icon="monitor"></span><span>Entire Screen</span>
       </button>
     </div>
+    <!-- Every open window is offered now, ScarmVoice's own included, so the
+         list is long enough that finding one in it is the actual problem. -->
+    <div class="picker-filter">
+      <span class="ico" data-icon="search"></span>
+      <input type="text" id="picker-search" placeholder="Search windows" autocomplete="off"
+             spellcheck="false" aria-label="Search windows">
+      <span class="pf-count" id="picker-count"></span>
+    </div>
     <div class="modal-body">
       <div id="picker-grid" class="picker-grid" role="tabpanel"></div>
       <div id="picker-empty" class="empty-state" hidden>Nothing to share here.</div>

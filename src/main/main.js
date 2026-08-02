@@ -1265,6 +1265,22 @@ function registerIpc() {
 
     // ---- screen share ----
 
+    // EVERY screen and EVERY capturable top-level window, ScarmVoice's own
+    // included.
+    //
+    // This used to drop anything called "ScarmVoice" — the comment said sharing
+    // ourselves is a hall of mirrors, which it is, and that is not a reason to
+    // refuse. Showing somebody a message you have just received, or walking
+    // through the app with a friend, are ordinary things to want, and the
+    // recursion only appears if the shared window is also the one displaying the
+    // share. Nothing else was filtered, so the list is otherwise whatever
+    // Windows will let us capture: browsers window by window, editors, terminals,
+    // and each monitor whole.
+    //
+    // Sorted, because the list is now long enough that finding a window in it
+    // matters: screens first in their natural order, then windows by name, with
+    // the ones we could not preview last — those are usually minimised, and a
+    // wall of "No preview" at the top reads as a broken picker.
     handle('share:sources', async () => {
         const sources = await desktopCapturer.getSources({
             types: ['screen', 'window'],
@@ -1272,15 +1288,22 @@ function registerIpc() {
             fetchWindowIcons: true
         });
         // Serialise the NativeImages; the renderer only needs data URLs.
-        return sources
-            .filter((s) => s.name !== 'ScarmVoice')   // sharing ourselves is a hall of mirrors
-            .map((s) => ({
-                id: s.id,
-                name: s.name,
-                isScreen: s.id.startsWith('screen:'),
-                thumbnail: s.thumbnail && !s.thumbnail.isEmpty() ? s.thumbnail.toDataURL() : null,
-                appIcon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null
-            }));
+        const out = sources.map((s) => ({
+            id: s.id,
+            name: s.name,
+            isScreen: s.id.startsWith('screen:'),
+            isSelf: s.name === 'ScarmVoice',
+            thumbnail: s.thumbnail && !s.thumbnail.isEmpty() ? s.thumbnail.toDataURL() : null,
+            appIcon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null
+        }));
+        const collate = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+        out.sort((a, b) => {
+            if (a.isScreen !== b.isScreen) return a.isScreen ? -1 : 1;
+            if (a.isScreen) return collate.compare(a.name, b.name);
+            if (!a.thumbnail !== !b.thumbnail) return a.thumbnail ? -1 : 1;
+            return collate.compare(a.name, b.name);
+        });
+        return out;
     });
 
     handle('share:select', (_e, { id, audio }) => {

@@ -575,140 +575,137 @@ button { font-family: inherit; background: none; border: 0; }
 
 /* ---------- app shell --------------------------------------------------- */
 
-/* A grid rather than a row of columns, for one reason: the user panel spans
-   BOTH the rail and the channel list, which no flex child can do. The chat and
-   member columns run the full height beside it.
+/* ---------- custom layouts (snap-to-zones) -------------------------------
 
-     rail  side  main  members
-     user  user  main  members
+   THE GRID IS FIXED; ONLY WHAT SITS IN IT MOVES.
 
-   The members column is `auto` so that hiding the panel (display:none) collapses
-   its track to nothing rather than leaving a gap. */
+   Five named regions are cut out of the app shell here, once, and never
+   recomputed. Edit Layout assigns a section to a region by writing
+   `grid-area` onto it — so the set of positions is finite and hand-checked,
+   every region is a rectangle, and no arrangement a user can reach was
+   assembled at runtime out of a drag. That is what "snapping" buys.
+
+     ztop    a strip across the whole window, above everything
+     zleft   the column beside the rail
+     zright  the column on the far side of the chat
+     zdock   the bottom-left corner, spanning the rail and the left column
+     zbot    a strip across the whole window, below everything
+
+   Two more regions live INSIDE the chat column and are reached by making the
+   section a child of #main instead: chat-top and chat-bottom, above and below
+   the message list. Between them that is seven places any section may go.
+
+   An empty region costs nothing: its row or column is `auto`, so it collapses
+   to zero and the layout closes over it. */
 #app {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--w-rail) var(--w-side) minmax(0, 1fr) auto;
-  grid-template-rows: 48px minmax(0, 1fr) auto;
-  /* The channel header spans the message column AND the member list, which is
-     why it is not inside #main: a header that stops at the chat column leaves
-     the member list divided from top to bottom and puts the search field one
-     column left of where it belongs. */
+  grid-template-columns: var(--w-rail) auto minmax(0, 1fr) auto;
+  grid-template-rows: auto 48px minmax(0, 1fr) auto auto;
+  /* The channel header spans the message column AND the right-hand region,
+     which is why it is not inside #main: a header that stops at the chat
+     column leaves the panel beside it divided from top to bottom and puts the
+     search field one column left of where it belongs. */
   grid-template-areas:
-    "rail side head head"
-    "rail side main members"
-    "user user main members";
+    "ztop  ztop  ztop ztop"
+    "rail  zleft head head"
+    "rail  zleft main zright"
+    "zdock zdock main zright"
+    "zbot  zbot  zbot zbot";
   /* Draggable regions swallow pointer events, which would silently kill file
      drops over any area that inherited it. Keep the app body explicitly out. */
   -webkit-app-region: no-drag;
 }
 #rail { grid-area: rail; }
-#sidebar { grid-area: side; }
-#user-dock { grid-area: user; }
 #main { grid-area: main; }
-#members-panel { grid-area: members; }
 #chan-head { grid-area: head; }
 #app[hidden] { display: none; }
 
-/* ---------- custom layouts (snap-to-zones) -------------------------------
-   Every arrangement Edit Layout can produce is WRITTEN OUT here, one rule per
-   combination, rather than assembled at runtime from whatever the drag ended
-   on. That is the whole reason the sections snap to zones instead of landing
-   where they were dropped: the set of layouts is finite, each one is a grid
-   whose areas are known to be rectangular and to tile the frame, and there is
-   no arrangement a user can reach that was not laid out by hand. A free
-   placement model would have had to defend against overlap; this one cannot
-   express it.
+/* The four movable sections carry their region in `grid-area`, written by
+   applyLayout(). These are the DEFAULTS, so a stylesheet loaded before any JS
+   has run still draws the app the right way round. */
+#sidebar, #dm-sidebar { grid-area: zleft; }
+#members-panel { grid-area: zright; }
+#user-dock { grid-area: zdock; }
 
-   Three independent choices, so eight layouts:
-     data-panels  default | swapped   — which side the channel list is on
-     data-dock    bottom  | top       — the me bar under the left column, or a
-                                        full-width bar above everything
-     data-input   bottom  | top       — the message box below or above the
-                                        message list (see #main, further down)
+/* Region SHAPE, not region identity: a column gives a section its own width and
+   the full height, a bar gives it the whole width and only the height it asks
+   for. Written as `data-zonekind` so a section does not need a rule per region
+   — there are four sections and seven regions, and the product of those is not
+   a stylesheet anybody should maintain. */
+#sidebar[data-zonekind="col"],
+#dm-sidebar[data-zonekind="col"] { width: var(--w-side); }
+#members-panel[data-zonekind="col"] { width: var(--w-members); }
+[data-zonekind="bar"] { width: auto; }
+/* A list in a horizontal strip would otherwise take the whole window. */
+#sidebar[data-zonekind="bar"],
+#dm-sidebar[data-zonekind="bar"],
+#members-panel[data-zonekind="bar"] { max-height: 30vh; }
 
-   The dock is the one that cannot simply move: it holds the voice panel and
-   the soundboard, so its height grows during a call. That rules out sharing a
-   row with #chan-head — the header would grow with it — which is why the top
-   zone gives it a row of its own spanning the full width. */
+/* The hairline between a panel and the chat is drawn on the edge that FACES the
+   chat, so it follows the panel across. An inset shadow rather than a border,
+   for the same reason it always was: a border would change the width the resize
+   drag is writing. */
+#sidebar[data-zone="zleft"],
+#dm-sidebar[data-zone="zleft"],
+#members-panel[data-zone="zleft"] { box-shadow: inset -1px 0 0 var(--line); }
+#sidebar[data-zone="zright"],
+#dm-sidebar[data-zone="zright"],
+#members-panel[data-zone="zright"] { box-shadow: inset 1px 0 0 var(--line); }
 
-/* Channels on the right, member list on the left. The two tracks trade widths
-   as well as places: the member list carries its own width (the `auto` track
-   measures it), and the channel list takes whatever its track is given. The
-   dock follows the CHANNEL list rather than staying put, because it is the me
-   bar under your channels in both arrangements — and because the member track
-   collapses to nothing when the panel is hidden, which would have squeezed a
-   dock spanning it down to the width of the rail. */
-#app[data-panels="swapped"] {
-  grid-template-columns: var(--w-rail) auto minmax(0, 1fr) var(--w-side);
-  grid-template-areas:
-    "rail members head head"
-    "rail members main side"
-    "rail members main user";
-}
-#app[data-dock="top"] {
-  grid-template-rows: auto 48px minmax(0, 1fr);
-  grid-template-areas:
-    "user user user user"
-    "rail side head head"
-    "rail side main members";
-}
-#app[data-panels="swapped"][data-dock="top"] {
-  grid-template-columns: var(--w-rail) auto minmax(0, 1fr) var(--w-side);
-  grid-template-rows: auto 48px minmax(0, 1fr);
-  grid-template-areas:
-    "user user user user"
-    "rail members head head"
-    "rail members main side";
-}
+/* The drag strip straddles that same edge. It exists only in a column: there is
+   no width to drag when the section is a full-width bar, and a strip left
+   hanging down the side of one is a control that does nothing. The `dir` that
+   turns a pointer delta into a width follows this — see sidebarDragDir(). */
+.pane-resize { display: none; }
+[data-zonekind="col"] > .pane-resize { display: block; }
+[data-zone="zleft"] > .pane-resize { right: -4px; left: auto; }
+[data-zone="zright"] > .pane-resize { left: -4px; right: auto; }
 
-/* The hairline between a panel and the chat is drawn on the edge that faces
-   the chat, so it moves with the panel. Left as an inset shadow rather than a
-   border for the same reason it always was: a border would change the width
-   the resize drag is writing. */
-#app[data-panels="swapped"] #sidebar { box-shadow: inset 1px 0 0 var(--line); }
-#app[data-panels="swapped"] #members-panel { box-shadow: inset -1px 0 0 var(--line); }
-/* …and the drag strip straddles the edge that faces the chat, so it swaps too.
-   The `dir` that turns a pointer delta into a width follows this in app.js. */
-#app[data-panels="swapped"] #sidebar-resize,
-#app[data-panels="swapped"] #dm-sidebar-resize { right: auto; left: -4px; }
-#app[data-panels="swapped"] #members-resize { left: auto; right: -4px; }
-/* #dm-sidebar takes the same grid area as #sidebar — the DM list replaces the
-   channel list in the column rather than opening beside it — so it travels
-   with it and needs the same edge treatment. */
-#app[data-panels="swapped"] #dm-sidebar { box-shadow: inset 1px 0 0 var(--line); }
-
-/* #dm-panel is placed by TRACK NUMBER rather than by area name (it deliberately
-   covers two of them), so it is the one thing in the app that has to be told
-   about a layout change instead of following the named areas.
-     swapped: the list it belongs to is now the RIGHT column, so the panel takes
-              the member column and the chat — 2/4 — and leaves it showing.
-     dock top: row 1 is the me bar across the whole window, and a conversation
-              drawn over it would cover the mute button. */
-#app[data-panels="swapped"] #dm-panel { grid-column: 2 / 4; }
-#app[data-dock="top"] #dm-panel { grid-row: 2 / 4; }
-
-/* A full-width bar sits ON the frame rather than floating in a corner, so it
-   loses the corner card's rounding and margin and grows a rule underneath. */
-#app[data-dock="top"] #user-dock {
+/* The me bar is a card in its corner and a full-bleed strip anywhere else: a
+   rounded, inset card stretched across the window reads as something that came
+   loose. */
+#user-dock[data-zonekind="bar"]:not([data-zone="zdock"]) {
   margin: 0; border-radius: 0; border: 0;
   box-shadow: 0 1px 0 var(--line);
 }
 
-/* The message box above the message list. #main is a flex column, so this is
-   `order` — which leaves the DOM alone, and with it the focus order, the
-   composer's identity across a move into a conversation, and every selector
-   that reaches it. The typing line travels with the box it belongs to: equal
-   order values fall back to document order, so it stays immediately above.
-
-   Scoped to `#main >` deliberately. The composer is MOVED into the DM drawer
-   (see moveComposer), where it is the last row of a different container and an
-   order of -1 would put it above the conversation it is for. */
-#app[data-input="top"] #main > #composer,
-#app[data-input="top"] #main > #typing-line { order: -1; }
-/* Padding flips with it, so the gap stays between the box and the messages
+/* A section placed in the chat column is a child of #main (a flex column), so
+   its position there is `order`. The typing line travels with the message box
+   it belongs to; equal order values fall back to document order, which keeps it
+   immediately above. */
+#main > [data-zone="chat-top"] { order: -1; }
+#main > [data-zone="chat-bottom"] { order: 1; }
+#main.input-top > #typing-line { order: -1; }
+/* Padding flips with the box, so the gap stays between it and the messages
    rather than against the window edge. */
-#app[data-input="top"] #main > #composer { padding: 8px 8px 0; }
+#composer[data-zone="chat-top"] { padding: 8px 8px 0; }
+
+/* #dm-panel is placed by TRACK NUMBER rather than by area name — it covers the
+   header, the chat and the right-hand region together — so it is the one thing
+   in the app that has to be told the shape of the grid rather than named into
+   it. Rows 2-4 are header + body, leaving ztop and zbot outside it; columns 3-4
+   are the chat and whatever is to its right. */
+#dm-panel { grid-column: 3 / 5; grid-row: 2 / 5; }
+
+/* ---------- Edit Layout: the regions, made visible ----------------------- */
+
+/* One probe per region, added to the grid while editing and removed after. It
+   is what makes an EMPTY region droppable: a region with nothing in it has no
+   size, and a target with no size cannot be hit. It is also what the drag
+   measures against, so what is outlined is exactly where the section will land.
+   Inert — the shield takes every pointer event. */
+.zone-probe {
+  min-width: 56px; min-height: 52px;
+  pointer-events: none;
+  border: 2px dashed var(--line);
+  border-radius: 8px;
+  margin: 3px;
+  display: grid; place-items: center;
+  color: var(--dim); font-size: 11.5px; font-weight: 700; text-align: center;
+}
+.zone-probe.filled { border-style: dotted; opacity: .45; }
 
 /* ---------- rail -------------------------------------------------------- */
 
@@ -1004,7 +1001,9 @@ button { font-family: inherit; background: none; border: 0; }
    around both, and the only thing between them is a hairline.
    Positioned, because the soundboard tray is measured against the whole card. */
 #user-dock {
-  grid-area: user; position: relative;
+  /* Its region is declared with the other movable sections, up in the app
+     shell, and rewritten by applyLayout(). */
+  position: relative;
   margin: 0 8px 8px; border-radius: 8px;
   background: var(--panel); border: 1px solid rgba(153, 153, 153, .04);
   box-shadow: var(--shadow-xs);
@@ -1270,7 +1269,9 @@ button { font-family: inherit; background: none; border: 0; }
    done it; the rail and the popover's row cards were the other two. */
 #members-panel {
   position: relative;      /* see .pane-resize */
-  width: var(--w-members);
+  /* Width comes from the REGION it is in — see the [data-zonekind] rules in the
+     app shell. Declared unconditionally here it outranked them (an id beats an
+     attribute), so the panel kept its column width when moved into a bar. */
   background: var(--members);
   box-shadow: inset 1px 0 0 var(--line);
   display: flex; flex-direction: column;
@@ -2058,14 +2059,22 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   display: flex; align-items: center; gap: 2px;
   height: 56px; padding: 0 8px 0 4px;
 }
-#btn-emoji, #btn-mic {
+/* Every button in the composer's tool cluster, named as a group rather than one
+   at a time. It used to list #btn-emoji and #btn-mic literally, so the Format
+   button added beside them inherited none of it — no pointer cursor, no hover
+   plate, nothing at all to say it could be pressed. A new tool button gets the
+   whole treatment by being in the cluster now, which is the only way this does
+   not happen again the next time one is added. */
+.composer-tools > button {
   position: relative;
   flex: 0 0 auto; width: 32px; height: 32px; border-radius: 5px;
   display: grid; place-items: center;
   background: none; border: 0; cursor: pointer; color: var(--muted);
 }
-#btn-emoji .ico, #btn-mic .ico { width: 20px; height: 20px; }
-#btn-emoji:hover, #btn-mic:hover { background: var(--hover); color: var(--text); }
+.composer-tools > button .ico { width: 20px; height: 20px; }
+.composer-tools > button:hover { background: var(--hover); color: var(--text); }
+/* Held open, so the toggle reads as pressed rather than merely hovered. */
+.composer-tools > #btn-format[aria-pressed="true"] { background: var(--hover); color: var(--accent); }
 #btn-send {
   width: 32px; height: 32px; flex: 0 0 32px;
   border: 0; border-radius: 5px; cursor: pointer;
@@ -5768,7 +5777,7 @@ html.win-hidden .up-bar i {
    reference does. Conversations live only here now: they are not part of a
    server, and the rail button carries their unread count. */
 #dm-sidebar {
-  grid-area: side;
+  /* Region declared with #sidebar, whose place it takes. */
   display: flex; flex-direction: column; min-height: 0;
   background: var(--side);
   position: relative;      /* see .pane-resize */
@@ -6291,8 +6300,9 @@ body.layout-editing.layout-dragging #layout-shield { cursor: grabbing; }
 .fb-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); flex: 0 0 1px; }
 .fb-spacer { flex: 1 1 auto; }
 
-#btn-format { position: relative; }
-#btn-format[aria-pressed="true"] { color: var(--accent); }
+/* The Format button's own look lives with the rest of the composer's tool
+   cluster (.composer-tools > button), not here — one place, so it cannot be
+   half-styled again. */
 
 /* ---------- live formatting in the message box ---------------------------
 
@@ -6341,21 +6351,47 @@ body.rich-composer #composer-input { position: relative; z-index: 1; background:
 /* The marks themselves. Dimmed markers, real formatting — the point is that a
    `**` you have typed is visibly punctuation and the word between it is
    visibly bold, at the same time. */
+/* THE ONE RULE THESE ALL OBEY: nothing here may change how wide a character is.
+ *
+ * The caret belongs to the textarea, the glyphs belong to this layer, and the
+ * two only agree while every character advances by the same amount in both. The
+ * textarea can carry exactly one font, so anything here that changes the family,
+ * the size, the weight, the slant or the tracking makes the drawn text drift
+ * away from the caret — a little per character, all of it cumulative.
+ *
+ * It shipped that way in v0.76.0: code spans and fences were set in the mono
+ * face at 0.92em, so typing inside a ``` block left the caret further behind
+ * every character. Bold and italic were the same bug in slower motion.
+ *
+ * So emphasis is drawn with PAINT, never with metrics:
+ *   colour, background, and the two decorations — all free
+ *   weight  -> -webkit-text-stroke, which thickens the glyph it already laid out
+ *   slant   -> not available at all; italics are shown by tint and their marks
+ *
+ * test/format-bar.test.js fails on any metric-changing property appearing in a
+ * .cm-* rule, because this is not a thing to remember. */
 .cm-mark { color: var(--placeholder); }
-.cm-b { font-weight: 700; }
-.cm-i { font-style: italic; }
+/* Faux bold. A stroke is a paint operation on glyphs whose advances are already
+   decided, so this is heavier text in exactly the same space. */
+.cm-b { -webkit-text-stroke: .38px currentColor; }
+/* Italic has no paint-only form — `font-style` reshapes the glyphs and their
+   advances with them. A tint plus the dimmed * marks is what is left, and it is
+   worth more than a caret that no longer points at anything. */
+.cm-i { color: var(--author, var(--text)); }
 .cm-u { text-decoration: underline; }
 .cm-s { text-decoration: line-through; }
+/* Code keeps its tinted plate and its own colour; the mono face it used to take
+   is exactly what broke the caret. */
 .cm-code, .cm-fence {
-  font-family: var(--mono); font-size: 0.92em;
-  background: var(--code-bg); border-radius: 3px;
+  background: var(--code-bg); color: var(--code-text);
+  border-radius: 3px;
 }
 .cm-fence { display: inline; }
 .cm-quote { color: var(--muted); }
-.cm-head { font-weight: 700; }
+.cm-head { -webkit-text-stroke: .45px currentColor; }
 .cm-link { color: var(--accent); }
 .cm-spoiler { background: var(--hover); border-radius: 3px; }
-.cm-list { color: var(--accent); font-weight: 700; }
+.cm-list { color: var(--accent); -webkit-text-stroke: .3px currentColor; }
 
 /* ---------- the code block's language menu ------------------------------- */
 
@@ -6433,3 +6469,20 @@ body.rich-composer #composer-input { position: relative; z-index: 1; background:
   margin: 0; border: 0; border-radius: 0; background: none;
   flex: 1 1 auto; min-width: 0;
 }
+
+/* The share picker's search row. Present only on the Applications tab, where
+   the list is every window the machine has open. */
+.picker-filter {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px 0;
+}
+.picker-filter[hidden] { display: none; }
+.picker-filter .ico { width: 16px; height: 16px; color: var(--dim); flex: 0 0 16px; }
+#picker-search {
+  flex: 1; min-width: 0; height: 32px;
+  padding: 0 10px; border-radius: 6px;
+  background: var(--sunk, var(--input)); border: 1px solid var(--line-lo);
+  color: var(--text); font: inherit; font-size: 13px; outline: none;
+}
+#picker-search:focus { border-color: var(--accent-line); }
+.pf-count { color: var(--dim); font-size: 11.5px; font-weight: 600; white-space: nowrap; }

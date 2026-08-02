@@ -144,12 +144,13 @@ const DEFAULTS = {
     // RMS x100 above which you read as "speaking"; see voice.js
     speakThreshold: 6,
 
-    // Layout — where the movable sections sit. Three independent choices, each
-    // one of two zones; styles.css writes out every combination by hand, so
-    // there is no value here that can produce an arrangement nobody laid out.
-    // See applyLayout() and normalizeLayout() in app.js, which is what actually
-    // holds this to the allowed words — a settings file is editable by hand.
-    layout: { panels: 'default', dock: 'bottom', input: 'bottom' },
+    // Layout — which REGION each movable section sits in. Seven regions are cut
+    // out of the app shell in styles.css and one section may be in each, so
+    // there is no value here that can put two things in the same place or a
+    // section nowhere at all. normalizeLayout() in app.js is what actually holds
+    // it to that — a settings file is editable by hand — and it also translates
+    // the three-switch shape v0.76.0 wrote.
+    layout: { channels: 'zleft', members: 'zright', mebar: 'zdock', composer: 'chat-bottom' },
     // Saved arrangements, newest last. Capped at LAYOUT_TEMPLATE_MAX (10) by
     // the renderer; the cap is re-applied on read, because this file outlives
     // any one build and a list that grew past it must not stay grown.

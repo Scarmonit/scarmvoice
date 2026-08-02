@@ -149,18 +149,71 @@ test('the field stops painting its own glyphs, but keeps its caret', async () =>
     expect(c.caret).not.toMatch(/rgba\(0, 0, 0, 0\)/);
 });
 
+// The reported bug, measured: inside a ``` block the layer was set in the mono
+// face at 0.92em while the caret kept advancing in the field's own font, so the
+// drawn text ran ahead of the caret and the gap grew with every character.
+// Measuring the END of a long single line is what makes that visible — a wrap
+// test cannot see it, because both wrap somewhere and the height comes out
+// close either way.
+test('a code fence draws at exactly the field’s own metrics', async () => {
+    const cases = [
+        '```javascript',
+        '(function(){ console.info("this is a test of some text"); })();',
+        'plain **bold** and `a code span` and *italic* together',
+        '# a heading with some length to it'
+    ];
+    for (const line of cases) {
+        await typeInComposer(line);
+        const drift = await page.evaluate((text) => {
+            const m = document.getElementById('composer-mirror');
+            const i = document.getElementById('composer-input');
+            // Where the LAST character ends in each. The field is measured with a
+            // throwaway span that copies its computed type — which is exactly what
+            // the caret follows.
+            const probe = document.createElement('span');
+            const cs = getComputedStyle(i);
+            probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+            probe.style.font = cs.font;
+            probe.style.fontFamily = cs.fontFamily;
+            probe.style.fontSize = cs.fontSize;
+            probe.style.letterSpacing = cs.letterSpacing;
+            probe.textContent = text;
+            document.body.appendChild(probe);
+            const want = probe.getBoundingClientRect().width;
+            probe.remove();
+            // …and in the layer, which is the text actually on screen.
+            const r = document.createRange();
+            r.selectNodeContents(m);
+            const got = r.getBoundingClientRect().width;
+            return Math.abs(got - want);
+        }, line);
+        // Sub-pixel rounding across a few spans is fine; a font change is tens
+        // of pixels over a line this long.
+        expect(drift, JSON.stringify(line)).toBeLessThan(2);
+    }
+});
+
 test('what it draws is actually formatted, not just marked up', async () => {
     await typeInComposer('a **bold** b *italic* c');
     const w = await page.evaluate(() => {
         const b = document.querySelector('#composer-mirror .cm-b');
         const i = document.querySelector('#composer-mirror .cm-i');
+        const m = document.querySelector('#composer-mirror .cm-mark');
         return {
-            bold: b && getComputedStyle(b).fontWeight,
-            italic: i && getComputedStyle(i).fontStyle
+            // Painted, not set in a heavier face — see the note on .cm-b. The
+            // weight must stay the field's, or the caret drifts.
+            stroke: b && getComputedStyle(b).webkitTextStrokeWidth,
+            boldWeight: b && getComputedStyle(b).fontWeight,
+            italicColor: i && getComputedStyle(i).color,
+            markColor: m && getComputedStyle(m).color,
+            bodyColor: getComputedStyle(document.getElementById('composer-mirror')).color
         };
     });
-    expect(Number(w.bold)).toBeGreaterThanOrEqual(700);
-    expect(w.italic).toBe('italic');
+    expect(parseFloat(w.stroke)).toBeGreaterThan(0);
+    expect(Number(w.boldWeight)).toBe(Number(
+        await page.evaluate(() => getComputedStyle(document.getElementById('composer-input')).fontWeight)));
+    // The marks are visibly punctuation rather than part of the sentence.
+    expect(w.markColor).not.toBe(w.bodyColor);
 });
 
 // ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // compare against — skipped there, the same way the RNNoise worklet check is.
 const HLJS = path.join(ROOT, 'src', 'renderer', 'vendor', 'hljs.js');
 const vendored = fs.existsSync(HLJS);
+const CSS = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'styles.css'), 'utf8');
 
 const POST = {
     id: 7, body: 'hello', name: 'Alice', client_id: 'alice', user_id: 2,
@@ -385,6 +386,36 @@ describe('the formatting drawn under the caret', () => {
             // that ends on Shift+Enter has a final line with height.
             expect(mirror().textContent, JSON.stringify(s)).toBe(s + '\n');
         }
+    });
+
+    // THE RULE THE WHOLE LAYER RESTS ON.
+    //
+    // The caret is the textarea's, the glyphs are the layer's, and a textarea
+    // can carry exactly one font — so any style here that changes how wide a
+    // character is makes the drawn text drift away from the caret, cumulatively,
+    // one character at a time.
+    //
+    // v0.76.0 shipped with the mono face and 0.92em on code spans and fences:
+    // typing inside a ``` block left the caret further behind with every key.
+    // Bold and italic were the same bug, slower. Emphasis is painted now —
+    // colour, background, decorations and -webkit-text-stroke — and this is the
+    // check that keeps it that way, because it is not a thing to remember.
+    it('never changes a character’s width, in any of its marks', () => {
+        const banned = /(^|[;{\s])(font-family|font-size|font-weight|font-style|font-stretch|font-variant|font|letter-spacing|word-spacing|text-transform|zoom|transform)\s*:/;
+        const rules = CSS.match(/\.cm-[\w-]+[^{}]*\{[^}]*\}/g) || [];
+        expect(rules.length, 'no .cm-* rules found — did they move?').toBeGreaterThan(8);
+        for (const rule of rules) {
+            const body = rule.slice(rule.indexOf('{'));
+            expect(banned.test(body), rule.split('{')[0].trim() + ' changes glyph metrics').toBe(false);
+        }
+    });
+
+    it('still draws code, bold and headings as something', () => {
+        // Paint-only is the constraint, not an excuse to draw nothing.
+        const rule = (sel) => (CSS.match(new RegExp('\\' + sel + '[^{}]*\\{[^}]*\\}')) || [''])[0];
+        expect(rule('.cm-b')).toMatch(/-webkit-text-stroke/);
+        expect(rule('.cm-head')).toMatch(/-webkit-text-stroke/);
+        expect(rule('.cm-code, .cm-fence')).toMatch(/background/);
     });
 
     // The layer is positioned against a wrapper holding it and the field, NOT

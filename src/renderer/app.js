@@ -6244,6 +6244,9 @@
             initial: document.querySelector('.picker-tab.active')
         });
         $('picker-grid').innerHTML = '<div class="empty-state">Looking for screens and windows…</div>';
+        // A search left behind by the last open would silently hide most of the
+        // list on this one.
+        $('picker-search').value = '';
 
         try {
             pickerSources = await L.share.sources();
@@ -6319,10 +6322,22 @@
     function renderPicker() {
         const grid = $('picker-grid');
         const want = pickerTab === 'screen';
-        const list = pickerSources.filter((s) => s.isScreen === want);
+        const q = ($('picker-search').value || '').trim().toLowerCase();
+        const inTab = pickerSources.filter((s) => s.isScreen === want);
+        const list = q ? inTab.filter((s) => s.name.toLowerCase().includes(q)) : inTab;
+
+        // Only worth offering where there is a list to search. Screens are two
+        // or three rows; windows are now everything the machine has open.
+        $('picker-search').closest('.picker-filter').hidden = want;
+        $('picker-count').textContent = q
+            ? list.length + ' of ' + inTab.length
+            : inTab.length + (inTab.length === 1 ? ' window' : ' windows');
 
         grid.innerHTML = '';
         $('picker-empty').hidden = list.length > 0;
+        $('picker-empty').textContent = q
+            ? 'No window called “' + q + '”.'
+            : 'Nothing to share here.';
 
         list.forEach((s) => {
             const b = document.createElement('button');
@@ -6351,9 +6366,22 @@
         });
     }
 
+    $('picker-search').addEventListener('input', () => {
+        // The selection survives a search that still shows it and is dropped by
+        // one that does not — arming Share on a window that has been filtered
+        // out of view is the same trap as carrying it across the tabs.
+        renderPicker();
+        if (pickerSelected && !$('picker-grid').querySelector('.pick.sel')) {
+            pickerSelected = null;
+            $('picker-go').disabled = true;
+            paintPickerChoice();
+        }
+    });
+
     document.querySelectorAll('.picker-tab').forEach((t) => {
         t.addEventListener('click', () => {
             pickerTab = t.dataset.tab;
+            $('picker-search').value = '';
             // The selection belongs to the category it was made in — carrying it
             // across meant Share could send a window while the grid showed
             // screens, with nothing on screen saying which one was armed.
@@ -9529,34 +9557,86 @@
 
     // ---------- custom layout (Edit Layout) --------------------------------
     //
-    // The window's arrangement, as three independent choices rather than as
-    // coordinates. Each one has exactly two settled positions, styles.css
-    // writes out every combination of them by hand, and a section can only be
-    // dropped into a zone — so every arrangement reachable from the UI is one
-    // somebody laid out, and there is no way to express an overlap or a section
-    // hanging off the edge. That is the entire argument for snapping.
+    // Seven REGIONS are cut out of the app shell (five in the grid, two inside
+    // the chat column — see styles.css), and each of the four movable sections
+    // sits in one of them. A section may go in ANY region; a region holds one
+    // section, so dropping onto an occupied one trades places with whatever was
+    // there. That pair of rules is the whole model, and it is what makes an
+    // overlap or a section with nowhere to be unreachable rather than merely
+    // unlikely.
     //
-    //   panels  default | swapped   channel list left or right
-    //   dock    bottom  | top       me bar under the channels, or a top bar
-    //   input   bottom  | top       message box below or above the messages
-    const LAYOUT_DEFAULT = { panels: 'default', dock: 'bottom', input: 'bottom' };
-    const LAYOUT_CHOICES = {
-        panels: ['default', 'swapped'],
-        dock: ['bottom', 'top'],
-        input: ['bottom', 'top']
+    // The first version of this was three either/or switches — channels left or
+    // right, me bar here or there — which is why the me bar looked movable and
+    // then refused every target, and why the message box could not be moved at
+    // all: the places it was being dragged to did not exist. Regions are places
+    // now, they are the same places for every section, and an EMPTY one is drawn
+    // and droppable like any other.
+    const LAYOUT_ZONES = [
+        { id: 'zleft', label: 'Left column', kind: 'col', where: 'grid' },
+        { id: 'zright', label: 'Right column', kind: 'col', where: 'grid' },
+        { id: 'ztop', label: 'Top bar', kind: 'bar', where: 'grid' },
+        { id: 'zdock', label: 'Bottom left', kind: 'bar', where: 'grid' },
+        { id: 'zbot', label: 'Bottom bar', kind: 'bar', where: 'grid' },
+        { id: 'chat-top', label: 'Above the messages', kind: 'bar', where: 'chat' },
+        { id: 'chat-bottom', label: 'Below the messages', kind: 'bar', where: 'chat' }
+    ];
+    const ZONE_BY_ID = new Map(LAYOUT_ZONES.map((z) => [z.id, z]));
+
+    const LAYOUT_SECTIONS = [
+        { key: 'channels', elId: 'sidebar', name: 'Channels & DMs' },
+        { key: 'members', elId: 'members-panel', name: 'Member list' },
+        { key: 'mebar', elId: 'user-dock', name: 'Me bar' },
+        { key: 'composer', elId: 'composer', name: 'Message box' }
+    ];
+
+    // Where everything starts, and what Reset goes back to: the arrangement the
+    // app has always had.
+    const LAYOUT_DEFAULT = {
+        channels: 'zleft', members: 'zright', mebar: 'zdock', composer: 'chat-bottom'
     };
     const LAYOUT_TEMPLATE_MAX = 10;
     const LAYOUT_NAME_MAX = 40;
 
-    // Held to the allowed words on the way IN, every time, rather than trusted
-    // because this app wrote it. settings.json is a text file on disk, it
-    // outlives any one build, and an unknown value here would select no CSS
-    // rule at all — which is not a broken layout, it is a blank window.
-    function normalizeLayout(raw) {
-        const out = Object.assign({}, LAYOUT_DEFAULT);
-        if (!raw || typeof raw !== 'object') return out;
-        for (const key of Object.keys(LAYOUT_CHOICES)) {
-            if (LAYOUT_CHOICES[key].indexOf(raw[key]) !== -1) out[key] = raw[key];
+    // Held to the model on the way IN, every time, rather than trusted because
+    // this app wrote it: settings.json is a text file that outlives any one
+    // build, an unknown region would select no rule at all, and two sections in
+    // one region would draw them on top of each other — the exact thing the
+    // model exists to prevent.
+    //
+    // Resolution is deterministic and in section order, so the same bad input
+    // always produces the same good output: keep the asked-for region if it is
+    // free, else this section's default if that is free, else the first free
+    // region there is. There are seven regions and four sections, so the last
+    // branch can always find one.
+    // v0.76.0 stored three either/or switches instead of a region per section.
+    // Anyone who arranged their window under that build has one saved, and in
+    // their templates, so it is translated rather than thrown away — the
+    // arrangements it could express are all expressible here.
+    function migrateLayout(raw) {
+        if (!raw || typeof raw !== 'object') return raw;
+        if (LAYOUT_SECTIONS.some((s) => raw[s.key] !== undefined)) return raw;
+        if (raw.panels === undefined && raw.dock === undefined && raw.input === undefined) return raw;
+        const swapped = raw.panels === 'swapped';
+        return {
+            channels: swapped ? 'zright' : 'zleft',
+            members: swapped ? 'zleft' : 'zright',
+            mebar: raw.dock === 'top' ? 'ztop' : 'zdock',
+            composer: raw.input === 'top' ? 'chat-top' : 'chat-bottom'
+        };
+    }
+
+    function normalizeLayout(rawIn) {
+        const raw = migrateLayout(rawIn);
+        const src = (raw && typeof raw === 'object') ? raw : {};
+        const out = {};
+        const taken = new Set();
+        for (const sec of LAYOUT_SECTIONS) {
+            const want = ZONE_BY_ID.has(src[sec.key]) ? src[sec.key] : LAYOUT_DEFAULT[sec.key];
+            let pick = !taken.has(want) ? want : null;
+            if (!pick && !taken.has(LAYOUT_DEFAULT[sec.key])) pick = LAYOUT_DEFAULT[sec.key];
+            if (!pick) pick = LAYOUT_ZONES.map((z) => z.id).find((id) => !taken.has(id));
+            out[sec.key] = pick;
+            taken.add(pick);
         }
         return out;
     }
@@ -9565,127 +9645,96 @@
 
     function sameLayout(a, b) {
         const x = normalizeLayout(a), y = normalizeLayout(b);
-        return Object.keys(LAYOUT_CHOICES).every((k) => x[k] === y[k]);
+        return LAYOUT_SECTIONS.every((s) => x[s.key] === y[s.key]);
     }
 
     // In the app's own words, for the template list.
     function layoutSummary(raw) {
         const l = normalizeLayout(raw);
-        return [
-            l.panels === 'swapped' ? 'Channels right' : 'Channels left',
-            l.dock === 'top' ? 'Me bar on top' : 'Me bar below',
-            l.input === 'top' ? 'Message box above' : 'Message box below'
-        ].join(' · ');
+        return LAYOUT_SECTIONS
+            .map((s) => s.name + ' → ' + (ZONE_BY_ID.get(l[s.key]) || {}).label)
+            .join(' · ');
     }
 
-    // The only place the attributes are written. Everything else — boot, a drop,
-    // a template, Cancel — goes through here, so there is one description of
-    // what "apply a layout" means.
+    // Whose region a given element is showing. Both sidebars share one: the DM
+    // list REPLACES the channel list in whatever region that is rather than
+    // opening beside it.
+    function elementsFor(sec) {
+        const out = [$(sec.elId)];
+        if (sec.key === 'channels' && $('dm-sidebar')) out.push($('dm-sidebar'));
+        return out.filter(Boolean);
+    }
+
+    // The composer is also moved by the DM drawer, which owns it for as long as
+    // a conversation is open (see moveComposer). The layout still records where
+    // it belongs; it is put back there on the way out.
+    function composerHeldByDm() {
+        const slot = $('dm-composer-slot');
+        return !!(slot && $('composer') && $('composer').parentElement === slot);
+    }
+
+    // Called by moveComposer() on the way OUT of a conversation. The layout is
+    // what knows where the box lives — it used to be a comment node dropped
+    // beside it the first time a DM was opened, which recorded whatever place it
+    // happened to be in that day and would have marched it back there over
+    // whatever the user had since chosen.
+    function restoreComposerToLayout() {
+        placeSection(LAYOUT_SECTIONS.find((s) => s.key === 'composer'), zoneOf('composer'), true);
+    }
+
+    function placeSection(sec, zoneId, force) {
+        const zone = ZONE_BY_ID.get(zoneId) || ZONE_BY_ID.get(LAYOUT_DEFAULT[sec.key]);
+        if (sec.key === 'composer' && !force && composerHeldByDm()) {
+            // Remember it, do not move it. The drawer is showing it somewhere
+            // else on purpose.
+            $('composer').dataset.zone = zone.id;
+            $('composer').dataset.zonekind = zone.kind;
+            return;
+        }
+        for (const el of elementsFor(sec)) {
+            el.dataset.zone = zone.id;
+            el.dataset.zonekind = zone.kind;
+            if (zone.where === 'chat') {
+                el.style.gridArea = '';
+                if (el.parentElement !== $('main')) $('main').appendChild(el);
+            } else {
+                el.style.gridArea = zone.id;
+                if (el.parentElement !== $('app')) $('app').appendChild(el);
+            }
+        }
+        // The typing line belongs to the message box and follows it up.
+        if (sec.key === 'composer') $('main').classList.toggle('input-top', zone.id === 'chat-top');
+    }
+
+    // The only place a layout is applied. Everything else — boot, a drop, a
+    // template, Cancel, the DM drawer handing the composer back — comes through
+    // here, so there is one description of what "apply a layout" means.
     function applyLayout(raw) {
         const lay = normalizeLayout(raw === undefined ? settings.layout : raw);
-        const app = $('app');
-        app.dataset.panels = lay.panels;
-        app.dataset.dock = lay.dock;
-        app.dataset.input = lay.input;
-        // The panels keep their widths across a swap, but the drag strips move
-        // to the other edge and each one now reports the other's number to
-        // assistive technology. applyPaneWidths is what re-announces them.
+        for (const sec of LAYOUT_SECTIONS) placeSection(sec, lay[sec.key]);
+        // A section that has left a column takes its width with it, and the two
+        // that are still in one may now be on the other side — which is the edge
+        // their drag strip straddles and the direction it reads.
         applyPaneWidths();
         return lay;
     }
 
+    function zoneOf(key) { return currentLayout()[key]; }
+
     // Which way a pointer delta widens the panel. A function rather than the
-    // constant it used to be: dragging the channel list's strip to the RIGHT
-    // widens it when the panel is on the left and narrows it when it is on the
-    // right, and the strip swaps edges with the panel (see styles.css).
-    function sidebarDragDir() { return currentLayout().panels === 'swapped' ? -1 : 1; }
-    function membersDragDir() { return currentLayout().panels === 'swapped' ? 1 : -1; }
-
-    // ---- the sections, and the zones each one may go in --------------------
-    //
-    // A zone is named by a PATCH, not by a position: dropping the member list
-    // into the left column and dropping the channel list into the right one are
-    // the same rearrangement, and describing both as `panels: 'swapped'` is what
-    // makes them impossible to disagree.
-    const LAYOUT_SECTIONS = [
-        {
-            key: 'sidebar', elId: 'sidebar', name: 'Channels & DMs',
-            zones: [
-                { id: 'left', label: 'Left column', patch: { panels: 'default' } },
-                { id: 'right', label: 'Right column', patch: { panels: 'swapped' } }
-            ]
-        },
-        {
-            key: 'members', elId: 'members-panel', name: 'Member list',
-            zones: [
-                { id: 'left', label: 'Left column', patch: { panels: 'swapped' } },
-                { id: 'right', label: 'Right column', patch: { panels: 'default' } }
-            ]
-        },
-        {
-            key: 'dock', elId: 'user-dock', name: 'Me bar',
-            zones: [
-                { id: 'top', label: 'Top bar', patch: { dock: 'top' } },
-                { id: 'bottom', label: 'Below the channels', patch: { dock: 'bottom' } }
-            ]
-        },
-        {
-            key: 'composer', elId: 'composer', name: 'Message box',
-            zones: [
-                { id: 'top', label: 'Above the messages', patch: { input: 'top' } },
-                { id: 'bottom', label: 'Below the messages', patch: { input: 'bottom' } }
-            ]
-        }
-    ];
-
-    // A section is movable only if it is actually on screen and in the place
-    // this system knows how to move it from. Two real cases:
-    //   • the member list can be hidden, and a zero-sized frame is a target
-    //     nobody can hit;
-    //   • the composer is MOVED into the conversation drawer for DMs, where it
-    //     is a child of something else entirely and `order` would do nothing —
-    //     offering to move it there would be offering a control that lies.
-    function sectionMovable(sec) {
-        const el = $(sec.elId);
-        if (!el || el.hidden) return false;
-        if (sec.key === 'composer' && el.parentElement !== $('main')) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 8 && r.height > 8;
-    }
-
-    function movableSections() { return LAYOUT_SECTIONS.filter(sectionMovable); }
-
-    // Where a section WOULD be if it were dropped in a zone — measured, not
-    // guessed, by putting the app into that layout and reading the rectangle
-    // back. Every write and read here happens inside one synchronous run, so
-    // the browser never paints an arrangement that was only being measured.
-    function measureZones(sec) {
-        const app = $('app');
-        const el = $(sec.elId);
-        const before = { panels: app.dataset.panels, dock: app.dataset.dock, input: app.dataset.input };
-        const out = [];
-        for (const zone of sec.zones) {
-            const probe = Object.assign({}, normalizeLayout(before), zone.patch);
-            app.dataset.panels = probe.panels;
-            app.dataset.dock = probe.dock;
-            app.dataset.input = probe.input;
-            const r = el.getBoundingClientRect();      // forces the layout
-            out.push({ zone, rect: { x: r.left, y: r.top, w: r.width, h: r.height } });
-        }
-        app.dataset.panels = before.panels;
-        app.dataset.dock = before.dock;
-        app.dataset.input = before.input;
-        // Read once more so the restored layout is the one in effect when this
-        // returns, rather than one flush behind whatever happens next.
-        el.getBoundingClientRect();
-        return out;
-    }
+    // constant it used to be: either panel can be in either column, and the
+    // strip swaps edges with it (see styles.css), so a rightward drag widens the
+    // left-hand one and narrows the right-hand one. Read per event, because the
+    // handles are wired once for the life of the process.
+    function sidebarDragDir() { return zoneOf('channels') === 'zright' ? -1 : 1; }
+    function membersDragDir() { return zoneOf('members') === 'zleft' ? 1 : -1; }
 
     // ---- edit mode ---------------------------------------------------------
 
     let layoutEditing = false;
     let layoutEntryState = null;    // the layout to put back if Cancel is pressed
     let layoutDrag = null;          // { sec, targets, hot }
+    let zoneProbes = [];
 
     function layoutEditOpen() { return layoutEditing; }
 
@@ -9700,17 +9749,65 @@
         el.style.height = rect.h + 'px';
     }
 
-    // The dashed outline over each movable section, at its live position. Rebuilt
-    // rather than moved, because the set of movable sections changes with the
-    // layout (and with the member list being hidden).
+    // A probe in every region, for the length of the edit.
+    //
+    // This is what makes an EMPTY region a target at all: a region with nothing
+    // in it has no size, and something with no size cannot be dropped on. It is
+    // also what the drag measures against, so the outline under the pointer is
+    // exactly the space the section will occupy — no arithmetic, no assumptions
+    // about the grid, and nothing to fall out of step when the grid changes.
+    function addZoneProbes() {
+        removeZoneProbes();
+        const lay = currentLayout();
+        const filled = new Set(LAYOUT_SECTIONS.map((s) => lay[s.key]));
+        for (const zone of LAYOUT_ZONES) {
+            const el = document.createElement('div');
+            el.className = 'zone-probe' + (filled.has(zone.id) ? ' filled' : '');
+            el.dataset.zoneProbe = zone.id;
+            el.textContent = zone.label;
+            if (zone.where === 'chat') {
+                el.style.order = zone.id === 'chat-top' ? '-2' : '2';
+                $('main').appendChild(el);
+            } else {
+                el.style.gridArea = zone.id;
+                $('app').appendChild(el);
+            }
+            zoneProbes.push(el);
+        }
+    }
+
+    function removeZoneProbes() {
+        zoneProbes.forEach((el) => el.remove());
+        zoneProbes = [];
+    }
+
+    function probeRect(zoneId) {
+        const el = zoneProbes.find((p) => p.dataset.zoneProbe === zoneId);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) return null;
+        return { x: r.left, y: r.top, w: r.width, h: r.height };
+    }
+
+    // A section is movable when it is on screen. The member list can be hidden,
+    // and a section with no box is one nobody can pick up.
+    function sectionMovable(sec) {
+        const el = $(sec.elId);
+        if (!el || el.hidden) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 8 && r.height > 8;
+    }
+
+    function movableSections() { return LAYOUT_SECTIONS.filter(sectionMovable); }
+
+    // The dashed outline over each movable section, at its live position.
     function renderLayoutFrames() {
         const host = $('layout-frames');
         host.textContent = '';
-        if (layoutDrag) return;      // zones are drawn instead, see startLayoutDrag
         for (const sec of movableSections()) {
             const r = $(sec.elId).getBoundingClientRect();
             const box = document.createElement('div');
-            box.className = 'lay-sec';
+            box.className = 'lay-sec' + (layoutDrag && layoutDrag.sec === sec ? ' picked' : '');
             place(box, { x: r.left, y: r.top, w: r.width, h: r.height });
             const tag = document.createElement('span');
             tag.className = 'lay-sec-name';
@@ -9721,32 +9818,38 @@
     }
 
     function sectionAt(x, y) {
-        // Last first: the frames are drawn in section order and the later ones
-        // are the smaller, more specific targets (the message box sits inside
-        // the area the others surround).
-        const list = movableSections();
-        for (let i = list.length - 1; i >= 0; i--) {
-            const r = $(list[i].elId).getBoundingClientRect();
-            if (hit({ x: r.left, y: r.top, w: r.width, h: r.height }, x, y)) return list[i];
+        // Smallest first, so a section sitting inside the area another one
+        // surrounds is still the one that gets picked up.
+        const list = movableSections()
+            .map((sec) => ({ sec, r: $(sec.elId).getBoundingClientRect() }))
+            .sort((a, b) => (a.r.width * a.r.height) - (b.r.width * b.r.height));
+        for (const { sec, r } of list) {
+            if (hit({ x: r.left, y: r.top, w: r.width, h: r.height }, x, y)) return sec;
         }
         return null;
     }
 
     function startLayoutDrag(sec, x, y) {
-        layoutDrag = { sec, targets: measureZones(sec), hot: null };
+        // EVERY region, not only the ones this section is allowed in — it is
+        // allowed in all of them. The one it is already in is drawn too, and
+        // dropping there is simply no change.
+        const targets = LAYOUT_ZONES
+            .map((zone) => ({ zone, rect: probeRect(zone.id) }))
+            .filter((t) => t.rect);
+        layoutDrag = { sec, targets, hot: null };
         document.body.classList.add('layout-dragging');
+
         const host = $('layout-frames');
         host.textContent = '';
-        // ONLY this section's zones are drawn. Within one section's set they
-        // never overlap, so "what is under the pointer" has exactly one answer
-        // and the drop needs no tie-break rule at all.
-        const cur = currentLayout();
-        for (const t of layoutDrag.targets) {
+        const lay = currentLayout();
+        for (const t of targets) {
             const box = document.createElement('div');
             box.className = 'lay-zone';
-            const isNow = sameLayout(cur, Object.assign({}, cur, t.zone.patch));
-            if (isNow) box.classList.add('current');
-            box.textContent = t.zone.label + (isNow ? ' (current)' : '');
+            const holder = LAYOUT_SECTIONS.find((s) => lay[s.key] === t.zone.id);
+            const mine = lay[sec.key] === t.zone.id;
+            if (mine) box.classList.add('current');
+            box.textContent = t.zone.label +
+                (mine ? ' (here now)' : holder ? ' — swap with ' + holder.name : '');
             place(box, t.rect);
             t.el = box;
             host.appendChild(box);
@@ -9779,12 +9882,12 @@
         document.body.classList.remove('layout-dragging');
         $('layout-ghost').hidden = true;
         if (commit && hot) {
-            const next = Object.assign({}, currentLayout(), hot.zone.patch);
+            const next = withSectionAt(currentLayout(), sec.key, hot.zone.id);
             if (!sameLayout(next, currentLayout())) {
-                // Applied at once and saved at once. Edit mode's Cancel restores
-                // the entry state, so there is nothing to be gained by holding
-                // the change in memory — and a crash mid-edit would otherwise
-                // lose an arrangement the user had already seen take effect.
+                // Applied and saved at once. Cancel restores the arrangement
+                // that was in effect on entry, so there is nothing to be gained
+                // by holding the change in memory — and a crash mid-edit would
+                // otherwise lose an arrangement already seen to take effect.
                 settings.layout = next;
                 applyLayout(next);
                 await saveSettings({ layout: next });
@@ -9792,12 +9895,25 @@
                 setLayoutHint(sec.name + ' → ' + hot.zone.label);
             }
         }
+        addZoneProbes();
         renderLayoutFrames();
+    }
+
+    // Move one section into one region, and give up whatever it displaced — a
+    // straight swap, which is the only resolution that leaves every section
+    // somewhere and every region holding at most one.
+    function withSectionAt(layout, key, zoneId) {
+        const next = Object.assign({}, layout);
+        const evicted = LAYOUT_SECTIONS.find((s) => s.key !== key && next[s.key] === zoneId);
+        const was = next[key];
+        next[key] = zoneId;
+        if (evicted) next[evicted.key] = was;
+        return normalizeLayout(next);
     }
 
     function setLayoutHint(text) {
         const el = $('layout-hint');
-        if (el) el.textContent = text || 'Drag a section into a zone';
+        if (el) el.textContent = text || 'Drag a section into any zone';
     }
 
     function openLayoutEdit() {
@@ -9808,6 +9924,7 @@
         document.body.classList.add('layout-editing');
         $('layout-edit').hidden = false;
         setLayoutHint(null);
+        addZoneProbes();
         renderLayoutFrames();
     }
 
@@ -9822,6 +9939,7 @@
             await saveSettings({ layout: back });
         }
         layoutEntryState = null;
+        removeZoneProbes();
         document.body.classList.remove('layout-editing');
         document.body.classList.remove('layout-dragging');
         $('layout-edit').hidden = true;
@@ -9850,18 +9968,24 @@
         });
         const up = (e, commit) => {
             if (pointer === null || (e && e.pointerId !== undefined && e.pointerId !== pointer)) return;
+            // Where the pointer was RELEASED decides it, not wherever it last
+            // happened to pass over. Without this, dragging across a region and
+            // letting go somewhere else entirely dropped the section into the
+            // one it had crossed — a move nobody asked for, from a gesture that
+            // looked like giving up.
+            if (commit && e && e.clientX !== undefined) moveLayoutDrag(e.clientX, e.clientY);
             try { shield.releasePointerCapture(pointer); } catch (err) { /* already released */ }
             pointer = null;
             endLayoutDrag(commit);
         };
         shield.addEventListener('pointerup', (e) => up(e, true));
-        // A cancelled pointer is not a drop. Same for the window losing the
-        // pointer entirely, which leaves no pointerup at all.
+        // A cancelled pointer is not a drop, and neither is the window losing
+        // the pointer entirely — which leaves no pointerup at all.
         shield.addEventListener('pointercancel', (e) => up(e, false));
         window.addEventListener('blur', () => { if (pointer !== null) up(null, false); });
 
         // The outlines are drawn at measured pixel positions, so anything that
-        // changes those positions has to redraw them.
+        // moves those positions has to redraw them.
         window.addEventListener('resize', () => { if (layoutEditing && !layoutDrag) renderLayoutFrames(); });
 
         $('layout-done').addEventListener('click', () => { closeLayoutEdit(false); });
@@ -9871,6 +9995,7 @@
             applyLayout(LAYOUT_DEFAULT);
             await saveSettings({ layout: settings.layout });
             setLayoutHint('Back to the default arrangement');
+            addZoneProbes();
             renderLayoutFrames();
         });
         $('layout-save-tpl').addEventListener('click', async () => {
@@ -9924,7 +10049,7 @@
         applyLayout(tpl.layout);
         await saveSettings({ layout: tpl.layout });
         renderLayoutTemplates();
-        if (layoutEditing) renderLayoutFrames();
+        if (layoutEditing) { addZoneProbes(); renderLayoutFrames(); }
         toast('Layout “' + tpl.name + '” applied');
     }
 
@@ -16358,9 +16483,8 @@
 
     // The one composer, relocated. Moving the node keeps every listener, every
     // sub-control and the exact appearance, because it IS the same element —
-    // which is the whole point. A marker holds its place in #main so it goes
-    // back exactly where it was rather than at the end.
-    let composerHome = null;
+    // which is the whole point. Where it goes back to is the LAYOUT's answer
+    // (restoreComposerToLayout), not a marker planted where it once was.
 
     // Which conversation the composer's CONTENTS belong to, and what was left
     // behind on the surfaces it is not currently sitting on.
@@ -16412,13 +16536,14 @@
     function moveComposer(intoDm) {
         const form = $('composer');
         if (!form) return;
-        if (!composerHome) {
-            composerHome = document.createComment('composer');
-            form.parentNode.insertBefore(composerHome, form);
-        }
         const slot = $('dm-composer-slot');
+        // Out of a conversation, the box goes wherever the LAYOUT says — which
+        // is the whole point of Edit Layout being able to move it. This used to
+        // return it to a comment node planted beside it the first time a DM was
+        // ever opened, so a box the user had since moved to the top of the
+        // window came back to the bottom on the way out of every conversation.
         if (intoDm && slot) slot.appendChild(form);
-        else if (composerHome.parentNode) composerHome.parentNode.insertBefore(form, composerHome.nextSibling);
+        else restoreComposerToLayout();
 
         // Both callers can fire twice for one transition (setDmMode calls
         // closeDm, which moves the composer, and then moves it again), so the
