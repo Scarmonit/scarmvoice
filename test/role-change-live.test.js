@@ -108,6 +108,73 @@ describe('a role change arriving on the socket', () => {
         expect($('dialog').hidden).toBe(true);
     });
 
+    // The notice arrives unannounced, over whatever the person was already doing.
+    // The next click after it appears was aimed at something underneath it — and
+    // that click used to dismiss it, because the backdrop closed the dialog. So a
+    // change to what somebody is allowed to do could vanish before it had been
+    // read, with nothing in the app that would show it again. It has to be
+    // acknowledged now: the button is the only way out.
+    describe('and the notice is static', () => {
+        async function noticeUp() {
+            const h = await bootRenderer(asRole('member'));
+            await settle();
+            h.lounge.account.me.mockImplementation(async () => ({
+                success: true, user: { id: 1, username: 'Me', role: 'admin' }
+            }));
+            h.rt({ t: 'role', role: 'admin', by: 'Scarmonit', at: Date.now() });
+            await settle();
+            expect($('dialog').hidden).toBe(false);
+            return h;
+        }
+
+        it('survives a click on the backdrop', async () => {
+            await noticeUp();
+            $('dialog').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+            await settle();
+            expect($('dialog').hidden).toBe(false);
+            // The click is not simply swallowed: it points at the way out.
+            expect(document.activeElement).toBe($('dialog-ok'));
+        });
+
+        it('survives Escape', async () => {
+            await noticeUp();
+            document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await settle();
+            expect($('dialog').hidden).toBe(false);
+        });
+
+        // Escape is refused, not ignored — the branch still has to swallow the key,
+        // or it falls through to whatever is open behind the modal and closes that
+        // instead, leaving the notice up over a panel that has just disappeared.
+        it('does not let Escape reach what is behind it', async () => {
+            await noticeUp();
+            $('btn-pinned').click();
+            await settle();
+            expect($('pinned-panel').hidden).toBe(false);
+
+            document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await settle();
+            expect($('dialog').hidden).toBe(false);
+            expect($('pinned-panel').hidden).toBe(false);
+        });
+
+        it('closes on the button, and lets go of static as it goes', async () => {
+            await noticeUp();
+            $('dialog-ok').click();
+            await settle();
+            expect($('dialog').hidden).toBe(true);
+
+            // The flag is shared with every other dialog. If it were not cleared,
+            // the next ordinary prompt would be unescapable too.
+            $('btn-add-channel').click();
+            await settle();
+            expect($('dialog').hidden).toBe(false);
+            $('dialog').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+            await settle();
+            expect($('dialog').hidden).toBe(true);
+        });
+    });
+
     it('says "changed to" rather than "promoted" on the way down', async () => {
         const h = await bootRenderer(asRole('admin'));
         await settle();

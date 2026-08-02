@@ -1255,6 +1255,14 @@
 
     let dialogDone = null;
 
+    // Whether the dialog on screen is one that must be acknowledged — see
+    // `staticBackdrop` in openDialog(). Kept ON THE ELEMENT rather than in a variable
+    // beside dialogDone: the backdrop listener is bound to #dialog, but the
+    // Escape handler is bound to `document`, and anything else listening there
+    // has to be able to ask the same question and get the same answer. State
+    // about an element belongs on the element.
+    const dialogIsStatic = () => $('dialog').hasAttribute('data-static');
+
     // ---------- modal focus management -------------------------------------
     //
     // Every overlay in this app was a plain div: assistive technology had no way
@@ -1334,7 +1342,7 @@
     }
 
     function openDialog({ title, message, value, ok, danger, withInput, label2, value2, placeholder,
-                          inputType, maxLength, placeholder2, maxLength2, noCancel }) {
+                          inputType, maxLength, placeholder2, maxLength2, noCancel, staticBackdrop }) {
         return new Promise((resolve) => {
             // A second dialog opening over the first used to overwrite
             // dialogDone, so the first promise never settled and whatever was
@@ -1375,6 +1383,14 @@
             // button would imply the change had not already happened. Reset every
             // time, because this element is shared by every dialog.
             $('dialog-cancel').hidden = !!noCancel;
+            // `staticBackdrop` takes away the two silent ways out — a click on
+            // the backdrop and Escape — so the only way past the dialog is the
+            // button. For an announcement that is the whole point: a click
+            // anywhere in the window, aimed at whatever was underneath, used to
+            // dismiss the role-change notice before it had been read, and there
+            // is nothing that would bring it back. Reset every time, because
+            // this state is shared by every dialog.
+            $('dialog').toggleAttribute('data-static', !!staticBackdrop);
             $('dialog').hidden = false;
             trapFocus($('dialog'), {
                 label: title,
@@ -1387,6 +1403,7 @@
     function closeDialog(result) {
         releaseFocus($('dialog'));
         $('dialog').hidden = true;
+        $('dialog').removeAttribute('data-static');
         const done = dialogDone;
         dialogDone = null;
         if (done) done(result);
@@ -1412,8 +1429,17 @@
     }
     // Tell the user something, with one button to dismiss it. No Cancel: there is
     // nothing to decline, because whatever it describes has already happened.
+    //
+    // The backdrop is static, so that button is the ONLY way out. A notice like
+    // this arrives unannounced, on top of whatever the person was already doing —
+    // the next click was aimed at something else, and letting it fall through as
+    // a dismissal meant the notice could be gone before it was read, with no way
+    // to ask for it again.
     function tellUser(title, message, ok) {
-        return openDialog({ title, message, ok: ok || 'OK', withInput: false, noCancel: true });
+        return openDialog({
+            title, message, ok: ok || 'OK', withInput: false,
+            noCancel: true, staticBackdrop: true
+        });
     }
 
     $('dialog-form').addEventListener('submit', (e) => {
@@ -1424,7 +1450,12 @@
     $('dialog-cancel').addEventListener('click', () => closeDialog(inp_null()));
     function inp_null() { return $('dialog-input').hidden ? false : null; }
     $('dialog').addEventListener('mousedown', (e) => {
-        if (e.target === $('dialog')) closeDialog(inp_null());
+        if (e.target !== $('dialog')) return;
+        // A static dialog does not take the backdrop as an answer. Put the caret
+        // back on the button instead of doing nothing at all, so the click has a
+        // visible result and points at the way out.
+        if (dialogIsStatic()) { $('dialog-ok').focus(); return; }
+        closeDialog(inp_null());
     });
 
     // ---------- settings --------------------------------------------------
@@ -16299,7 +16330,11 @@
             else if (threadsPopOpen()) closeThreadsPop();
             else if (mePopoverOpen()) closeMePopover();
             else if (!$('lightbox').hidden) closeLightbox();
-            else if (!$('dialog').hidden) closeDialog(inp_null());
+            // A static dialog refuses Escape as well as the backdrop, but it
+            // still SWALLOWS the key here rather than falling through — the
+            // branches below would otherwise close the picker or the drawer
+            // underneath the modal that is still up and still holding focus.
+            else if (!$('dialog').hidden) { if (!dialogIsStatic()) closeDialog(inp_null()); }
             // Also a focus-trapped modal over the drawers. Without it here Esc
             // fell through to dmPanelOpen() and closed the conversation BEHIND
             // the picker, which stayed up and kept the focus trap.
