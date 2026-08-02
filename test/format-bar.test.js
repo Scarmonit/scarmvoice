@@ -837,6 +837,116 @@ describe('the keyboard inside a code block', () => {
     });
 });
 
+// ---------------------------------------------------------------------------
+// Backspacing the last character of code out of a block used to leave the shell
+// behind — a title bar, one numbered line and a bottom edge — and the next press
+// ate the newline between the code and the fence, putting the caret inside the
+// title bar where the text is invisible. From there every further press deleted
+// a character of ```javascript that nobody could see.
+
+describe('emptying a code block', () => {
+    function del(key, opts = {}) {
+        const ev = new window.KeyboardEvent('keydown', Object.assign({
+            key, bubbles: true, cancelable: true
+        }, opts));
+        input().dispatchEvent(ev);
+        return ev;
+    }
+
+    it('takes the whole block away once it is empty', async () => {
+        const el = await withText('```js\n\n```');
+        await settle();
+        select(6);                                // the empty body line
+        const ev = del('Backspace');
+        expect(ev.defaultPrevented).toBe(true);
+        expect(el.value).toBe('');
+        expect(el.selectionStart).toBe(0);
+    });
+
+    it('closes the gap it leaves in a longer message', async () => {
+        const el = await withText('before\n```js\n\n```\nafter');
+        await settle();
+        select(13);
+        del('Backspace');
+        expect(el.value).toBe('before\nafter');
+        expect(el.selectionStart).toBe(7);
+    });
+
+    it('works from anywhere in an empty block, including its fences', async () => {
+        for (const at of [0, 3, 6, 8]) {
+            const el = await withText('```js\n\n```');
+            await settle();
+            select(at);
+            del('Backspace');
+            expect(el.value, 'from ' + at).toBe('');
+        }
+    }, 20000);
+
+    it('answers Delete the same way', async () => {
+        const el = await withText('```js\n\n```');
+        await settle();
+        select(6);
+        expect(del('Delete').defaultPrevented).toBe(true);
+        expect(el.value).toBe('');
+    });
+
+    it('leaves an unclosed block deletable too', async () => {
+        const el = await withText('```js');
+        await settle();
+        select(5);
+        del('Backspace');
+        expect(el.value).toBe('');
+    });
+
+    // With code still in it the fences are not the user's to delete by accident
+    // — they are drawn as the panel's own edges, so eating one is damage nobody
+    // can see happening.
+    it('refuses to eat the fence while there is still code', async () => {
+        const el = await withText('```js\ncode\n```');
+        await settle();
+        select(6);                                // start of the first code line
+        expect(del('Backspace').defaultPrevented).toBe(true);
+        expect(el.value).toBe('```js\ncode\n```');
+
+        select(10);                               // end of the last code line
+        expect(del('Delete').defaultPrevented).toBe(true);
+        expect(el.value).toBe('```js\ncode\n```');
+    });
+
+    it('leaves an ordinary delete inside the code alone', async () => {
+        await withText('```js\ncode\n```');
+        await settle();
+        select(8);
+        expect(del('Backspace').defaultPrevented).toBe(false);
+    });
+
+    // Nothing else can put the caret on a fence line any more, but TYPING one
+    // still can: the moment ``` is typed the bar covers what is being typed, so
+    // the language went in blind.
+    it('shows the fence again while the caret is on it', async () => {
+        await withText('');
+        await settle();
+        type('```js');
+        input().focus();
+        select(5);
+        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: 'j', bubbles: true }));
+
+        const open = mirror().querySelector('.cm-fl-open');
+        expect(open.classList.contains('cm-at-caret')).toBe(true);
+        expect($('composer-chrome').querySelector('.codechip').hidden).toBe(true);
+    });
+
+    it('hides it again once the caret leaves', async () => {
+        await withText('```js\ncode\n```');
+        await settle();
+        input().focus();
+        select(8);
+        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }));
+        expect(mirror().querySelector('.cm-at-caret')).toBe(null);
+        expect($('composer-chrome').querySelector('.codechip').hidden).toBe(false);
+    });
+});
+
 describe('Tab inside a code block', () => {
     const DOC = '```js\none\ntwo\n```';
 

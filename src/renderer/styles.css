@@ -6477,6 +6477,10 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    only its ink is gone. */
 .cm-fl-open .cm-mark,
 .cm-fl-close .cm-mark { opacity: 0; }
+/* …unless the caret is on that very line, which only happens while somebody is
+   typing the fence itself. Hiding what is being typed is how a language ends up
+   entered blind. */
+.cm-fl.cm-at-caret .cm-mark { opacity: 1; color: var(--placeholder); }
 .cm-fl-body { color: var(--code-text); }
 /* Out in the gutter the padding made, inside the panel that reaches across it.
    `position: absolute` is what keeps it from taking any inline space at all. */

@@ -4477,11 +4477,95 @@
         replaceRange(start, end, text, ns, ne);
     }
 
+    // A fence line the caret is ACTUALLY ON shows its own text again, and its
+    // title bar steps aside for as long as it does.
+    //
+    // Nothing else in the app can put the caret there any more — the arrows step
+    // over these lines, a click settles off them and Backspace refuses to eat
+    // into one — but TYPING one still can: the moment ``` is typed the line
+    // becomes a fence and the bar covers it, so the language typed after it went
+    // in blind. This is the one place the raw syntax is worth seeing.
+    function refreshFenceReveal() {
+        const m = $('composer-mirror');
+        const chrome = $('composer-chrome');
+        if (!m || !chrome || m.hidden) return;
+        const info = fenceLineInfo();
+        const on = (document.activeElement === input && info.fence.has(caretLine()))
+            ? caretLine() : -1;
+        const rows = m.querySelectorAll('.cm-line');
+        rows.forEach((row, i) => row.classList.toggle('cm-at-caret', i === on));
+        chrome.querySelectorAll('.codechip').forEach((c) => {
+            c.hidden = Number(c.dataset.line) === on;
+        });
+    }
+
+    // The block a line belongs to — its fences included — or null.
+    function blockAtLine(idx) {
+        return fenceBlocks(input.value).find((b) => idx >= b.start && idx <= b.end) || null;
+    }
+
+    // Everything between the fences. '' is the state this is all about: the
+    // user has backspaced the last character of code out of the block.
+    function blockBodyLines(block) {
+        const lines = input.value.split('\n');
+        const from = block.start + 1;
+        const to = block.closed ? block.end - 1 : block.end;
+        return from > to ? [] : lines.slice(from, to + 1);
+    }
+    const blockIsEmpty = (block) => blockBodyLines(block).join('\n') === '';
+
+    // Take the whole thing out — fences and all — and close the gap it leaves.
+    // Through replaceRange, so one Ctrl+Z brings it back: this deletes several
+    // lines at once and is exactly the edit somebody will want to undo.
+    function deleteWholeBlock(block) {
+        const v = input.value;
+        let from = lineRangeAt(block.start).start;
+        let to = lineRangeAt(block.end).end;
+        // One of the newlines around it goes too, or the block leaves a blank
+        // line behind — which is its own small ghost.
+        if (v[to] === '\n') to += 1;
+        else if (from > 0 && v[from - 1] === '\n') from -= 1;
+        replaceRange(from, to, '', from, from);
+    }
+
     input.addEventListener('keydown', (e) => {
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
         const info = fenceLineInfo();
         if (!info.fence.size) return;
         const idx = caretLine();
+
+        // AN EMPTY BLOCK HAS TO BE DELETABLE. Backspacing the last character of
+        // code out leaves the shell — a title bar, one numbered line and a
+        // bottom edge — and the next Backspace used to eat the newline between
+        // the code and the fence, putting the caret INSIDE the title bar where
+        // the text is invisible. From there every further press deleted a
+        // character of ```javascript that nobody could see, and let go of
+        // halfway it left a broken fence. One more press removes the block
+        // instead, which is what the key was being held down for.
+        if (input.selectionStart === input.selectionEnd &&
+            (e.key === 'Backspace' || e.key === 'Delete')) {
+            const block = blockAtLine(idx);
+            if (block) {
+                if (blockIsEmpty(block)) {
+                    e.preventDefault();
+                    deleteWholeBlock(block);
+                    return;
+                }
+                // With code still in it, the fences are not the user's to
+                // delete by accident: they are drawn as the panel's own edges,
+                // so eating one is invisible damage. The keys that would reach
+                // them do nothing at all.
+                const first = block.start + 1;
+                const last = block.closed ? block.end - 1 : block.end;
+                const at = input.selectionStart;
+                const eatsOpen = e.key === 'Backspace' && idx === first && at === lineRangeAt(first).start;
+                const eatsClose = e.key === 'Delete' && idx === last && at === lineRangeAt(last).end;
+                if (eatsOpen || eatsClose) { e.preventDefault(); return; }
+                if (info.fence.has(idx)) { e.preventDefault(); settleCaret(0); return; }
+            }
+            return;
+        }
+
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
 
         if (e.key === 'Tab' && (info.inside.has(idx) || info.fence.has(idx))) {
             // Only inside a block. Everywhere else Tab is how somebody who does
@@ -4522,10 +4606,12 @@
         else if (e.key === 'ArrowDown' || e.key === 'PageDown') settleCaret(1);
         else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
                  e.key === 'Home' || e.key === 'End') settleCaret(0);
+        refreshFenceReveal();
     });
     // A click on the title bar or the bottom band belongs to the code, not to
     // the fence it landed on.
-    input.addEventListener('click', () => settleCaret(0));
+    input.addEventListener('click', () => { settleCaret(0); refreshFenceReveal(); });
+    input.addEventListener('blur', () => refreshFenceReveal());
 
     // ---- the formatting drawn under the caret ------------------------------
     //
@@ -4718,9 +4804,12 @@
         lines.forEach((line, i) => {
             const m = FENCE_RE.exec(line);
             if (!m) return;
-            if (open) { open.end = i; out.push(open); open = null; return; }
+            if (open) { open.end = i; open.closed = true; out.push(open); open = null; return; }
             const tag = m[1].trim().toLowerCase();
-            open = { start: i, end: lines.length - 1, lang: /^[\w+#._-]{0,20}$/.test(tag) ? tag : '' };
+            open = {
+                start: i, end: lines.length - 1, closed: false,
+                lang: /^[\w+#._-]{0,20}$/.test(tag) ? tag : ''
+            };
         });
         if (open) out.push(open);          // an unclosed fence is still a block
         return out;
@@ -4827,6 +4916,7 @@
             chrome.appendChild(chip);
         }
         chrome.style.transform = 'translateY(' + (-input.scrollTop) + 'px)';
+        refreshFenceReveal();
     }
 
     // No `input` listener of its own: autosize() already repaints this and is
