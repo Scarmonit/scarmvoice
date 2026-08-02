@@ -144,17 +144,24 @@ const DEFAULTS = {
     // RMS x100 above which you read as "speaking"; see voice.js
     speakThreshold: 6,
 
-    // Layout — which REGION each movable section sits in. Seven regions are cut
-    // out of the app shell in styles.css and one section may be in each, so
-    // there is no value here that can put two things in the same place or a
-    // section nowhere at all. normalizeLayout() in app.js is what actually holds
-    // it to that — a settings file is editable by hand — and it also translates
-    // the three-switch shape v0.76.0 wrote.
-    layout: { channels: 'zleft', members: 'zright', mebar: 'zdock', composer: 'chat-bottom' },
-    // Saved arrangements, newest last. Capped at LAYOUT_TEMPLATE_MAX (10) by
-    // the renderer; the cap is re-applied on read, because this file outlives
-    // any one build and a list that grew past it must not stay grown.
-    layoutTemplates: [],
+    // Edit Mode.
+    //
+    // A layout is a rectangle per element — x/y/w/h as FRACTIONS of the app box,
+    // so an arrangement survives a resized window — plus a shown/hidden flag,
+    // under a name. `activeLayout` names the one in force; 'default' is the CSS
+    // grid the app has always drawn and is not in this list, cannot be edited in
+    // place and cannot be deleted. Capped at 10 by the renderer, and the cap is
+    // re-applied on read because this file outlives any one build.
+    //
+    // normalizeLayout() in app.js is what actually holds these to their shape: a
+    // settings file is editable by hand, and a rectangle with a NaN in it is an
+    // element drawn nowhere at all.
+    layouts: [],
+    activeLayout: 'default',
+    // The editor's own controls, remembered between sessions the way the
+    // reference remembers them: grid on/off, its pitch in pixels, whether
+    // elements snap to each other, and where the panel was left.
+    editorPrefs: { showGrid: true, gridSize: 24, snapElements: true },
 
     // Chat
     // Ctrl+Up / Ctrl+Down in the message box walks back through what you have

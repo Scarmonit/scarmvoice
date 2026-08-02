@@ -8265,7 +8265,7 @@
         // saved as it is made, and throwing away a change somebody has already
         // seen take effect because their session happened to expire is worse
         // than keeping it.
-        closeLayoutEdit(false);
+        closeEditMode(false);
         // A dialog left open never settles its promise, so whatever was
         // awaiting it is abandoned mid-flight rather than cancelled.
         if (!$('dialog').hidden) closeDialog(inp_null());
@@ -9540,12 +9540,12 @@
         paneHandlesWired = true;
 
         ['sidebar-resize', 'dm-sidebar-resize'].forEach((idAttr) => {
-            makeResizable(idAttr, sidebarDragDir,
+            makeResizable(idAttr, 1,
                 () => settings.sidebarWidth,
                 (v) => { settings.sidebarWidth = v; },
                 (v) => clampSidebar(v, membersWidthNow()));
         });
-        makeResizable('members-resize', membersDragDir,
+        makeResizable('members-resize', -1,
             () => settings.membersWidth,
             (v) => { settings.membersWidth = v; },
             (v) => clampMembers(v, clampSidebar(settings.sidebarWidth, 0)));
@@ -9555,553 +9555,984 @@
         window.addEventListener('resize', applyPaneWidths);
     }
 
-    // ---------- custom layout (Edit Layout) --------------------------------
+    // ---------- Edit Mode --------------------------------------------------
     //
-    // Seven REGIONS are cut out of the app shell (five in the grid, two inside
-    // the chat column — see styles.css), and each of the four movable sections
-    // sits in one of them. A section may go in ANY region; a region holds one
-    // section, so dropping onto an occupied one trades places with whatever was
-    // there. That pair of rules is the whole model, and it is what makes an
-    // overlap or a section with nowhere to be unreachable rather than merely
-    // unlikely.
+    // The retail WoW HUD editor, for this app. Every managed element is a
+    // first-class thing that can be MOVED, RESIZED and HIDDEN, all of it driven
+    // from one control panel, and an arrangement can be kept as a named layout.
     //
-    // The first version of this was three either/or switches — channels left or
-    // right, me bar here or there — which is why the me bar looked movable and
-    // then refused every target, and why the message box could not be moved at
-    // all: the places it was being dragged to did not exist. Regions are places
-    // now, they are the same places for every section, and an EMPTY one is drawn
-    // and droppable like any other.
-    const LAYOUT_ZONES = [
-        { id: 'zleft', label: 'Left column', kind: 'col', where: 'grid' },
-        { id: 'zright', label: 'Right column', kind: 'col', where: 'grid' },
-        { id: 'ztop', label: 'Top bar', kind: 'bar', where: 'grid' },
-        { id: 'zdock', label: 'Bottom left', kind: 'bar', where: 'grid' },
-        { id: 'zbot', label: 'Bottom bar', kind: 'bar', where: 'grid' },
-        { id: 'chat-top', label: 'Above the messages', kind: 'bar', where: 'chat' },
-        { id: 'chat-bottom', label: 'Below the messages', kind: 'bar', where: 'chat' }
-    ];
-    const ZONE_BY_ID = new Map(LAYOUT_ZONES.map((z) => [z.id, z]));
+    // A LAYOUT IS A RECTANGLE PER ELEMENT, stored as fractions of the app box.
+    // Fractions rather than pixels so an arrangement survives a resized window,
+    // a different monitor and the zoom control — everything keeps its
+    // proportions instead of drifting off the edge or piling into a corner. The
+    // GRID the editor snaps to is a pixel grid at the current size, because that
+    // is what a grid overlay means and what the size slider is measured in: a
+    // drag snaps in pixels and is stored as the fraction that produces.
+    //
+    // The default layout is not one of these. It is the CSS grid the app has
+    // always used, and it stays in force until something is actually moved or
+    // resized — at which point the arrangement is measured off the screen as it
+    // stands and becomes the starting point. So the app is unchanged for anybody
+    // who never opens this, and identical at the instant they do.
+    //
+    // This replaces the zone model that shipped in v0.76. There is one layout
+    // system, and this is it.
 
-    const LAYOUT_SECTIONS = [
-        { key: 'channels', elId: 'sidebar', name: 'Channels & DMs' },
-        { key: 'members', elId: 'members-panel', name: 'Member list' },
-        { key: 'mebar', elId: 'user-dock', name: 'Me bar' },
-        { key: 'composer', elId: 'composer', name: 'Message box' }
+    const EDIT_ELEMENTS = [
+        {
+            key: 'rail', elId: 'rail', name: 'Servers rail', group: 'Panels',
+            move: true, minW: 44, minH: 80, z: 3
+        },
+        {
+            key: 'channels', elId: 'sidebar', name: 'Channels list', group: 'Panels',
+            // The DM list takes the same place as the channel list rather than
+            // opening beside it, so it is the same element as far as a layout is
+            // concerned.
+            also: ['dm-sidebar'], move: true, minW: 120, minH: 90, z: 3
+        },
+        {
+            key: 'members', elId: 'members-panel', name: 'Member list', group: 'Panels',
+            move: true, minW: 120, minH: 90, z: 3
+        },
+        {
+            key: 'chat', elId: 'main', name: 'Message area', group: 'Panels',
+            move: true, minW: 240, minH: 120, z: 1
+        },
+        {
+            key: 'header', elId: 'chan-head', name: 'Channel header', group: 'Bars',
+            move: true, minW: 180, minH: 32, z: 4
+        },
+        {
+            key: 'mebar', elId: 'user-dock', name: 'Me bar', group: 'Bars',
+            move: true, minW: 160, minH: 40, z: 5
+        },
+        {
+            key: 'composer', elId: 'composer', name: 'Message box', group: 'Bars',
+            move: true, minW: 200, minH: 44, z: 5
+        },
+        // Shown or hidden, but not placed: each of these lives INSIDE one of the
+        // elements above and moves with it.
+        { key: 'typing', elId: 'typing-line', name: 'Typing indicator', group: 'Details', move: false },
+        { key: 'search', elId: 'search-box', name: 'Header search', group: 'Details', move: false },
+        { key: 'toolbar', elId: 'format-bar', name: 'Formatting bar', group: 'Details', move: false }
     ];
+    const EL_BY_KEY = new Map(EDIT_ELEMENTS.map((e) => [e.key, e]));
+    const MOVABLE = EDIT_ELEMENTS.filter((e) => e.move);
+    const EDIT_GROUPS = ['Panels', 'Bars', 'Details'];
 
-    // Where everything starts, and what Reset goes back to: the arrangement the
-    // app has always had.
-    const LAYOUT_DEFAULT = {
-        channels: 'zleft', members: 'zright', mebar: 'zdock', composer: 'chat-bottom'
-    };
-    const LAYOUT_TEMPLATE_MAX = 10;
+    const LAYOUT_MAX = 10;
     const LAYOUT_NAME_MAX = 40;
+    const DEFAULT_LAYOUT_ID = 'default';
+    // How close an edge has to come before it snaps to another element's.
+    const SNAP_PX = 8;
+    const GRID_MIN = 4, GRID_MAX = 96;
 
-    // Held to the model on the way IN, every time, rather than trusted because
-    // this app wrote it: settings.json is a text file that outlives any one
-    // build, an unknown region would select no rule at all, and two sections in
-    // one region would draw them on top of each other — the exact thing the
-    // model exists to prevent.
-    //
-    // Resolution is deterministic and in section order, so the same bad input
-    // always produces the same good output: keep the asked-for region if it is
-    // free, else this section's default if that is free, else the first free
-    // region there is. There are seven regions and four sections, so the last
-    // branch can always find one.
-    // v0.76.0 stored three either/or switches instead of a region per section.
-    // Anyone who arranged their window under that build has one saved, and in
-    // their templates, so it is translated rather than thrown away — the
-    // arrangements it could express are all expressible here.
-    function migrateLayout(raw) {
-        if (!raw || typeof raw !== 'object') return raw;
-        if (LAYOUT_SECTIONS.some((s) => raw[s.key] !== undefined)) return raw;
-        if (raw.panels === undefined && raw.dock === undefined && raw.input === undefined) return raw;
-        const swapped = raw.panels === 'swapped';
-        return {
-            channels: swapped ? 'zright' : 'zleft',
-            members: swapped ? 'zleft' : 'zright',
-            mebar: raw.dock === 'top' ? 'ztop' : 'zdock',
-            composer: raw.input === 'top' ? 'chat-top' : 'chat-bottom'
-        };
-    }
+    const clamp01 = (n) => Math.max(0, Math.min(1, Number(n) || 0));
 
-    function normalizeLayout(rawIn) {
-        const raw = migrateLayout(rawIn);
+    // A layout, held to its shape on the way in. settings.json is a text file
+    // that outlives any one build, and a rectangle with a NaN in it is an
+    // element drawn nowhere at all.
+    function normalizeLayout(raw) {
         const src = (raw && typeof raw === 'object') ? raw : {};
-        const out = {};
-        const taken = new Set();
-        for (const sec of LAYOUT_SECTIONS) {
-            const want = ZONE_BY_ID.has(src[sec.key]) ? src[sec.key] : LAYOUT_DEFAULT[sec.key];
-            let pick = !taken.has(want) ? want : null;
-            if (!pick && !taken.has(LAYOUT_DEFAULT[sec.key])) pick = LAYOUT_DEFAULT[sec.key];
-            if (!pick) pick = LAYOUT_ZONES.map((z) => z.id).find((id) => !taken.has(id));
-            out[sec.key] = pick;
-            taken.add(pick);
+        const out = {
+            id: String(src.id || DEFAULT_LAYOUT_ID),
+            name: typeof src.name === 'string' && src.name.trim()
+                ? src.name.trim().slice(0, LAYOUT_NAME_MAX) : 'Default',
+            custom: !!src.custom,
+            els: {}
+        };
+        const els = (src.els && typeof src.els === 'object') ? src.els : {};
+        for (const el of EDIT_ELEMENTS) {
+            const s = (els[el.key] && typeof els[el.key] === 'object') ? els[el.key] : {};
+            const rec = { hidden: !!s.hidden };
+            if (el.move && [s.x, s.y, s.w, s.h].every((n) => Number.isFinite(Number(n)))) {
+                rec.x = clamp01(s.x);
+                rec.y = clamp01(s.y);
+                // A zero-sized element is one nobody can find again.
+                rec.w = Math.max(0.02, clamp01(s.w));
+                rec.h = Math.max(0.02, clamp01(s.h));
+            }
+            out.els[el.key] = rec;
         }
+        // `custom` is only meaningful when every movable element HAS a
+        // rectangle. A half-filled custom layout would place some elements and
+        // leave the rest at their static positions, on top of each other.
+        if (out.custom && !MOVABLE.every((el) => out.els[el.key].x !== undefined)) out.custom = false;
         return out;
     }
 
-    function currentLayout() { return normalizeLayout(settings.layout); }
-
-    function sameLayout(a, b) {
-        const x = normalizeLayout(a), y = normalizeLayout(b);
-        return LAYOUT_SECTIONS.every((s) => x[s.key] === y[s.key]);
+    function defaultLayout() {
+        return normalizeLayout({ id: DEFAULT_LAYOUT_ID, name: 'Default', custom: false });
     }
 
-    // In the app's own words, for the template list.
-    function layoutSummary(raw) {
-        const l = normalizeLayout(raw);
-        return LAYOUT_SECTIONS
-            .map((s) => s.name + ' → ' + (ZONE_BY_ID.get(l[s.key]) || {}).label)
-            .join(' · ');
+    function savedLayouts() {
+        const raw = settings.layouts;
+        if (!Array.isArray(raw)) return [];
+        return raw.filter((l) => l && typeof l === 'object' && l.id !== DEFAULT_LAYOUT_ID)
+            .map(normalizeLayout)
+            .slice(0, LAYOUT_MAX);
     }
 
-    // Whose region a given element is showing. Both sidebars share one: the DM
-    // list REPLACES the channel list in whatever region that is rather than
-    // opening beside it.
-    function elementsFor(sec) {
-        const out = [$(sec.elId)];
-        if (sec.key === 'channels' && $('dm-sidebar')) out.push($('dm-sidebar'));
+    function layoutById(id) {
+        if (!id || id === DEFAULT_LAYOUT_ID) return defaultLayout();
+        return savedLayouts().find((l) => l.id === id) || defaultLayout();
+    }
+
+    function activeLayout() { return layoutById(settings.activeLayout); }
+
+    function editorPrefs() {
+        const p = (settings.editorPrefs && typeof settings.editorPrefs === 'object') ? settings.editorPrefs : {};
+        const size = Math.round(Number(p.gridSize));
+        return {
+            showGrid: p.showGrid !== false,
+            snapElements: p.snapElements !== false,
+            gridSize: Number.isFinite(size) ? Math.max(GRID_MIN, Math.min(GRID_MAX, size)) : 24
+        };
+    }
+
+    const sameLayout = (a, b) => JSON.stringify(normalizeLayout(a)) === JSON.stringify(normalizeLayout(b));
+
+    // ---- applying ----------------------------------------------------------
+
+    function nodesFor(el) {
+        const out = [$(el.elId)];
+        for (const extra of el.also || []) out.push($(extra));
         return out.filter(Boolean);
     }
 
-    // The composer is also moved by the DM drawer, which owns it for as long as
-    // a conversation is open (see moveComposer). The layout still records where
-    // it belongs; it is put back there on the way out.
+    const appBox = () => $('app').getBoundingClientRect();
+    const pct = (n) => (n * 100).toFixed(4) + '%';
+
+    // The one place a layout reaches the screen. Boot, a drop, a template, a
+    // revert and the DM drawer handing the composer back all come through here.
+    function applyLayout(raw) {
+        const lay = normalizeLayout(raw === undefined ? activeLayout() : raw);
+        const app = $('app');
+        app.dataset.layout = lay.custom ? 'custom' : 'grid';
+
+        for (const el of EDIT_ELEMENTS) {
+            const st = lay.els[el.key] || {};
+            for (const node of nodesFor(el)) {
+                node.dataset.el = el.key;
+                node.classList.toggle('el-hidden', !!st.hidden);
+                if (lay.custom && el.move && st.x !== undefined) {
+                    node.style.left = pct(st.x);
+                    node.style.top = pct(st.y);
+                    node.style.width = pct(st.w);
+                    node.style.height = pct(st.h);
+                    // WITHOUT THIS, an element dragged over another vanishes
+                    // behind it: absolutely-positioned siblings stack in
+                    // document order, and the message area is declared after
+                    // most of them with an opaque background. So the order is
+                    // stated rather than inherited from the markup — the
+                    // message area is the backdrop, panels sit on it, and the
+                    // bars float over both, which is the order somebody moving
+                    // a bar onto the chat is asking for.
+                    node.style.zIndex = String(el.z || 2);
+                } else {
+                    node.style.left = node.style.top = node.style.width = node.style.height = '';
+                    node.style.zIndex = '';
+                }
+            }
+        }
+        placeComposerFor(lay);
+        // The conversation drawer is placed by grid track, which says nothing in
+        // a custom arrangement — it takes the message area's rectangle instead.
+        const dm = $('dm-panel');
+        if (dm) {
+            const chat = lay.els.chat || {};
+            if (lay.custom && chat.x !== undefined) {
+                dm.style.left = pct(chat.x); dm.style.top = pct(chat.y);
+                dm.style.width = pct(chat.w); dm.style.height = pct(chat.h);
+            } else {
+                dm.style.left = dm.style.top = dm.style.width = dm.style.height = '';
+            }
+        }
+        applyPaneWidths();
+        return lay;
+    }
+
+    // The message box is a child of the message area in the default grid and a
+    // free-standing element in a custom one — it cannot be positioned inside
+    // something it is also allowed to sit beside. The DM drawer owns it while a
+    // conversation is open and hands it back afterwards (see moveComposer).
+    function placeComposerFor(lay) {
+        const form = $('composer');
+        if (!form || composerHeldByDm()) return;
+        const want = lay.custom ? $('app') : $('main');
+        if (form.parentElement !== want) want.appendChild(form);
+    }
+
     function composerHeldByDm() {
         const slot = $('dm-composer-slot');
         return !!(slot && $('composer') && $('composer').parentElement === slot);
     }
 
-    // Called by moveComposer() on the way OUT of a conversation. The layout is
-    // what knows where the box lives — it used to be a comment node dropped
-    // beside it the first time a DM was opened, which recorded whatever place it
-    // happened to be in that day and would have marched it back there over
-    // whatever the user had since chosen.
+    // Called by moveComposer() on the way OUT of a conversation.
     function restoreComposerToLayout() {
-        placeSection(LAYOUT_SECTIONS.find((s) => s.key === 'composer'), zoneOf('composer'), true);
+        const form = $('composer');
+        if (!form) return;
+        const lay = editing ? work : activeLayout();
+        const want = lay.custom ? $('app') : $('main');
+        want.appendChild(form);
     }
-
-    function placeSection(sec, zoneId, force) {
-        const zone = ZONE_BY_ID.get(zoneId) || ZONE_BY_ID.get(LAYOUT_DEFAULT[sec.key]);
-        if (sec.key === 'composer' && !force && composerHeldByDm()) {
-            // Remember it, do not move it. The drawer is showing it somewhere
-            // else on purpose.
-            $('composer').dataset.zone = zone.id;
-            $('composer').dataset.zonekind = zone.kind;
-            return;
-        }
-        for (const el of elementsFor(sec)) {
-            el.dataset.zone = zone.id;
-            el.dataset.zonekind = zone.kind;
-            if (zone.where === 'chat') {
-                el.style.gridArea = '';
-                if (el.parentElement !== $('main')) $('main').appendChild(el);
-            } else {
-                el.style.gridArea = zone.id;
-                if (el.parentElement !== $('app')) $('app').appendChild(el);
-            }
-        }
-        // The typing line belongs to the message box and follows it up.
-        if (sec.key === 'composer') $('main').classList.toggle('input-top', zone.id === 'chat-top');
-    }
-
-    // The only place a layout is applied. Everything else — boot, a drop, a
-    // template, Cancel, the DM drawer handing the composer back — comes through
-    // here, so there is one description of what "apply a layout" means.
-    function applyLayout(raw) {
-        const lay = normalizeLayout(raw === undefined ? settings.layout : raw);
-        for (const sec of LAYOUT_SECTIONS) placeSection(sec, lay[sec.key]);
-        // A section that has left a column takes its width with it, and the two
-        // that are still in one may now be on the other side — which is the edge
-        // their drag strip straddles and the direction it reads.
-        applyPaneWidths();
-        return lay;
-    }
-
-    function zoneOf(key) { return currentLayout()[key]; }
-
-    // Which way a pointer delta widens the panel. A function rather than the
-    // constant it used to be: either panel can be in either column, and the
-    // strip swaps edges with it (see styles.css), so a rightward drag widens the
-    // left-hand one and narrows the right-hand one. Read per event, because the
-    // handles are wired once for the life of the process.
-    function sidebarDragDir() { return zoneOf('channels') === 'zright' ? -1 : 1; }
-    function membersDragDir() { return zoneOf('members') === 'zleft' ? 1 : -1; }
 
     // ---- edit mode ---------------------------------------------------------
 
-    let layoutEditing = false;
-    let layoutEntryState = null;    // the layout to put back if Cancel is pressed
-    let layoutDrag = null;          // { sec, targets, hot }
-    let zoneProbes = [];
+    let editing = false;
+    let work = null;          // the layout being edited
+    let entrySnapshot = null; // what Revert All Changes goes back to
+    let entryActiveId = null;
+    let selectedKey = null;
+    let drag = null;          // { key, mode, startX, startY, base, handle }
+    let dirty = false;
 
-    function layoutEditOpen() { return layoutEditing; }
+    function editModeOpen() { return editing; }
 
-    function hit(rect, x, y) {
-        return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
-    }
-
-    function place(el, rect) {
-        el.style.left = rect.x + 'px';
-        el.style.top = rect.y + 'px';
-        el.style.width = rect.w + 'px';
-        el.style.height = rect.h + 'px';
-    }
-
-    // A probe in every region, for the length of the edit.
-    //
-    // This is what makes an EMPTY region a target at all: a region with nothing
-    // in it has no size, and something with no size cannot be dropped on. It is
-    // also what the drag measures against, so the outline under the pointer is
-    // exactly the space the section will occupy — no arithmetic, no assumptions
-    // about the grid, and nothing to fall out of step when the grid changes.
-    function addZoneProbes() {
-        removeZoneProbes();
-        const lay = currentLayout();
-        const filled = new Set(LAYOUT_SECTIONS.map((s) => lay[s.key]));
-        for (const zone of LAYOUT_ZONES) {
-            const el = document.createElement('div');
-            el.className = 'zone-probe' + (filled.has(zone.id) ? ' filled' : '');
-            el.dataset.zoneProbe = zone.id;
-            el.textContent = zone.label;
-            if (zone.where === 'chat') {
-                el.style.order = zone.id === 'chat-top' ? '-2' : '2';
-                $('main').appendChild(el);
-            } else {
-                el.style.gridArea = zone.id;
-                $('app').appendChild(el);
-            }
-            zoneProbes.push(el);
+    // Every movable element's rectangle right now, in fractions — which is how
+    // an arrangement that has only ever been the CSS grid becomes a layout
+    // without anything moving on screen.
+    function measureAll() {
+        const box = appBox();
+        const out = {};
+        for (const el of MOVABLE) {
+            const node = $(el.elId);
+            if (!node) continue;
+            const r = node.getBoundingClientRect();
+            out[el.key] = {
+                x: (r.left - box.left) / box.width,
+                y: (r.top - box.top) / box.height,
+                w: r.width / box.width,
+                h: r.height / box.height
+            };
         }
+        return out;
     }
 
-    function removeZoneProbes() {
-        zoneProbes.forEach((el) => el.remove());
-        zoneProbes = [];
+    // A hidden element has no rectangle to measure, so it keeps whatever it had
+    // — or is given a sensible one so unhiding it later puts it somewhere.
+    function materialize() {
+        if (work.custom) return;
+        const meas = measureAll();
+        for (const el of MOVABLE) {
+            const had = work.els[el.key];
+            const m = meas[el.key];
+            if (m && m.w > 0.001 && m.h > 0.001) Object.assign(had, m);
+            else if (had.x === undefined) Object.assign(had, { x: 0.35, y: 0.35, w: 0.3, h: 0.25 });
+        }
+        work.custom = true;
+        applyLayout(work);
     }
 
-    function probeRect(zoneId) {
-        const el = zoneProbes.find((p) => p.dataset.zoneProbe === zoneId);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        if (r.width < 2 || r.height < 2) return null;
+    const rectOf = (key) => {
+        const node = $(EL_BY_KEY.get(key).elId);
+        if (!node) return null;
+        const r = node.getBoundingClientRect();
         return { x: r.left, y: r.top, w: r.width, h: r.height };
+    };
+
+    const hit = (r, x, y) => r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+
+    function visibleMovable() {
+        return MOVABLE.filter((el) => {
+            if (work.els[el.key].hidden) return false;
+            const r = rectOf(el.key);
+            return r && r.w > 6 && r.h > 6;
+        });
     }
 
-    // A section is movable when it is on screen. The member list can be hidden,
-    // and a section with no box is one nobody can pick up.
-    function sectionMovable(sec) {
-        const el = $(sec.elId);
-        if (!el || el.hidden) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 8 && r.height > 8;
+    // ---- snapping ----------------------------------------------------------
+
+    const gridPx = () => editorPrefs().gridSize;
+
+    function snapValue(v, origin) {
+        const g = gridPx();
+        return origin + Math.round((v - origin) / g) * g;
     }
 
-    function movableSections() { return LAYOUT_SECTIONS.filter(sectionMovable); }
-
-    // The dashed outline over each movable section, at its live position.
-    function renderLayoutFrames() {
-        const host = $('layout-frames');
-        host.textContent = '';
-        for (const sec of movableSections()) {
-            const r = $(sec.elId).getBoundingClientRect();
-            const box = document.createElement('div');
-            box.className = 'lay-sec' + (layoutDrag && layoutDrag.sec === sec ? ' picked' : '');
-            place(box, { x: r.left, y: r.top, w: r.width, h: r.height });
-            const tag = document.createElement('span');
-            tag.className = 'lay-sec-name';
-            tag.textContent = sec.name;
-            box.appendChild(tag);
-            host.appendChild(box);
+    // Candidate lines to align with: the app's own edges and centre, and every
+    // other visible element's edges and centre.
+    function snapLines(exceptKey) {
+        const box = appBox();
+        const v = [box.left, box.left + box.width / 2, box.left + box.width];
+        const h = [box.top, box.top + box.height / 2, box.top + box.height];
+        if (!editorPrefs().snapElements) return { v, h };
+        for (const el of visibleMovable()) {
+            if (el.key === exceptKey) continue;
+            const r = rectOf(el.key);
+            if (!r) continue;
+            v.push(r.x, r.x + r.w / 2, r.x + r.w);
+            h.push(r.y, r.y + r.h / 2, r.y + r.h);
         }
+        return { v, h };
     }
 
-    function sectionAt(x, y) {
-        // Smallest first, so a section sitting inside the area another one
-        // surrounds is still the one that gets picked up.
-        const list = movableSections()
-            .map((sec) => ({ sec, r: $(sec.elId).getBoundingClientRect() }))
-            .sort((a, b) => (a.r.width * a.r.height) - (b.r.width * b.r.height));
-        for (const { sec, r } of list) {
-            if (hit({ x: r.left, y: r.top, w: r.width, h: r.height }, x, y)) return sec;
-        }
-        return null;
-    }
-
-    function startLayoutDrag(sec, x, y) {
-        // EVERY region, not only the ones this section is allowed in — it is
-        // allowed in all of them. The one it is already in is drawn too, and
-        // dropping there is simply no change.
-        const targets = LAYOUT_ZONES
-            .map((zone) => ({ zone, rect: probeRect(zone.id) }))
-            .filter((t) => t.rect);
-        layoutDrag = { sec, targets, hot: null };
-        document.body.classList.add('layout-dragging');
-
-        const host = $('layout-frames');
-        host.textContent = '';
-        const lay = currentLayout();
-        for (const t of targets) {
-            const box = document.createElement('div');
-            box.className = 'lay-zone';
-            const holder = LAYOUT_SECTIONS.find((s) => lay[s.key] === t.zone.id);
-            const mine = lay[sec.key] === t.zone.id;
-            if (mine) box.classList.add('current');
-            box.textContent = t.zone.label +
-                (mine ? ' (here now)' : holder ? ' — swap with ' + holder.name : '');
-            place(box, t.rect);
-            t.el = box;
-            host.appendChild(box);
-        }
-        const ghost = $('layout-ghost');
-        ghost.textContent = sec.name;
-        ghost.hidden = false;
-        moveLayoutDrag(x, y);
-    }
-
-    function moveLayoutDrag(x, y) {
-        if (!layoutDrag) return;
-        const ghost = $('layout-ghost');
-        ghost.style.left = x + 'px';
-        ghost.style.top = y + 'px';
-        let hot = null;
-        for (const t of layoutDrag.targets) {
-            const over = hit(t.rect, x, y);
-            t.el.classList.toggle('hot', over);
-            if (over) hot = t;
-        }
-        layoutDrag.hot = hot;
-    }
-
-    async function endLayoutDrag(commit) {
-        if (!layoutDrag) return;
-        const hot = layoutDrag.hot;
-        const sec = layoutDrag.sec;
-        layoutDrag = null;
-        document.body.classList.remove('layout-dragging');
-        $('layout-ghost').hidden = true;
-        if (commit && hot) {
-            const next = withSectionAt(currentLayout(), sec.key, hot.zone.id);
-            if (!sameLayout(next, currentLayout())) {
-                // Applied and saved at once. Cancel restores the arrangement
-                // that was in effect on entry, so there is nothing to be gained
-                // by holding the change in memory — and a crash mid-edit would
-                // otherwise lose an arrangement already seen to take effect.
-                settings.layout = next;
-                applyLayout(next);
-                await saveSettings({ layout: next });
-                renderLayoutTemplates();
-                setLayoutHint(sec.name + ' → ' + hot.zone.label);
+    // Nearest line within SNAP_PX, or null. `edges` are the moving edges being
+    // offered; the one that lands closest wins, and the offset it needs is what
+    // is returned.
+    function bestSnap(edges, lines) {
+        let best = null;
+        for (const e of edges) {
+            for (const line of lines) {
+                const d = line - e;
+                if (Math.abs(d) > SNAP_PX) continue;
+                if (!best || Math.abs(d) < Math.abs(best.d)) best = { d, line };
             }
         }
-        addZoneProbes();
-        renderLayoutFrames();
+        return best;
     }
 
-    // Move one section into one region, and give up whatever it displaced — a
-    // straight swap, which is the only resolution that leaves every section
-    // somewhere and every region holding at most one.
-    function withSectionAt(layout, key, zoneId) {
-        const next = Object.assign({}, layout);
-        const evicted = LAYOUT_SECTIONS.find((s) => s.key !== key && next[s.key] === zoneId);
-        const was = next[key];
-        next[key] = zoneId;
-        if (evicted) next[evicted.key] = was;
-        return normalizeLayout(next);
-    }
+    let guides = [];
 
-    function setLayoutHint(text) {
-        const el = $('layout-hint');
-        if (el) el.textContent = text || 'Drag a section into any zone';
-    }
-
-    function openLayoutEdit() {
-        if (layoutEditing) return;
-        layoutEditing = true;
-        layoutEntryState = currentLayout();
-        closeSettings();
-        document.body.classList.add('layout-editing');
-        $('layout-edit').hidden = false;
-        setLayoutHint(null);
-        addZoneProbes();
-        renderLayoutFrames();
-    }
-
-    async function closeLayoutEdit(revert) {
-        if (!layoutEditing) return;
-        layoutEditing = false;
-        await endLayoutDrag(false);
-        if (revert && layoutEntryState && !sameLayout(layoutEntryState, currentLayout())) {
-            const back = layoutEntryState;
-            settings.layout = back;
-            applyLayout(back);
-            await saveSettings({ layout: back });
+    function drawGuides(list) {
+        guides = list;
+        const host = $('edit-guides');
+        host.textContent = '';
+        const box = appBox();
+        for (const g of list) {
+            const el = document.createElement('div');
+            el.className = 'ed-guide ' + g.axis;
+            if (g.axis === 'v') {
+                el.style.left = g.at + 'px';
+                el.style.top = box.top + 'px';
+                el.style.height = box.height + 'px';
+            } else {
+                el.style.top = g.at + 'px';
+                el.style.left = box.left + 'px';
+                el.style.width = box.width + 'px';
+            }
+            host.appendChild(el);
         }
-        layoutEntryState = null;
-        removeZoneProbes();
-        document.body.classList.remove('layout-editing');
-        document.body.classList.remove('layout-dragging');
-        $('layout-edit').hidden = true;
-        $('layout-frames').textContent = '';
-        $('layout-ghost').hidden = true;
-        renderLayoutTemplates();
     }
 
-    (function wireLayoutEdit() {
-        const shield = $('layout-shield');
-        if (!shield) return;
-        let pointer = null;
+    // ---- the frames --------------------------------------------------------
 
-        shield.addEventListener('pointerdown', (e) => {
-            if (!layoutEditing || e.button !== 0) return;
-            const sec = sectionAt(e.clientX, e.clientY);
-            if (!sec) return;
-            e.preventDefault();
-            pointer = e.pointerId;
-            try { shield.setPointerCapture(pointer); } catch (err) { /* best effort */ }
-            startLayoutDrag(sec, e.clientX, e.clientY);
-        });
-        shield.addEventListener('pointermove', (e) => {
-            if (pointer === null || e.pointerId !== pointer) return;
-            moveLayoutDrag(e.clientX, e.clientY);
-        });
-        const up = (e, commit) => {
-            if (pointer === null || (e && e.pointerId !== undefined && e.pointerId !== pointer)) return;
-            // Where the pointer was RELEASED decides it, not wherever it last
-            // happened to pass over. Without this, dragging across a region and
-            // letting go somewhere else entirely dropped the section into the
-            // one it had crossed — a move nobody asked for, from a gesture that
-            // looked like giving up.
-            if (commit && e && e.clientX !== undefined) moveLayoutDrag(e.clientX, e.clientY);
-            try { shield.releasePointerCapture(pointer); } catch (err) { /* already released */ }
-            pointer = null;
-            endLayoutDrag(commit);
+    const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+
+    function renderFrames() {
+        const host = $('edit-frames');
+        host.textContent = '';
+        if (!editing) return;
+        for (const el of MOVABLE) {
+            const hiddenEl = work.els[el.key].hidden;
+            const r = rectOf(el.key);
+            if (!r || (!hiddenEl && (r.w < 4 || r.h < 4))) continue;
+            if (hiddenEl) continue;             // nothing on screen to outline
+            const box = document.createElement('div');
+            box.className = 'ed-frame' + (selectedKey === el.key ? ' sel' : '');
+            box.style.left = r.x + 'px';
+            box.style.top = r.y + 'px';
+            box.style.width = r.w + 'px';
+            box.style.height = r.h + 'px';
+            const tag = document.createElement('span');
+            tag.className = 'ed-name';
+            tag.textContent = el.name;
+            box.appendChild(tag);
+            if (selectedKey === el.key) {
+                for (const h of HANDLES) {
+                    const dot = document.createElement('i');
+                    dot.className = 'ed-h ed-h-' + h;
+                    box.appendChild(dot);
+                }
+            }
+            host.appendChild(box);
+        }
+    }
+
+    // Where the eight handles of the selected element are, for hit-testing.
+    function handleRects() {
+        if (!selectedKey) return [];
+        const r = rectOf(selectedKey);
+        if (!r) return [];
+        const S = 14, half = S / 2;
+        const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+        const at = {
+            nw: [r.x, r.y], n: [cx, r.y], ne: [r.x + r.w, r.y], e: [r.x + r.w, cy],
+            se: [r.x + r.w, r.y + r.h], s: [cx, r.y + r.h], sw: [r.x, r.y + r.h], w: [r.x, cy]
         };
-        shield.addEventListener('pointerup', (e) => up(e, true));
-        // A cancelled pointer is not a drop, and neither is the window losing
-        // the pointer entirely — which leaves no pointerup at all.
-        shield.addEventListener('pointercancel', (e) => up(e, false));
-        window.addEventListener('blur', () => { if (pointer !== null) up(null, false); });
-
-        // The outlines are drawn at measured pixel positions, so anything that
-        // moves those positions has to redraw them.
-        window.addEventListener('resize', () => { if (layoutEditing && !layoutDrag) renderLayoutFrames(); });
-
-        $('layout-done').addEventListener('click', () => { closeLayoutEdit(false); });
-        $('layout-cancel').addEventListener('click', () => { closeLayoutEdit(true); });
-        $('layout-reset').addEventListener('click', async () => {
-            settings.layout = Object.assign({}, LAYOUT_DEFAULT);
-            applyLayout(LAYOUT_DEFAULT);
-            await saveSettings({ layout: settings.layout });
-            setLayoutHint('Back to the default arrangement');
-            addZoneProbes();
-            renderLayoutFrames();
-        });
-        $('layout-save-tpl').addEventListener('click', async () => {
-            await promptSaveLayoutTemplate();
-            renderLayoutFrames();
-        });
-    })();
-
-    // ---- templates ---------------------------------------------------------
-
-    function layoutTemplates() {
-        const raw = settings.layoutTemplates;
-        if (!Array.isArray(raw)) return [];
-        return raw
-            .filter((t) => t && typeof t === 'object' && typeof t.name === 'string')
-            .map((t) => ({ id: String(t.id || ''), name: t.name, layout: normalizeLayout(t.layout) }))
-            .slice(0, LAYOUT_TEMPLATE_MAX);
+        return HANDLES.map((h) => ({
+            handle: h,
+            rect: { x: at[h][0] - half, y: at[h][1] - half, w: S, h: S }
+        }));
     }
 
-    async function writeLayoutTemplates(list) {
-        const capped = list.slice(0, LAYOUT_TEMPLATE_MAX);
-        settings.layoutTemplates = capped;
-        await saveSettings({ layoutTemplates: capped });
-        renderLayoutTemplates();
+    function elementAt(x, y) {
+        // Smallest first, so an element sitting inside the area another one
+        // surrounds is still the one that gets picked up.
+        return visibleMovable()
+            .map((el) => ({ el, r: rectOf(el.key) }))
+            .filter((o) => hit(o.r, x, y))
+            .sort((a, b) => (a.r.w * a.r.h) - (b.r.w * b.r.h))
+            .map((o) => o.el)[0] || null;
     }
 
-    let templateSeq = 0;
-    async function promptSaveLayoutTemplate() {
-        const list = layoutTemplates();
-        // Refused BEFORE the name is asked for. Asking first and then throwing
-        // the answer away is the same information delivered as a waste of time.
-        if (list.length >= LAYOUT_TEMPLATE_MAX) {
-            toast('You already have ' + LAYOUT_TEMPLATE_MAX + ' layout templates — delete one first.', true);
+    // ---- dragging ----------------------------------------------------------
+
+    function beginDrag(x, y) {
+        const onHandle = handleRects().find((h) => hit(h.rect, x, y));
+        if (onHandle) {
+            materialize();
+            drag = { key: selectedKey, mode: 'resize', handle: onHandle.handle, x, y, base: rectOf(selectedKey) };
+            return true;
+        }
+        const el = elementAt(x, y);
+        if (!el) { select(null); return false; }
+        select(el.key);
+        materialize();
+        drag = { key: el.key, mode: 'move', x, y, base: rectOf(el.key) };
+        return true;
+    }
+
+    function moveDrag(x, y) {
+        if (!drag) return;
+        const box = appBox();
+        const el = EL_BY_KEY.get(drag.key);
+        const lines = snapLines(drag.key);
+        const dx = x - drag.x, dy = y - drag.y;
+        let r;
+
+        if (drag.mode === 'move') {
+            r = { x: drag.base.x + dx, y: drag.base.y + dy, w: drag.base.w, h: drag.base.h };
+            r.x = snapValue(r.x, box.left);
+            r.y = snapValue(r.y, box.top);
+            const sv = bestSnap([r.x, r.x + r.w / 2, r.x + r.w], lines.v);
+            const sh = bestSnap([r.y, r.y + r.h / 2, r.y + r.h], lines.h);
+            if (sv) r.x += sv.d;
+            if (sh) r.y += sh.d;
+            drawGuides([].concat(sv ? [{ axis: 'v', at: sv.line }] : [], sh ? [{ axis: 'h', at: sh.line }] : []));
+        } else {
+            const h = drag.handle;
+            let { x: rx, y: ry, w: rw, h: rh } = drag.base;
+            if (h.includes('e')) rw = snapValue(drag.base.x + drag.base.w + dx, box.left) - rx;
+            if (h.includes('s')) rh = snapValue(drag.base.y + drag.base.h + dy, box.top) - ry;
+            if (h.includes('w')) { const nx = snapValue(drag.base.x + dx, box.left); rw = drag.base.x + drag.base.w - nx; rx = nx; }
+            if (h.includes('n')) { const ny = snapValue(drag.base.y + dy, box.top); rh = drag.base.y + drag.base.h - ny; ry = ny; }
+            // Element snapping applies to the edge actually being dragged.
+            if (h.includes('e')) { const s = bestSnap([rx + rw], lines.v); if (s) rw += s.d; }
+            if (h.includes('w')) { const s = bestSnap([rx], lines.v); if (s) { rw -= s.d; rx += s.d; } }
+            if (h.includes('s')) { const s = bestSnap([ry + rh], lines.h); if (s) rh += s.d; }
+            if (h.includes('n')) { const s = bestSnap([ry], lines.h); if (s) { rh -= s.d; ry += s.d; } }
+            r = { x: rx, y: ry, w: rw, h: rh };
+            drawGuides([]);
+        }
+
+        // Never smaller than it can be used at, and never off the edge — the two
+        // ways a layout becomes one you cannot get out of without a reset.
+        const minW = el.minW || 40, minH = el.minH || 30;
+        r.w = Math.max(minW, Math.min(box.width, r.w));
+        r.h = Math.max(minH, Math.min(box.height, r.h));
+        r.x = Math.max(box.left, Math.min(box.left + box.width - r.w, r.x));
+        r.y = Math.max(box.top, Math.min(box.top + box.height - r.h, r.y));
+
+        work.els[drag.key].x = (r.x - box.left) / box.width;
+        work.els[drag.key].y = (r.y - box.top) / box.height;
+        work.els[drag.key].w = r.w / box.width;
+        work.els[drag.key].h = r.h / box.height;
+        dirty = true;
+        applyLayout(work);
+        renderFrames();
+        paintSelected();
+    }
+
+    function endDrag() {
+        if (!drag) return;
+        drag = null;
+        drawGuides([]);
+        document.body.classList.remove('edit-dragging');
+        renderFrames();
+    }
+
+    // ---- selection ---------------------------------------------------------
+
+    function select(key) {
+        selectedKey = key;
+        renderFrames();
+        renderElementList();
+        paintSelected();
+    }
+
+    function paintSelected() {
+        const host = $('edit-selected');
+        if (!host) return;
+        if (!selectedKey) { host.hidden = true; host.textContent = ''; return; }
+        const el = EL_BY_KEY.get(selectedKey);
+        const r = rectOf(selectedKey);
+        host.hidden = false;
+        host.textContent = '';
+        const name = document.createElement('div');
+        name.className = 'ep-sel-name';
+        name.textContent = el.name;
+        const dims = document.createElement('div');
+        dims.className = 'ep-sel-dims';
+        dims.textContent = r
+            ? Math.round(r.w) + ' × ' + Math.round(r.h) + ' px  ·  ' +
+              Math.round(r.x - appBox().left) + ', ' + Math.round(r.y - appBox().top)
+            : 'hidden';
+        const btns = document.createElement('div');
+        btns.className = 'ep-sel-btns';
+        const hideBtn = document.createElement('button');
+        hideBtn.type = 'button';
+        hideBtn.className = 'keycap';
+        hideBtn.textContent = work.els[selectedKey].hidden ? 'Show' : 'Hide';
+        hideBtn.addEventListener('click', () => setHidden(selectedKey, !work.els[selectedKey].hidden));
+        const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'keycap';
+        resetBtn.textContent = 'Reset this';
+        resetBtn.addEventListener('click', () => resetElement(selectedKey));
+        btns.appendChild(hideBtn);
+        btns.appendChild(resetBtn);
+        host.appendChild(name);
+        host.appendChild(dims);
+        host.appendChild(btns);
+    }
+
+    // Back to where the default grid would have put it, measured from a shell
+    // temporarily put back into that grid — which is the only honest answer to
+    // "where does this belong".
+    function resetElement(key) {
+        const app = $('app');
+        const was = app.dataset.layout;
+        app.dataset.layout = 'grid';
+        const node = $(EL_BY_KEY.get(key).elId);
+        const saved = { left: node.style.left, top: node.style.top, width: node.style.width, height: node.style.height };
+        node.style.left = node.style.top = node.style.width = node.style.height = '';
+        const box = app.getBoundingClientRect();
+        const r = node.getBoundingClientRect();
+        const next = {
+            x: (r.left - box.left) / box.width, y: (r.top - box.top) / box.height,
+            w: r.width / box.width, h: r.height / box.height
+        };
+        Object.assign(node.style, saved);
+        app.dataset.layout = was;
+        if (next.w > 0.001 && next.h > 0.001) {
+            Object.assign(work.els[key], next);
+            dirty = true;
+            applyLayout(work);
+            renderFrames();
+            paintSelected();
+        }
+    }
+
+    function setHidden(key, hidden) {
+        work.els[key].hidden = !!hidden;
+        dirty = true;
+        applyLayout(work);
+        renderFrames();
+        renderElementList();
+        paintSelected();
+    }
+
+    // ---- the control panel -------------------------------------------------
+
+    function renderElementList() {
+        const host = $('edit-element-list');
+        if (!host) return;
+        host.textContent = '';
+        for (const group of EDIT_GROUPS) {
+            const inGroup = EDIT_ELEMENTS.filter((e) => e.group === group);
+            if (!inGroup.length) continue;
+            const head = document.createElement('div');
+            head.className = 'ep-group';
+            head.textContent = group;
+            host.appendChild(head);
+            for (const el of inGroup) {
+                const row = document.createElement('div');
+                row.className = 'ep-el' + (selectedKey === el.key ? ' sel' : '');
+                const box = document.createElement('input');
+                box.type = 'checkbox';
+                box.checked = !work.els[el.key].hidden;
+                box.setAttribute('aria-label', 'Show ' + el.name);
+                box.addEventListener('click', (e) => e.stopPropagation());
+                box.addEventListener('change', () => setHidden(el.key, !box.checked));
+                const name = document.createElement('span');
+                name.className = 'ep-el-name';
+                name.textContent = el.name;
+                row.appendChild(box);
+                row.appendChild(name);
+                if (!el.move) {
+                    const tag = document.createElement('span');
+                    tag.className = 'ep-el-tag';
+                    tag.textContent = 'shown/hidden';
+                    row.appendChild(tag);
+                }
+                if (el.move) row.addEventListener('click', () => select(el.key));
+                host.appendChild(row);
+            }
+        }
+    }
+
+    function renderLayoutSelect() {
+        const sel = $('edit-layout-select');
+        if (!sel) return;
+        const list = savedLayouts();
+        sel.textContent = '';
+        const opt = document.createElement('option');
+        opt.value = DEFAULT_LAYOUT_ID;
+        opt.textContent = 'Default';
+        sel.appendChild(opt);
+        for (const l of list) {
+            const o = document.createElement('option');
+            o.value = l.id;
+            o.textContent = l.name;
+            sel.appendChild(o);
+        }
+        sel.value = work ? work.id : (settings.activeLayout || DEFAULT_LAYOUT_ID);
+        const count = $('edit-layout-count');
+        if (count) count.textContent = list.length + ' of ' + LAYOUT_MAX + ' saved layouts';
+        $('edit-layout-rename').disabled = !work || work.id === DEFAULT_LAYOUT_ID;
+        $('edit-layout-delete').disabled = !work || work.id === DEFAULT_LAYOUT_ID;
+    }
+
+    function paintEditorPrefs() {
+        const p = editorPrefs();
+        $('edit-show-grid').setAttribute('aria-checked', p.showGrid ? 'true' : 'false');
+        $('edit-snap-elements').setAttribute('aria-checked', p.snapElements ? 'true' : 'false');
+        $('edit-grid-size').value = String(p.gridSize);
+        $('edit-grid-size-val').textContent = String(p.gridSize);
+        document.documentElement.style.setProperty('--edit-grid', p.gridSize + 'px');
+        const g = $('edit-grid');
+        g.hidden = !p.showGrid;
+        const box = appBox();
+        g.style.left = box.left + 'px';
+        g.style.top = box.top + 'px';
+        g.style.width = box.width + 'px';
+        g.style.height = box.height + 'px';
+    }
+
+    async function saveEditorPrefs(patch) {
+        const next = Object.assign({}, editorPrefs(), patch);
+        settings.editorPrefs = next;
+        paintEditorPrefs();
+        await saveSettings({ editorPrefs: next });
+    }
+
+    // ---- opening and closing -----------------------------------------------
+
+    function openEditMode() {
+        if (editing) return;
+        editing = true;
+        dirty = false;
+        selectedKey = null;
+        work = normalizeLayout(activeLayout());
+        entrySnapshot = normalizeLayout(work);
+        entryActiveId = settings.activeLayout || DEFAULT_LAYOUT_ID;
+        closeSettings();
+        document.body.classList.add('edit-mode');
+        $('edit-mode').hidden = false;
+        paintEditorPrefs();
+        renderLayoutSelect();
+        renderElementList();
+        paintSelected();
+        renderFrames();
+        // LAST, so the clamp measures the panel with its list in it rather than
+        // an empty shell that is about to grow past the bottom of the window.
+        placeEditPanel();
+    }
+
+    async function closeEditMode(revert) {
+        if (!editing) return;
+        endDrag();
+        if (revert) {
+            settings.activeLayout = entryActiveId;
+            applyLayout(entrySnapshot);
+            await saveSettings({ activeLayout: entryActiveId });
+        }
+        editing = false;
+        work = null;
+        entrySnapshot = null;
+        selectedKey = null;
+        dirty = false;
+        document.body.classList.remove('edit-mode');
+        document.body.classList.remove('edit-dragging');
+        $('edit-mode').hidden = true;
+        $('edit-frames').textContent = '';
+        $('edit-guides').textContent = '';
+        applyLayout();
+        renderSavedLayouts();
+    }
+
+    // Top-right by default, then wherever it was dragged to. Clamped against
+    // the panel's MEASURED height, not a guess at it: the footer holds Save and
+    // Revert, and a panel placed past the bottom of the window puts both of
+    // them off screen with no way to scroll to them.
+    function placeEditPanel() {
+        const panel = $('edit-panel');
+        const pos = (settings.editorPrefs && settings.editorPrefs.panel) || null;
+        const w = panel.offsetWidth || 320;
+        const h = panel.offsetHeight || Math.min(window.innerHeight - 56, 640);
+        const x = pos && Number.isFinite(pos.x) ? pos.x : window.innerWidth - w - 20;
+        const y = pos && Number.isFinite(pos.y) ? pos.y : 20;
+        panel.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x)) + 'px';
+        panel.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y)) + 'px';
+    }
+
+    // ---- saving ------------------------------------------------------------
+
+    async function writeLayouts(list) {
+        const capped = list.slice(0, LAYOUT_MAX);
+        settings.layouts = capped;
+        await saveSettings({ layouts: capped });
+        renderLayoutSelect();
+        renderSavedLayouts();
+    }
+
+    let layoutSeq = 0;
+    function newLayoutId() { layoutSeq++; return 'L' + Date.now() + '-' + layoutSeq; }
+
+    // Save writes the working copy to the active layout. The DEFAULT cannot be
+    // written to — it is what Reset means — so saving over it asks for a name
+    // and makes a new one, which is what the reference does with its presets.
+    async function saveWork() {
+        if (!work) return false;
+        if (work.id === DEFAULT_LAYOUT_ID) return createLayoutFromWork();
+        const list = savedLayouts().map((l) => (l.id === work.id ? normalizeLayout(work) : l));
+        await writeLayouts(list);
+        settings.activeLayout = work.id;
+        await saveSettings({ activeLayout: work.id });
+        entrySnapshot = normalizeLayout(work);
+        entryActiveId = work.id;
+        dirty = false;
+        toast('Layout “' + work.name + '” saved');
+        return true;
+    }
+
+    async function createLayoutFromWork() {
+        const list = savedLayouts();
+        if (list.length >= LAYOUT_MAX) {
+            toast('You already have ' + LAYOUT_MAX + ' layouts — delete one first.', true);
             return false;
         }
         const name = await askText('Name this layout', '', 'Save');
         if (name === null || name === false) return false;
         const clean = String(name).trim().slice(0, LAYOUT_NAME_MAX);
         if (!clean) return false;
-        templateSeq++;
-        list.push({ id: Date.now() + '-' + templateSeq, name: clean, layout: currentLayout() });
-        await writeLayoutTemplates(list);
-        toast('Saved “' + clean + '”');
+        const made = normalizeLayout(Object.assign({}, work, { id: newLayoutId(), name: clean }));
+        list.push(made);
+        await writeLayouts(list);
+        work = normalizeLayout(made);
+        settings.activeLayout = made.id;
+        await saveSettings({ activeLayout: made.id });
+        entrySnapshot = normalizeLayout(work);
+        entryActiveId = made.id;
+        dirty = false;
+        renderLayoutSelect();
+        toast('Layout “' + clean + '” saved');
         return true;
     }
 
-    async function applyLayoutTemplate(id) {
-        const tpl = layoutTemplates().find((t) => t.id === id);
-        if (!tpl) return;
-        settings.layout = tpl.layout;
-        applyLayout(tpl.layout);
-        await saveSettings({ layout: tpl.layout });
-        renderLayoutTemplates();
-        if (layoutEditing) { addZoneProbes(); renderLayoutFrames(); }
-        toast('Layout “' + tpl.name + '” applied');
+    async function switchWorkTo(id) {
+        work = normalizeLayout(layoutById(id));
+        settings.activeLayout = work.id;
+        dirty = false;
+        applyLayout(work);
+        await saveSettings({ activeLayout: work.id });
+        renderLayoutSelect();
+        renderElementList();
+        select(null);
+        renderFrames();
     }
 
-    async function deleteLayoutTemplate(id) {
-        const tpl = layoutTemplates().find((t) => t.id === id);
-        if (!tpl) return;
-        if (!(await askConfirm('Delete this layout?', '“' + tpl.name + '” will be removed.', 'Delete', true))) return;
-        await writeLayoutTemplates(layoutTemplates().filter((t) => t.id !== id));
+    async function applySavedLayout(id) {
+        settings.activeLayout = id;
+        applyLayout(layoutById(id));
+        await saveSettings({ activeLayout: id });
+        renderSavedLayouts();
+        toast(id === DEFAULT_LAYOUT_ID ? 'Default layout' : 'Layout “' + layoutById(id).name + '” applied');
     }
 
-    // The list in Settings → Appearance. Rebuilt rather than patched: it is at
-    // most ten rows and it is only ever looked at with the sheet open.
-    function renderLayoutTemplates() {
+    async function deleteLayout(id) {
+        const l = savedLayouts().find((x) => x.id === id);
+        if (!l) return;
+        if (!(await askConfirm('Delete this layout?', '“' + l.name + '” will be removed.', 'Delete', true))) return;
+        await writeLayouts(savedLayouts().filter((x) => x.id !== id));
+        if ((settings.activeLayout || DEFAULT_LAYOUT_ID) === id) {
+            settings.activeLayout = DEFAULT_LAYOUT_ID;
+            await saveSettings({ activeLayout: DEFAULT_LAYOUT_ID });
+            applyLayout();
+        }
+        if (editing && work && work.id === id) await switchWorkTo(DEFAULT_LAYOUT_ID);
+    }
+
+    // The list in Settings → Appearance, for switching without opening the
+    // editor.
+    function renderSavedLayouts() {
         const host = $('lay-tpl-list');
         if (!host) return;
-        const list = layoutTemplates();
+        const list = savedLayouts();
         const count = $('lay-tpl-count');
-        if (count) count.textContent = list.length + ' of ' + LAYOUT_TEMPLATE_MAX;
+        if (count) count.textContent = list.length + ' of ' + LAYOUT_MAX;
         host.textContent = '';
+        const active = settings.activeLayout || DEFAULT_LAYOUT_ID;
         if (!list.length) {
             const empty = document.createElement('div');
             empty.className = 'lay-tpl-empty';
-            empty.textContent = 'No templates yet. Arrange the window, then save it here.';
+            empty.textContent = 'No saved layouts yet. Open Edit Mode, arrange the window, then Save.';
             host.appendChild(empty);
             return;
         }
-        const cur = currentLayout();
-        for (const tpl of list) {
+        for (const l of list) {
             const row = document.createElement('div');
             row.className = 'lay-tpl';
             const text = document.createElement('div');
             text.className = 'lay-tpl-name';
-            text.textContent = tpl.name;
+            text.textContent = l.name;
             const sub = document.createElement('div');
             sub.className = 'lay-tpl-sub';
-            sub.textContent = layoutSummary(tpl.layout) + (sameLayout(tpl.layout, cur) ? ' · in use' : '');
+            const hiddenCount = EDIT_ELEMENTS.filter((e) => l.els[e.key].hidden).length;
+            sub.textContent = (l.custom ? 'Custom positions' : 'Default positions') +
+                (hiddenCount ? ' · ' + hiddenCount + ' hidden' : '') +
+                (l.id === active ? ' · in use' : '');
             text.appendChild(sub);
             const use = document.createElement('button');
             use.type = 'button';
             use.className = 'keycap';
             use.textContent = 'Apply';
-            use.disabled = sameLayout(tpl.layout, cur);
-            use.addEventListener('click', () => applyLayoutTemplate(tpl.id));
+            use.disabled = l.id === active;
+            use.addEventListener('click', () => applySavedLayout(l.id));
             const del = document.createElement('button');
             del.type = 'button';
             del.className = 'keycap';
             del.textContent = 'Delete';
-            del.addEventListener('click', () => deleteLayoutTemplate(tpl.id));
+            del.addEventListener('click', () => deleteLayout(l.id));
             row.appendChild(text);
             row.appendChild(use);
             row.appendChild(del);
             host.appendChild(row);
+        }
+    }
+
+    // ---- wiring ------------------------------------------------------------
+
+    (function wireEditMode() {
+        const shield = $('edit-shield');
+        if (!shield) return;
+        let pointer = null;
+
+        shield.addEventListener('pointerdown', (e) => {
+            if (!editing || e.button !== 0) return;
+            e.preventDefault();
+            if (!beginDrag(e.clientX, e.clientY)) return;
+            pointer = e.pointerId;
+            try { shield.setPointerCapture(pointer); } catch (err) { /* best effort */ }
+            document.body.classList.add('edit-dragging');
+        });
+        shield.addEventListener('pointermove', (e) => {
+            if (pointer === null || e.pointerId !== pointer) return;
+            moveDrag(e.clientX, e.clientY);
+        });
+        const up = (e) => {
+            if (pointer === null || (e && e.pointerId !== undefined && e.pointerId !== pointer)) return;
+            if (e && e.clientX !== undefined) moveDrag(e.clientX, e.clientY);
+            try { shield.releasePointerCapture(pointer); } catch (err) { /* already released */ }
+            pointer = null;
+            endDrag();
+        };
+        shield.addEventListener('pointerup', up);
+        shield.addEventListener('pointercancel', () => { pointer = null; endDrag(); });
+        window.addEventListener('blur', () => { if (pointer !== null) { pointer = null; endDrag(); } });
+
+        // Everything here is measured in pixels against a window that can change
+        // size under it.
+        window.addEventListener('resize', () => {
+            if (!editing) return;
+            paintEditorPrefs();
+            placeEditPanel();
+            renderFrames();
+            paintSelected();
+        });
+
+        // The panel is dragged by its header, like the reference's.
+        (function dragPanel() {
+            const head = $('edit-panel-head');
+            const panel = $('edit-panel');
+            let id = null, ox = 0, oy = 0;
+            head.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0 || e.target.closest('button')) return;
+                id = e.pointerId;
+                const r = panel.getBoundingClientRect();
+                ox = e.clientX - r.left; oy = e.clientY - r.top;
+                try { head.setPointerCapture(id); } catch (err) { /* best effort */ }
+            });
+            head.addEventListener('pointermove', (e) => {
+                if (id === null || e.pointerId !== id) return;
+                const w = panel.offsetWidth, h = panel.offsetHeight;
+                panel.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - ox)) + 'px';
+                panel.style.top = Math.max(8, Math.min(window.innerHeight - 40, e.clientY - oy)) + 'px';
+            });
+            const done = () => {
+                if (id === null) return;
+                id = null;
+                const r = panel.getBoundingClientRect();
+                saveEditorPrefs({ panel: { x: Math.round(r.left), y: Math.round(r.top) } });
+            };
+            head.addEventListener('pointerup', done);
+            head.addEventListener('pointercancel', done);
+        })();
+
+        $('edit-close').addEventListener('click', () => exitEditMode());
+        $('edit-revert').addEventListener('click', async () => {
+            if (!work) return;
+            work = normalizeLayout(entrySnapshot);
+            settings.activeLayout = entryActiveId;
+            dirty = false;
+            applyLayout(work);
+            await saveSettings({ activeLayout: entryActiveId });
+            renderLayoutSelect();
+            renderElementList();
+            select(null);
+            renderFrames();
+            toast('Layout changes reverted');
+        });
+        $('edit-save').addEventListener('click', () => { saveWork(); });
+
+        $('edit-layout-select').addEventListener('change', (e) => { switchWorkTo(e.target.value); });
+        $('edit-layout-new').addEventListener('click', () => { createLayoutFromWork(); });
+        $('edit-layout-rename').addEventListener('click', async () => {
+            if (!work || work.id === DEFAULT_LAYOUT_ID) return;
+            const name = await askText('Rename layout', work.name, 'Rename');
+            if (name === null || name === false) return;
+            const clean = String(name).trim().slice(0, LAYOUT_NAME_MAX);
+            if (!clean) return;
+            work.name = clean;
+            await writeLayouts(savedLayouts().map((l) => (l.id === work.id ? normalizeLayout(work) : l)));
+            renderLayoutSelect();
+        });
+        $('edit-layout-delete').addEventListener('click', () => {
+            if (work && work.id !== DEFAULT_LAYOUT_ID) deleteLayout(work.id);
+        });
+
+        wireSwitch('edit-show-grid', () => editorPrefs().showGrid,
+            async (v) => { await saveEditorPrefs({ showGrid: v }); });
+        wireSwitch('edit-snap-elements', () => editorPrefs().snapElements,
+            async (v) => { await saveEditorPrefs({ snapElements: v }); });
+        $('edit-grid-size').addEventListener('input', (e) => {
+            const v = Math.max(GRID_MIN, Math.min(GRID_MAX, parseInt(e.target.value, 10) || 24));
+            $('edit-grid-size-val').textContent = String(v);
+            document.documentElement.style.setProperty('--edit-grid', v + 'px');
+        });
+        $('edit-grid-size').addEventListener('change', (e) => {
+            const v = Math.max(GRID_MIN, Math.min(GRID_MAX, parseInt(e.target.value, 10) || 24));
+            saveEditorPrefs({ gridSize: v });
+        });
+    })();
+
+    // Leaving with work nobody has saved is the one place this asks a question:
+    // an arrangement can be several minutes of fiddling, and the panel's Save is
+    // easy to walk past.
+    async function exitEditMode() {
+        if (!editing) return;
+        if (!dirty) { await closeEditMode(false); return; }
+        const keep = await askConfirm(
+            'Leave Edit Mode?',
+            'Your layout has changes that have not been saved.',
+            'Save and leave', false);
+        if (keep) {
+            const ok = await saveWork();
+            if (!ok) return;                 // the name prompt was cancelled
+            await closeEditMode(false);
+        } else {
+            await closeEditMode(true);
         }
     }
 
@@ -12004,7 +12435,7 @@
 
         paintSwitches();
         paintRadios();
-        renderLayoutTemplates();
+        renderSavedLayouts();
         updateLaunchHiddenEnabled();
         renderDefaultKeys();
         paintKeybinds();
@@ -12733,16 +13164,14 @@
 
     // ---- Layout + chat controls ------------------------------------------
 
-    $('set-edit-layout').addEventListener('click', () => { openLayoutEdit(); });
-    $('set-layout-reset').addEventListener('click', async () => {
-        if (sameLayout(settings.layout, LAYOUT_DEFAULT)) { toast('Already the default layout'); return; }
-        settings.layout = Object.assign({}, LAYOUT_DEFAULT);
-        applyLayout(LAYOUT_DEFAULT);
-        await saveSettings({ layout: settings.layout });
-        renderLayoutTemplates();
-        toast('Layout reset');
+    $('set-edit-layout').addEventListener('click', () => { openEditMode(); });
+    $('set-layout-reset').addEventListener('click', () => {
+        if ((settings.activeLayout || DEFAULT_LAYOUT_ID) === DEFAULT_LAYOUT_ID) {
+            toast('Already on the default layout');
+            return;
+        }
+        applySavedLayout(DEFAULT_LAYOUT_ID);
     });
-    $('set-save-layout').addEventListener('click', () => { promptSaveLayoutTemplate(); });
 
     wireSwitch('set-rich-composer', richComposerOn, async (v) => {
         await saveSettings({ richComposer: v });
@@ -17708,7 +18137,7 @@
             // unreachable while it is up — and Escape means CANCEL here, the
             // same as the button, because an arrangement is applied as it is
             // made and backing out is the only thing left to ask for.
-            if (layoutEditOpen()) closeLayoutEdit(true);
+            if (editModeOpen()) exitEditMode();
             // Above the emoji pop and the rest for the same reason they rank
             // above the drawers: it is the innermost thing open, and it is drawn
             // over the composer that Escape would otherwise reach past.

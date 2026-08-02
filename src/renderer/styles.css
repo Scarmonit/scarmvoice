@@ -575,137 +575,89 @@ button { font-family: inherit; background: none; border: 0; }
 
 /* ---------- app shell --------------------------------------------------- */
 
-/* ---------- custom layouts (snap-to-zones) -------------------------------
-
-   THE GRID IS FIXED; ONLY WHAT SITS IN IT MOVES.
-
-   Five named regions are cut out of the app shell here, once, and never
-   recomputed. Edit Layout assigns a section to a region by writing
-   `grid-area` onto it — so the set of positions is finite and hand-checked,
-   every region is a rectangle, and no arrangement a user can reach was
-   assembled at runtime out of a drag. That is what "snapping" buys.
-
-     ztop    a strip across the whole window, above everything
-     zleft   the column beside the rail
-     zright  the column on the far side of the chat
-     zdock   the bottom-left corner, spanning the rail and the left column
-     zbot    a strip across the whole window, below everything
-
-   Two more regions live INSIDE the chat column and are reached by making the
-   section a child of #main instead: chat-top and chat-bottom, above and below
-   the message list. Between them that is seven places any section may go.
-
-   An empty region costs nothing: its row or column is `auto`, so it collapses
-   to zero and the layout closes over it. */
+/* The DEFAULT arrangement, and the only one that is a grid.
+   
+     rail  side  main  members
+     user  user  main  members
+   
+   The user panel spans BOTH the rail and the channel list, which no flex child
+   can do; the chat and member columns run the full height beside it. The
+   members column is `auto` so hiding the panel collapses its track to nothing
+   rather than leaving a gap — which is now also how Edit Mode hides it.
+   
+   Edit Mode's own arrangements are NOT this. The moment anything is moved or
+   resized the shell switches to `data-layout="custom"` below, every managed
+   element becomes absolutely positioned from the layout's own numbers, and this
+   grid stops applying. Nobody who never opens Edit Mode is affected by any of
+   it. */
 #app {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--w-rail) auto minmax(0, 1fr) auto;
-  grid-template-rows: auto 48px minmax(0, 1fr) auto auto;
-  /* The channel header spans the message column AND the right-hand region,
-     which is why it is not inside #main: a header that stops at the chat
-     column leaves the panel beside it divided from top to bottom and puts the
-     search field one column left of where it belongs. */
+  grid-template-columns: var(--w-rail) var(--w-side) minmax(0, 1fr) auto;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  /* The channel header spans the message column AND the member list, which is
+     why it is not inside #main: a header that stops at the chat column leaves
+     the member list divided from top to bottom and puts the search field one
+     column left of where it belongs. */
   grid-template-areas:
-    "ztop  ztop  ztop ztop"
-    "rail  zleft head head"
-    "rail  zleft main zright"
-    "zdock zdock main zright"
-    "zbot  zbot  zbot zbot";
+    "rail side head head"
+    "rail side main members"
+    "user user main members";
   /* Draggable regions swallow pointer events, which would silently kill file
      drops over any area that inherited it. Keep the app body explicitly out. */
   -webkit-app-region: no-drag;
 }
 #rail { grid-area: rail; }
+#sidebar, #dm-sidebar { grid-area: side; }
+#user-dock { grid-area: user; }
 #main { grid-area: main; }
+#members-panel { grid-area: members; }
 #chan-head { grid-area: head; }
 #app[hidden] { display: none; }
+/* The members track is `auto` so it collapses when the panel is hidden, which
+   means the panel is what carries the width. Scoped to the grid: in a custom
+   layout the rectangle decides, and an unscoped width here would outrank it. */
+#app:not([data-layout="custom"]) > #members-panel { width: var(--w-members); }
 
-/* The four movable sections carry their region in `grid-area`, written by
-   applyLayout(). These are the DEFAULTS, so a stylesheet loaded before any JS
-   has run still draws the app the right way round. */
-#sidebar, #dm-sidebar { grid-area: zleft; }
-#members-panel { grid-area: zright; }
-#user-dock { grid-area: zdock; }
+/* ---------- custom layouts ------------------------------------------------
 
-/* Region SHAPE, not region identity: a column gives a section its own width and
-   the full height, a bar gives it the whole width and only the height it asks
-   for. Written as `data-zonekind` so a section does not need a rule per region
-   — there are four sections and seven regions, and the product of those is not
-   a stylesheet anybody should maintain. */
-#sidebar[data-zonekind="col"],
-#dm-sidebar[data-zonekind="col"] { width: var(--w-side); }
-#members-panel[data-zonekind="col"] { width: var(--w-members); }
-[data-zonekind="bar"] { width: auto; }
-/* A list in a horizontal strip would otherwise take the whole window. */
-#sidebar[data-zonekind="bar"],
-#dm-sidebar[data-zonekind="bar"],
-#members-panel[data-zonekind="bar"] { max-height: 30vh; }
+   A LAYOUT IS A RECTANGLE PER ELEMENT, stored as fractions of the app box.
+   Fractions rather than pixels so the arrangement survives a resized window,
+   a second monitor and the zoom control: everything keeps its proportions
+   instead of drifting off the edge or piling into a corner.
 
-/* The hairline between a panel and the chat is drawn on the edge that FACES the
-   chat, so it follows the panel across. An inset shadow rather than a border,
-   for the same reason it always was: a border would change the width the resize
-   drag is writing. */
-#sidebar[data-zone="zleft"],
-#dm-sidebar[data-zone="zleft"],
-#members-panel[data-zone="zleft"] { box-shadow: inset -1px 0 0 var(--line); }
-#sidebar[data-zone="zright"],
-#dm-sidebar[data-zone="zright"],
-#members-panel[data-zone="zright"] { box-shadow: inset 1px 0 0 var(--line); }
-
-/* The drag strip straddles that same edge. It exists only in a column: there is
-   no width to drag when the section is a full-width bar, and a strip left
-   hanging down the side of one is a control that does nothing. The `dir` that
-   turns a pointer delta into a width follows this — see sidebarDragDir(). */
-.pane-resize { display: none; }
-[data-zonekind="col"] > .pane-resize { display: block; }
-[data-zone="zleft"] > .pane-resize { right: -4px; left: auto; }
-[data-zone="zright"] > .pane-resize { left: -4px; right: auto; }
-
-/* The me bar is a card in its corner and a full-bleed strip anywhere else: a
-   rounded, inset card stretched across the window reads as something that came
-   loose. */
-#user-dock[data-zonekind="bar"]:not([data-zone="zdock"]) {
-  margin: 0; border-radius: 0; border: 0;
-  box-shadow: 0 1px 0 var(--line);
+   The grid the editor snaps to is a PIXEL grid at the current size — that is
+   what a grid overlay means, and what the size slider is measured in — so a
+   drag snaps in pixels and is stored as the fraction that produces. */
+#app[data-layout="custom"] {
+  display: block;
+  position: relative;
+  overflow: hidden;
 }
-
-/* A section placed in the chat column is a child of #main (a flex column), so
-   its position there is `order`. The typing line travels with the message box
-   it belongs to; equal order values fall back to document order, which keeps it
-   immediately above. */
-#main > [data-zone="chat-top"] { order: -1; }
-#main > [data-zone="chat-bottom"] { order: 1; }
-#main.input-top > #typing-line { order: -1; }
-/* Padding flips with the box, so the gap stays between it and the messages
-   rather than against the window edge. */
-#composer[data-zone="chat-top"] { padding: 8px 8px 0; }
-
-/* #dm-panel is placed by TRACK NUMBER rather than by area name — it covers the
-   header, the chat and the right-hand region together — so it is the one thing
-   in the app that has to be told the shape of the grid rather than named into
-   it. Rows 2-4 are header + body, leaving ztop and zbot outside it; columns 3-4
-   are the chat and whatever is to its right. */
-#dm-panel { grid-column: 3 / 5; grid-row: 2 / 5; }
-
-/* ---------- Edit Layout: the regions, made visible ----------------------- */
-
-/* One probe per region, added to the grid while editing and removed after. It
-   is what makes an EMPTY region droppable: a region with nothing in it has no
-   size, and a target with no size cannot be hit. It is also what the drag
-   measures against, so what is outlined is exactly where the section will land.
-   Inert — the shield takes every pointer event. */
-.zone-probe {
-  min-width: 56px; min-height: 52px;
-  pointer-events: none;
-  border: 2px dashed var(--line);
-  border-radius: 8px;
-  margin: 3px;
-  display: grid; place-items: center;
-  color: var(--dim); font-size: 11.5px; font-weight: 700; text-align: center;
+/* Only the managed elements move; anything else in the shell keeps its own
+   rules. `data-el` is written once, by app.js, and is what marks an element as
+   Edit Mode's to place. */
+#app[data-layout="custom"] > [data-el] {
+  position: absolute;
+  margin: 0;
+  /* left/top/width/height come from the layout, inline. */
 }
-.zone-probe.filled { border-style: dotted; opacity: .45; }
+/* Hidden by the panel's checkbox. `display: none` rather than `visibility`, so
+   in the default grid the element's track collapses with it. */
+[data-el].el-hidden { display: none !important; }
+
+/* The drag strips resize the GRID's columns by writing --w-side / --w-members.
+   In a custom layout the numbers come from the layout instead, so a strip there
+   is a control that does nothing. */
+#app[data-layout="custom"] .pane-resize { display: none; }
+/* The conversation drawer is placed by grid track in the default arrangement,
+   which says nothing at all in a custom one. It takes the message area's own
+   rectangle there - a DM replaces the messages, which is what it does. */
+#app[data-layout="custom"] > #dm-panel { position: absolute; }
+
+/* Nothing may scroll the page while the editor is measuring against it. */
+body.edit-mode { overflow: hidden; }
 
 /* ---------- rail -------------------------------------------------------- */
 
@@ -1269,9 +1221,9 @@ button { font-family: inherit; background: none; border: 0; }
    done it; the rail and the popover's row cards were the other two. */
 #members-panel {
   position: relative;      /* see .pane-resize */
-  /* Width comes from the REGION it is in — see the [data-zonekind] rules in the
-     app shell. Declared unconditionally here it outranked them (an id beats an
-     attribute), so the panel kept its column width when moved into a bar. */
+  /* Width belongs to the LAYOUT: the grid column in the default arrangement,
+     the element's own rectangle in a custom one. Declared here it outranked
+     both (an id beats an attribute), which is why it is not. */
   background: var(--members);
   box-shadow: inset 1px 0 0 var(--line);
   display: flex; flex-direction: column;
@@ -6065,7 +6017,7 @@ html.desat .threads-pop,
 html.desat .notif-pop,
 html.desat .ctx-menu,
 html.desat #lightbox,
-html.desat #layout-edit,
+html.desat #edit-mode,
 html.desat #lang-pop,
 html.desat .toast {
   filter: saturate(var(--sat, 1));
@@ -6160,102 +6112,172 @@ html[data-ui-density] #voice-people .vp {
   margin-bottom: var(--ui-row-gap);
 }
 
-/* ---------- Edit Layout ---------------------------------------------------
+/* ---------- Edit Mode -----------------------------------------------------
 
-   Edit mode is drawn OVER the running app rather than replacing it with a
-   diagram: what you drag is the real channel list, at its real size, so the
-   arrangement you are choosing is the one you end up with.
+   The retail WoW HUD editor, in this app's clothes: the interface goes into an
+   editing state, every managed element grows an outline and resize handles, a
+   grid appears behind it all, and a control panel drives the lot.
 
-   Everything here is inert (`pointer-events: none`) except the toolbar. A
-   single shield takes every pointer event while editing, and app.js decides
-   what was grabbed by hit-testing the sections' own rects — so nothing in the
-   app underneath can be clicked, dragged or typed into by accident, and no
-   section needs a handler of its own that would have to be unbound again. */
+   Everything here is inert except the panel. One shield takes every pointer
+   event and app.js decides what was grabbed by hit-testing the elements' own
+   rectangles - so nothing underneath can be clicked, dragged or typed into by
+   accident, and no element needs a handler of its own to unbind afterwards. */
 
-#layout-edit { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
-#layout-edit[hidden] { display: none; }
+#edit-mode { position: fixed; inset: 0; z-index: 92; pointer-events: none; }
+#edit-mode[hidden] { display: none; }
 
-/* Takes the events, shows nothing. Cursor is the whole affordance: the app
-   underneath is visibly unclickable the moment edit mode starts. */
-#layout-shield { position: absolute; inset: 0; pointer-events: auto; cursor: default; }
-body.layout-editing #layout-shield { cursor: grab; }
-body.layout-editing.layout-dragging #layout-shield { cursor: grabbing; }
+/* Drawn as two repeating gradients rather than as a few thousand nodes. The
+   pitch comes from the slider, through --edit-grid. Positioned over the app
+   body, not the window, so the lines line up with what is being snapped. */
+#edit-grid {
+  position: absolute;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(to right, var(--edit-grid-line) 0 1px, transparent 1px var(--edit-grid)),
+    repeating-linear-gradient(to bottom, var(--edit-grid-line) 0 1px, transparent 1px var(--edit-grid));
+}
+#edit-grid[hidden] { display: none; }
+:root { --edit-grid: 24px; --edit-grid-line: rgba(160, 160, 170, .16); }
 
-/* The movable sections, outlined in place. Drawn as boxes positioned over the
-   real elements rather than as an outline ON them: an outline would be clipped
-   by the panels' own overflow, and a border would move the thing it describes. */
-.lay-sec {
+#edit-shield { position: absolute; inset: 0; pointer-events: auto; cursor: default; }
+body.edit-mode #edit-shield { cursor: grab; }
+body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
+
+/* An element's outline. A box positioned OVER the real thing rather than an
+   outline on it: an outline is clipped by the panels' own overflow, and a
+   border would move the element it describes. */
+.ed-frame {
   position: absolute;
   border: 2px dashed var(--accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  display: flex; align-items: flex-start; justify-content: center;
-  transition: background .12s ease, border-color .12s ease;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  pointer-events: none;
 }
-.lay-sec.picked { background: color-mix(in srgb, var(--accent) 20%, transparent); }
-.lay-sec-name {
-  margin-top: -11px;
-  padding: 2px 9px;
-  border-radius: 999px;
+.ed-frame.sel {
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.ed-frame.hidden-el { border-color: var(--dim); background: none; opacity: .5; }
+.ed-name {
+  position: absolute; left: 50%; top: -11px; transform: translateX(-50%);
+  padding: 2px 9px; border-radius: 999px;
   background: var(--accent); color: var(--on-accent);
   font-size: 11.5px; font-weight: 700; white-space: nowrap;
   box-shadow: var(--shadow-xs);
 }
+.ed-frame.hidden-el .ed-name { background: var(--dim); }
 
-/* A zone. Only the zones the section being dragged can actually go in are
-   drawn — which is what keeps the drop unambiguous without any z-order rule:
-   within one section's set they never overlap, so there is always exactly one
-   answer to "what is under the pointer". */
-.lay-zone {
+/* Eight handles on the selected element - four corners and four edges, the way
+   every editor draws them. */
+.ed-h {
+  position: absolute; width: 11px; height: 11px;
+  background: var(--accent); border: 2px solid var(--on-accent);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.ed-h-nw { left: -6px; top: -6px; }
+.ed-h-n { left: 50%; top: -6px; margin-left: -6px; }
+.ed-h-ne { right: -6px; top: -6px; }
+.ed-h-e { right: -6px; top: 50%; margin-top: -6px; }
+.ed-h-se { right: -6px; bottom: -6px; }
+.ed-h-s { left: 50%; bottom: -6px; margin-left: -6px; }
+.ed-h-sw { left: -6px; bottom: -6px; }
+.ed-h-w { left: -6px; top: 50%; margin-top: -6px; }
+
+/* The alignment guides that appear while an edge lines up with another
+   element's. One hairline in the accent, the full length of the app. */
+.ed-guide { position: absolute; background: var(--accent); pointer-events: none; }
+.ed-guide.v { width: 1px; }
+.ed-guide.h { height: 1px; }
+
+/* ---------- the control panel ------------------------------------------- */
+
+/* .keycap carries a 124px min-width for the settings sheet, where the buttons
+   stand alone. Three of them in a 292px row is 372px, and #edit-panel clips its
+   overflow — so the third button was simply not there. */
+#edit-panel .keycap { min-width: 0; }
+#edit-panel {
   position: absolute;
-  border: 2px dashed var(--line-2, var(--line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-  display: grid; place-items: center;
-  color: var(--dim); font-size: 12px; font-weight: 700;
-  text-align: center; padding: 6px;
-}
-.lay-zone.hot {
-  border-color: var(--accent); border-style: solid;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--text);
-}
-.lay-zone.current { opacity: .55; }
-
-/* Follows the pointer. Never under it — the offset keeps the drop target
-   visible, which is the thing being aimed at. */
-#layout-ghost {
-  position: absolute; z-index: 2;
-  padding: 6px 12px; border-radius: 999px;
-  background: var(--accent); color: var(--on-accent);
-  font-size: 12.5px; font-weight: 700; white-space: nowrap;
-  box-shadow: var(--shadow-sm, var(--shadow-xs));
-  transform: translate(14px, 14px);
-}
-#layout-ghost[hidden] { display: none; }
-
-#layout-bar {
-  position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+  width: 320px; max-height: calc(100vh - 56px);
+  display: flex; flex-direction: column;
   pointer-events: auto;
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px; border-radius: 10px;
   background: var(--panel); border: 1px solid var(--line);
-  box-shadow: var(--shadow-lg, var(--shadow-xs));
-  max-width: calc(100vw - 28px); flex-wrap: wrap;
+  border-radius: 10px; box-shadow: var(--shadow-lg, var(--shadow-xs));
+  overflow: hidden;
 }
-#layout-bar .lb-hint {
-  color: var(--dim); font-size: 12.5px; margin-right: 4px; padding-left: 4px;
+#edit-panel-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 8px 10px 14px;
+  background: var(--elev, var(--panel));
+  box-shadow: 0 1px 0 var(--line);
+  cursor: move; user-select: none;
 }
-.lb-btn {
-  padding: 6px 12px; border-radius: 7px; cursor: pointer;
-  border: 1px solid var(--line); background: var(--input-bg, var(--hover));
-  color: var(--text); font-size: 12.5px; font-weight: 600;
+.ep-title { flex: 1; font-size: 13.5px; font-weight: 700; }
+.ep-x {
+  width: 26px; height: 26px; display: grid; place-items: center;
+  background: none; border: 0; border-radius: 6px; cursor: pointer; color: var(--dim);
 }
-.lb-btn:hover { background: var(--hover); }
-.lb-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.lb-btn.primary:hover { background: var(--accent-hi); }
+.ep-x:hover { background: var(--hover); color: var(--text); }
+.ep-x .ico { width: 15px; height: 15px; }
 
-/* ---------- Layout templates (Settings → Appearance) --------------------- */
+.ep-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 14px; }
+.ep-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.ep-row.ep-stack { flex-direction: column; align-items: stretch; gap: 6px; }
+.ep-label { flex: 1; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.ep-label b { color: var(--accent); font-variant-numeric: tabular-nums; }
+.ep-btns { gap: 6px; }
+.ep-btns .keycap { flex: 1; }
+.ep-count { color: var(--dim); font-size: 11.5px; margin: -4px 0 10px; }
+.ep-rule { height: 1px; background: var(--line); margin: 12px 0; }
+#edit-layout-select {
+  height: 32px; padding: 0 8px; border-radius: 6px;
+  background: var(--sunk, var(--input)); border: 1px solid var(--line-lo);
+  color: var(--text); font: inherit; font-size: 13px;
+}
+#edit-grid-size { width: 100%; }
+
+/* The element list - grouped, scrollable, one checkbox each. */
+.ep-list { display: flex; flex-direction: column; gap: 2px; }
+.ep-group {
+  margin: 8px 0 2px; padding-left: 2px;
+  color: var(--dim); font-size: 10.5px; font-weight: 800;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.ep-group:first-child { margin-top: 0; }
+.ep-el {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  background: none; border: 0; width: 100%;
+  color: var(--text); font: inherit; font-size: 12.5px; text-align: left;
+}
+.ep-el:hover { background: var(--hover); }
+.ep-el.sel { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.ep-el input[type="checkbox"] { flex: 0 0 auto; accent-color: var(--accent); cursor: pointer; }
+.ep-el .ep-el-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-el .ep-el-tag { color: var(--dim); font-size: 10.5px; font-weight: 700; }
+
+/* What the selected element can be told beyond move and resize. */
+.ep-sel {
+  margin-top: 12px; padding: 10px; border-radius: 8px;
+  background: var(--sunk, var(--hover)); border: 1px solid var(--line-lo);
+}
+.ep-sel[hidden] { display: none; }
+.ep-sel-name { font-size: 12.5px; font-weight: 700; margin-bottom: 2px; }
+.ep-sel-dims { color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.ep-sel-btns { display: flex; gap: 6px; margin-top: 8px; }
+.ep-sel-btns .keycap { flex: 1; }
+
+.ep-foot {
+  flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 14px;
+  background: var(--elev, var(--panel)); box-shadow: 0 -1px 0 var(--line);
+}
+.ep-foot .keycap { flex: 1; }
+.keycap.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.keycap.primary:hover { background: var(--accent-hi); }
+
+/* ---------- Saved layouts (Settings -> Appearance) ----------------------- */
 
 .lay-tpl-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
 .lay-tpl {

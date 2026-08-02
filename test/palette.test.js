@@ -1242,12 +1242,11 @@ describe('the window shell', () => {
         // A header that stops at the chat column leaves the member list divided
         // from the title bar to the floor, and puts the search field a whole
         // column left of where it belongs.
-        // The areas are named for REGIONS now, not for the section that happens
-        // to be in one — Edit Layout can put any section in any of them — but
-        // the shape being asserted is the same: the header spans the chat column
-        // and whatever sits to its right.
-        expect(css).toMatch(/"rail\s+zleft head head"/);
-        expect(css).toMatch(/"rail\s+zleft main zright"/);
+        // The DEFAULT arrangement, which is the only one that is a grid at all —
+        // Edit Mode's own layouts place every element absolutely and this
+        // template stops applying to them.
+        expect(css).toMatch(/"rail side head head"/);
+        expect(css).toMatch(/"rail side main members"/);
         expect(css).toMatch(/#chan-head \{ grid-area: head; \}/);
         // Which is only possible with the header OUTSIDE #main.
         const main = html().slice(html().indexOf('<main id="main">'));

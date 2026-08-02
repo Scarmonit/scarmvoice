@@ -730,17 +730,86 @@
      A sibling of #app rather than a child, like every other overlay, which is
      why teardownSession() has to close it: hiding #app would leave the toolbar
      and the zone outlines drawn over the sign-in card. -->
-<div id="layout-edit" hidden>
-  <div id="layout-shield"></div>
-  <div id="layout-frames"></div>
-  <div id="layout-ghost" hidden></div>
-  <div id="layout-bar" role="toolbar" aria-label="Edit layout">
-    <span class="lb-hint" id="layout-hint">Drag a section into a zone</span>
-    <button type="button" class="lb-btn" id="layout-reset">Reset</button>
-    <button type="button" class="lb-btn" id="layout-save-tpl">Save as template…</button>
-    <button type="button" class="lb-btn" id="layout-cancel">Cancel</button>
-    <button type="button" class="lb-btn primary" id="layout-done">Done</button>
-  </div>
+<!-- ---------- Edit Mode ----------
+     Modelled on the retail WoW HUD editor: the whole interface goes into an
+     editing state, every managed element becomes movable, resizable and
+     hideable, and a control panel drives the lot.
+
+     Drawn OVER the running app rather than instead of it — what you drag is the
+     real channel list at its real size. Everything in here is inert except the
+     panel: #edit-shield takes every pointer event and app.js works out what was
+     grabbed from the elements' own rectangles, so no element needs a drag
+     handler that would have to be unbound when edit mode ends.
+
+     A sibling of #app rather than a child, like every other overlay, which is
+     why teardownSession() has to close it: hiding #app would leave the panel
+     and the outlines drawn over the sign-in card. -->
+<div id="edit-mode" hidden>
+  <!-- The grid the elements snap to, drawn as a background rather than as
+       thousands of nodes. Its pitch is the slider's. -->
+  <div id="edit-grid" hidden></div>
+  <div id="edit-shield"></div>
+  <!-- Outlines, resize handles and the alignment guides, all positioned from
+       measured rectangles. -->
+  <div id="edit-frames"></div>
+  <div id="edit-guides"></div>
+
+  <!-- The manager. Draggable by its header, like WoW's. -->
+  <section id="edit-panel" role="dialog" aria-label="Edit Mode">
+    <header id="edit-panel-head">
+      <span class="ep-title">Edit Mode</span>
+      <button type="button" class="ep-x" id="edit-close" title="Exit Edit Mode (Esc)">
+        <span class="ico" data-icon="x"></span>
+      </button>
+    </header>
+
+    <div class="ep-body">
+      <label class="ep-row ep-stack">
+        <span class="ep-label">Layout</span>
+        <select id="edit-layout-select" aria-label="Active layout"></select>
+      </label>
+      <div class="ep-row ep-btns">
+        <button type="button" class="keycap" id="edit-layout-new">New</button>
+        <button type="button" class="keycap" id="edit-layout-rename">Rename</button>
+        <button type="button" class="keycap" id="edit-layout-delete">Delete</button>
+      </div>
+      <div class="ep-count" id="edit-layout-count"></div>
+
+      <div class="ep-rule"></div>
+
+      <div class="ep-row">
+        <span class="ep-label">Show Grid</span>
+        <button type="button" class="switch" id="edit-show-grid" role="switch" aria-checked="true">
+          <span class="switch-knob"></span>
+        </button>
+      </div>
+      <div class="ep-row ep-stack">
+        <span class="ep-label">Grid Size <b id="edit-grid-size-val">24</b></span>
+        <input type="range" id="edit-grid-size" min="4" max="96" step="2" value="24"
+               aria-label="Grid size">
+      </div>
+      <div class="ep-row">
+        <span class="ep-label">Snap to Elements</span>
+        <button type="button" class="switch" id="edit-snap-elements" role="switch" aria-checked="true">
+          <span class="switch-knob"></span>
+        </button>
+      </div>
+
+      <div class="ep-rule"></div>
+
+      <!-- One row per managed element, grouped. The checkbox is its
+           show/hide; the row itself selects it. -->
+      <div class="ep-list" id="edit-element-list" role="group" aria-label="Elements"></div>
+
+      <!-- Whatever the selected element can be told, beyond move and resize. -->
+      <div class="ep-sel" id="edit-selected" hidden></div>
+    </div>
+
+    <footer class="ep-foot">
+      <button type="button" class="keycap" id="edit-revert">Revert All Changes</button>
+      <button type="button" class="keycap primary" id="edit-save">Save</button>
+    </footer>
+  </section>
 </div>
 
 <!-- ---------- login ---------- -->
@@ -1298,25 +1367,22 @@
         <div class="set-rule"></div>
         <h4 class="set-sub">Layout</h4>
         <div class="set-field-block">
-          <span class="set-block-title">Arrange the window</span>
-          <span class="set-block-sub">Move the channel list, member list, me bar and message box
-            between the window's zones. Sections snap into place, so an arrangement is
-            never left overlapping or half off the edge.</span>
+          <span class="set-block-title">Edit Mode</span>
+          <span class="set-block-sub">Move, resize and hide every part of the window, and keep
+            arrangements as named layouts. Everything is done from the Edit Mode panel —
+            this button is only the way in.</span>
           <div class="acct-btns">
-            <button type="button" class="keycap" id="set-edit-layout">Edit Layout</button>
-            <button type="button" class="keycap" id="set-layout-reset">Reset to default</button>
+            <button type="button" class="keycap" id="set-edit-layout">Edit Mode</button>
+            <button type="button" class="keycap" id="set-layout-reset">Use the default layout</button>
           </div>
         </div>
         <div class="set-field-block">
           <span class="set-block-title">
-            Layout templates <span class="lay-tpl-count" id="lay-tpl-count"></span>
+            Saved layouts <span class="lay-tpl-count" id="lay-tpl-count"></span>
           </span>
-          <span class="set-block-sub">Save an arrangement you like and come back to it later.
-            Up to 10.</span>
+          <span class="set-block-sub">Each one remembers where every element is, how big it is and
+            whether it is shown. Up to 10.</span>
           <div class="lay-tpl-list" id="lay-tpl-list"></div>
-          <div class="acct-btns">
-            <button type="button" class="keycap" id="set-save-layout">Save current layout…</button>
-          </div>
         </div>
       </section>
 
