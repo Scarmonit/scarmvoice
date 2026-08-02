@@ -45,6 +45,11 @@ beforeEach(() => {
 // appeared, NOR did anything after it, and every later poll threw in the same
 // place. Anyone could wedge a channel for everyone in it.
 describe('a very long line of formatting still renders', () => {
+    // Its own timeout. This one deliberately renders sixty thousand characters
+    // into twenty thousand elements — that is the whole point of it — and it
+    // lands near the 5s default, so under a full parallel run whether it passed
+    // depended on how loaded the machine was rather than on anything about the
+    // recursion. The number is not a claim about speed.
     it('draws a message with far more spans than the stack has frames', async () => {
         const board = router({
             list: () => ({
@@ -58,7 +63,7 @@ describe('a very long line of formatting still renders', () => {
         const row = document.querySelector('#messages .msg[data-id="2"]');
         expect(row).toBeTruthy();
         expect(row.querySelectorAll('em').length).toBe(20000);
-    });
+    }, 20000);
 
     // The real damage was collateral: the throw took the rest of the render with
     // it, so an ordinary message below the offending one vanished too.
@@ -76,7 +81,7 @@ describe('a very long line of formatting still renders', () => {
         await settle(20);
 
         expect(document.querySelector('#messages .msg[data-id="4"]')).toBeTruthy();
-    });
+    }, 20000);
 
     // Nesting is what the recursion is FOR, and it still has to work.
     it('still nests one format inside another', async () => {

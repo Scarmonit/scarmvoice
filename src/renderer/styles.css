@@ -6019,6 +6019,7 @@ html.desat .ctx-menu,
 html.desat #lightbox,
 html.desat #edit-mode,
 html.desat #lang-pop,
+html.desat #fmt-menu,
 html.desat .toast {
   filter: saturate(var(--sat, 1));
 }
@@ -6376,6 +6377,7 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .fb-btn.on { background: var(--accent-soft, var(--hover)); color: var(--accent); }
 .fb-btn[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 .fb-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); flex: 0 0 1px; }
+.fb-danger:hover { background: var(--danger-soft, var(--hover)); color: var(--danger); }
 .fb-spacer { flex: 1 1 auto; }
 
 /* The Format button's own look lives with the rest of the composer's tool
@@ -6413,6 +6415,107 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
   color: var(--text);
   z-index: 0;
 }
+/* ONE BLOCK PER SOURCE LINE, rather than one run of text with newlines in it.
+   A block can carry a background across the full width and can hold an
+   absolutely-positioned line number; a span can only cover its own glyphs. The
+   wrapping properties are inherited from the rule above, which is what keeps a
+   long line breaking in the same place in both boxes. */
+.cm-line { position: relative; margin: 0; padding: 0; }
+/* An empty line's height comes from a <br>, not from a filler character: the
+   invariant this whole layer rests on is that its text is the field's text. */
+
+/* ---------- a code block, drawn as an editor -----------------------------
+
+   The reference draws a fenced block as a titled panel with numbered lines and
+   coloured code. All three of those need horizontal room and a full-width
+   background, and NOTHING here may change the width of a character — so the
+   room is made by padding BOTH boxes, the numbers are absolutely positioned out
+   in it, and the colouring is colour only.
+
+   The mono face is the one exception, and it is allowed for the same reason:
+   the field and the layer switch to it TOGETHER, so they still typeset the
+   same string identically. It applies while the message holds a block at all,
+   because a message that holds one is mostly code. */
+.composer-field.cm-code #composer-input,
+.composer-field.cm-code #composer-mirror {
+  font-family: var(--mono);
+  padding-left: 38px;
+}
+.cm-fl { background: var(--code-bg); }
+.cm-fl-open { border-radius: 6px 6px 0 0; }
+.cm-fl-close { border-radius: 0 0 6px 6px; }
+/* The fences themselves are the panel's own edges: the opening line carries the
+   title bar and the closing one is its bottom rule, so neither shows its
+   backticks. The text is still there, still selectable, still what gets sent —
+   only its ink is gone. */
+.cm-fl-open .cm-mark,
+.cm-fl-close .cm-mark { opacity: 0; }
+.cm-fl-body { color: var(--code-text); }
+/* Out in the gutter the padding made. `position: absolute` is what keeps it
+   from taking any inline space at all. */
+.cm-num::before { content: attr(data-n); }
+.cm-num {
+  position: absolute; right: 100%; margin-right: 12px; top: 0;
+  color: var(--placeholder); font-style: normal;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+/* The highlighter's theme sets weight and slant on some tokens. Colour is all
+   that may survive in here — see the note on .cm-mark. */
+#composer-mirror [class^="hljs"],
+#composer-mirror [class*=" hljs"] { font-weight: inherit; font-style: normal; }
+
+/* The block's own title bar, drawn over its ``` line. The layer is inert; only
+   this is not, because the field underneath has to keep every other click. */
+#composer-chrome {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 2;
+}
+#composer-chrome:empty { display: none; }
+.codechip {
+  position: absolute; left: 0; right: 0;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px 0 0;
+  pointer-events: none;
+}
+.codechip-lang, .codechip-more {
+  pointer-events: auto;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 7px;
+  border: 0; border-radius: 5px; cursor: pointer;
+  background: var(--input); color: var(--dim);
+  font: inherit; font-family: var(--font); font-size: 11.5px; font-weight: 700;
+}
+.codechip-lang:hover, .codechip-more:hover { background: var(--hover); color: var(--text); }
+.codechip-lang .ico { width: 13px; height: 13px; }
+.codechip-lang .ico:last-child { width: 11px; height: 11px; margin-left: -2px; }
+.codechip-more { margin-left: auto; padding: 0 5px; }
+.codechip-more .ico { width: 14px; height: 14px; }
+
+/* ---------- the toolbar's little menus ---------------------------------- */
+
+.fmt-menu {
+  position: fixed; z-index: 120;
+  min-width: 200px; padding: 5px;
+  border-radius: 8px;
+  background: var(--elev, var(--panel)); border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg, var(--shadow-xs));
+}
+.fmt-menu[hidden] { display: none; }
+.fm-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 9px; border: 0; border-radius: 6px; cursor: pointer;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left;
+}
+.fm-item:hover { background: var(--hover); }
+.fm-item.on { color: var(--accent); }
+.fm-item .ico { width: 16px; height: 16px; flex: 0 0 16px; color: var(--dim); }
+.fm-item.on .ico { color: var(--accent); }
+.fm-label { flex: 1; min-width: 0; }
+.fm-hint { color: var(--dim); font-size: 11px; font-weight: 600; }
+.fm-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 #composer-mirror[hidden] { display: none; }
 /* The textarea is transparent ONLY while the mirror is drawing. Anything that
    turns the mirror off — the setting, a parse that threw — leaves the field

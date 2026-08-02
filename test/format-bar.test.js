@@ -59,6 +59,19 @@ function click(fmt) {
     const btn = $('format-bar').querySelector('[data-fmt="' + fmt + '"]');
     btn.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
 }
+// Three of the old buttons live in menus now, the way the reference arranges
+// them. These drive the menus rather than reaching past them.
+function menuItem(label) {
+    return [...$('fmt-menu').querySelectorAll('.fm-item')]
+        .find((b) => b.querySelector('.fm-label').textContent === label);
+}
+function openMenu(id) {
+    $(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+}
+function pickFromMore(label) {
+    openMenu('btn-more');
+    menuItem(label).click();
+}
 function chord(key, opts = {}) {
     input().dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({
         key, ctrlKey: true, bubbles: true, cancelable: true
@@ -139,10 +152,10 @@ describe('the marks a button writes', () => {
         expect(el.selectionStart).toBe(1);
     });
 
-    it('writes each of the five inline marks', async () => {
+    it('writes each of the marks on the bar itself', async () => {
         const cases = [
             ['bold', '**x**'], ['italic', '*x*'], ['underline', '__x__'],
-            ['strike', '~~x~~'], ['code', '`x`'], ['spoiler', '||x||']
+            ['strike', '~~x~~'], ['code', '`x`']
         ];
         for (const [kind, want] of cases) {
             const el = await withText('x');
@@ -150,6 +163,16 @@ describe('the marks a button writes', () => {
             click(kind);
             expect(el.value, kind).toBe(want);
         }
+        // Its own timeout: a whole renderer is booted per case, so this lands
+        // near the 5s default and whether it passed depended on how loaded the
+        // machine was rather than on anything about the marks.
+    }, 20000);
+
+    it('writes the ones that moved into More', async () => {
+        const el = await withText('x');
+        select(0, 1);
+        pickFromMore('Spoiler');
+        expect(el.value).toBe('||x||');
     });
 
     // Italic pressed inside **bold** used to see the inner star of each pair,
@@ -165,7 +188,7 @@ describe('the marks a button writes', () => {
     it('makes a link and leaves the caret on the part still to be typed', async () => {
         const el = await withText('docs');
         select(0, 4);
-        click('link');
+        pickFromMore('Link');
         expect(el.value).toBe('[docs](url)');
         expect(el.value.slice(el.selectionStart, el.selectionEnd)).toBe('url');
     });
@@ -173,7 +196,7 @@ describe('the marks a button writes', () => {
     it('turns a selected url into the target instead', async () => {
         const el = await withText('https://example.com');
         select(0, 19);
-        click('link');
+        pickFromMore('Link');
         expect(el.value).toBe('[](https://example.com)');
         expect(el.selectionStart).toBe(1);
     });
@@ -217,17 +240,34 @@ describe('the marks that belong to a line', () => {
         expect(el.value).toBe('> one');
     });
 
-    it('cycles the heading through the three levels Markdown has, then off', async () => {
+    // The reference's font-size control. Markdown's three heading levels ARE its
+    // type scale — there is no point size to offer — so this is what it means
+    // here, and it is a menu rather than a cycle because a menu can say which
+    // one you are already on.
+    it('sets a heading level from the text size menu', async () => {
         const el = await withText('title');
         select(0);
-        $('btn-heading').click();
-        expect(el.value).toBe('# title');
-        $('btn-heading').click();
+        openMenu('btn-fontsize');
+        menuItem('Heading 2').click();
         expect(el.value).toBe('## title');
-        $('btn-heading').click();
-        expect(el.value).toBe('### title');
-        $('btn-heading').click();
+
+        select(0);
+        openMenu('btn-fontsize');
+        menuItem('Heading 1').click();
+        expect(el.value).toBe('# title');
+
+        select(0);
+        openMenu('btn-fontsize');
+        menuItem('Normal text').click();
         expect(el.value).toBe('title');
+    });
+
+    it('says which level the caret is already on', async () => {
+        await withText('## title');
+        select(4);
+        openMenu('btn-fontsize');
+        expect(menuItem('Heading 2').classList.contains('on')).toBe(true);
+        expect(menuItem('Normal text').classList.contains('on')).toBe(false);
     });
 
     it('keeps the indent it found', async () => {
@@ -246,7 +286,7 @@ describe('the keyboard chords', () => {
             chord(key);
             expect(el.value, key).toBe(want);
         }
-    });
+    }, 20000);
 
     // With Shift held the key IS '*' and '&', so these have to be read off the
     // physical code rather than the character.
@@ -271,7 +311,8 @@ describe('inserting a code block', () => {
     const items = () => [...$('lang-list').querySelectorAll('.lang-item')];
 
     async function openLangs() {
-        $('btn-code-block').click();
+        openMenu('btn-more');
+        menuItem('Code block').click();
         await settle();
     }
 
@@ -377,14 +418,31 @@ describe('the formatting drawn under the caret', () => {
         '```\nno language\n```\ntail'
     ];
 
+    // The invariant, in its new shape. The layer is a stack of line boxes now
+    // rather than one run of text with newlines in it — a block can carry a
+    // background across the full width and hold a line number out in the
+    // gutter, and a span cannot — so the characters are compared line by line.
+    const mirrorText = () => [...mirror().querySelectorAll('.cm-line')]
+        .map((l) => l.textContent).join('\n');
+
     it('holds exactly the characters in the field', async () => {
         await boot({});
         await settle();
         for (const s of SAMPLES) {
             type(s);
-            // The one deliberate difference: a trailing newline, so a message
-            // that ends on Shift+Enter has a final line with height.
-            expect(mirror().textContent, JSON.stringify(s)).toBe(s + '\n');
+            // The one deliberate difference: a trailing empty line, so a message
+            // that ends on Shift+Enter has a final row with height.
+            expect(mirrorText(), JSON.stringify(s)).toBe(s + '\n');
+        }
+    });
+
+    it('gives every source line exactly one line box', async () => {
+        await boot({});
+        await settle();
+        for (const s of SAMPLES) {
+            type(s);
+            expect(mirror().querySelectorAll('.cm-line').length, JSON.stringify(s))
+                .toBe(s.split('\n').length + 1);
         }
     });
 
@@ -402,12 +460,46 @@ describe('the formatting drawn under the caret', () => {
     // check that keeps it that way, because it is not a thing to remember.
     it('never changes a character’s width, in any of its marks', () => {
         const banned = /(^|[;{\s])(font-family|font-size|font-weight|font-style|font-stretch|font-variant|font|letter-spacing|word-spacing|text-transform|zoom|transform)\s*:/;
-        const rules = CSS.match(/\.cm-[\w-]+[^{}]*\{[^}]*\}/g) || [];
+        // Comments stripped first: one of them MENTIONS .cm-mark, and an
+        // unguarded scan ran from that word into the next real rule and blamed
+        // it for whatever it found there.
+        const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+        const rules = bare.match(/\.cm-[\w-]+[^{}]*\{[^}]*\}/g) || [];
         expect(rules.length, 'no .cm-* rules found — did they move?').toBeGreaterThan(8);
         for (const rule of rules) {
+            const selector = rule.split('{')[0].trim();
+            // ONE exception, and it is the reason the exception is stated by
+            // NAME rather than by trusting the author: a rule that changes both
+            // boxes at once cannot pull them apart. The mono face for a message
+            // holding a code block is that rule, and it names #composer-input.
+            if (selector.includes('#composer-input')) continue;
             const body = rule.slice(rule.indexOf('{'));
-            expect(banned.test(body), rule.split('{')[0].trim() + ' changes glyph metrics').toBe(false);
+            // …and anything taken OUT OF THE FLOW cannot push a glyph anywhere:
+            // the line numbers live in the gutter, absolutely positioned, and
+            // what they are set in is their own business.
+            if (/position:\s*absolute/.test(body)) continue;
+            expect(banned.test(body), selector + ' changes glyph metrics').toBe(false);
         }
+    });
+
+    // The fences are the panel's own edges — the opening line carries the title
+    // bar and the closing one is its bottom rule — so neither shows its
+    // backticks. The text is still there; only its ink is gone.
+    it('turns the backticks into the block’s edges', () => {
+        const flat = CSS.replace(/\s+/g, ' ');
+        expect(flat).toContain('.cm-fl-open .cm-mark, .cm-fl-close .cm-mark { opacity: 0; }');
+    });
+
+    // The gutter and the mono face are made by padding and typesetting BOTH
+    // boxes in one rule. Named together on purpose: separately they drift, and
+    // drift is the caret sitting beside the wrong glyph.
+    it('makes the gutter and the mono face on both boxes at once', () => {
+        const flat = CSS.replace(/\s+/g, ' ');
+        const rule = /\.composer-field\.cm-code #composer-input, \.composer-field\.cm-code #composer-mirror \{([^}]*)\}/
+            .exec(flat);
+        expect(rule, 'the gutter/mono rule must name both boxes').toBeTruthy();
+        expect(rule[1]).toContain('font-family: var(--mono)');
+        expect(rule[1]).toContain('padding-left');
     });
 
     it('still draws code, bold and headings as something', () => {
@@ -429,7 +521,8 @@ describe('the formatting drawn under the caret', () => {
         const field = mirror().parentElement;
         expect(field.classList.contains('composer-field')).toBe(true);
         expect(input().parentElement).toBe(field);
-        expect([...field.children].map((c) => c.id)).toEqual(['composer-mirror', 'composer-input']);
+        expect([...field.children].map((c) => c.id))
+            .toEqual(['composer-mirror', 'composer-input', 'composer-chrome']);
     });
 
     it('marks the syntax and formats what it wraps', async () => {
@@ -456,7 +549,7 @@ describe('the formatting drawn under the caret', () => {
         await settle();
         type('```js\n**not bold**\n```');
         expect(mirror().querySelector('.cm-b')).toBe(null);
-        expect(mirror().querySelector('.cm-fence').textContent).toBe('**not bold**');
+        expect(mirror().querySelector('.cm-fl-body').textContent).toBe('**not bold**');
     });
 
     it('escapes what it is given, because it is the least trusted text here', async () => {
@@ -464,7 +557,7 @@ describe('the formatting drawn under the caret', () => {
         await settle();
         type('<img src=x onerror=1>');
         expect(mirror().querySelector('img')).toBe(null);
-        expect(mirror().textContent).toBe('<img src=x onerror=1>\n');
+        expect(mirrorText()).toBe('<img src=x onerror=1>\n');
     });
 
     it('is off, and the field paints its own text, when the setting says so', async () => {
@@ -494,7 +587,105 @@ describe('the formatting drawn under the caret', () => {
         input().dispatchEvent(new window.KeyboardEvent('keydown', {
             key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true
         }));
-        expect(mirror().textContent).toBe('**recalled**\n');
+        expect(mirrorText()).toBe('**recalled**\n');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// The reference draws a fenced block in the composer as an editor: a titled
+// panel with the language on it, numbered lines and coloured code.
+
+describe('a code block while it is being written', () => {
+    const chip = () => $('composer-chrome').querySelector('.codechip');
+    const field = () => document.querySelector('.composer-field');
+
+    it('turns the box into a code editor while it holds a block', async () => {
+        await boot({});
+        await settle();
+        expect(field().classList.contains('cm-code')).toBe(false);
+        type('```js\nconst a = 1;\n```');
+        expect(field().classList.contains('cm-code')).toBe(true);
+        type('no code here');
+        expect(field().classList.contains('cm-code')).toBe(false);
+    });
+
+    it('numbers the lines of the block, and only those', async () => {
+        await boot({});
+        await settle();
+        type('before\n```js\none\ntwo\nthree\n```\nafter');
+        const nums = [...mirror().querySelectorAll('.cm-num')].map((n) => n.dataset.n);
+        expect(nums).toEqual(['1', '2', '3']);
+    });
+
+    // Generated content, not text. The invariant this layer rests on is that its
+    // text is the field's text — a number in the markup would break it as
+    // surely as an extra character typed in.
+    it('keeps the numbers out of the text', async () => {
+        await boot({});
+        await settle();
+        type('```js\nconst a = 1;\n```');
+        const text = [...mirror().querySelectorAll('.cm-line')].map((l) => l.textContent).join('\n');
+        expect(text).toBe('```js\nconst a = 1;\n```\n');
+    });
+
+    it('titles the block with its language, and can change it', async () => {
+        const el = await withText('```js\nconst a = 1;\n```');
+        await settle();
+        expect(chip()).toBeTruthy();
+        expect(chip().querySelector('.codechip-lang span').textContent).toBe('JavaScript');
+
+        chip().querySelector('.codechip-lang').click();
+        await settle();
+        $('lang-search').value = 'python';
+        $('lang-search').dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle();
+        $('lang-list').querySelector('.lang-item').click();
+        await settle();
+
+        expect(el.value).toBe('```python\nconst a = 1;\n```');
+        expect(chip().querySelector('.codechip-lang span').textContent).toBe('Python');
+    });
+
+    it('offers the block its own menu', async () => {
+        const el = await withText('```js\nconst a = 1;\n```');
+        await settle();
+        chip().querySelector('.codechip-more').click();
+        await settle();
+        expect([...$('fmt-menu').querySelectorAll('.fm-label')].map((l) => l.textContent))
+            .toEqual(['Change language', 'Copy code', 'Remove code block']);
+
+        menuItem('Remove code block').click();
+        await settle();
+        expect(el.value).toBe('const a = 1;');
+    });
+
+    it('is one block per fence, however many there are', async () => {
+        await withText('```js\na\n```\ntext\n```python\nb\n```');
+        await settle();
+        expect($('composer-chrome').querySelectorAll('.codechip').length).toBe(2);
+    });
+
+    it('titles an unclosed fence too, because it is still a block', async () => {
+        await withText('```rust\nfn main() {');
+        await settle();
+        expect(chip().querySelector('.codechip-lang span').textContent).toBe('Rust');
+    });
+
+    // A stand-in on window.hljs with only the methods somebody else needed used
+    // to throw straight through the preview and take the whole layer down.
+    it('survives a highlighter that is not all there', async () => {
+        await boot({});
+        await settle();
+        const real = window.hljs;
+        window.hljs = { highlightElement: () => {} };
+        try {
+            type('```js\nconst a = 1;\n```');
+            expect(mirror().hidden).toBe(false);
+            const text = [...mirror().querySelectorAll('.cm-line')].map((l) => l.textContent).join('\n');
+            expect(text).toBe('```js\nconst a = 1;\n```\n');
+        } finally {
+            if (real === undefined) delete window.hljs; else window.hljs = real;
+        }
     });
 });
 

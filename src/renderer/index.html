@@ -473,6 +473,15 @@
            Every button here writes MARKDOWN into the same textarea. There is no
            second document and no rich-text model: what gets sent is what is in
            the box, which is what the renderer has always read. -->
+      <!-- The reference's row, control for control and in its order:
+           B I U S | bulleted numbered | quote highlight size more | trash.
+
+           Every one of them writes MARKDOWN into the same textarea. There is no
+           second document and no rich-text model: what gets sent is what is in
+           the box, which is what the renderer has always read. Where the
+           reference offers something Markdown cannot say — a text colour — the
+           slot holds the nearest thing it CAN say rather than a control that
+           lies about what it did. -->
       <div id="format-bar" hidden role="toolbar" aria-label="Formatting">
         <button type="button" class="fb-btn fb-letter" data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>
         <button type="button" class="fb-btn fb-letter" data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>
@@ -485,32 +494,26 @@
         <button type="button" class="fb-btn" data-fmt="number" title="Numbered list (Ctrl+Shift+7)">
           <span class="ico" data-icon="list-number"></span>
         </button>
+        <span class="fb-sep"></span>
         <button type="button" class="fb-btn" data-fmt="quote" title="Quote (Ctrl+Shift+9)">
           <span class="ico" data-icon="quote"></span>
         </button>
-        <button type="button" class="fb-btn" id="btn-heading" title="Heading">
-          <span class="ico" data-icon="heading"></span>
+        <!-- The reference's highlighter. Markdown has exactly one way to put
+             text on a coloured plate and this is it. -->
+        <button type="button" class="fb-btn" data-fmt="code" title="Highlight — inline code (Ctrl+Shift+C)">
+          <span class="ico" data-icon="highlight"></span>
         </button>
-        <span class="fb-sep"></span>
-        <button type="button" class="fb-btn" data-fmt="code" title="Inline code (Ctrl+Shift+C)">
-          <span class="ico" data-icon="code"></span>
-        </button>
-        <!-- The one control with a menu behind it: a fenced block is only worth
-             inserting with the language already on it, because that is what
-             decides how it is highlighted when it lands. -->
-        <button type="button" class="fb-btn" id="btn-code-block" title="Code block (Ctrl+Alt+C)"
+        <button type="button" class="fb-btn" id="btn-fontsize" title="Text size"
                 aria-haspopup="menu" aria-expanded="false">
-          <span class="ico" data-icon="code-block"></span>
+          <span class="ico" data-icon="text-size"></span>
         </button>
-        <button type="button" class="fb-btn" data-fmt="link" title="Link (Ctrl+K)">
-          <span class="ico" data-icon="link"></span>
-        </button>
-        <button type="button" class="fb-btn" data-fmt="spoiler" title="Spoiler">
-          <span class="ico" data-icon="spoiler"></span>
+        <button type="button" class="fb-btn" id="btn-more" title="More options"
+                aria-haspopup="menu" aria-expanded="false">
+          <span class="ico" data-icon="more"></span>
         </button>
         <span class="fb-spacer"></span>
-        <button type="button" class="fb-btn" id="btn-format-close" title="Hide formatting options">
-          <span class="ico" data-icon="x"></span>
+        <button type="button" class="fb-btn fb-danger" id="btn-discard" title="Discard this message">
+          <span class="ico" data-icon="trash"></span>
         </button>
       </div>
       <div class="composer-row">
@@ -539,6 +542,10 @@
                and a screen reader must not meet the same text twice. -->
           <div id="composer-mirror" aria-hidden="true"></div>
           <textarea id="composer-input" rows="1" placeholder="Message #general"></textarea>
+          <!-- The code block's own controls, drawn over its header line. The
+               layer is inert; only the chip inside it takes clicks, because the
+               textarea underneath has to keep every other one. -->
+          <div id="composer-chrome" aria-hidden="true"></div>
         </div>
         <div class="composer-tools">
           <button type="button" id="btn-format" title="Show formatting options (Ctrl+Shift+X)"
@@ -2226,6 +2233,10 @@
      A language is not decoration on a code block, it is the thing that decides
      how the block is highlighted when it lands — so it is chosen at insert
      time rather than typed into the fence afterwards. -->
+<!-- The toolbar's little menus: text size, more options, and the code
+     block's own. One element, filled per open. -->
+<div id="fmt-menu" class="fmt-menu" hidden role="menu"></div>
+
 <div id="lang-pop" class="lang-pop" hidden role="menu" aria-label="Code language">
   <input type="text" id="lang-search" placeholder="Search languages" autocomplete="off"
          spellcheck="false" aria-label="Search languages">

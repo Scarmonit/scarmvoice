@@ -4121,8 +4121,12 @@
         const bar = fmtBar();
         if (!bar) return;
         $('btn-format').addEventListener('click', () => setFormatBar(!formatBarOpen(), true));
-        $('btn-format-close').addEventListener('click', () => setFormatBar(false, true));
-        $('btn-heading').addEventListener('click', () => cycleHeading());
+        $('btn-fontsize').addEventListener('mousedown', (e) => e.preventDefault());
+        $('btn-fontsize').addEventListener('click', (e) => openFontSizeMenu(e.currentTarget));
+        $('btn-more').addEventListener('mousedown', (e) => e.preventDefault());
+        $('btn-more').addEventListener('click', (e) => openMoreMenu(e.currentTarget));
+        $('btn-discard').addEventListener('mousedown', (e) => e.preventDefault());
+        $('btn-discard').addEventListener('click', () => discardDraft());
         // Delegated, and on MOUSEDOWN with the default prevented: a click would
         // take focus out of the textarea first, and the selection a wrap needs
         // is gone the moment that happens.
@@ -4132,8 +4136,6 @@
             e.preventDefault();
             runFormat(btn.dataset.fmt);
         });
-        $('btn-code-block').addEventListener('mousedown', (e) => { e.preventDefault(); });
-        $('btn-code-block').addEventListener('click', () => toggleLangPop());
         ['keyup', 'mouseup'].forEach((ev) => input.addEventListener(ev, paintFormatState));
     })();
 
@@ -4172,7 +4174,7 @@
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'c') {
             e.preventDefault();
             if (!formatBarOpen()) setFormatBar(true, true);
-            openLangPop();
+            openLangPop(null, $('btn-more'));
             return;
         }
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -4180,6 +4182,183 @@
             $('composer').requestSubmit();
         }
     });
+
+    // ---- the toolbar's little menus ---------------------------------------
+    //
+    // One element, filled per open. Each item is a label and something to run;
+    // nothing here knows what it is a menu OF, which is why the code block's own
+    // menu can use it too.
+
+    function closeFmtMenu() {
+        const menu = $('fmt-menu');
+        if (!menu || menu.hidden) return;
+        menu.hidden = true;
+        document.querySelectorAll('[aria-haspopup="menu"][aria-expanded="true"]')
+            .forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    }
+
+    const fmtMenuOpen = () => !!($('fmt-menu') && !$('fmt-menu').hidden);
+
+    function openFmtMenu(anchor, items) {
+        const menu = $('fmt-menu');
+        if (!menu) return;
+        menu.textContent = '';
+        for (const it of items) {
+            if (it.sep) {
+                const hr = document.createElement('div');
+                hr.className = 'fm-sep';
+                menu.appendChild(hr);
+                continue;
+            }
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'fm-item' + (it.on ? ' on' : '');
+            if (it.icon && window.ScarmIcons.has(it.icon)) b.appendChild(window.ScarmIcons.build(it.icon));
+            const label = document.createElement('span');
+            label.className = 'fm-label';
+            label.textContent = it.label;
+            b.appendChild(label);
+            if (it.hint) {
+                const h = document.createElement('span');
+                h.className = 'fm-hint';
+                h.textContent = it.hint;
+                b.appendChild(h);
+            }
+            // The selection is what most of these act on, and a click would take
+            // the focus out of the field before they ran.
+            b.addEventListener('mousedown', (e) => e.preventDefault());
+            b.addEventListener('click', () => { closeFmtMenu(); it.run(); });
+            menu.appendChild(b);
+        }
+        menu.hidden = false;
+        if (anchor) anchor.setAttribute('aria-expanded', 'true');
+        const r = anchor ? anchor.getBoundingClientRect() : { left: 40, top: window.innerHeight - 60 };
+        const w = menu.offsetWidth || 220, h = menu.offsetHeight || 180;
+        menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
+        // Above the button, because the toolbar sits low in the window.
+        menu.style.top = Math.max(8, r.top - h - 6) + 'px';
+    }
+
+    document.addEventListener('mousedown', (e) => {
+        if (!fmtMenuOpen()) return;
+        const t = e.target;
+        if (t && t.closest && t.closest('#fmt-menu')) return;
+        closeFmtMenu();
+    });
+
+    // Markdown's three heading levels are its type scale — there is no point
+    // size to offer, so this is what "text size" means here.
+    function setHeading(level) {
+        const { start, end, lines } = selectedLines();
+        const out = lines.map((l) => {
+            const indent = (ANY_LINE_MARK.exec(l) || ['', ''])[1] || '';
+            const bare = l.replace(ANY_LINE_MARK, '');
+            return level ? indent + '#'.repeat(level) + ' ' + bare : indent + bare;
+        }).join('\n');
+        replaceRange(start, end, out, start, start + out.length);
+    }
+
+    function headingLevelNow() {
+        const first = selectedLines().lines[0] || '';
+        const m = /^[ \t]*(#{1,3})[ \t]+/.exec(first);
+        return m ? m[1].length : 0;
+    }
+
+    function openFontSizeMenu(anchor) {
+        const at = headingLevelNow();
+        openFmtMenu(anchor, [
+            { label: 'Normal text', on: at === 0, run: () => setHeading(0) },
+            { label: 'Heading 1', on: at === 1, run: () => setHeading(1) },
+            { label: 'Heading 2', on: at === 2, run: () => setHeading(2) },
+            { label: 'Heading 3', on: at === 3, run: () => setHeading(3) }
+        ]);
+    }
+
+    function openMoreMenu(anchor) {
+        openFmtMenu(anchor, [
+            { label: 'Link', icon: 'link', hint: 'Ctrl+K', run: () => insertLink() },
+            { label: 'Code block', icon: 'code-block', hint: 'Ctrl+Alt+C', run: () => openLangPop(null, anchor) },
+            { label: 'Spoiler', icon: 'spoiler', run: () => applyWrap('spoiler') },
+            { sep: true },
+            { label: 'Clear formatting', run: () => clearFormatting() }
+        ]);
+    }
+
+    function openCodeBlockMenu(anchor, block) {
+        openFmtMenu(anchor, [
+            { label: 'Change language', icon: 'code-block', run: () => openLangPop(block, anchor) },
+            { label: 'Copy code', icon: 'copy', run: () => copyBlockCode(block) },
+            { sep: true },
+            { label: 'Remove code block', icon: 'trash', run: () => removeCodeBlock(block) }
+        ]);
+    }
+
+    const blockBody = (block) => input.value.split('\n').slice(block.start + 1, block.end).join('\n');
+
+    async function copyBlockCode(block) {
+        try { await navigator.clipboard.writeText(blockBody(block)); toast('Code copied'); }
+        catch (e) { /* nothing worth saying */ }
+    }
+
+    // Takes the fences off and leaves the code as ordinary lines, which is what
+    // "remove the block" means when the block IS its fences.
+    function removeCodeBlock(block) {
+        const first = lineRangeAt(block.start);
+        const last = lineRangeAt(block.end);
+        if (!first) return;
+        const end = last ? last.end : input.value.length;
+        const body = blockBody(block);
+        replaceRange(first.start, end, body, first.start, first.start + body.length);
+    }
+
+    // Everything this app's renderer treats as syntax, taken back off. Line
+    // markers as well as inline marks: "clear formatting" on a bulleted list
+    // that stayed a bulleted list would not have cleared much.
+    function clearFormatting() {
+        const v = input.value;
+        let s = input.selectionStart, e = input.selectionEnd;
+        if (s === e) { const r = selectedLines(); s = r.start; e = r.end; }
+        const stripped = v.slice(s, e).split('\n').map((line) => {
+            const indent = (ANY_LINE_MARK.exec(line) || ['', ''])[1] || '';
+            let body = line.replace(ANY_LINE_MARK, '');
+            // Repeatedly, because marks nest: ***x*** is two of them.
+            for (let i = 0; i < 6; i++) {
+                const before = body;
+                body = body
+                    .replace(/\|\|([\s\S]*?)\|\|/g, '$1')
+                    .replace(/\*\*\*([\s\S]*?)\*\*\*/g, '$1')
+                    .replace(/\*\*([\s\S]*?)\*\*/g, '$1')
+                    .replace(/___([\s\S]*?)___/g, '$1')
+                    .replace(/__([\s\S]*?)__/g, '$1')
+                    .replace(/~~([\s\S]*?)~~/g, '$1')
+                    .replace(/\*([\s\S]*?)\*/g, '$1')
+                    .replace(/`{1,2}([\s\S]*?)`{1,2}/g, '$1')
+                    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+                if (body === before) break;
+            }
+            return indent + body;
+        }).join('\n');
+        replaceRange(s, e, stripped, s, s + stripped.length);
+    }
+
+    // The reference's bin: throw this message away. Asked about, because it
+    // takes the staged files and the reply with it and there is no undo for
+    // those the way there is for the text.
+    async function discardDraft() {
+        const hasText = !!input.value;
+        const hasFiles = validStaged().length > 0;
+        if (!hasText && !hasFiles) return;
+        if (!(await askConfirm('Discard this message?',
+            'What you have written' + (hasFiles ? ', and the files attached to it,' : '') +
+            ' will be thrown away.', 'Discard', true))) return;
+        input.value = '';
+        clearStaged();
+        clearReply();
+        resetRecall();
+        autosize();
+        updateSendEnabled();
+        input.focus();
+    }
 
     // ---- the formatting drawn under the caret ------------------------------
     //
@@ -4260,20 +4439,124 @@
         return mirrorInline(line);
     }
 
+    // ---- the code block, drawn as an editor -------------------------------
+    //
+    // A fenced block in the message box is drawn the way the reference draws it:
+    // a titled panel with the language on it, numbered lines down the side and
+    // the code coloured.
+    //
+    // All three of those are the same problem — they need horizontal room and a
+    // full-width background, and the layer may not change the width of a single
+    // character (see the note on .cm-mark). So:
+    //   • the mirror renders ONE BLOCK PER LINE rather than one run of text with
+    //     newlines in it. A block can carry a background across the whole width;
+    //     a span can only cover its own glyphs.
+    //   • the numbers are absolutely positioned in a gutter, so they take no
+    //     inline space at all, and the gutter is made by padding BOTH boxes.
+    //   • colouring is colour only — the highlighter's own bold and italic are
+    //     turned off in the stylesheet, for the same reason nothing else here
+    //     may set them.
+    // And because a code block is what the box is mostly holding when it holds
+    // one, the whole field switches to the mono face while there is one. Both
+    // boxes switch together, which is the only reason that is allowed.
+    const FENCE_RE = /^[ \t]*```(.*)$/;
+
+    // (lang + line) -> highlighted html. Small and bounded: the same lines are
+    // re-rendered on every keystroke, and re-highlighting them is the only part
+    // of this that is not linear in the length of the line.
+    const cmHlCache = new Map();
+    let cmHlWanted = false;
+
+    function highlightLine(lang, text) {
+        if (!text) return '';
+        const canon = LANG_ALIAS[lang] || lang;
+        if (!canon) return esc(text);
+        // A BUNDLE THAT IS NOT ALL THERE is the same case as no bundle at all,
+        // and it is a real one: a stand-in on `window.hljs` with only the
+        // methods somebody else needed threw straight through the preview and
+        // took the whole layer down with it.
+        const hl = window.hljs;
+        const ready = hl && typeof hl.getLanguage === 'function' && typeof hl.highlight === 'function';
+        if (!ready) {
+            // Fetched on first sight of a fence; until it lands the code is
+            // plain, which is exactly what it looked like before.
+            if (!cmHlWanted && !hl) {
+                cmHlWanted = true;
+                window.ScarmLazy.hljs().then((got) => { if (got) paintMirror(); });
+            }
+            return esc(text);
+        }
+        if (!hl.getLanguage(canon)) return esc(text);
+        const key = canon + '\n' + text;
+        const hit = cmHlCache.get(key);
+        if (hit !== undefined) return hit;
+        let html;
+        try {
+            html = hl.highlight(text, { language: canon, ignoreIllegals: true }).value;
+        } catch (e) {
+            html = esc(text);
+        }
+        cachePut(cmHlCache, key, html);
+        return html;
+    }
+
+    // One <div> per source line. An EMPTY line gets a <br>, which gives it a
+    // height without adding a character — the invariant this whole layer rests
+    // on is that its text is the field's text, and a filler character would
+    // break it as surely as a different font would.
     function mirrorHtml(src) {
         const lines = String(src).split('\n');
-        let inFence = false;
-        const out = lines.map((line) => {
-            if (/^[ \t]*```/.test(line)) {
-                inFence = !inFence;
-                return '<span class="cm-mark">' + esc(line) + '</span>';
+        let fence = null;                 // { lang, n } while inside one
+        const out = [];
+        for (const line of lines) {
+            const m = FENCE_RE.exec(line);
+            if (m) {
+                if (fence) {
+                    out.push('<div class="cm-line cm-fl cm-fl-close"><span class="cm-mark">' +
+                        esc(line) + '</span></div>');
+                    fence = null;
+                } else {
+                    const tag = m[1].trim().toLowerCase();
+                    fence = { lang: /^[\w+#._-]{0,20}$/.test(tag) ? tag : '', n: 0 };
+                    out.push('<div class="cm-line cm-fl cm-fl-open"><span class="cm-mark">' +
+                        esc(line) + '</span></div>');
+                }
+                continue;
             }
-            return inFence ? '<span class="cm-fence">' + esc(line) + '</span>' : mirrorLine(line);
+            if (fence) {
+                fence.n++;
+                out.push('<div class="cm-line cm-fl cm-fl-body">' +
+                    // The number is GENERATED CONTENT, not text: this layer's
+                    // whole invariant is that its text is the field's text, and
+                    // a number in the markup would break it as surely as an
+                    // extra character typed in.
+                    '<i class="cm-num" aria-hidden="true" data-n="' + fence.n + '"></i>' +
+                    (line ? highlightLine(fence.lang, line) : '<br>') + '</div>');
+                continue;
+            }
+            const body = mirrorLine(line);
+            out.push('<div class="cm-line">' + (body || '<br>') + '</div>');
+        }
+        // A trailing empty line needs somewhere to be, or the caret sits below
+        // its own text whenever the message ends on Shift+Enter.
+        out.push('<div class="cm-line"><br></div>');
+        return out.join('');
+    }
+
+    // Every fenced block in the field: which lines it spans and its language.
+    function fenceBlocks(src) {
+        const lines = String(src).split('\n');
+        const out = [];
+        let open = null;
+        lines.forEach((line, i) => {
+            const m = FENCE_RE.exec(line);
+            if (!m) return;
+            if (open) { open.end = i; out.push(open); open = null; return; }
+            const tag = m[1].trim().toLowerCase();
+            open = { start: i, end: lines.length - 1, lang: /^[\w+#._-]{0,20}$/.test(tag) ? tag : '' };
         });
-        // The trailing newline gives a final empty line somewhere to be. Without
-        // it the mirror is one row shorter than the field whenever the message
-        // ends on Shift+Enter, and the caret sits below its own text.
-        return out.join('\n') + '\n';
+        if (open) out.push(open);          // an unclosed fence is still a block
+        return out;
     }
 
     function richComposerOn() { return settings.richComposer !== false; }
@@ -4296,15 +4579,72 @@
         if (!on) { m.textContent = ''; return; }
         try {
             m.innerHTML = mirrorHtml(input.value);
+            paintCodeChrome();
         } catch (e) {
             // A preview is never worth a broken message box: fall all the way
             // back to the field painting its own text.
             document.body.classList.remove('rich-composer');
+            document.querySelector('.composer-field').classList.remove('cm-code');
             m.hidden = true;
             m.textContent = '';
+            $('composer-chrome').textContent = '';
             return;
         }
         m.scrollTop = input.scrollTop;
+    }
+
+    // The gutter, the mono face and the block's own title bar.
+    //
+    // The title bar is a REAL control drawn over the ``` line — the one line of
+    // a code block nobody wants to hand-edit — so the language can be changed
+    // from where it is shown. Everything else in the layer stays inert, because
+    // the field underneath has to keep every other click.
+    function paintCodeChrome() {
+        const field = document.querySelector('.composer-field');
+        const chrome = $('composer-chrome');
+        if (!field || !chrome) return;
+        const blocks = fenceBlocks(input.value);
+        // The whole field goes monospace and gains a gutter while it holds a
+        // block. BOTH boxes, in one rule, which is the only reason a font change
+        // is allowed here at all.
+        field.classList.toggle('cm-code', blocks.length > 0);
+        chrome.textContent = '';
+        if (!blocks.length) return;
+
+        const lines = $('composer-mirror').querySelectorAll('.cm-line');
+        for (const b of blocks) {
+            const head = lines[b.start];
+            if (!head) continue;
+            const chip = document.createElement('div');
+            chip.className = 'codechip';
+            chip.style.top = head.offsetTop + 'px';
+            chip.dataset.line = String(b.start);
+
+            const name = document.createElement('button');
+            name.type = 'button';
+            name.className = 'codechip-lang';
+            name.title = 'Change the language';
+            name.appendChild(window.ScarmIcons.build('code-block'));
+            const label = document.createElement('span');
+            label.textContent = languageLabel(b.lang);
+            name.appendChild(label);
+            name.appendChild(window.ScarmIcons.build('chevron-down'));
+            name.addEventListener('mousedown', (e) => e.preventDefault());
+            name.addEventListener('click', () => openLangPop(b));
+
+            const more = document.createElement('button');
+            more.type = 'button';
+            more.className = 'codechip-more';
+            more.title = 'Code block options';
+            more.appendChild(window.ScarmIcons.build('more'));
+            more.addEventListener('mousedown', (e) => e.preventDefault());
+            more.addEventListener('click', (e) => openCodeBlockMenu(e.currentTarget, b));
+
+            chip.appendChild(name);
+            chip.appendChild(more);
+            chrome.appendChild(chip);
+        }
+        chrome.style.transform = 'translateY(' + (-input.scrollTop) + 'px)';
     }
 
     // No `input` listener of its own: autosize() already repaints this and is
@@ -4316,6 +4656,8 @@
     input.addEventListener('scroll', () => {
         const m = $('composer-mirror');
         if (m && !m.hidden) m.scrollTop = input.scrollTop;
+        const chrome = $('composer-chrome');
+        if (chrome) chrome.style.transform = 'translateY(' + (-input.scrollTop) + 'px)';
     });
 
     // ---- the language menu -------------------------------------------------
@@ -4324,33 +4666,72 @@
 
     function langPopOpen() { return !$('lang-pop').hidden; }
 
+    // Which block the menu is about. Null means "there is no block yet" — the
+    // choice inserts one. A block means "this one" — the choice rewrites its
+    // fence line, which is the language chip's whole job.
+    let langTarget = null;
+
     function closeLangPop() {
         const pop = $('lang-pop');
         if (!pop || pop.hidden) return;
         pop.hidden = true;
-        $('btn-code-block').setAttribute('aria-expanded', 'false');
+        langTarget = null;
     }
 
-    function toggleLangPop() { if (langPopOpen()) closeLangPop(); else openLangPop(); }
-
-    function openLangPop() {
+    function openLangPop(block, anchor) {
         const pop = $('lang-pop');
-        const btn = $('btn-code-block');
-        if (!pop || !btn) return;
+        if (!pop) return;
+        langTarget = block || null;
         pop.hidden = false;
-        btn.setAttribute('aria-expanded', 'true');
         $('lang-search').value = '';
         langCursor = 0;
         renderLangList('');
-        // Placed against the button, then pulled back inside the window — the
-        // bar sits at the bottom of a narrow column, so a menu dropped from it
-        // would otherwise hang off the bottom edge on every open.
-        const r = btn.getBoundingClientRect();
+        // Placed against whatever opened it, then pulled back inside the window:
+        // the composer sits at the bottom of a narrow column, so a menu dropped
+        // from it would hang off the bottom edge on every open.
+        const el = anchor ||
+            document.querySelector('.codechip[data-line="' + (block ? block.start : -1) + '"]') ||
+            $('btn-more');
+        const r = el ? el.getBoundingClientRect() : { left: 40, top: window.innerHeight - 80 };
         const h = pop.offsetHeight || 320;
         const w = pop.offsetWidth || 232;
         pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
         pop.style.top = Math.max(8, r.top - h - 8) + 'px';
         $('lang-search').focus();
+    }
+
+    // The character range of one line of the field, by index.
+    function lineRangeAt(idx) {
+        const v = input.value;
+        let start = 0;
+        for (let i = 0; i < idx; i++) {
+            const nl = v.indexOf('\n', start);
+            if (nl === -1) return null;
+            start = nl + 1;
+        }
+        let end = v.indexOf('\n', start);
+        if (end === -1) end = v.length;
+        return { start, end };
+    }
+
+    // Rewrite an existing block's fence line. The caret is put back where it
+    // was, shifted by however much the tag grew or shrank — retyping the
+    // language should not also move you somewhere else in the message.
+    function setBlockLanguage(block, tag) {
+        const r = lineRangeAt(block.start);
+        if (!r) return;
+        const before = input.selectionStart;
+        const text = '```' + (tag || '');
+        const delta = text.length - (r.end - r.start);
+        const at = before > r.end ? before + delta : Math.min(before, r.start + text.length);
+        replaceRange(r.start, r.end, text, at, at);
+    }
+
+    function chooseLanguage(tag) {
+        const target = langTarget;
+        closeLangPop();
+        if (target) setBlockLanguage(target, tag);
+        else insertCodeBlock(tag);
     }
 
     function renderLangList(query) {
@@ -4384,7 +4765,7 @@
                 b.appendChild(tag);
             }
             b.addEventListener('mousedown', (e) => e.preventDefault());
-            b.addEventListener('click', () => { closeLangPop(); insertCodeBlock(l.tag); });
+            b.addEventListener('click', () => chooseLanguage(l.tag));
             host.appendChild(b);
         });
     }
@@ -4409,7 +4790,8 @@
         });
         document.addEventListener('mousedown', (e) => {
             if (!langPopOpen()) return;
-            if (e.target.closest('#lang-pop') || e.target.closest('#btn-code-block')) return;
+            const t = e.target;
+            if (t && t.closest && (t.closest('#lang-pop') || t.closest('.codechip'))) return;
             closeLangPop();
         });
     })();

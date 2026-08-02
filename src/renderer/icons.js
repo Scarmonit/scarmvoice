@@ -296,6 +296,16 @@
         heading: '<path d="M4.4 5.2v13.6M12.4 5.2v13.6M4.4 12h8"/><path d="M16.4 18.8V9.6l3.2-1.6v10.8"/>',
         spoiler: '<path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12Z"/>' +
             '<circle cx="12" cy="12" r="3"/><path d="M4 20L20 4"/>',
+        // The reference's highlighter pen. It writes inline code here, which is
+        // the one way Markdown puts text on a coloured plate.
+        highlight: '<path d="M8.6 15.4l-3 .8.8-3 8.2-8.2a1.7 1.7 0 0 1 2.4 0l1.8 1.8a1.7 1.7 0 0 1 0 2.4z"/>' +
+            '<path d="M13.4 6.6l4 4"/><path d="M4 20.4h16"/>',
+        // Two A's, large and small: the size control.
+        'text-size': '<path d="M2.6 17.4L6.6 6.6l4 10.8M3.9 14.2h5.4"/>' +
+            '<path d="M13.4 17.4l3.2-8 3.2 8M14.4 14.9h4.4"/>',
+        trash: '<path d="M4.4 6.6h15.2M9.6 6.6V4.4h4.8v2.2"/>' +
+            '<path d="M6.6 6.6l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6a1.6 1.6 0 0 0 1.6-1.5l.8-12.2"/>' +
+            '<path d="M10.2 10.2v6.4M13.8 10.2v6.4"/>',
         // Settings nav. `accessibility` is the standing figure in a ring the
         // reference uses; `system` is a desktop tower.
         accessibility: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="7.6" r="1.3" fill="currentColor" stroke="none"/>' +
