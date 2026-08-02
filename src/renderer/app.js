@@ -4360,6 +4360,173 @@
         input.focus();
     }
 
+    // ---- the code block's own keyboard -------------------------------------
+    //
+    // A fenced block is drawn as an editor, so it has to answer like one. Two
+    // things it was getting wrong, and they have the same root: the block is
+    // three or more lines of an ordinary textarea, and a textarea has no idea
+    // any of them are special.
+    //
+    // THE FENCE LINES ARE CHROME NOW. The opening ``` carries the title bar and
+    // the closing one is the panel's bottom edge — both have their ink turned
+    // off. So an Up from the first line of code put the caret INSIDE THE TITLE
+    // BAR, where there is nothing to see and anything typed corrupts the fence.
+    // That is what "the arrows escape the block" is: not the caret leaving, but
+    // the caret landing somewhere it cannot be seen. It steps over them now, so
+    // Up from the first line of code goes to the line above the block and Down
+    // from the last goes below it — which is leaving on purpose, and is the only
+    // way arrows leave.
+    //
+    // TAB BELONGS TO THE CODE. Everywhere else in the app it still moves focus,
+    // which is what it is for; inside a block it indents, and Shift+Tab
+    // outdents, because that is what it is for there.
+    const CODE_INDENT = '    ';
+
+    // Which lines are fences and which are inside a block. An UNCLOSED fence
+    // runs to the end, the same way fenceBlocks() reads it and the same way the
+    // renderer does.
+    function fenceLineInfo() {
+        const lines = input.value.split('\n');
+        const fence = new Set();
+        const inside = new Set();
+        const opening = new Set();
+        let open = false;
+        lines.forEach((line, i) => {
+            if (FENCE_RE.test(line)) {
+                fence.add(i);
+                if (!open) opening.add(i);
+                open = !open;
+                return;
+            }
+            if (open) inside.add(i);
+        });
+        return { lines, fence, inside, opening };
+    }
+
+    function lineIndexAt(pos) {
+        const v = input.value;
+        let n = 0;
+        for (let i = 0; i < pos && i < v.length; i++) if (v[i] === '\n') n++;
+        return n;
+    }
+
+    const caretLine = () => lineIndexAt(input.selectionStart);
+    const caretInCode = () => fenceLineInfo().inside.has(caretLine());
+
+    // Put the caret on `line`, keeping the column it had where the line is long
+    // enough to hold it.
+    function caretToLine(line, col) {
+        const r = lineRangeAt(line);
+        if (!r) return;
+        const at = Math.min(r.start + col, r.end);
+        input.setSelectionRange(at, at);
+    }
+
+    // The first line in `dir` that is not chrome.
+    function nextRealLine(from, dir, info) {
+        let i = from + dir;
+        while (i >= 0 && i < info.lines.length && info.fence.has(i)) i += dir;
+        return (i >= 0 && i < info.lines.length) ? i : -1;
+    }
+
+    // A caret that has ALREADY landed on a fence line, moved off it. This is the
+    // net: it catches a click on the title bar, a wrapped line the keydown path
+    // deliberately leaves alone, an undo, anything. `dir` is the way the caret
+    // was travelling; a click has no direction, and lands in the code.
+    let settling = false;
+    function settleCaret(dir) {
+        if (settling || input.selectionStart !== input.selectionEnd) return;
+        const info = fenceLineInfo();
+        if (!info.fence.size) return;
+        const idx = caretLine();
+        if (!info.fence.has(idx)) return;
+        const col = input.selectionStart - lineRangeAt(idx).start;
+        let way = dir || (info.opening.has(idx) ? 1 : -1);
+        let target = nextRealLine(idx, way, info);
+        if (target === -1) target = nextRealLine(idx, -way, info);
+        if (target === -1) return;              // a message that is only a fence
+        settling = true;
+        caretToLine(target, col);
+        settling = false;
+    }
+
+    // Indent or outdent, the way an editor does: a selection moves every line it
+    // touches, a bare caret inserts where it is.
+    function indentCode(out) {
+        const v = input.value;
+        const s = input.selectionStart, e = input.selectionEnd;
+        if (!out && s === e) {
+            replaceRange(s, e, CODE_INDENT, s + CODE_INDENT.length, s + CODE_INDENT.length);
+            return;
+        }
+        const { start, end, lines } = selectedLines();
+        const next = lines.map((line) => {
+            if (!out) return CODE_INDENT + line;
+            // Up to one indent's worth of leading space, or a single tab.
+            const m = /^(\t| {1,4})/.exec(line);
+            return m ? line.slice(m[0].length) : line;
+        });
+        const text = next.join('\n');
+        // Keep the same text selected — an indent that collapses the selection
+        // makes indenting twice impossible without reselecting.
+        const firstDelta = next[0].length - lines[0].length;
+        const total = text.length - (end - start);
+        const ns = s === e ? Math.max(start, s + firstDelta)
+            : Math.max(start, s + firstDelta);
+        const ne = s === e ? ns : Math.max(ns, e + total);
+        replaceRange(start, end, text, ns, ne);
+    }
+
+    input.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const info = fenceLineInfo();
+        if (!info.fence.size) return;
+        const idx = caretLine();
+
+        if (e.key === 'Tab' && (info.inside.has(idx) || info.fence.has(idx))) {
+            // Only inside a block. Everywhere else Tab is how somebody who does
+            // not use a mouse gets to the send button.
+            e.preventDefault();
+            indentCode(e.shiftKey);
+            return;
+        }
+
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+        const dir = e.key === 'ArrowUp' ? -1 : 1;
+        const neighbour = idx + dir;
+        if (neighbour < 0 || neighbour >= info.lines.length) return;
+        if (!info.fence.has(neighbour)) return;         // nothing in the way
+
+        // A WRAPPED line is left to the browser: inside one, Up and Down move
+        // between the rows of that line rather than between lines, and there is
+        // no way to know from here which row the caret is on. The settle pass on
+        // keyup catches whatever comes of it.
+        // Stated as "only when we can SEE that it wrapped", not as "only when we
+        // can see that it did not": where there is nothing to measure — no
+        // layer, no layout — the common case is one row, and standing down
+        // there would mean standing down always.
+        const row = $('composer-mirror').querySelectorAll('.cm-line')[idx];
+        const lh = row ? parseFloat(getComputedStyle(row).lineHeight) || 0 : 0;
+        if (lh > 0 && row.offsetHeight > lh * 1.6) return;
+
+        const target = nextRealLine(idx, dir, info);
+        if (target === -1) return;                      // let it run off the end
+        e.preventDefault();
+        caretToLine(target, input.selectionStart - lineRangeAt(idx).start);
+    });
+
+    // The net. `keyup` rather than the keydown above, because this is for the
+    // moves that were deliberately not intercepted.
+    input.addEventListener('keyup', (e) => {
+        if (e.key === 'ArrowUp' || e.key === 'PageUp') settleCaret(-1);
+        else if (e.key === 'ArrowDown' || e.key === 'PageDown') settleCaret(1);
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
+                 e.key === 'Home' || e.key === 'End') settleCaret(0);
+    });
+    // A click on the title bar or the bottom band belongs to the code, not to
+    // the fence it landed on.
+    input.addEventListener('click', () => settleCaret(0));
+
     // ---- the formatting drawn under the caret ------------------------------
     //
     // #composer-mirror holds EXACTLY the characters in the textarea, styled, and

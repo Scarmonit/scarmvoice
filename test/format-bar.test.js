@@ -747,6 +747,159 @@ describe('a code block while it is being written', () => {
     });
 });
 
+// ---------------------------------------------------------------------------
+// A block is drawn as an editor, so it has to answer like one.
+
+describe('the keyboard inside a code block', () => {
+    // before / ```js / code one / code two / ``` / after
+    const DOC = 'before\n```js\ncode one\ncode two\n```\nafter';
+    const L = { before: 0, open: 7, one: 13, two: 22, close: 31, after: 35 };
+
+    function key(k, opts = {}) {
+        const ev = new window.KeyboardEvent('keydown', Object.assign({
+            key: k, bubbles: true, cancelable: true
+        }, opts));
+        input().dispatchEvent(ev);
+        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: k, bubbles: true }));
+        return ev;
+    }
+    async function inBlock(text) {
+        const el = await withText(text === undefined ? DOC : text);
+        await settle();
+        return el;
+    }
+
+    // THE FENCE LINES ARE CHROME. The opening ``` carries the title bar and the
+    // closing one is the panel's bottom edge, both with their ink off — so an
+    // Up from the first line of code used to put the caret INSIDE THE TITLE BAR,
+    // where there is nothing to see and anything typed corrupts the fence. That
+    // is what "the arrows escape the block" was.
+    it('steps over the title bar going up, not into it', async () => {
+        const el = await inBlock();
+        select(L.one);
+        const ev = key('ArrowUp');
+        expect(ev.defaultPrevented).toBe(true);
+        expect(el.selectionStart).toBe(L.before);
+    });
+
+    it('steps over the bottom edge going down', async () => {
+        const el = await inBlock();
+        select(L.two);
+        const ev = key('ArrowDown');
+        expect(ev.defaultPrevented).toBe(true);
+        expect(el.selectionStart).toBe(L.after);
+    });
+
+    // Between lines of code it does nothing at all: the browser already moves
+    // the caret correctly, and column memory is its business.
+    it('leaves an ordinary move between code lines alone', async () => {
+        await inBlock();
+        select(L.one);
+        expect(key('ArrowDown').defaultPrevented).toBe(false);
+    });
+
+    it('keeps the column it had', async () => {
+        const el = await inBlock();
+        select(L.one + 4);                       // "code| one"
+        key('ArrowUp');
+        expect(el.selectionStart).toBe(L.before + 4);
+    });
+
+    // Off the end of the message there is nowhere to step to, so it is left to
+    // do whatever it would have done.
+    it('lets the caret run off the end when there is nothing past the block', async () => {
+        await inBlock('```js\ncode\n```');
+        select(6);                               // the one line of code
+        expect(key('ArrowUp').defaultPrevented).toBe(false);
+    });
+
+    // The net, for the moves that are deliberately not intercepted — a click on
+    // the title bar, a wrapped line, an undo.
+    it('moves a caret that has landed on the title bar into the code', async () => {
+        const el = await inBlock();
+        select(L.open + 2);
+        input().dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        expect(el.selectionStart).toBe(L.one + 2);
+    });
+
+    it('moves a caret that has landed on the bottom edge back up into it', async () => {
+        const el = await inBlock();
+        select(L.close + 1);
+        input().dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        expect(el.selectionStart).toBe(L.two + 1);
+    });
+
+    it('sends it the way it was travelling when it was an arrow', async () => {
+        const el = await inBlock();
+        select(L.close);
+        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }));
+        expect(el.selectionStart).toBe(L.after);
+    });
+});
+
+describe('Tab inside a code block', () => {
+    const DOC = '```js\none\ntwo\n```';
+
+    function tab(shift) {
+        const ev = new window.KeyboardEvent('keydown', {
+            key: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true
+        });
+        input().dispatchEvent(ev);
+        return ev;
+    }
+
+    it('indents instead of moving the focus away', async () => {
+        const el = await withText(DOC);
+        await settle();
+        select(6);                               // start of "one"
+        const ev = tab();
+        expect(ev.defaultPrevented).toBe(true);
+        expect(el.value).toBe('```js\n    one\ntwo\n```');
+    });
+
+    it('indents every line a selection touches', async () => {
+        const el = await withText(DOC);
+        await settle();
+        select(6, 13);                           // "one\ntwo"
+        tab();
+        expect(el.value).toBe('```js\n    one\n    two\n```');
+    });
+
+    it('outdents on Shift+Tab, and stops at the margin', async () => {
+        const el = await withText('```js\n        deep\n```');
+        await settle();
+        select(8);
+        tab(true);
+        expect(el.value).toBe('```js\n    deep\n```');
+        select(8);
+        tab(true);
+        expect(el.value).toBe('```js\ndeep\n```');
+        select(6);
+        tab(true);
+        expect(el.value).toBe('```js\ndeep\n```');
+    });
+
+    it('keeps the selection over the same text, so it can be indented twice', async () => {
+        const el = await withText(DOC);
+        await settle();
+        select(6, 13);
+        tab();
+        tab();
+        expect(el.value).toBe('```js\n        one\n        two\n```');
+    });
+
+    // Everywhere else Tab is how somebody who does not use a mouse reaches the
+    // send button, and it stays that way.
+    it('still moves the focus outside a code block', async () => {
+        const el = await withText('just a sentence');
+        await settle();
+        select(4);
+        const ev = tab();
+        expect(ev.defaultPrevented).toBe(false);
+        expect(el.value).toBe('just a sentence');
+    });
+});
+
 describe('what the message ends up being', () => {
     // The point of the whole exercise: the toolbar changes the TEXT, and the
     // text is what is sent. Nothing here stores HTML.
