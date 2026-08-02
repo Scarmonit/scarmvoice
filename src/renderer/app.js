@@ -3763,30 +3763,132 @@
 
     // ---------- composer --------------------------------------------------
 
-    const input = $('composer-input');
-
-    // The composer grows to fit what is in it, up to 180px, and then scrolls.
+    // THE MESSAGE BOX IS A CODEMIRROR DOCUMENT, and that document is the
+    // Markdown. Not a rich-text model over the top of it, and not a textarea
+    // with a picture painted behind it — the characters the editor holds are the
+    // characters that get sent, and `cm.getValue()` is the message.
+    //
+    // Which is the whole point of the change. A caret that keeps up with typing,
+    // arrows that stay inside a code block, Tab that indents rather than walking
+    // off to the next button, selection, copy and paste: all of those are the
+    // editor's now, instead of this file re-implementing them one bug at a time.
+    //
+    // WHAT DID NOT CHANGE is everything built on top of the old textarea —
+    // @mentions, message recall, drafts, the formatting toolbar, the send path.
+    // They all speak to `input`, so `input` is still a textarea-shaped thing:
+    // an adapter with .value, .selectionStart, .setSelectionRange, .focus and
+    // the events they listen for, forwarding to the editor underneath. That is
+    // what kept this from being a rewrite of the whole composer.
     const COMPOSER_MAX_PX = 180;
-    // Past this, the answer is always "the maximum" — and asking anyway is not
-    // free. Reading scrollHeight after height:auto forces Chromium to lay out the
-    // ENTIRE textarea, and this runs on every keystroke; with the character cap
-    // gone the field can hold a quarter of a megabyte, where that measurement is
-    // milliseconds of blocked typing per key. 6000 characters cannot fit in 180px
-    // at any font size the chat offers, so the measurement is skippable, not
-    // merely cached.
-    const AUTOSIZE_MEASURE_MAX = 6000;
+
+    const cm = window.CodeMirror($('composer-field'), {
+        value: '',
+        mode: { name: 'markdown', fencedCodeBlockHighlighting: true, highlightFormatting: true },
+        lineWrapping: true,
+        lineNumbers: false,
+        // The line numbers belong to code blocks, not to the message — see
+        // codeLineNumber(). The gutter is only mounted while there is a block.
+        gutters: [],
+        indentUnit: 4,
+        indentWithTabs: false,
+        smartIndent: true,
+        electricChars: false,
+        // Enter SENDS. Everything about that decision lives in the keymap below
+        // rather than in a listener that has to beat CodeMirror to the event.
+        extraKeys: {},
+        viewportMargin: Infinity,
+        placeholder: 'Message #general',
+        // The app draws its own scrollbars nowhere else either.
+        scrollbarStyle: 'native',
+        spellcheck: true,
+        autocorrect: true,
+        autocapitalize: false,
+        inputStyle: 'textarea'
+    });
+    // CodeMirror's own input field is a real textarea, which is what lets the
+    // main process still offer its spell-check menu on a right-click and lets
+    // the key handlers below stay ordinary DOM listeners.
+    const cmInput = cm.getInputField();
+    const cmWrap = cm.getWrapperElement();
+
+    // Grows with the message up to a ceiling, then scrolls — the behaviour the
+    // textarea's autosize() used to hand-roll on every keystroke.
+    cmWrap.style.maxHeight = COMPOSER_MAX_PX + 'px';
+
+    // ---- the textarea-shaped adapter --------------------------------------
+    //
+    // Everything this file already had goes through here unchanged. The two
+    // that need explaining:
+    //   • `value` writes are DOCUMENT REPLACEMENTS, not typing, so they do not
+    //     fire the input event — the same as assigning to textarea.value. The
+    //     callers that need the app to notice call autosize()/an input event
+    //     themselves, exactly as they did before.
+    //   • `style.height` is accepted and ignored. CodeMirror sizes itself, and
+    //     the old callers write to it on paths that are awkward to unpick.
+    let suppressInput = false;
+    const inputListeners = { input: [], keydown: [], keyup: [], click: [], scroll: [], blur: [], focus: [] };
+
+    const input = {
+        get value() { return cm.getValue(); },
+        set value(v) {
+            suppressInput = true;
+            const at = cm.getCursor();
+            cm.setValue(String(v == null ? '' : v));
+            try { cm.setCursor(at); } catch (e) { /* the document got shorter */ }
+            suppressInput = false;
+        },
+        get selectionStart() { return cm.indexFromPos(cm.getCursor('from')); },
+        get selectionEnd() { return cm.indexFromPos(cm.getCursor('to')); },
+        setSelectionRange(a, b) {
+            cm.setSelection(cm.posFromIndex(a), cm.posFromIndex(b === undefined ? a : b));
+        },
+        select() { cm.execCommand('selectAll'); },
+        focus() { cm.focus(); },
+        blur() { cmInput.blur(); },
+        get placeholder() { return cm.getOption('placeholder'); },
+        set placeholder(v) { cm.setOption('placeholder', v); },
+        get spellcheck() { return cmInput.spellcheck; },
+        set spellcheck(v) { cmInput.spellcheck = !!v; },
+        setAttribute(k, v) { cmInput.setAttribute(k, v); },
+        getAttribute(k) { return cmInput.getAttribute(k); },
+        get scrollTop() { return cm.getScrollInfo().top; },
+        set scrollTop(v) { cm.scrollTo(null, v); },
+        get scrollHeight() { return cm.getScrollInfo().height; },
+        get style() { return cmWrap.style; },
+        getBoundingClientRect() { return cmWrap.getBoundingClientRect(); },
+        contains(node) { return cmWrap.contains(node); },
+        addEventListener(type, fn) {
+            if (inputListeners[type]) inputListeners[type].push(fn);
+            else cmWrap.addEventListener(type, fn);
+        },
+        dispatchEvent(ev) { fireInput(ev && ev.type ? ev.type : 'input'); return true; },
+        // For the handful of comparisons that ask "did this event come from the
+        // message box?" — the answer is now "from anywhere inside the editor".
+        get element() { return cmWrap; }
+    };
+
+    function fireInput(type) {
+        const ev = { type, target: input, preventDefault() {}, stopPropagation() {} };
+        (inputListeners[type] || []).forEach((fn) => fn(ev));
+    }
+
+    cm.on('change', () => { if (!suppressInput) fireInput('input'); });
+    cm.on('scroll', () => fireInput('scroll'));
+    cm.on('blur', () => fireInput('blur'));
+    cm.on('focus', () => fireInput('focus'));
+    // Key events land on CodeMirror's own textarea, so these stay ordinary DOM
+    // listeners and everything that inspects e.key, e.ctrlKey or preventDefault
+    // keeps working.
+    cmInput.addEventListener('keydown', (e) => (inputListeners.keydown || []).forEach((fn) => fn(e)));
+    cmInput.addEventListener('keyup', (e) => (inputListeners.keyup || []).forEach((fn) => fn(e)));
+    cmWrap.addEventListener('click', (e) => (inputListeners.click || []).forEach((fn) => fn(e)));
+
+    // Kept as a name because a great many callers say it. The editor sizes
+    // itself; what is left is telling it to re-measure after a programmatic
+    // write, and repainting the code blocks' chrome.
     function autosize() {
-        // The live-formatting layer is repainted from here rather than from the
-        // input event, because it has to follow every write to the field — the
-        // toolbar, a recalled message, a restored draft, the clear after a send,
-        // the teardown — and this is the one call all of them already make.
-        paintMirror();
-        if (input.value.length > AUTOSIZE_MEASURE_MAX) {
-            input.style.height = COMPOSER_MAX_PX + 'px';
-            return;
-        }
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, COMPOSER_MAX_PX) + 'px';
+        cm.refresh();
+        paintCodeBlocks();
     }
 
     input.addEventListener('input', () => {
