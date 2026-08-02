@@ -6436,14 +6436,41 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    the field and the layer switch to it TOGETHER, so they still typeset the
    same string identically. It applies while the message holds a block at all,
    because a message that holds one is mostly code. */
+:root { --cm-gutter: 34px; --cm-inset: 2px; }
 .composer-field.cm-code #composer-input,
 .composer-field.cm-code #composer-mirror {
   font-family: var(--mono);
-  padding-left: 38px;
+  padding-left: var(--cm-gutter);
 }
-.cm-fl { background: var(--code-bg); }
-.cm-fl-open { border-radius: 6px 6px 0 0; }
-.cm-fl-close { border-radius: 0 0 6px 6px; }
+
+/* THE PANEL IS DRAWN, NOT LAID OUT.
+
+   A code block wants what a code block always wants: a border, rounded corners,
+   an inset from the edges and a gutter down the side. Every one of those is a
+   box the text would have to move for — and nothing in this layer may move the
+   text by so much as a pixel, or the caret stops pointing at it.
+
+   So the panel is an absolutely-positioned slice behind each of the block's
+   lines. It can reach left across the gutter the padding made, stop short of
+   the right edge, round its first and last corners and carry a border, all
+   without existing as far as the text is concerned. */
+.cm-fl::before {
+  content: '';
+  position: absolute; z-index: -1;
+  top: 0; bottom: 0;
+  left: calc(var(--cm-inset) - var(--cm-gutter));
+  right: var(--cm-inset);
+  background: var(--code-bg);
+  box-shadow: inset 1px 0 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
+}
+.cm-fl-open::before {
+  border-radius: 8px 8px 0 0;
+  box-shadow: inset 1px 1px 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
+}
+.cm-fl-close::before {
+  border-radius: 0 0 8px 8px;
+  box-shadow: inset 1px -1px 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
+}
 /* The fences themselves are the panel's own edges: the opening line carries the
    title bar and the closing one is its bottom rule, so neither shows its
    backticks. The text is still there, still selectable, still what gets sent —
@@ -6451,11 +6478,12 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .cm-fl-open .cm-mark,
 .cm-fl-close .cm-mark { opacity: 0; }
 .cm-fl-body { color: var(--code-text); }
-/* Out in the gutter the padding made. `position: absolute` is what keeps it
-   from taking any inline space at all. */
+/* Out in the gutter the padding made, inside the panel that reaches across it.
+   `position: absolute` is what keeps it from taking any inline space at all. */
 .cm-num::before { content: attr(data-n); }
 .cm-num {
-  position: absolute; right: 100%; margin-right: 12px; top: 0;
+  position: absolute; right: 100%; margin-right: 14px; top: 0;
+  min-width: 14px; text-align: right;
   color: var(--placeholder); font-style: normal;
   font-variant-numeric: tabular-nums;
   user-select: none;
@@ -6474,24 +6502,34 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
   z-index: 2;
 }
 #composer-chrome:empty { display: none; }
+/* The block's TITLE BAR — not a pill floating in the corner of it. It covers
+   the opening ``` line exactly, which is why that line's own ink is turned off:
+   the bar IS the fence, as far as anybody looking at it is concerned. */
 .codechip {
-  position: absolute; left: 0; right: 0;
-  display: flex; align-items: center; gap: 4px;
-  padding: 0 6px 0 0;
+  position: absolute;
+  left: var(--cm-inset); right: var(--cm-inset);
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 4px 0 6px;
+  border-radius: 8px 8px 0 0;
+  background: var(--code-head, rgba(127, 127, 127, .08));
+  box-shadow: inset 1px 1px 0 var(--line-2, var(--line)),
+              inset -1px 0 0 var(--line-2, var(--line)),
+              0 1px 0 var(--line-2, var(--line));
   pointer-events: none;
 }
 .codechip-lang, .codechip-more {
   pointer-events: auto;
   display: inline-flex; align-items: center; gap: 5px;
-  height: 20px; padding: 0 7px;
-  border: 0; border-radius: 5px; cursor: pointer;
-  background: var(--input); color: var(--dim);
+  height: 18px; padding: 0 6px;
+  border: 0; border-radius: 4px; cursor: pointer;
+  background: none; color: var(--dim);
   font: inherit; font-family: var(--font); font-size: 11.5px; font-weight: 700;
+  letter-spacing: .01em;
 }
 .codechip-lang:hover, .codechip-more:hover { background: var(--hover); color: var(--text); }
-.codechip-lang .ico { width: 13px; height: 13px; }
-.codechip-lang .ico:last-child { width: 11px; height: 11px; margin-left: -2px; }
-.codechip-more { margin-left: auto; padding: 0 5px; }
+.codechip-lang .ico { width: 13px; height: 13px; flex: 0 0 13px; }
+.codechip-lang .ico:last-child { width: 11px; height: 11px; flex: 0 0 11px; margin-left: -1px; }
+.codechip-more { margin-left: auto; padding: 0 4px; }
 .codechip-more .ico { width: 14px; height: 14px; }
 
 /* ---------- the toolbar's little menus ---------------------------------- */

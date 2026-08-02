@@ -485,6 +485,36 @@ describe('the formatting drawn under the caret', () => {
     // The fences are the panel's own edges — the opening line carries the title
     // bar and the closing one is its bottom rule — so neither shows its
     // backticks. The text is still there; only its ink is gone.
+    // THE PANEL IS DRAWN, NOT LAID OUT. A border, rounded corners, an inset and
+    // a gutter are all boxes the text would have to move for — and nothing here
+    // may move the text at all. So it is an absolutely-positioned slice behind
+    // each of the block's lines, which exists as far as the eye is concerned and
+    // not at all as far as the caret is.
+    it('draws the block’s panel behind the text rather than around it', () => {
+        const flat = CSS.replace(/\s+/g, ' ');
+        const rule = /\.cm-fl::before \{([^}]*)\}/.exec(flat);
+        expect(rule, 'the panel must be a ::before, not a box on .cm-fl').toBeTruthy();
+        expect(rule[1]).toContain('position: absolute');
+        // Reaching left across the gutter the padding made, so the numbers are
+        // inside the panel and not floating beside it.
+        expect(rule[1]).toContain('calc(var(--cm-inset) - var(--cm-gutter))');
+        expect(flat).toMatch(/\.cm-fl-open::before \{[^}]*border-radius: 8px 8px 0 0/);
+        expect(flat).toMatch(/\.cm-fl-close::before \{[^}]*border-radius: 0 0 8px 8px/);
+        // …and .cm-fl itself keeps no background of its own, or the slice would
+        // be drawn on top of a slab that ends at the text.
+        const plain = /\.cm-fl \{([^}]*)\}/.exec(flat);
+        expect(plain === null || !/background/.test(plain[1])).toBe(true);
+    });
+
+    it('makes the title bar span the panel, not sit in a corner of it', () => {
+        const flat = CSS.replace(/\s+/g, ' ');
+        const rule = /\.codechip \{([^}]*)\}/.exec(flat);
+        expect(rule).toBeTruthy();
+        expect(rule[1]).toContain('left: var(--cm-inset)');
+        expect(rule[1]).toContain('right: var(--cm-inset)');
+        expect(rule[1]).toContain('border-radius: 8px 8px 0 0');
+    });
+
     it('turns the backticks into the block’s edges', () => {
         const flat = CSS.replace(/\s+/g, ' ');
         expect(flat).toContain('.cm-fl-open .cm-mark, .cm-fl-close .cm-mark { opacity: 0; }');
@@ -657,6 +687,34 @@ describe('a code block while it is being written', () => {
         menuItem('Remove code block').click();
         await settle();
         expect(el.value).toBe('const a = 1;');
+    });
+
+    // CODE IS NOT PROSE. A textarea spell-checks all of itself or none of
+    // itself, so while the message holds a block the whole field stops — red
+    // squiggles under every identifier are worse than none under the sentence
+    // above them.
+    it('turns spellcheck off while there is code in the box', async () => {
+        await boot({});
+        await settle();
+        expect(input().spellcheck).toBe(true);
+
+        type('```js\nconst a = 1;\n```');
+        expect(input().spellcheck).toBe(false);
+        expect(input().getAttribute('spellcheck')).toBe('false');
+
+        type('just a sentence');
+        expect(input().spellcheck).toBe(true);
+        expect(input().getAttribute('spellcheck')).toBe('true');
+    });
+
+    // The bar covers the opening line EXACTLY — it is that line, as far as
+    // anybody looking at it is concerned, which is why the line's own ink is off.
+    it('sizes the title bar to the line it stands in for', async () => {
+        await withText('```js\nconst a = 1;\n```');
+        await settle();
+        const open = mirror().querySelector('.cm-fl-open');
+        expect(chip().style.top).toBe(open.offsetTop + 'px');
+        expect(chip().style.height).toBe(open.offsetHeight + 'px');
     });
 
     it('is one block per fence, however many there are', async () => {

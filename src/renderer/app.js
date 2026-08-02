@@ -4608,6 +4608,18 @@
         // block. BOTH boxes, in one rule, which is the only reason a font change
         // is allowed here at all.
         field.classList.toggle('cm-code', blocks.length > 0);
+        // CODE IS NOT PROSE. A textarea spell-checks all of itself or none of
+        // itself, so while the message holds a block the whole field stops —
+        // the same trade the mono face makes, and for the same reason. Red
+        // squiggles under every identifier are worse than no squiggles under
+        // the sentence above them.
+        const wantSpell = blocks.length === 0;
+        if (input.spellcheck !== wantSpell) {
+            input.spellcheck = wantSpell;
+            // Chromium only re-runs the checker when the attribute changes, and
+            // only clears the marks it has already drawn on a re-render.
+            input.setAttribute('spellcheck', wantSpell ? 'true' : 'false');
+        }
         chrome.textContent = '';
         if (!blocks.length) return;
 
@@ -4617,7 +4629,10 @@
             if (!head) continue;
             const chip = document.createElement('div');
             chip.className = 'codechip';
+            // The opening line's EXACT box, because the bar is that line as far
+            // as anybody looking at it is concerned.
             chip.style.top = head.offsetTop + 'px';
+            chip.style.height = head.offsetHeight + 'px';
             chip.dataset.line = String(b.start);
 
             const name = document.createElement('button');
