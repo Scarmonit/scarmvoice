@@ -153,7 +153,11 @@ describe('the direct-messages place', () => {
     // the member list's resize strip) this panel was still on 40, and the symptom
     // was the last text channel's name and its channel icons sitting over a DM.
     it('puts the conversation panel above the channel header', () => {
-        const dm = Number(/#dm-panel \{[\s\S]*?z-index: (\d+)/.exec(css)[1]);
+        // ANCHORED. Edit Layout adds `#app[data-panels="swapped"] #dm-panel`,
+        // which ends in the same selector text — unanchored, this matched that
+        // rule instead and then scanned forward to the next z-index in the file,
+        // which belongs to something else entirely.
+        const dm = Number(/^#dm-panel \{[\s\S]*?z-index: (\d+)/m.exec(css)[1]);
         const head = Number(/#chan-head \{[^}]*z-index: (\d+)/.exec(css)[1]);
         expect(dm).toBeGreaterThan(head);
     });
@@ -485,7 +489,7 @@ describe('the user panel', () => {
         // The card is the DOCK: it holds the voice section and the user panel
         // on one left edge, with one border around both.
         // Two rules carry this selector; the grid-area one comes first.
-        const dock = (css.match(/#user-dock \{[^}]*\}/g) || []).find((r) => r.includes('margin'));
+        const dock = (css.match(/^#user-dock \{[^}]*\}/gm) || []).find((r) => r.includes('margin'));
         expect(dock).toMatch(/margin:\s*0 8px 8px/);
         expect(dock).toMatch(/border-radius:\s*8px/);
         expect(dock).toMatch(/background:\s*var\(--panel\)/);
@@ -703,7 +707,7 @@ describe('the user dock', () => {
     });
 
     it('draws one border around both, and a hairline between them', () => {
-        const dock = (css.match(/#user-dock \{[^}]*\}/g) || []).find((r) => r.includes('margin'));
+        const dock = (css.match(/^#user-dock \{[^}]*\}/gm) || []).find((r) => r.includes('margin'));
         // A fainter edge than a general hairline — measured off the live panel
         // at four percent, where --line is six.
         expect(dock).toMatch(/border:\s*1px solid rgba\(153, 153, 153, \.04\)/);

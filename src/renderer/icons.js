@@ -269,6 +269,33 @@
         clipboard: '<rect x="5" y="5" width="14" height="16" rx="1.8"/>' +
             '<path d="M9 5V3.8a1.2 1.2 0 0 1 1.2-1.2h3.6A1.2 1.2 0 0 1 15 3.8V5z"/>',
         list: '<path d="M4 6.4h16M4 12h16M4 17.6h10"/>',
+
+        // ---- the composer's formatting bar ------------------------------
+        // Every one of these is a MARK, not a letter drawn as a path: the
+        // toolbar sets its own type in the app's font for B/I/U/S, the way the
+        // reference does, so these are only the ones that have no letter.
+        //
+        // The Format toggle itself: an "A" with a pen across its foot.
+        format: '<path d="M3.2 18.4L8 6.2l4.8 12.2M5.1 14.4h5.8"/>' +
+            '<path d="M14.4 18.6l1.1-3 5.1-5.1a1.3 1.3 0 0 1 1.9 1.9l-5.1 5.1z"/>',
+        'list-bullet': '<path d="M9 6.4h11M9 12h11M9 17.6h11"/>' +
+            '<circle cx="4.6" cy="6.4" r="1.5" fill="currentColor" stroke="none"/>' +
+            '<circle cx="4.6" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
+            '<circle cx="4.6" cy="17.6" r="1.5" fill="currentColor" stroke="none"/>',
+        'list-number': '<path d="M9.6 6.4h10.4M9.6 12h10.4M9.6 17.6h10.4"/>' +
+            '<path d="M3.4 4.6l1.4-.7v4M3.2 10.4a1.4 1.4 0 1 1 2.4 1L3.2 14h2.6M3.4 15.9h2.2l-1.3 1.5' +
+            'a1.3 1.3 0 1 1-.9 2.2"/>',
+        quote: '<path d="M4.4 16.6c0-4.6 1.4-7.4 4.6-8.8l.8 1.7c-1.9 1-2.8 2.3-2.9 4h2.5v5.4H4.4z"/>' +
+            '<path d="M13.6 16.6c0-4.6 1.4-7.4 4.6-8.8l.8 1.7c-1.9 1-2.8 2.3-2.9 4h2.5v5.4h-5z"/>',
+        // A fenced block, not the inline span: brackets around stacked rules.
+        'code-block': '<rect x="2.8" y="4.4" width="18.4" height="15.2" rx="2"/>' +
+            '<path d="M8.6 9.6L6.4 12l2.2 2.4M15.4 9.6L17.6 12l-2.2 2.4M12.9 9l-1.8 6"/>',
+        code: '<path d="M8.4 7.6L3.6 12l4.8 4.4M15.6 7.6L20.4 12l-4.8 4.4M13.6 5.4l-3.2 13.2"/>',
+        // The heading control, which is this app's honest answer to a font-size
+        // menu: Markdown has three heading levels and no type scale.
+        heading: '<path d="M4.4 5.2v13.6M12.4 5.2v13.6M4.4 12h8"/><path d="M16.4 18.8V9.6l3.2-1.6v10.8"/>',
+        spoiler: '<path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12Z"/>' +
+            '<circle cx="12" cy="12" r="3"/><path d="M4 20L20 4"/>',
         // Settings nav. `accessibility` is the standing figure in a ring the
         // reference uses; `system` is a desktop tower.
         accessibility: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="7.6" r="1.3" fill="currentColor" stroke="none"/>' +

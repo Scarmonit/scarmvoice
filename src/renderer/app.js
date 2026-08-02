@@ -745,11 +745,130 @@
                 if (lang) code.className = 'language-' + lang;
                 code.textContent = content;
                 pre.appendChild(code);
-                container.appendChild(pre);
+                container.appendChild(buildCodeBlock(pre, code, lang, content));
             } else if (part) {
                 renderTextBlock(part, container, ctx);
             }
         });
+    }
+
+    // The frame around a fenced block: what language it is in, a way to take a
+    // copy of it, and a numbered gutter.
+    //
+    // The `pre` is handed in already built and is NOT touched — it is still
+    // `pre.msg-code > code.language-x`, which is what highlightCodeBlocks()
+    // looks for and what every message written before this existed already is.
+    // Everything here is around it.
+    //
+    // The gutter is a sibling column rather than a marker on each line, because
+    // the highlighter replaces the whole of `code`: anything put inside it would
+    // be thrown away the first time the block was highlighted, and again on every
+    // re-render. It works because `.msg-code code` is `white-space: pre` — one
+    // source line is one drawn line, so counting lines is counting rows.
+    function buildCodeBlock(pre, code, lang, content) {
+        const box = document.createElement('div');
+        box.className = 'msg-codeblock';
+        if (lang) box.dataset.lang = lang;
+
+        const head = document.createElement('div');
+        head.className = 'cb-head';
+        head.appendChild(window.ScarmIcons.build('code-block'));
+        const name = document.createElement('span');
+        name.className = 'cb-lang';
+        name.textContent = languageLabel(lang);
+        head.appendChild(name);
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'cb-copy';
+        copy.textContent = 'Copy';
+        copy.addEventListener('click', async () => {
+            // The block's OWN text, captured here rather than read back off the
+            // element: by the time this runs the highlighter has rewritten it
+            // into a tree of spans, and reading textContent then would work only
+            // by accident of how those spans happen to nest.
+            try { await navigator.clipboard.writeText(content); } catch (e) { /* nothing to say */ }
+            copy.textContent = 'Copied';
+            setTimeout(() => { copy.textContent = 'Copy'; }, 1400);
+        });
+        head.appendChild(copy);
+
+        const body = document.createElement('div');
+        body.className = 'cb-body';
+        const gutter = document.createElement('div');
+        gutter.className = 'cb-gutter';
+        const lines = content === '' ? 1 : content.split('\n').length;
+        // Capped for the same reason highlighting is: a hundred-thousand-line
+        // paste is a real message, and a hundred thousand <div>s is not a real
+        // gutter. Past the cap the block simply has no numbers, which is what
+        // every block looked like before this.
+        if (lines <= CODE_GUTTER_MAX) {
+            gutter.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+            body.appendChild(gutter);
+        }
+        body.appendChild(pre);
+
+        box.appendChild(head);
+        box.appendChild(body);
+        return box;
+    }
+
+    const CODE_GUTTER_MAX = 2000;
+
+    // The languages the vendored highlighter actually knows, and nothing else.
+    // A menu offering a language the bundle cannot highlight is a menu that
+    // silently produces plain monospace — so this list is generated from what
+    // scripts/vendor-hljs.js registers, and test/format-bar.test.js checks the
+    // two still agree.
+    //
+    // `alias` is only for finding it in the search box; the tag written into the
+    // fence is always the canonical one, because that is what hljs matches on.
+    const CODE_LANGS = [
+        { tag: '', name: 'Plain text', alias: ['none', 'text', 'txt'] },
+        { tag: 'javascript', name: 'JavaScript', alias: ['js', 'node', 'jsx'] },
+        { tag: 'typescript', name: 'TypeScript', alias: ['ts', 'tsx'] },
+        { tag: 'python', name: 'Python', alias: ['py'] },
+        { tag: 'java', name: 'Java', alias: [] },
+        { tag: 'csharp', name: 'C#', alias: ['cs', 'dotnet'] },
+        { tag: 'cpp', name: 'C++', alias: ['c++', 'cc', 'hpp'] },
+        { tag: 'c', name: 'C', alias: ['h'] },
+        { tag: 'go', name: 'Go', alias: ['golang'] },
+        { tag: 'rust', name: 'Rust', alias: ['rs'] },
+        { tag: 'ruby', name: 'Ruby', alias: ['rb'] },
+        { tag: 'php', name: 'PHP', alias: [] },
+        { tag: 'swift', name: 'Swift', alias: [] },
+        { tag: 'kotlin', name: 'Kotlin', alias: ['kt'] },
+        { tag: 'objectivec', name: 'Objective-C', alias: ['objc'] },
+        { tag: 'lua', name: 'Lua', alias: [] },
+        { tag: 'perl', name: 'Perl', alias: ['pl'] },
+        { tag: 'r', name: 'R', alias: [] },
+        { tag: 'vbnet', name: 'VB.NET', alias: ['vb'] },
+        { tag: 'sql', name: 'SQL', alias: ['mysql', 'postgres'] },
+        { tag: 'graphql', name: 'GraphQL', alias: ['gql'] },
+        { tag: 'json', name: 'JSON', alias: [] },
+        { tag: 'yaml', name: 'YAML', alias: ['yml'] },
+        { tag: 'ini', name: 'INI / TOML', alias: ['toml', 'conf'] },
+        { tag: 'xml', name: 'XML / HTML', alias: ['html', 'svg', 'xhtml'] },
+        { tag: 'css', name: 'CSS', alias: [] },
+        { tag: 'scss', name: 'SCSS', alias: ['sass'] },
+        { tag: 'less', name: 'Less', alias: [] },
+        { tag: 'markdown', name: 'Markdown', alias: ['md'] },
+        { tag: 'bash', name: 'Bash', alias: ['sh', 'zsh'] },
+        { tag: 'shell', name: 'Shell session', alias: ['console'] },
+        { tag: 'makefile', name: 'Makefile', alias: ['make', 'mk'] },
+        { tag: 'diff', name: 'Diff', alias: ['patch'] },
+        { tag: 'wasm', name: 'WebAssembly', alias: ['wat'] }
+    ];
+
+    // What the block calls itself. A fence written by hand can carry anything —
+    // `js`, `yml`, a language nobody vendored — so an unknown tag is shown as
+    // itself rather than swallowed: it is what the author wrote, and the block
+    // renders as plain monospace, which is the honest pairing.
+    const LANG_ALIAS = { js: 'javascript', ts: 'typescript', py: 'python', rb: 'ruby', rs: 'rust', kt: 'kotlin', cs: 'csharp', 'c++': 'cpp', yml: 'yaml', md: 'markdown', sh: 'bash', html: 'xml', golang: 'go', objc: 'objectivec' };
+    function languageLabel(tag) {
+        if (!tag) return 'Code';
+        const canon = LANG_ALIAS[tag] || tag;
+        const hit = CODE_LANGS.find((l) => l.tag === canon);
+        return hit ? hit.name : tag;
     }
 
     // (lang + text) -> the highlighted markup and class hljs produced for it.
@@ -1941,6 +2060,7 @@
             applyAccessibility();
             applyZoom();
             applyChrome();
+            applyComposerPrefs();
             initPaneResizing();
             setChannelTitle(channel);
             warnIfElevated();
@@ -3656,6 +3776,11 @@
     // merely cached.
     const AUTOSIZE_MEASURE_MAX = 6000;
     function autosize() {
+        // The live-formatting layer is repainted from here rather than from the
+        // input event, because it has to follow every write to the field — the
+        // toolbar, a recalled message, a restored draft, the clear after a send,
+        // the teardown — and this is the one call all of them already make.
+        paintMirror();
         if (input.value.length > AUTOSIZE_MEASURE_MAX) {
             input.style.height = COMPOSER_MAX_PX + 'px';
             return;
@@ -3688,12 +3813,606 @@
         }
     });
 
+    // ---- message recall (Ctrl+Up / Ctrl+Down) -----------------------------
+    //
+    // What you have already sent, walked backwards, the way a shell walks its
+    // history. Deliberately NOT the plain arrow keys: this box holds multi-line
+    // messages and the arrows have to keep moving the caret through them, so a
+    // recall bound to them would fight every edit of a message longer than one
+    // line. Ctrl+Up and Ctrl+Down do nothing else in a textarea.
+    //
+    // One history for the whole app rather than one per channel. It follows the
+    // BOX, which is the thing the keys are pressed in — and that box is moved
+    // into the conversation drawer for DMs (see moveComposer), so a per-channel
+    // history would have had nothing to say in exactly the place the composer
+    // most often is.
+    const MESSAGE_HISTORY_MAX = 25;
+
+    // -1 means "not browsing" — the box holds whatever was typed into it.
+    // 0 is the most recent sent message, 1 the one before, and so on.
+    let recallIndex = -1;
+    // What was in the box when browsing started, handed back on the way down
+    // past the newest entry. Losing a half-written message to a stray Ctrl+Up
+    // would make the feature something to be careful around.
+    let recallDraft = null;
+
+    function messageHistory() {
+        const h = settings.messageHistory;
+        if (!Array.isArray(h)) return [];
+        return h.filter((s) => typeof s === 'string' && s !== '').slice(0, MESSAGE_HISTORY_MAX);
+    }
+
+    function resetRecall() { recallIndex = -1; recallDraft = null; }
+
+    // `!== false`, not truthiness. A settings file written by a build older than
+    // this feature has no such key at all, and `undefined` there must read as the
+    // default the store declares — which is on. The toggle's own getter asks the
+    // same question through this function, so the switch can never show a state
+    // the keys do not act on.
+    function messageRecallOn() { return settings.messageRecall !== false; }
+
+    // Fire-and-forget, and silent on failure. The history is a convenience: a
+    // send must not wait on a settings write, and must not fail because one did.
+    function rememberSentMessage(body) {
+        if (!body) return;
+        // An exact repeat replaces its older copy rather than filling a second
+        // slot — 25 entries is not many, and "the last 25 things I sent" is
+        // more useful than 25 copies of "ok".
+        const list = messageHistory().filter((s) => s !== body);
+        list.unshift(body);
+        Promise.resolve()
+            .then(() => saveSettings({ messageHistory: list.slice(0, MESSAGE_HISTORY_MAX) }))
+            .catch(() => { /* the message went; the history is not worth an error */ });
+    }
+
+    // Writing .value does not fire `input`, so nothing here has to be guarded
+    // against re-entering the handler that resets browsing.
+    function setRecallText(text) {
+        input.value = text;
+        autosize();
+        updateSendEnabled();
+        // The suggestion list was built from a prefix that is no longer there.
+        closeMentionPop();
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
+        input.scrollTop = input.scrollHeight;
+    }
+
+    // step +1 goes further back, -1 comes forward again.
+    function stepRecall(step) {
+        const hist = messageHistory();
+        if (!hist.length) return;
+        if (recallIndex === -1) {
+            if (step < 0) return;               // nothing ahead of the live draft
+            recallDraft = input.value;
+        }
+        const next = recallIndex + step;
+        // Both ends STOP rather than wrap. Wrapping from the oldest back to the
+        // draft is indistinguishable from a missed keypress.
+        if (next < -1 || next >= hist.length) return;
+        recallIndex = next;
+        setRecallText(next === -1 ? (recallDraft || '') : hist[next]);
+        if (next === -1) recallDraft = null;
+    }
+
+    // Any real edit ends the walk: from here the box is the user's again, and a
+    // Ctrl+Down should not overwrite it with a stashed draft from before.
+    input.addEventListener('input', resetRecall);
+
+    // ---- formatting bar, and formatting drawn as you type ------------------
+    //
+    // A WYSIWYG LAYER OVER MARKDOWN, not a replacement for it. The textarea is
+    // still the only document: every button writes Markdown characters into it,
+    // the "rich" view is a div underneath painting those same characters with
+    // the formatting applied, and what is sent is the string in the box. The
+    // renderer that draws the message afterwards is the one this app already
+    // had — untouched, and still the definition of what the syntax means.
+    //
+    // That last point is why the preview shares FMT/fmtMatch with the renderer
+    // rather than carrying a second parser. Two parsers would have been two
+    // opinions about what `**a *b** c*` means, and the one in the message box
+    // would have been wrong in a way nobody could see until they pressed Enter.
+
+    const fmtBar = () => $('format-bar');
+
+    // Every write to the field goes through here, for one reason: the UNDO
+    // STACK. Assigning .value wipes it, so Ctrl+Z after using the toolbar used
+    // to undo whatever came before the button rather than the button itself.
+    // execCommand('insertText') is deprecated for editing DOM documents and is
+    // still the only way to write into a textarea as though it had been typed.
+    function replaceRange(start, end, text, selStart, selEnd) {
+        input.focus();
+        input.setSelectionRange(start, end);
+        let ok = false;
+        try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
+        if (!ok) {
+            // No undo entry, but the edit still happens — and this is the path
+            // taken under a test runner, which has no execCommand at all.
+            const v = input.value;
+            input.value = v.slice(0, start) + text + v.slice(end);
+        }
+        if (selStart !== undefined) {
+            input.setSelectionRange(selStart, selEnd === undefined ? selStart : selEnd);
+        }
+        // execCommand fires `input` itself. Firing a second one would run the
+        // typing indicator, the autosize and the recall reset twice per click.
+        if (!ok) input.dispatchEvent(new Event('input', { bubbles: true }));
+        else { autosize(); updateSendEnabled(); }
+        paintFormatState();
+    }
+
+    // The paired marks. Every one of these is something FMT already understands,
+    // which is the whole contract: a button may only write syntax the renderer
+    // reads back.
+    const WRAPS = {
+        bold: '**',
+        italic: '*',
+        underline: '__',
+        strike: '~~',
+        code: '`',
+        spoiler: '||'
+    };
+
+    // True when the selection is already inside this mark, so the button turns
+    // it off again.
+    //
+    // The guard is for `*` against `**`: without it, italic pressed inside
+    // **bold** saw the inner star of each pair, called it an italic wrapper and
+    // unwrapped ONE star from each end — turning bold into a stray asterisk.
+    function wrappedAt(mark, s, e) {
+        const v = input.value;
+        if (v.slice(s - mark.length, s) !== mark || v.slice(e, e + mark.length) !== mark) return false;
+        if (mark.length === 1) {
+            if (v[s - mark.length - 1] === mark[0] || v[e + mark.length] === mark[0]) return false;
+        }
+        return true;
+    }
+
+    function applyWrap(kind) {
+        const mark = WRAPS[kind];
+        if (!mark) return;
+        const v = input.value;
+        const s = input.selectionStart, e = input.selectionEnd;
+
+        if (wrappedAt(mark, s, e)) {
+            const inner = v.slice(s, e);
+            replaceRange(s - mark.length, e + mark.length, inner, s - mark.length, e - mark.length);
+            return;
+        }
+        const sel = v.slice(s, e);
+        // The marks inside the selection rather than around it — which is what a
+        // double-click on a formatted word gives you in some fonts.
+        if (sel.length > mark.length * 2 &&
+            sel.slice(0, mark.length) === mark && sel.slice(-mark.length) === mark) {
+            const inner = sel.slice(mark.length, sel.length - mark.length);
+            replaceRange(s, e, inner, s, s + inner.length);
+            return;
+        }
+        // Nothing selected puts the caret BETWEEN the marks, so the next thing
+        // typed is the formatted thing.
+        replaceRange(s, e, mark + sel + mark, s + mark.length, s + mark.length + sel.length);
+    }
+
+    // ---- line-level marks --------------------------------------------------
+
+    const LINE_KINDS = {
+        bullet: { re: /^([ \t]*)[-*+][ \t]+/, add: (i, ind) => ind + '- ' },
+        number: { re: /^([ \t]*)\d{1,9}[.)][ \t]+/, add: (i, ind) => ind + (i + 1) + '. ' },
+        quote: { re: /^([ \t]*)>[ \t]?/, add: (i, ind) => ind + '> ' },
+        h1: { re: /^([ \t]*)#[ \t]+/, add: (i, ind) => ind + '# ' },
+        h2: { re: /^([ \t]*)##[ \t]+/, add: (i, ind) => ind + '## ' },
+        h3: { re: /^([ \t]*)###[ \t]+/, add: (i, ind) => ind + '### ' }
+    };
+    // Anything this app understands at the head of a line, so switching from a
+    // bullet to a quote replaces the marker instead of stacking two.
+    const ANY_LINE_MARK = /^([ \t]*)(?:[-*+][ \t]+|\d{1,9}[.)][ \t]+|>[ \t]?|#{1,3}[ \t]+)?/;
+
+    // The whole of every line the selection touches — a list is made out of
+    // lines, so selecting the middle of three still means all three.
+    function selectedLines() {
+        const v = input.value;
+        const start = v.lastIndexOf('\n', input.selectionStart - 1) + 1;
+        let end = v.indexOf('\n', input.selectionEnd);
+        if (end === -1) end = v.length;
+        return { start, end, lines: v.slice(start, end).split('\n') };
+    }
+
+    function applyLineMark(kind) {
+        const spec = LINE_KINDS[kind];
+        if (!spec) return;
+        const { start, end, lines } = selectedLines();
+        // Off again only if EVERY line already carries it. A mixed selection is
+        // somebody asking for all of it to become a list, not for half of it to
+        // stop being one.
+        const already = lines.every((l) => spec.re.test(l));
+        const out = lines.map((l, i) => {
+            const indent = (ANY_LINE_MARK.exec(l) || ['', ''])[1] || '';
+            const bare = l.replace(ANY_LINE_MARK, '');
+            return already ? indent + bare : spec.add(i, indent) + bare;
+        }).join('\n');
+        replaceRange(start, end, out, start, start + out.length);
+    }
+
+    // # → ## → ### → off. A cycle rather than a menu because Markdown has three
+    // heading levels and no type scale: a "font size" dropdown here would be a
+    // control offering sizes the format cannot store.
+    function cycleHeading() {
+        const { lines } = selectedLines();
+        const first = lines[0] || '';
+        const at = LINE_KINDS.h3.re.test(first) ? 'h3'
+            : LINE_KINDS.h2.re.test(first) ? 'h2'
+                : LINE_KINDS.h1.re.test(first) ? 'h1' : null;
+        if (at === 'h3') applyLineMark('h3');            // already h3 → strip it
+        else applyLineMark(at === 'h1' ? 'h2' : at === 'h2' ? 'h3' : 'h1');
+    }
+
+    function insertLink() {
+        const v = input.value;
+        const s = input.selectionStart, e = input.selectionEnd;
+        const sel = v.slice(s, e);
+        // A selected URL becomes the target and waits for a label; selected
+        // words become the label and wait for a target. Either way the caret
+        // lands on the half that still has to be typed.
+        if (/^https?:\/\/\S+$/i.test(sel)) {
+            const text = '[](' + sel + ')';
+            replaceRange(s, e, text, s + 1, s + 1);
+            return;
+        }
+        const text = '[' + sel + '](url)';
+        const at = s + 1 + sel.length + 2;
+        replaceRange(s, e, text, at, at + 3);
+    }
+
+    function insertCodeBlock(lang) {
+        const v = input.value;
+        const s = input.selectionStart, e = input.selectionEnd;
+        const sel = v.slice(s, e);
+        // A fence only opens a block at the start of a line, and only closes one
+        // on a line of its own — so the newlines are part of the syntax, not
+        // tidiness, and are added only where they are missing.
+        const open = (s === 0 || v[s - 1] === '\n' ? '' : '\n') + '```' + (lang || '') + '\n';
+        const close = '\n```' + (e === v.length || v[e] === '\n' ? '' : '\n');
+        const body = s + open.length;
+        replaceRange(s, e, open + sel + close, body, body + sel.length);
+    }
+
+    function runFormat(kind) {
+        if (kind === 'heading') { cycleHeading(); return; }
+        if (kind === 'link') { insertLink(); return; }
+        if (WRAPS[kind]) { applyWrap(kind); return; }
+        if (LINE_KINDS[kind]) { applyLineMark(kind); return; }
+    }
+
+    // Lit while the caret is inside a run of that mark, the way a word processor
+    // lights its own toolbar — the answer to "am I typing in bold right now",
+    // which is otherwise only knowable by reading the asterisks.
+    function paintFormatState() {
+        const bar = fmtBar();
+        if (!bar || bar.hidden) return;
+        const s = input.selectionStart, e = input.selectionEnd;
+        bar.querySelectorAll('[data-fmt]').forEach((b) => {
+            const kind = b.dataset.fmt;
+            let on = false;
+            if (WRAPS[kind]) on = wrappedAt(WRAPS[kind], s, e);
+            else if (LINE_KINDS[kind]) on = selectedLines().lines.every((l) => LINE_KINDS[kind].re.test(l));
+            b.classList.toggle('on', on);
+        });
+    }
+
+    // ---- the bar itself ----------------------------------------------------
+
+    function formatBarOpen() { return !!(fmtBar() && !fmtBar().hidden); }
+
+    function setFormatBar(open, remember) {
+        const bar = fmtBar();
+        if (!bar) return;
+        bar.hidden = !open;
+        $('btn-format').setAttribute('aria-pressed', open ? 'true' : 'false');
+        $('btn-format').setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (!open) closeLangPop();
+        if (open) paintFormatState();
+        // The composer's height changed, and the message list is pinned to the
+        // bottom — without this the last message slides under the bar.
+        autosize();
+        if (remember) saveSettings({ formatBarOpen: !!open });
+    }
+
+    (function wireFormatBar() {
+        const bar = fmtBar();
+        if (!bar) return;
+        $('btn-format').addEventListener('click', () => setFormatBar(!formatBarOpen(), true));
+        $('btn-format-close').addEventListener('click', () => setFormatBar(false, true));
+        $('btn-heading').addEventListener('click', () => cycleHeading());
+        // Delegated, and on MOUSEDOWN with the default prevented: a click would
+        // take focus out of the textarea first, and the selection a wrap needs
+        // is gone the moment that happens.
+        bar.addEventListener('mousedown', (e) => {
+            const btn = e.target.closest('[data-fmt]');
+            if (!btn) return;
+            e.preventDefault();
+            runFormat(btn.dataset.fmt);
+        });
+        $('btn-code-block').addEventListener('mousedown', (e) => { e.preventDefault(); });
+        $('btn-code-block').addEventListener('click', () => toggleLangPop());
+        ['keyup', 'mouseup'].forEach((ev) => input.addEventListener(ev, paintFormatState));
+    })();
+
     input.addEventListener('keydown', (e) => {
+        // Checked before Enter, and before anything else looks at the key: the
+        // whole point of the chord is that it is unambiguous.
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey &&
+            (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            // Off means OFF — not "off but still swallowing the keystroke".
+            if (!messageRecallOn()) return;
+            e.preventDefault();
+            stepRecall(e.key === 'ArrowUp' ? 1 : -1);
+            return;
+        }
+        // Formatting chords. Deliberately the ones every text box on this
+        // machine already uses for the same three marks, plus the reference's
+        // own Ctrl+Shift+X for the bar.
+        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+            const k = e.key.toLowerCase();
+            if (!e.shiftKey && k === 'b') { e.preventDefault(); applyWrap('bold'); return; }
+            if (!e.shiftKey && k === 'i') { e.preventDefault(); applyWrap('italic'); return; }
+            if (!e.shiftKey && k === 'u') { e.preventDefault(); applyWrap('underline'); return; }
+            if (!e.shiftKey && k === 'k') { e.preventDefault(); insertLink(); return; }
+            if (e.shiftKey && k === 'x') { e.preventDefault(); setFormatBar(!formatBarOpen(), true); return; }
+            if (e.shiftKey && k === 's') { e.preventDefault(); applyWrap('strike'); return; }
+            if (e.shiftKey && k === 'c') { e.preventDefault(); applyWrap('code'); return; }
+            // Ctrl+Shift+8 and 7 are the list chords the reference uses. `code`
+            // rather than `key`, because with Shift held the key IS '*' and '&'.
+            if (e.shiftKey && e.code === 'Digit8') { e.preventDefault(); applyLineMark('bullet'); return; }
+            if (e.shiftKey && e.code === 'Digit7') { e.preventDefault(); applyLineMark('number'); return; }
+            if (e.shiftKey && e.code === 'Digit9') { e.preventDefault(); applyLineMark('quote'); return; }
+        }
+        // Ctrl+Alt+C opens the language menu rather than inserting a bare fence:
+        // the language is what decides how the block is highlighted, so it is
+        // part of inserting one.
+        if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'c') {
+            e.preventDefault();
+            if (!formatBarOpen()) setFormatBar(true, true);
+            openLangPop();
+            return;
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             $('composer').requestSubmit();
         }
     });
+
+    // ---- the formatting drawn under the caret ------------------------------
+    //
+    // #composer-mirror holds EXACTLY the characters in the textarea, styled, and
+    // the textarea is painted transparent on top of it. That equality is the
+    // whole mechanism — one character more or fewer and the caret stops lining
+    // up with the glyph it is beside — so every branch below emits the text it
+    // consumed, markers included, and test/format-bar.test.js asserts
+    // mirror.textContent === input.value over a pile of awkward strings.
+    //
+    // It shares FMT and fmtMatch with the message renderer, so what looks bold
+    // here is bold there by construction rather than by agreement.
+
+    // `esc` is lib.js's, imported at the top of this file. It escapes quotes as
+    // well as the angle brackets, which is more than a text node needs and is
+    // exactly why it is the one to use: every string below is interpolated into
+    // markup, and the composer's contents are the least trustworthy text in the
+    // app — it is whatever the user typed or pasted, re-parsed on every keystroke.
+    const MIRROR_CLASS = {
+        strong: 'cm-b', em: 'cm-i', u: 'cm-u', del: 'cm-s', spoiler: 'cm-spoiler'
+    };
+
+    // Past this the preview is switched off for the message and the field paints
+    // its own text again. The parse is linear-ish but it runs on every keystroke,
+    // and a quarter-megabyte paste (which the server accepts) must not turn
+    // typing into a slideshow.
+    const MIRROR_MAX = 12000;
+
+    function mirrorInline(text) {
+        let rest = String(text), out = '';
+        for (;;) {
+            if (!rest) return out;
+            // Code spans first, exactly as renderInline does it: formatting
+            // characters inside a span are literal, and the preview has to agree.
+            const c = CODE_SPAN_RE.exec(rest);
+            const f = fmtMatch(rest);
+            const cAt = c ? c.index : Infinity;
+            const fAt = f ? f.start : Infinity;
+            if (cAt === Infinity && fAt === Infinity) return out + esc(rest);
+            if (cAt <= fAt) {
+                out += esc(rest.slice(0, c.index));
+                out += '<span class="cm-code">' + esc(c[0]) + '</span>';
+                rest = rest.slice(c.index + c[0].length);
+                continue;
+            }
+            out += esc(rest.slice(0, f.start));
+            const whole = rest.slice(f.start, f.end);
+            // The marks are symmetric, so what is not the inner text is half a
+            // marker at each end. That holds for every entry in FMT — ||, ***,
+            // **, ___, __, ~~, * and _ alike.
+            const mlen = (whole.length - f.inner.length) / 2;
+            const open = whole.slice(0, mlen), close = whole.slice(whole.length - mlen);
+            const cls = [MIRROR_CLASS[f.f.kind] || '', f.f.wrap ? MIRROR_CLASS[f.f.wrap] || '' : '']
+                .filter(Boolean).join(' ');
+            out += '<span class="cm-mark">' + esc(open) + '</span>' +
+                '<span class="' + cls + '">' + mirrorInline(f.inner) + '</span>' +
+                '<span class="cm-mark">' + esc(close) + '</span>';
+            rest = rest.slice(f.end);
+        }
+    }
+
+    function mirrorLine(line) {
+        let m = /^([ \t]*)(#{1,3})([ \t]+)([\s\S]*)$/.exec(line);
+        if (m) {
+            return esc(m[1]) + '<span class="cm-mark">' + esc(m[2] + m[3]) + '</span>' +
+                '<span class="cm-head">' + mirrorInline(m[4]) + '</span>';
+        }
+        m = /^([ \t]*)(>[ \t]?)([\s\S]*)$/.exec(line);
+        if (m) {
+            return esc(m[1]) + '<span class="cm-mark">' + esc(m[2]) + '</span>' +
+                '<span class="cm-quote">' + mirrorInline(m[3]) + '</span>';
+        }
+        m = /^([ \t]*)([-*+]|\d{1,9}[.)])([ \t]+)([\s\S]*)$/.exec(line);
+        if (m) {
+            return esc(m[1]) + '<span class="cm-list">' + esc(m[2]) + '</span>' +
+                esc(m[3]) + mirrorInline(m[4]);
+        }
+        return mirrorInline(line);
+    }
+
+    function mirrorHtml(src) {
+        const lines = String(src).split('\n');
+        let inFence = false;
+        const out = lines.map((line) => {
+            if (/^[ \t]*```/.test(line)) {
+                inFence = !inFence;
+                return '<span class="cm-mark">' + esc(line) + '</span>';
+            }
+            return inFence ? '<span class="cm-fence">' + esc(line) + '</span>' : mirrorLine(line);
+        });
+        // The trailing newline gives a final empty line somewhere to be. Without
+        // it the mirror is one row shorter than the field whenever the message
+        // ends on Shift+Enter, and the caret sits below its own text.
+        return out.join('\n') + '\n';
+    }
+
+    function richComposerOn() { return settings.richComposer !== false; }
+
+    // Both composer preferences, applied together on entry and again whenever
+    // one of them is changed. `!== false` for the same reason messageRecallOn()
+    // uses it: a settings file older than the feature has no key at all, and
+    // that has to read as the default the store declares.
+    function applyComposerPrefs() {
+        setFormatBar(!!settings.formatBarOpen, false);
+        paintMirror();
+    }
+
+    function paintMirror() {
+        const m = $('composer-mirror');
+        if (!m) return;
+        const on = richComposerOn() && input.value.length <= MIRROR_MAX;
+        document.body.classList.toggle('rich-composer', on);
+        m.hidden = !on;
+        if (!on) { m.textContent = ''; return; }
+        try {
+            m.innerHTML = mirrorHtml(input.value);
+        } catch (e) {
+            // A preview is never worth a broken message box: fall all the way
+            // back to the field painting its own text.
+            document.body.classList.remove('rich-composer');
+            m.hidden = true;
+            m.textContent = '';
+            return;
+        }
+        m.scrollTop = input.scrollTop;
+    }
+
+    // No `input` listener of its own: autosize() already repaints this and is
+    // called from the input handler, from the toolbar, from a recalled message,
+    // from a restored draft and from the clear after a send. A second listener
+    // here would parse the whole field twice per keystroke for no difference.
+    //
+    // The field scrolls past 180px; the layer under it has to go with it.
+    input.addEventListener('scroll', () => {
+        const m = $('composer-mirror');
+        if (m && !m.hidden) m.scrollTop = input.scrollTop;
+    });
+
+    // ---- the language menu -------------------------------------------------
+
+    let langCursor = 0;
+
+    function langPopOpen() { return !$('lang-pop').hidden; }
+
+    function closeLangPop() {
+        const pop = $('lang-pop');
+        if (!pop || pop.hidden) return;
+        pop.hidden = true;
+        $('btn-code-block').setAttribute('aria-expanded', 'false');
+    }
+
+    function toggleLangPop() { if (langPopOpen()) closeLangPop(); else openLangPop(); }
+
+    function openLangPop() {
+        const pop = $('lang-pop');
+        const btn = $('btn-code-block');
+        if (!pop || !btn) return;
+        pop.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        $('lang-search').value = '';
+        langCursor = 0;
+        renderLangList('');
+        // Placed against the button, then pulled back inside the window — the
+        // bar sits at the bottom of a narrow column, so a menu dropped from it
+        // would otherwise hang off the bottom edge on every open.
+        const r = btn.getBoundingClientRect();
+        const h = pop.offsetHeight || 320;
+        const w = pop.offsetWidth || 232;
+        pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
+        pop.style.top = Math.max(8, r.top - h - 8) + 'px';
+        $('lang-search').focus();
+    }
+
+    function renderLangList(query) {
+        const host = $('lang-list');
+        const q = String(query || '').trim().toLowerCase();
+        const hits = CODE_LANGS.filter((l) =>
+            !q || l.name.toLowerCase().includes(q) || l.tag.includes(q) ||
+            (l.alias || []).some((a) => a.includes(q)));
+        host.textContent = '';
+        if (!hits.length) {
+            const none = document.createElement('div');
+            none.className = 'lang-none';
+            none.textContent = 'No language called “' + query + '”';
+            host.appendChild(none);
+            return;
+        }
+        if (langCursor >= hits.length) langCursor = hits.length - 1;
+        if (langCursor < 0) langCursor = 0;
+        hits.forEach((l, i) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'lang-item' + (i === langCursor ? ' active' : '');
+            b.setAttribute('role', 'menuitem');
+            const name = document.createElement('span');
+            name.textContent = l.name;
+            b.appendChild(name);
+            if (l.tag) {
+                const tag = document.createElement('span');
+                tag.className = 'li-tag';
+                tag.textContent = l.tag;
+                b.appendChild(tag);
+            }
+            b.addEventListener('mousedown', (e) => e.preventDefault());
+            b.addEventListener('click', () => { closeLangPop(); insertCodeBlock(l.tag); });
+            host.appendChild(b);
+        });
+    }
+
+    (function wireLangPop() {
+        const search = $('lang-search');
+        if (!search) return;
+        search.addEventListener('input', () => { langCursor = 0; renderLangList(search.value); });
+        search.addEventListener('keydown', (e) => {
+            const items = [...$('lang-list').querySelectorAll('.lang-item')];
+            if (e.key === 'ArrowDown') { e.preventDefault(); langCursor++; renderLangList(search.value); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); langCursor--; renderLangList(search.value); }
+            else if (e.key === 'Enter') {
+                e.preventDefault();
+                const pick = items[langCursor];
+                if (pick) pick.click();
+            } else if (e.key === 'Escape') {
+                e.preventDefault(); e.stopPropagation();
+                closeLangPop();
+                input.focus();
+            }
+        });
+        document.addEventListener('mousedown', (e) => {
+            if (!langPopOpen()) return;
+            if (e.target.closest('#lang-pop') || e.target.closest('#btn-code-block')) return;
+            closeLangPop();
+        });
+    })();
 
     $('composer').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -3715,6 +4434,12 @@
         const forDm = dmOpen ? dmOpen.id : null;
 
         input.value = '';
+        // Remembered from the SENT text, not from the box — which has just been
+        // cleared — and only when there was text: an attachment with no message
+        // has nothing to recall. Browsing ends here too, or the next Ctrl+Down
+        // would hand back a draft that has already gone out.
+        rememberSentMessage(body);
+        resetRecall();
         autosize();
         $('btn-send').disabled = true;
         clearStaged();
@@ -4800,8 +5525,13 @@
     // on the input itself, listener order would decide it, which is fragile.
     document.addEventListener('keydown', (e) => {
         if (e.target !== input || !mentionPopOpen()) return;
-        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive + 1); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive - 1); }
+        // A MODIFIED arrow is not list navigation. This runs in the capture
+        // phase, ahead of the composer's own keydown, so without the guard an
+        // open suggestion list swallowed Ctrl+Up and message recall did nothing
+        // whenever the last thing typed happened to start an @mention.
+        const plainArrow = !e.ctrlKey && !e.metaKey && !e.altKey;
+        if (plainArrow && e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive + 1); }
+        else if (plainArrow && e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive - 1); }
         else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); chooseMention(mentionActive); }
         else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMentionPop(); }
     }, true);
@@ -7480,6 +8210,9 @@
         closeLightbox();
         closeNotes();
         closeDmPicker();
+        // Body-level and position:fixed, so hiding #app leaves it drawn over the
+        // sign-in card like every other floating surface in this list.
+        closeLangPop();
         // Focus-trapped, a sibling of #app and LATER in the document than
         // #login — so left open it paints over the sign-in card and its Tab
         // trap keeps the password field unreachable.
@@ -7497,6 +8230,14 @@
         // one thing on that card the user has typed.
         closeProfileCard();
         hideTip();
+        // Another sibling of #app, and one that covers the whole window: left
+        // open by an expiring session it paints its toolbar and its dashed
+        // outlines over the sign-in card, and its shield takes every click on
+        // the password field. Closed WITHOUT reverting — the arrangement is
+        // saved as it is made, and throwing away a change somebody has already
+        // seen take effect because their session happened to expire is worse
+        // than keeping it.
+        closeLayoutEdit(false);
         // A dialog left open never settles its promise, so whatever was
         // awaiting it is abandoned mid-flight rather than cancelled.
         if (!$('dialog').hidden) closeDialog(inp_null());
@@ -7604,6 +8345,13 @@
         clearReply();
         autosize();
         updateSendEnabled();
+        // …and the RECALL history, for exactly the same reason and one more:
+        // this one is written to disk, so without this the next person to sign
+        // in on this machine could press Ctrl+Up and read the last twenty-five
+        // messages the previous account sent. Cleared in the store, not just in
+        // memory — `settings` is re-read from it on the next sign-in.
+        resetRecall();
+        try { await saveSettings({ messageHistory: [] }); } catch (e) { /* leaving either way */ }
         // Same rule as the drafts: remembered pages are somebody's messages,
         // and the next person to sign in on this machine must not open a
         // channel and find them already painted.
@@ -8655,9 +9403,17 @@
     //
     // `dir` is +1 when dragging the handle right widens the panel (the left-hand
     // sidebar) and -1 when it narrows it (the right-hand member list).
-    function makeResizable(handleId, dir, read, write, clamp) {
+    //
+    // A FUNCTION, not the constant it used to be. Edit Layout can put either
+    // panel on either side, and the strip moves to the edge facing the chat with
+    // it — so which way a rightward drag widens the panel is a property of the
+    // layout in effect at the moment of the drag, not of which handle this is.
+    // Read per event rather than captured here, because the handles are wired
+    // once for the life of the process and the layout changes under them.
+    function makeResizable(handleId, dirOf, read, write, clamp) {
         const handle = $(handleId);
         if (!handle) return;
+        const dir = () => (typeof dirOf === 'function' ? dirOf() : dirOf);
         handle.setAttribute('role', 'separator');
         handle.setAttribute('aria-orientation', 'vertical');
 
@@ -8667,7 +9423,7 @@
             if (id === null || e.pointerId !== id) return;
             // clientX only. There is deliberately no clientY term anywhere in this
             // function: the panels resize horizontally and nothing else.
-            const next = clamp(startW + dir * (e.clientX - startX));
+            const next = clamp(startW + dir() * (e.clientX - startX));
             if (next === read()) return;
             write(next);
             applyPaneWidths();
@@ -8721,7 +9477,7 @@
             else if (e.key === 'End') delta = 9999;
             else return;
             e.preventDefault();
-            write(clamp(read() + dir * delta));
+            write(clamp(read() + dir() * delta));
             applyPaneWidths();
             saveSettings({ sidebarWidth: settings.sidebarWidth, membersWidth: settings.membersWidth });
         });
@@ -8744,18 +9500,24 @@
     function initPaneResizing() {
         settings.sidebarWidth = clampSidebar(settings.sidebarWidth || DEFAULT_SIDEBAR_W, 0);
         settings.membersWidth = clampMembers(settings.membersWidth || DEFAULT_MEMBERS_W, 0);
-        applyPaneWidths();
+        // The saved arrangement, before the first paint of the app shell. It is
+        // three attributes and a stylesheet rule, so there is nothing to animate
+        // and nothing to see settling into place — but it has to be on #app
+        // before the panels are measured, because which side each one is on
+        // decides which edge its drag strip reports from. (applyLayout ends by
+        // calling applyPaneWidths, which is why there is no second call here.)
+        applyLayout();
 
         if (paneHandlesWired) return;
         paneHandlesWired = true;
 
         ['sidebar-resize', 'dm-sidebar-resize'].forEach((idAttr) => {
-            makeResizable(idAttr, 1,
+            makeResizable(idAttr, sidebarDragDir,
                 () => settings.sidebarWidth,
                 (v) => { settings.sidebarWidth = v; },
                 (v) => clampSidebar(v, membersWidthNow()));
         });
-        makeResizable('members-resize', -1,
+        makeResizable('members-resize', membersDragDir,
             () => settings.membersWidth,
             (v) => { settings.membersWidth = v; },
             (v) => clampMembers(v, clampSidebar(settings.sidebarWidth, 0)));
@@ -8763,6 +9525,459 @@
         // Shrinking the window is the other way to squeeze the message column, so
         // the clamp is re-applied rather than only enforced while dragging.
         window.addEventListener('resize', applyPaneWidths);
+    }
+
+    // ---------- custom layout (Edit Layout) --------------------------------
+    //
+    // The window's arrangement, as three independent choices rather than as
+    // coordinates. Each one has exactly two settled positions, styles.css
+    // writes out every combination of them by hand, and a section can only be
+    // dropped into a zone — so every arrangement reachable from the UI is one
+    // somebody laid out, and there is no way to express an overlap or a section
+    // hanging off the edge. That is the entire argument for snapping.
+    //
+    //   panels  default | swapped   channel list left or right
+    //   dock    bottom  | top       me bar under the channels, or a top bar
+    //   input   bottom  | top       message box below or above the messages
+    const LAYOUT_DEFAULT = { panels: 'default', dock: 'bottom', input: 'bottom' };
+    const LAYOUT_CHOICES = {
+        panels: ['default', 'swapped'],
+        dock: ['bottom', 'top'],
+        input: ['bottom', 'top']
+    };
+    const LAYOUT_TEMPLATE_MAX = 10;
+    const LAYOUT_NAME_MAX = 40;
+
+    // Held to the allowed words on the way IN, every time, rather than trusted
+    // because this app wrote it. settings.json is a text file on disk, it
+    // outlives any one build, and an unknown value here would select no CSS
+    // rule at all — which is not a broken layout, it is a blank window.
+    function normalizeLayout(raw) {
+        const out = Object.assign({}, LAYOUT_DEFAULT);
+        if (!raw || typeof raw !== 'object') return out;
+        for (const key of Object.keys(LAYOUT_CHOICES)) {
+            if (LAYOUT_CHOICES[key].indexOf(raw[key]) !== -1) out[key] = raw[key];
+        }
+        return out;
+    }
+
+    function currentLayout() { return normalizeLayout(settings.layout); }
+
+    function sameLayout(a, b) {
+        const x = normalizeLayout(a), y = normalizeLayout(b);
+        return Object.keys(LAYOUT_CHOICES).every((k) => x[k] === y[k]);
+    }
+
+    // In the app's own words, for the template list.
+    function layoutSummary(raw) {
+        const l = normalizeLayout(raw);
+        return [
+            l.panels === 'swapped' ? 'Channels right' : 'Channels left',
+            l.dock === 'top' ? 'Me bar on top' : 'Me bar below',
+            l.input === 'top' ? 'Message box above' : 'Message box below'
+        ].join(' · ');
+    }
+
+    // The only place the attributes are written. Everything else — boot, a drop,
+    // a template, Cancel — goes through here, so there is one description of
+    // what "apply a layout" means.
+    function applyLayout(raw) {
+        const lay = normalizeLayout(raw === undefined ? settings.layout : raw);
+        const app = $('app');
+        app.dataset.panels = lay.panels;
+        app.dataset.dock = lay.dock;
+        app.dataset.input = lay.input;
+        // The panels keep their widths across a swap, but the drag strips move
+        // to the other edge and each one now reports the other's number to
+        // assistive technology. applyPaneWidths is what re-announces them.
+        applyPaneWidths();
+        return lay;
+    }
+
+    // Which way a pointer delta widens the panel. A function rather than the
+    // constant it used to be: dragging the channel list's strip to the RIGHT
+    // widens it when the panel is on the left and narrows it when it is on the
+    // right, and the strip swaps edges with the panel (see styles.css).
+    function sidebarDragDir() { return currentLayout().panels === 'swapped' ? -1 : 1; }
+    function membersDragDir() { return currentLayout().panels === 'swapped' ? 1 : -1; }
+
+    // ---- the sections, and the zones each one may go in --------------------
+    //
+    // A zone is named by a PATCH, not by a position: dropping the member list
+    // into the left column and dropping the channel list into the right one are
+    // the same rearrangement, and describing both as `panels: 'swapped'` is what
+    // makes them impossible to disagree.
+    const LAYOUT_SECTIONS = [
+        {
+            key: 'sidebar', elId: 'sidebar', name: 'Channels & DMs',
+            zones: [
+                { id: 'left', label: 'Left column', patch: { panels: 'default' } },
+                { id: 'right', label: 'Right column', patch: { panels: 'swapped' } }
+            ]
+        },
+        {
+            key: 'members', elId: 'members-panel', name: 'Member list',
+            zones: [
+                { id: 'left', label: 'Left column', patch: { panels: 'swapped' } },
+                { id: 'right', label: 'Right column', patch: { panels: 'default' } }
+            ]
+        },
+        {
+            key: 'dock', elId: 'user-dock', name: 'Me bar',
+            zones: [
+                { id: 'top', label: 'Top bar', patch: { dock: 'top' } },
+                { id: 'bottom', label: 'Below the channels', patch: { dock: 'bottom' } }
+            ]
+        },
+        {
+            key: 'composer', elId: 'composer', name: 'Message box',
+            zones: [
+                { id: 'top', label: 'Above the messages', patch: { input: 'top' } },
+                { id: 'bottom', label: 'Below the messages', patch: { input: 'bottom' } }
+            ]
+        }
+    ];
+
+    // A section is movable only if it is actually on screen and in the place
+    // this system knows how to move it from. Two real cases:
+    //   • the member list can be hidden, and a zero-sized frame is a target
+    //     nobody can hit;
+    //   • the composer is MOVED into the conversation drawer for DMs, where it
+    //     is a child of something else entirely and `order` would do nothing —
+    //     offering to move it there would be offering a control that lies.
+    function sectionMovable(sec) {
+        const el = $(sec.elId);
+        if (!el || el.hidden) return false;
+        if (sec.key === 'composer' && el.parentElement !== $('main')) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 8 && r.height > 8;
+    }
+
+    function movableSections() { return LAYOUT_SECTIONS.filter(sectionMovable); }
+
+    // Where a section WOULD be if it were dropped in a zone — measured, not
+    // guessed, by putting the app into that layout and reading the rectangle
+    // back. Every write and read here happens inside one synchronous run, so
+    // the browser never paints an arrangement that was only being measured.
+    function measureZones(sec) {
+        const app = $('app');
+        const el = $(sec.elId);
+        const before = { panels: app.dataset.panels, dock: app.dataset.dock, input: app.dataset.input };
+        const out = [];
+        for (const zone of sec.zones) {
+            const probe = Object.assign({}, normalizeLayout(before), zone.patch);
+            app.dataset.panels = probe.panels;
+            app.dataset.dock = probe.dock;
+            app.dataset.input = probe.input;
+            const r = el.getBoundingClientRect();      // forces the layout
+            out.push({ zone, rect: { x: r.left, y: r.top, w: r.width, h: r.height } });
+        }
+        app.dataset.panels = before.panels;
+        app.dataset.dock = before.dock;
+        app.dataset.input = before.input;
+        // Read once more so the restored layout is the one in effect when this
+        // returns, rather than one flush behind whatever happens next.
+        el.getBoundingClientRect();
+        return out;
+    }
+
+    // ---- edit mode ---------------------------------------------------------
+
+    let layoutEditing = false;
+    let layoutEntryState = null;    // the layout to put back if Cancel is pressed
+    let layoutDrag = null;          // { sec, targets, hot }
+
+    function layoutEditOpen() { return layoutEditing; }
+
+    function hit(rect, x, y) {
+        return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+    }
+
+    function place(el, rect) {
+        el.style.left = rect.x + 'px';
+        el.style.top = rect.y + 'px';
+        el.style.width = rect.w + 'px';
+        el.style.height = rect.h + 'px';
+    }
+
+    // The dashed outline over each movable section, at its live position. Rebuilt
+    // rather than moved, because the set of movable sections changes with the
+    // layout (and with the member list being hidden).
+    function renderLayoutFrames() {
+        const host = $('layout-frames');
+        host.textContent = '';
+        if (layoutDrag) return;      // zones are drawn instead, see startLayoutDrag
+        for (const sec of movableSections()) {
+            const r = $(sec.elId).getBoundingClientRect();
+            const box = document.createElement('div');
+            box.className = 'lay-sec';
+            place(box, { x: r.left, y: r.top, w: r.width, h: r.height });
+            const tag = document.createElement('span');
+            tag.className = 'lay-sec-name';
+            tag.textContent = sec.name;
+            box.appendChild(tag);
+            host.appendChild(box);
+        }
+    }
+
+    function sectionAt(x, y) {
+        // Last first: the frames are drawn in section order and the later ones
+        // are the smaller, more specific targets (the message box sits inside
+        // the area the others surround).
+        const list = movableSections();
+        for (let i = list.length - 1; i >= 0; i--) {
+            const r = $(list[i].elId).getBoundingClientRect();
+            if (hit({ x: r.left, y: r.top, w: r.width, h: r.height }, x, y)) return list[i];
+        }
+        return null;
+    }
+
+    function startLayoutDrag(sec, x, y) {
+        layoutDrag = { sec, targets: measureZones(sec), hot: null };
+        document.body.classList.add('layout-dragging');
+        const host = $('layout-frames');
+        host.textContent = '';
+        // ONLY this section's zones are drawn. Within one section's set they
+        // never overlap, so "what is under the pointer" has exactly one answer
+        // and the drop needs no tie-break rule at all.
+        const cur = currentLayout();
+        for (const t of layoutDrag.targets) {
+            const box = document.createElement('div');
+            box.className = 'lay-zone';
+            const isNow = sameLayout(cur, Object.assign({}, cur, t.zone.patch));
+            if (isNow) box.classList.add('current');
+            box.textContent = t.zone.label + (isNow ? ' (current)' : '');
+            place(box, t.rect);
+            t.el = box;
+            host.appendChild(box);
+        }
+        const ghost = $('layout-ghost');
+        ghost.textContent = sec.name;
+        ghost.hidden = false;
+        moveLayoutDrag(x, y);
+    }
+
+    function moveLayoutDrag(x, y) {
+        if (!layoutDrag) return;
+        const ghost = $('layout-ghost');
+        ghost.style.left = x + 'px';
+        ghost.style.top = y + 'px';
+        let hot = null;
+        for (const t of layoutDrag.targets) {
+            const over = hit(t.rect, x, y);
+            t.el.classList.toggle('hot', over);
+            if (over) hot = t;
+        }
+        layoutDrag.hot = hot;
+    }
+
+    async function endLayoutDrag(commit) {
+        if (!layoutDrag) return;
+        const hot = layoutDrag.hot;
+        const sec = layoutDrag.sec;
+        layoutDrag = null;
+        document.body.classList.remove('layout-dragging');
+        $('layout-ghost').hidden = true;
+        if (commit && hot) {
+            const next = Object.assign({}, currentLayout(), hot.zone.patch);
+            if (!sameLayout(next, currentLayout())) {
+                // Applied at once and saved at once. Edit mode's Cancel restores
+                // the entry state, so there is nothing to be gained by holding
+                // the change in memory — and a crash mid-edit would otherwise
+                // lose an arrangement the user had already seen take effect.
+                settings.layout = next;
+                applyLayout(next);
+                await saveSettings({ layout: next });
+                renderLayoutTemplates();
+                setLayoutHint(sec.name + ' → ' + hot.zone.label);
+            }
+        }
+        renderLayoutFrames();
+    }
+
+    function setLayoutHint(text) {
+        const el = $('layout-hint');
+        if (el) el.textContent = text || 'Drag a section into a zone';
+    }
+
+    function openLayoutEdit() {
+        if (layoutEditing) return;
+        layoutEditing = true;
+        layoutEntryState = currentLayout();
+        closeSettings();
+        document.body.classList.add('layout-editing');
+        $('layout-edit').hidden = false;
+        setLayoutHint(null);
+        renderLayoutFrames();
+    }
+
+    async function closeLayoutEdit(revert) {
+        if (!layoutEditing) return;
+        layoutEditing = false;
+        await endLayoutDrag(false);
+        if (revert && layoutEntryState && !sameLayout(layoutEntryState, currentLayout())) {
+            const back = layoutEntryState;
+            settings.layout = back;
+            applyLayout(back);
+            await saveSettings({ layout: back });
+        }
+        layoutEntryState = null;
+        document.body.classList.remove('layout-editing');
+        document.body.classList.remove('layout-dragging');
+        $('layout-edit').hidden = true;
+        $('layout-frames').textContent = '';
+        $('layout-ghost').hidden = true;
+        renderLayoutTemplates();
+    }
+
+    (function wireLayoutEdit() {
+        const shield = $('layout-shield');
+        if (!shield) return;
+        let pointer = null;
+
+        shield.addEventListener('pointerdown', (e) => {
+            if (!layoutEditing || e.button !== 0) return;
+            const sec = sectionAt(e.clientX, e.clientY);
+            if (!sec) return;
+            e.preventDefault();
+            pointer = e.pointerId;
+            try { shield.setPointerCapture(pointer); } catch (err) { /* best effort */ }
+            startLayoutDrag(sec, e.clientX, e.clientY);
+        });
+        shield.addEventListener('pointermove', (e) => {
+            if (pointer === null || e.pointerId !== pointer) return;
+            moveLayoutDrag(e.clientX, e.clientY);
+        });
+        const up = (e, commit) => {
+            if (pointer === null || (e && e.pointerId !== undefined && e.pointerId !== pointer)) return;
+            try { shield.releasePointerCapture(pointer); } catch (err) { /* already released */ }
+            pointer = null;
+            endLayoutDrag(commit);
+        };
+        shield.addEventListener('pointerup', (e) => up(e, true));
+        // A cancelled pointer is not a drop. Same for the window losing the
+        // pointer entirely, which leaves no pointerup at all.
+        shield.addEventListener('pointercancel', (e) => up(e, false));
+        window.addEventListener('blur', () => { if (pointer !== null) up(null, false); });
+
+        // The outlines are drawn at measured pixel positions, so anything that
+        // changes those positions has to redraw them.
+        window.addEventListener('resize', () => { if (layoutEditing && !layoutDrag) renderLayoutFrames(); });
+
+        $('layout-done').addEventListener('click', () => { closeLayoutEdit(false); });
+        $('layout-cancel').addEventListener('click', () => { closeLayoutEdit(true); });
+        $('layout-reset').addEventListener('click', async () => {
+            settings.layout = Object.assign({}, LAYOUT_DEFAULT);
+            applyLayout(LAYOUT_DEFAULT);
+            await saveSettings({ layout: settings.layout });
+            setLayoutHint('Back to the default arrangement');
+            renderLayoutFrames();
+        });
+        $('layout-save-tpl').addEventListener('click', async () => {
+            await promptSaveLayoutTemplate();
+            renderLayoutFrames();
+        });
+    })();
+
+    // ---- templates ---------------------------------------------------------
+
+    function layoutTemplates() {
+        const raw = settings.layoutTemplates;
+        if (!Array.isArray(raw)) return [];
+        return raw
+            .filter((t) => t && typeof t === 'object' && typeof t.name === 'string')
+            .map((t) => ({ id: String(t.id || ''), name: t.name, layout: normalizeLayout(t.layout) }))
+            .slice(0, LAYOUT_TEMPLATE_MAX);
+    }
+
+    async function writeLayoutTemplates(list) {
+        const capped = list.slice(0, LAYOUT_TEMPLATE_MAX);
+        settings.layoutTemplates = capped;
+        await saveSettings({ layoutTemplates: capped });
+        renderLayoutTemplates();
+    }
+
+    let templateSeq = 0;
+    async function promptSaveLayoutTemplate() {
+        const list = layoutTemplates();
+        // Refused BEFORE the name is asked for. Asking first and then throwing
+        // the answer away is the same information delivered as a waste of time.
+        if (list.length >= LAYOUT_TEMPLATE_MAX) {
+            toast('You already have ' + LAYOUT_TEMPLATE_MAX + ' layout templates — delete one first.', true);
+            return false;
+        }
+        const name = await askText('Name this layout', '', 'Save');
+        if (name === null || name === false) return false;
+        const clean = String(name).trim().slice(0, LAYOUT_NAME_MAX);
+        if (!clean) return false;
+        templateSeq++;
+        list.push({ id: Date.now() + '-' + templateSeq, name: clean, layout: currentLayout() });
+        await writeLayoutTemplates(list);
+        toast('Saved “' + clean + '”');
+        return true;
+    }
+
+    async function applyLayoutTemplate(id) {
+        const tpl = layoutTemplates().find((t) => t.id === id);
+        if (!tpl) return;
+        settings.layout = tpl.layout;
+        applyLayout(tpl.layout);
+        await saveSettings({ layout: tpl.layout });
+        renderLayoutTemplates();
+        if (layoutEditing) renderLayoutFrames();
+        toast('Layout “' + tpl.name + '” applied');
+    }
+
+    async function deleteLayoutTemplate(id) {
+        const tpl = layoutTemplates().find((t) => t.id === id);
+        if (!tpl) return;
+        if (!(await askConfirm('Delete this layout?', '“' + tpl.name + '” will be removed.', 'Delete', true))) return;
+        await writeLayoutTemplates(layoutTemplates().filter((t) => t.id !== id));
+    }
+
+    // The list in Settings → Appearance. Rebuilt rather than patched: it is at
+    // most ten rows and it is only ever looked at with the sheet open.
+    function renderLayoutTemplates() {
+        const host = $('lay-tpl-list');
+        if (!host) return;
+        const list = layoutTemplates();
+        const count = $('lay-tpl-count');
+        if (count) count.textContent = list.length + ' of ' + LAYOUT_TEMPLATE_MAX;
+        host.textContent = '';
+        if (!list.length) {
+            const empty = document.createElement('div');
+            empty.className = 'lay-tpl-empty';
+            empty.textContent = 'No templates yet. Arrange the window, then save it here.';
+            host.appendChild(empty);
+            return;
+        }
+        const cur = currentLayout();
+        for (const tpl of list) {
+            const row = document.createElement('div');
+            row.className = 'lay-tpl';
+            const text = document.createElement('div');
+            text.className = 'lay-tpl-name';
+            text.textContent = tpl.name;
+            const sub = document.createElement('div');
+            sub.className = 'lay-tpl-sub';
+            sub.textContent = layoutSummary(tpl.layout) + (sameLayout(tpl.layout, cur) ? ' · in use' : '');
+            text.appendChild(sub);
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'keycap';
+            use.textContent = 'Apply';
+            use.disabled = sameLayout(tpl.layout, cur);
+            use.addEventListener('click', () => applyLayoutTemplate(tpl.id));
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'keycap';
+            del.textContent = 'Delete';
+            del.addEventListener('click', () => deleteLayoutTemplate(tpl.id));
+            row.appendChild(text);
+            row.appendChild(use);
+            row.appendChild(del);
+            host.appendChild(row);
+        }
     }
 
     // ---------- layout chrome: rail, categories, members sidebar ----------
@@ -10664,6 +11879,7 @@
 
         paintSwitches();
         paintRadios();
+        renderLayoutTemplates();
         updateLaunchHiddenEnabled();
         renderDefaultKeys();
         paintKeybinds();
@@ -11388,6 +12604,48 @@
         paintSlider('set-zoom', v);
         await saveSettings({ zoomLevel: v });
         applyZoom();
+    });
+
+    // ---- Layout + chat controls ------------------------------------------
+
+    $('set-edit-layout').addEventListener('click', () => { openLayoutEdit(); });
+    $('set-layout-reset').addEventListener('click', async () => {
+        if (sameLayout(settings.layout, LAYOUT_DEFAULT)) { toast('Already the default layout'); return; }
+        settings.layout = Object.assign({}, LAYOUT_DEFAULT);
+        applyLayout(LAYOUT_DEFAULT);
+        await saveSettings({ layout: settings.layout });
+        renderLayoutTemplates();
+        toast('Layout reset');
+    });
+    $('set-save-layout').addEventListener('click', () => { promptSaveLayoutTemplate(); });
+
+    wireSwitch('set-rich-composer', richComposerOn, async (v) => {
+        await saveSettings({ richComposer: v });
+        paintMirror();
+        toast(v ? 'Formatting will be drawn as you type' : 'The message box will show plain text');
+    });
+    wireSwitch('set-format-bar', () => !!settings.formatBarOpen, async (v) => {
+        await saveSettings({ formatBarOpen: v });
+        setFormatBar(v, false);
+    });
+
+    wireSwitch('set-msg-recall', messageRecallOn, async (v) => {
+        await saveSettings({ messageRecall: v });
+        // Turning it off ends any walk in progress, so the box is not left
+        // holding an old message with no key left that would take it back.
+        if (!v) resetRecall();
+        toast(v ? 'Ctrl+↑ / Ctrl+↓ will recall your messages' : 'Message recall is off');
+    });
+    $('set-clear-history').addEventListener('click', async () => {
+        const n = messageHistory().length;
+        if (!n) { toast('No recall history to clear'); return; }
+        if (!(await askConfirm('Clear recall history?',
+            'The last ' + n + (n === 1 ? ' message' : ' messages') +
+            ' you sent will no longer come back with Ctrl+↑. This does not delete anything from the board.',
+            'Clear', true))) return;
+        resetRecall();
+        await saveSettings({ messageHistory: [] });
+        toast('Recall history cleared');
     });
 
     wireSwitch('set-underline', () => !!settings.underlineLinks, async (v) => {
@@ -16320,7 +17578,17 @@
             // modals drawn OVER the thread/DM drawers, so they have to rank
             // above them — opening an image from a thread row and pressing Esc
             // used to close the thread behind the picture that was still up.
-            if (emojiPopOpen()) closeEmojiPop();
+            // Layout edit first of all. It covers the entire window and takes
+            // every pointer event, so anything Escape might otherwise reach is
+            // unreachable while it is up — and Escape means CANCEL here, the
+            // same as the button, because an arrangement is applied as it is
+            // made and backing out is the only thing left to ask for.
+            if (layoutEditOpen()) closeLayoutEdit(true);
+            // Above the emoji pop and the rest for the same reason they rank
+            // above the drawers: it is the innermost thing open, and it is drawn
+            // over the composer that Escape would otherwise reach past.
+            else if (langPopOpen()) { closeLangPop(); input.focus(); }
+            else if (emojiPopOpen()) closeEmojiPop();
             else if (!$('ctx-menu').hidden) closeCtxMenu();
             // The mute-duration submenu is inside the notification popout, so it
             // has to come off first — Escape on it must not take the whole popout

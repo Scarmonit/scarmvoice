@@ -610,6 +610,106 @@ button { font-family: inherit; background: none; border: 0; }
 #chan-head { grid-area: head; }
 #app[hidden] { display: none; }
 
+/* ---------- custom layouts (snap-to-zones) -------------------------------
+   Every arrangement Edit Layout can produce is WRITTEN OUT here, one rule per
+   combination, rather than assembled at runtime from whatever the drag ended
+   on. That is the whole reason the sections snap to zones instead of landing
+   where they were dropped: the set of layouts is finite, each one is a grid
+   whose areas are known to be rectangular and to tile the frame, and there is
+   no arrangement a user can reach that was not laid out by hand. A free
+   placement model would have had to defend against overlap; this one cannot
+   express it.
+
+   Three independent choices, so eight layouts:
+     data-panels  default | swapped   — which side the channel list is on
+     data-dock    bottom  | top       — the me bar under the left column, or a
+                                        full-width bar above everything
+     data-input   bottom  | top       — the message box below or above the
+                                        message list (see #main, further down)
+
+   The dock is the one that cannot simply move: it holds the voice panel and
+   the soundboard, so its height grows during a call. That rules out sharing a
+   row with #chan-head — the header would grow with it — which is why the top
+   zone gives it a row of its own spanning the full width. */
+
+/* Channels on the right, member list on the left. The two tracks trade widths
+   as well as places: the member list carries its own width (the `auto` track
+   measures it), and the channel list takes whatever its track is given. The
+   dock follows the CHANNEL list rather than staying put, because it is the me
+   bar under your channels in both arrangements — and because the member track
+   collapses to nothing when the panel is hidden, which would have squeezed a
+   dock spanning it down to the width of the rail. */
+#app[data-panels="swapped"] {
+  grid-template-columns: var(--w-rail) auto minmax(0, 1fr) var(--w-side);
+  grid-template-areas:
+    "rail members head head"
+    "rail members main side"
+    "rail members main user";
+}
+#app[data-dock="top"] {
+  grid-template-rows: auto 48px minmax(0, 1fr);
+  grid-template-areas:
+    "user user user user"
+    "rail side head head"
+    "rail side main members";
+}
+#app[data-panels="swapped"][data-dock="top"] {
+  grid-template-columns: var(--w-rail) auto minmax(0, 1fr) var(--w-side);
+  grid-template-rows: auto 48px minmax(0, 1fr);
+  grid-template-areas:
+    "user user user user"
+    "rail members head head"
+    "rail members main side";
+}
+
+/* The hairline between a panel and the chat is drawn on the edge that faces
+   the chat, so it moves with the panel. Left as an inset shadow rather than a
+   border for the same reason it always was: a border would change the width
+   the resize drag is writing. */
+#app[data-panels="swapped"] #sidebar { box-shadow: inset 1px 0 0 var(--line); }
+#app[data-panels="swapped"] #members-panel { box-shadow: inset -1px 0 0 var(--line); }
+/* …and the drag strip straddles the edge that faces the chat, so it swaps too.
+   The `dir` that turns a pointer delta into a width follows this in app.js. */
+#app[data-panels="swapped"] #sidebar-resize,
+#app[data-panels="swapped"] #dm-sidebar-resize { right: auto; left: -4px; }
+#app[data-panels="swapped"] #members-resize { left: auto; right: -4px; }
+/* #dm-sidebar takes the same grid area as #sidebar — the DM list replaces the
+   channel list in the column rather than opening beside it — so it travels
+   with it and needs the same edge treatment. */
+#app[data-panels="swapped"] #dm-sidebar { box-shadow: inset 1px 0 0 var(--line); }
+
+/* #dm-panel is placed by TRACK NUMBER rather than by area name (it deliberately
+   covers two of them), so it is the one thing in the app that has to be told
+   about a layout change instead of following the named areas.
+     swapped: the list it belongs to is now the RIGHT column, so the panel takes
+              the member column and the chat — 2/4 — and leaves it showing.
+     dock top: row 1 is the me bar across the whole window, and a conversation
+              drawn over it would cover the mute button. */
+#app[data-panels="swapped"] #dm-panel { grid-column: 2 / 4; }
+#app[data-dock="top"] #dm-panel { grid-row: 2 / 4; }
+
+/* A full-width bar sits ON the frame rather than floating in a corner, so it
+   loses the corner card's rounding and margin and grows a rule underneath. */
+#app[data-dock="top"] #user-dock {
+  margin: 0; border-radius: 0; border: 0;
+  box-shadow: 0 1px 0 var(--line);
+}
+
+/* The message box above the message list. #main is a flex column, so this is
+   `order` — which leaves the DOM alone, and with it the focus order, the
+   composer's identity across a move into a conversation, and every selector
+   that reaches it. The typing line travels with the box it belongs to: equal
+   order values fall back to document order, so it stays immediately above.
+
+   Scoped to `#main >` deliberately. The composer is MOVED into the DM drawer
+   (see moveComposer), where it is the last row of a different container and an
+   order of -1 would put it above the conversation it is for. */
+#app[data-input="top"] #main > #composer,
+#app[data-input="top"] #main > #typing-line { order: -1; }
+/* Padding flips with it, so the gap stays between the box and the messages
+   rather than against the window edge. */
+#app[data-input="top"] #main > #composer { padding: 8px 8px 0; }
+
 /* ---------- rail -------------------------------------------------------- */
 
 /* The same shade as the channel list, divided by a hairline rather than by
@@ -5956,6 +6056,8 @@ html.desat .threads-pop,
 html.desat .notif-pop,
 html.desat .ctx-menu,
 html.desat #lightbox,
+html.desat #layout-edit,
+html.desat #lang-pop,
 html.desat .toast {
   filter: saturate(var(--sat, 1));
 }
@@ -6047,4 +6149,287 @@ html[data-ui-density] #members-list .vp,
 html[data-ui-density] #voice-people .vp {
   padding-top: var(--ui-row-pad); padding-bottom: var(--ui-row-pad);
   margin-bottom: var(--ui-row-gap);
+}
+
+/* ---------- Edit Layout ---------------------------------------------------
+
+   Edit mode is drawn OVER the running app rather than replacing it with a
+   diagram: what you drag is the real channel list, at its real size, so the
+   arrangement you are choosing is the one you end up with.
+
+   Everything here is inert (`pointer-events: none`) except the toolbar. A
+   single shield takes every pointer event while editing, and app.js decides
+   what was grabbed by hit-testing the sections' own rects — so nothing in the
+   app underneath can be clicked, dragged or typed into by accident, and no
+   section needs a handler of its own that would have to be unbound again. */
+
+#layout-edit { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
+#layout-edit[hidden] { display: none; }
+
+/* Takes the events, shows nothing. Cursor is the whole affordance: the app
+   underneath is visibly unclickable the moment edit mode starts. */
+#layout-shield { position: absolute; inset: 0; pointer-events: auto; cursor: default; }
+body.layout-editing #layout-shield { cursor: grab; }
+body.layout-editing.layout-dragging #layout-shield { cursor: grabbing; }
+
+/* The movable sections, outlined in place. Drawn as boxes positioned over the
+   real elements rather than as an outline ON them: an outline would be clipped
+   by the panels' own overflow, and a border would move the thing it describes. */
+.lay-sec {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  display: flex; align-items: flex-start; justify-content: center;
+  transition: background .12s ease, border-color .12s ease;
+}
+.lay-sec.picked { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.lay-sec-name {
+  margin-top: -11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  box-shadow: var(--shadow-xs);
+}
+
+/* A zone. Only the zones the section being dragged can actually go in are
+   drawn — which is what keeps the drop unambiguous without any z-order rule:
+   within one section's set they never overlap, so there is always exactly one
+   answer to "what is under the pointer". */
+.lay-zone {
+  position: absolute;
+  border: 2px dashed var(--line-2, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  display: grid; place-items: center;
+  color: var(--dim); font-size: 12px; font-weight: 700;
+  text-align: center; padding: 6px;
+}
+.lay-zone.hot {
+  border-color: var(--accent); border-style: solid;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+.lay-zone.current { opacity: .55; }
+
+/* Follows the pointer. Never under it — the offset keeps the drop target
+   visible, which is the thing being aimed at. */
+#layout-ghost {
+  position: absolute; z-index: 2;
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 12.5px; font-weight: 700; white-space: nowrap;
+  box-shadow: var(--shadow-sm, var(--shadow-xs));
+  transform: translate(14px, 14px);
+}
+#layout-ghost[hidden] { display: none; }
+
+#layout-bar {
+  position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg, var(--shadow-xs));
+  max-width: calc(100vw - 28px); flex-wrap: wrap;
+}
+#layout-bar .lb-hint {
+  color: var(--dim); font-size: 12.5px; margin-right: 4px; padding-left: 4px;
+}
+.lb-btn {
+  padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--input-bg, var(--hover));
+  color: var(--text); font-size: 12.5px; font-weight: 600;
+}
+.lb-btn:hover { background: var(--hover); }
+.lb-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.lb-btn.primary:hover { background: var(--accent-hi); }
+
+/* ---------- Layout templates (Settings → Appearance) --------------------- */
+
+.lay-tpl-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
+.lay-tpl {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line);
+}
+.lay-tpl-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lay-tpl-sub { color: var(--dim); font-size: 11.5px; font-weight: 500; }
+.lay-tpl-empty { color: var(--dim); font-size: 12.5px; padding: 6px 2px; }
+.lay-tpl-count { color: var(--dim); font-size: 11.5px; font-weight: 600; }
+
+/* ---------- the composer's formatting bar --------------------------------
+
+   Teams' control set, in this app's clothes, over this app's storage: every
+   button writes Markdown into the same textarea, and the message that is sent
+   is the text in that box. There is no rich-text document anywhere in here. */
+
+#format-bar {
+  display: flex; align-items: center; gap: 2px;
+  margin: 0 0 6px; padding: 4px 6px;
+  background: var(--input); border: 1px solid var(--line-lo); border-radius: 8px;
+  flex-wrap: wrap;
+}
+#format-bar[hidden] { display: none; }
+.fb-btn {
+  width: 30px; height: 30px; flex: 0 0 30px;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 6px; cursor: pointer;
+  color: var(--muted);
+}
+.fb-btn:hover { background: var(--hover); color: var(--text); }
+.fb-btn .ico { width: 18px; height: 18px; }
+/* B / I / U / S are set in the app's own type rather than drawn as paths — the
+   letter IS the icon, and a drawn one at 18px is a smudge. */
+.fb-letter { font-size: 14px; font-weight: 700; line-height: 1; }
+.fb-letter i { font-family: Georgia, 'Times New Roman', serif; font-style: italic; }
+/* Lit while the caret sits inside a run of that mark, the way a word processor
+   lights its own toolbar. */
+.fb-btn.on { background: var(--accent-soft, var(--hover)); color: var(--accent); }
+.fb-btn[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+.fb-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); flex: 0 0 1px; }
+.fb-spacer { flex: 1 1 auto; }
+
+#btn-format { position: relative; }
+#btn-format[aria-pressed="true"] { color: var(--accent); }
+
+/* ---------- live formatting in the message box ---------------------------
+
+   The mirror sits UNDER the textarea and holds exactly the same characters, so
+   the two only stay aligned if they are typeset identically. That is why the
+   metrics live in one rule that names both: a font, a size, a line-height or a
+   padding changed on one of them alone is a composer whose text does not line
+   up with itself.
+
+   The textarea keeps every one of its own behaviours — it is still the control,
+   still focused, still the thing the caret is in. It only stops painting its
+   own glyphs. */
+#composer-mirror,
+#composer-input {
+  font-family: inherit; font-size: 15px; line-height: 1.375;
+  padding: 14px 0;
+  letter-spacing: normal; word-spacing: normal;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+  tab-size: 4;
+}
+/* The wrapper is the positioning context, and it is exactly the field's column
+   of the row — NOT the row, which also holds the attach button and the tools.
+   Measured against the row, every character in the layer would sit one button's
+   width to the left of the caret it belongs to. */
+.composer-field { flex: 1 1 auto; min-width: 0; position: relative; display: flex; }
+#composer-mirror {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  color: var(--text);
+  z-index: 0;
+}
+#composer-mirror[hidden] { display: none; }
+/* The textarea is transparent ONLY while the mirror is drawing. Anything that
+   turns the mirror off — the setting, a parse that threw — leaves the field
+   painting its own text, which is the state this app shipped in for years. */
+body.rich-composer #composer-input { color: transparent; caret-color: var(--text); }
+/* A solid selection would hide the mirror's glyphs behind it, because they are
+   painted underneath. Translucent lets the text read through at the cost of
+   nothing that matters. */
+body.rich-composer #composer-input::selection { background: var(--accent-line, rgba(88, 101, 242, .45)); }
+/* The textarea has to win the paint order, so its caret and its selection are
+   above the layer rather than behind it. */
+body.rich-composer #composer-input { position: relative; z-index: 1; background: none; }
+
+/* The marks themselves. Dimmed markers, real formatting — the point is that a
+   `**` you have typed is visibly punctuation and the word between it is
+   visibly bold, at the same time. */
+.cm-mark { color: var(--placeholder); }
+.cm-b { font-weight: 700; }
+.cm-i { font-style: italic; }
+.cm-u { text-decoration: underline; }
+.cm-s { text-decoration: line-through; }
+.cm-code, .cm-fence {
+  font-family: var(--mono); font-size: 0.92em;
+  background: var(--code-bg); border-radius: 3px;
+}
+.cm-fence { display: inline; }
+.cm-quote { color: var(--muted); }
+.cm-head { font-weight: 700; }
+.cm-link { color: var(--accent); }
+.cm-spoiler { background: var(--hover); border-radius: 3px; }
+.cm-list { color: var(--accent); font-weight: 700; }
+
+/* ---------- the code block's language menu ------------------------------- */
+
+.lang-pop {
+  position: fixed; z-index: 120;
+  width: 232px; max-height: 320px;
+  display: flex; flex-direction: column;
+  padding: 6px; border-radius: 8px;
+  background: var(--elev, var(--panel)); border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg, var(--shadow-xs));
+}
+.lang-pop[hidden] { display: none; }
+#lang-search {
+  flex: 0 0 auto; height: 30px; margin-bottom: 6px;
+  padding: 0 8px; border-radius: 6px;
+  background: var(--sunk, var(--input)); border: 1px solid var(--line-lo);
+  color: var(--text); font-size: 13px; outline: none;
+}
+#lang-search:focus { border-color: var(--accent-line); }
+.lang-list { overflow-y: auto; min-height: 0; }
+.lang-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border: 0; border-radius: 6px; cursor: pointer;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left;
+}
+.lang-item:hover, .lang-item.active { background: var(--hover); }
+.lang-item .li-tag {
+  margin-left: auto; color: var(--dim); font-family: var(--mono); font-size: 11px;
+}
+.lang-none { padding: 10px 8px; color: var(--dim); font-size: 12.5px; }
+
+/* ---------- rendered code blocks ----------------------------------------
+
+   A fence lands as a titled block: the language it was written with, a copy
+   button, and a numbered gutter. The `pre` inside is untouched — it is still
+   `pre.msg-code > code.language-x`, which is what the highlighter looks for and
+   what every existing message already is. */
+.msg-codeblock {
+  margin: 6px 0 2px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.cb-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px 5px 10px;
+  background: var(--code-head, rgba(127, 127, 127, .07));
+  box-shadow: 0 1px 0 var(--line);
+  font-size: 11.5px;
+}
+.cb-head .ico { width: 14px; height: 14px; color: var(--dim); flex: 0 0 14px; }
+.cb-lang { color: var(--dim); font-weight: 700; letter-spacing: .02em; }
+.cb-copy {
+  margin-left: auto; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  background: none; border: 1px solid transparent; color: var(--dim);
+  font: inherit; font-size: 11.5px; font-weight: 600;
+}
+.cb-copy:hover { background: var(--hover); color: var(--text); border-color: var(--line); }
+.cb-body { display: flex; align-items: stretch; min-width: 0; }
+/* The gutter is a SEPARATE column rather than a ::before on each line: the
+   highlighter rewrites the whole of `code`, so anything living inside it would
+   be thrown away on the next render. It does not scroll with the code, which is
+   the point — the numbers stay put while a long line runs past them. */
+.cb-gutter {
+  flex: 0 0 auto;
+  padding: 10px 8px 10px 10px;
+  text-align: right;
+  color: var(--placeholder); user-select: none;
+  font-family: var(--mono); font-size: 0.82em; line-height: 1.45;
+  white-space: pre;
+  box-shadow: inset -1px 0 0 var(--line);
+}
+/* Inside the block the `pre` has already been framed, so it drops its own. */
+.msg-codeblock .msg-code {
+  margin: 0; border: 0; border-radius: 0; background: none;
+  flex: 1 1 auto; min-width: 0;
 }

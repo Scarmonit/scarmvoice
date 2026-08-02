@@ -142,7 +142,37 @@ const DEFAULTS = {
     micVolume: 1,
 
     // RMS x100 above which you read as "speaking"; see voice.js
-    speakThreshold: 6
+    speakThreshold: 6,
+
+    // Layout — where the movable sections sit. Three independent choices, each
+    // one of two zones; styles.css writes out every combination by hand, so
+    // there is no value here that can produce an arrangement nobody laid out.
+    // See applyLayout() and normalizeLayout() in app.js, which is what actually
+    // holds this to the allowed words — a settings file is editable by hand.
+    layout: { panels: 'default', dock: 'bottom', input: 'bottom' },
+    // Saved arrangements, newest last. Capped at LAYOUT_TEMPLATE_MAX (10) by
+    // the renderer; the cap is re-applied on read, because this file outlives
+    // any one build and a list that grew past it must not stay grown.
+    layoutTemplates: [],
+
+    // Chat
+    // Ctrl+Up / Ctrl+Down in the message box walks back through what you have
+    // sent. On by default — it does nothing until the keys are pressed, and
+    // those two chords do nothing else in a textarea.
+    messageRecall: true,
+    // Draw the Markdown in the message box as it is typed — bold actually bold,
+    // the ** dimmed beside it. A view over the same textarea, never a different
+    // document: what is sent is exactly what is in the box.
+    richComposer: true,
+    // Whether the formatting toolbar is remembered between sessions. Off, like
+    // the reference's: the bar is a thing you open when you want it.
+    formatBarOpen: false,
+    // The last MESSAGE_HISTORY_MAX (25) message bodies, newest FIRST. Persisted
+    // so the history survives a restart, and CLEARED BY teardownSession() the
+    // way the drafts and the composer are: it is a record of what somebody
+    // typed, and the next person to sign in on this machine must not be able to
+    // press Ctrl+Up and read it.
+    messageHistory: []
 };
 
 // baseUrl decides which host receives the sb_auth cookie AND the account token,

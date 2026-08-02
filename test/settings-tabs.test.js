@@ -319,6 +319,11 @@ describe('Visual Density', () => {
     // The same problem the font slider had. Its stops are 0/4/8/16/24, so 12 and 20
     // are values no tick names — and with step="4" and no snapping, going from 8 to
     // 16 came to rest on 12 on the way.
+    // Its own timeout, because this one walks all 25 positions and each is a
+    // settings write and a full repaint — it sat at 5.0s against the 5s default,
+    // so whether it passed depended on how loaded the machine was rather than on
+    // anything about snapping. The number is not a claim about speed; it is room
+    // for a loop that is deliberately exhaustive.
     it('snaps message-group spacing onto the stops the scale names', async () => {
         for (let v = 0; v <= 24; v++) {
             await slide('set-msg-gap', v);
@@ -328,7 +333,7 @@ describe('Visual Density', () => {
         await slide('set-msg-gap', 12);
         expect($('set-msg-gap').value).toBe('8');
         await slide('set-msg-gap', 16);
-    });
+    }, 20000);
 
     // A KEYBOARD nudge has to move between the stops, which the browser cannot do
     // on a snapping slider: it steps by `step`, and the snap then pulls the result

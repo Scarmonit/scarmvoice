@@ -610,7 +610,7 @@ describe('the settings screen', () => {
     it('files every section under a divider, in the markup s own order', () => {
         expect(nav().map((b) => b.textContent.trim())).toEqual([
             'Account', 'Custom emoji', 'Privacy',
-            'Voice & Audio', 'Notifications', 'Appearance', 'Accessibility',
+            'Voice & Audio', 'Notifications', 'Appearance', 'Chat', 'Accessibility',
             'Screen share', 'System',
             'About'
         ]);
