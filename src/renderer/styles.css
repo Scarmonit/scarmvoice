@@ -3531,7 +3531,9 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
 .sc-glyph { width: 24px; height: 24px; }
 .sc-play .ico { width: 12px; height: 12px; }
 .thread-head > .ico { width: 17px; height: 17px; color: var(--accent); }
-.ub-icon .ico { width: 15px; height: 15px; stroke-width: 2.4; }
+/* .ub-icon .ico used to be here too, at 15px/2.4, and beat the update card's own
+   17px/2.2 rule the same way and for the same reason as the pin below. Size lives
+   with the panel; this section is about icon shapes that have no panel. */
 /* Size and gap live with the panel, further up — this section is only about the
    fact that the title is an inline-flex row. It used to set 15x15 here as well,
    which beat the panel's own rule (same specificity, later in the file) and left
@@ -4898,8 +4900,20 @@ button.ap-row:hover .ap-more { color: var(--text); }
 .set-toggle-label { font-size: 16px; font-weight: 500; color: var(--text-strong); }
 /* OFF is a dark well with a hairline round it — it reads as empty, which is what
    off means. It used to be --track, a mid grey, and a filled grey pill reads as a
-   third state rather than as the absence of one. 48px wide, measured. */
-.switch {
+   third state rather than as the absence of one. 48px wide, measured.
+
+   `button.switch`, not `.switch`. One class name covers TWO different widgets:
+   this one — a <button role="switch"> with a .switch-knob child, 18 of them in
+   the settings sheet — and the popover's "Mute for me", which is a <span> wrapping
+   a checkbox and an <i> track and is styled 38x22 further up (see .pop-row). Both
+   selectors were bare `.switch`, same specificity, and this block is later in the
+   file, so it silently resized the popover's switch to 48x24 and put a border
+   round it — while the knob travel that belongs to that widget is a hard-coded
+   translateX(16px) sized for the 38px track. The result was a toggle whose knob
+   stopped 11px short of the end: fully on, reading as half-thrown. The element
+   name is the honest discriminator here, since the two shapes have nothing else
+   in common. */
+button.switch {
   width: 48px; height: 24px; flex: 0 0 48px; padding: 0;
   border: 1px solid var(--switch-off-line); border-radius: 12px; cursor: pointer;
   background: var(--switch-off); position: relative; box-sizing: border-box;
@@ -5672,7 +5686,6 @@ html.win-hidden .up-bar i {
   font-size: 13px; font-weight: 500; text-align: center; cursor: pointer;
 }
 #dm-find:hover { background: var(--elev); }
-#dm-find:hover { background: var(--hover); color: var(--muted); }
 #dm-nav { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
 /* background:none and border:0 are not decoration here — this is a <button>, and
    without them the UA's own button face paints, which put a light plate at the top

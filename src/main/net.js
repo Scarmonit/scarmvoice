@@ -433,6 +433,19 @@ function retriable(status) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The reads the SERVER routes through a D1 read-replication session, which is
+// exactly the set of handlers that call boardDb() and hand the session back to
+// json() so it echoes an x-d1-bookmark: list, thread, pins, threads.
+//
+// This is one list rather than a condition in each place because the two halves
+// have to agree. A read that is replica-routed server-side but left out of the
+// SEND half arrives with no bookmark, so boardDb() opens it 'first-unconstrained'
+// and any replica may answer, however far behind — and it never spends
+// forcePrimary either, which is the only read-your-writes lever there is, since
+// writes echo no bookmark of their own. Left out of the STORE half, a bookmark
+// the server did hand back is thrown away. `threads` was missing from both.
+const REPLICA_READS = new Set(['list', 'thread', 'pins', 'threads']);
+
 async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
@@ -446,7 +459,12 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     // message you just pinned missing from it, or the one you just unpinned
     // still there. forcePrimary was being set by that write and then spent on
     // whichever poll happened to fire next.
-    if (pathname === 'list' || pathname === 'thread' || pathname === 'pins') {
+    //
+    // `threads` is the fourth, and it was missed: post a reply and open the
+    // Threads panel and the thread you just started could simply not be in the
+    // list — success:true, so the local-derivation fallback never ran and the
+    // panel showed the stale answer with confidence.
+    if (REPLICA_READS.has(pathname)) {
         // `primary` is an explicit ask for a primary read, for a caller that
         // knows it is racing a write it cannot see. Startup uses it: the first
         // `list` now leaves alongside the channels POST rather than behind it,
@@ -502,8 +520,13 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
         };
     }
 
-    const bm = res.headers.get('x-d1-bookmark');
-    if (bm) bookmark = bm;
+    // Only from the endpoints that actually participate — see REPLICA_READS.
+    // Nothing else echoes one today, so this is belt and braces rather than a
+    // behaviour change; it is here so the two halves stay one decision.
+    if (REPLICA_READS.has(pathname)) {
+        const bm = res.headers.get('x-d1-bookmark');
+        if (bm) bookmark = bm;
+    }
 
     if (res.status === 401) {
         let msg = 'unauthorized';

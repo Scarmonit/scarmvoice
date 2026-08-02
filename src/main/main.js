@@ -85,6 +85,22 @@ log.install();
 // directory — see store.migrateLegacyProfile for why the timing matters.
 store.migrateLegacyProfile();
 
+// …and READ it here too, not at whenReady.
+//
+// `cache` starts as null and get() is `Object.assign({}, cache)`, so before
+// init() every module-scope read answers `{}` — every default invisible, every
+// stored value missing, and no error to say so. The hardware-acceleration
+// switch below was the one such read, and it therefore never once fired:
+// `undefined === false` on every launch, so the setting saved, the toggle read
+// back as off, the app offered a restart to apply it, and Chromium came up with
+// GPU compositing on regardless. Somebody turning it off to escape a driver bug
+// got nothing, no matter how many times they restarted.
+//
+// init() needs only app.getPath('userData'), which is legal before ready —
+// migrateLegacyProfile() just above has always relied on that — and nothing
+// re-points userData later.
+store.init();
+
 // Chromium blocks audio until the page sees a user gesture. That rule exists to
 // stop web pages autoplaying at you; in a desktop chat client it just means the
 // first join/message chime is silently dropped. Must be set before app ready.
@@ -1467,10 +1483,26 @@ function registerIpc() {
     // is ready — so the setting says so and offers this rather than appearing to
     // take effect and not doing anything until the next launch.
     handle('app:relaunch', () => {
-        // relaunchAllowed guards the same thing quitAndInstall does: a call in
-        // progress must not be dropped by a restart somebody asked for casually.
+        // app.quit(), NOT app.exit(0).
+        //
+        // exit() terminates the process outright: before-quit and will-quit
+        // never run, so nothing flushes and nothing is released. That took the
+        // three things this restart depends on with it —
+        //   • store.flush(). Settings writes are debounced by 250ms, and the
+        //     only reason to be here is that somebody just changed one. The
+        //     restart raced the write and usually won, so the hardware
+        //     acceleration toggle this exists to apply was discarded by the
+        //     very restart meant to apply it.
+        //   • retirePresence(). The member-list row is left behind, so you go
+        //     on showing as present until the row ages out.
+        //   • ptt.shutdown() / rt.stop() / log.close(). The native keyboard
+        //     hook in particular is system-wide, and the replacement process
+        //     starts while the old one still holds it.
+        // quit() runs all of it; app.relaunch() is already armed and survives
+        // the deferred second pass before-quit takes to retire presence.
+        quitting = true;
         app.relaunch();
-        app.exit(0);
+        app.quit();
         return true;
     });
 
@@ -1705,7 +1737,8 @@ app.whenReady().then(async () => {
     }
 
     detectElevation();
-    store.init();
+    // store.init() has already run, at module scope — the hardware-acceleration
+    // read up there needs it and cannot wait for this.
     net.init();
     registerProtocol();
     configurePermissions();

@@ -97,6 +97,24 @@ async function type(value) {
     await settle();
 }
 
+// The ARCHIVE half is behind a real 220 ms debounce (app.js: the search input's
+// `input` listener arms `setTimeout(runSearch, 220)`). Counting zero-delay ticks
+// does not clear a wall-clock timer — it only clears it if the ticks happen to
+// take long enough, which is a property of how loaded the machine is and not of
+// the code under test.
+//
+// That is what made "jumps into the conversation a hit actually came from" fail
+// roughly one full run in two while passing every time the file ran alone:
+// measured, its `type()` + `settle(20)` came to ~256 ms against a 220 ms timer,
+// so ~36 ms of margin decided it. Every other archive test in this file happens
+// to have accumulated 400-500 ms by the time it asks, which is why only that one
+// ever went red. Waiting the timer out is the fix; the tick loop after it is
+// still needed for the fetch-and-render chain the timer starts.
+async function settleSearch() {
+    await new Promise((r) => setTimeout(r, 300));
+    await settle(20);
+}
+
 beforeAll(async () => {
     const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
     document.documentElement.innerHTML = html
@@ -331,7 +349,7 @@ describe('the archive half', () => {
     it('asks the DM archive, never the channel one', async () => {
         board.mockClear();
         await type('logo');
-        await settle(20);
+        await settleSearch();
         const call = board.mock.calls.find((c) => c[0] === 'dm/search');
         expect(call).toBeTruthy();
         expect(call[1].query).toMatchObject({ q: 'logo', thread: 40, scope: 'conversation' });
@@ -360,7 +378,7 @@ describe('the archive half', () => {
     it('sends only free text to the archive, keeping operators local', async () => {
         board.mockClear();
         await type('from:alice logo');
-        await settle(20);
+        await settleSearch();
         const call = board.mock.calls.find((c) => c[0] === 'dm/search');
         // The server has no idea who alice is; the operator is answerable here
         // without a round trip. Same split the channel search makes.
@@ -379,7 +397,7 @@ describe('the archive half', () => {
     // along (jumpToPost); this is its other side.
     it('jumps into the conversation a hit actually came from', async () => {
         await type('logo');
-        await settle(20);
+        await settleSearch();
         const hits = $('search-results').querySelectorAll('.search-result');
         expect(hits.length).toBe(2);
         expect(hits[0].querySelector('.sr-ch').textContent).toBe('alice');

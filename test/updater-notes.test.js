@@ -85,6 +85,44 @@ describe('parseNotes', () => {
         expect(blocks[2].items.some((i) => i.startsWith('•'))).toBe(false);
     });
 
+    // A BULLET THAT WRAPS IS STILL ONE BULLET.
+    //
+    // These notes are written to a column width, so most bullets run over two or
+    // three lines. Each continuation line was read as a fresh paragraph, which
+    // cut every wrapped bullet off at the line break and left the rest of its
+    // sentence stranded underneath as a fragment of its own — "• The title bar,
+    // which is on screen at all times and holds the connection dot —" followed
+    // by a paragraph reading "green, amber or red." Every release published up
+    // to 0.74.5 reads that way in the release-notes modal.
+    it('joins a bullet that runs over more than one line', () => {
+        const { blocks } = parseNotes([
+            '**Section**',
+            '- The title bar, which is on screen at all times and holds the',
+            '  connection dot — green, amber or red.',
+            '- A short one.'
+        ].join('\n'));
+
+        expect(blocks.map((b) => b.t).join(',')).toBe('h,ul');
+        expect(blocks[1].items).toEqual([
+            'The title bar, which is on screen at all times and holds the connection dot — green, amber or red.',
+            'A short one.'
+        ]);
+    });
+
+    // …but a blank line still ends the list, so a real paragraph after one is
+    // not swallowed into the last bullet.
+    it('still ends the list at a blank line', () => {
+        const { blocks } = parseNotes([
+            '- One thing',
+            '',
+            'A paragraph that follows the list.'
+        ].join('\n'));
+
+        expect(blocks.map((b) => b.t).join(',')).toBe('ul,p');
+        expect(blocks[0].items).toEqual(['One thing']);
+        expect(blocks[1].text).toBe('A paragraph that follows the list.');
+    });
+
     it('understands real <ul>/<li> and <h2> markup too', () => {
         const { blocks } = parseNotes(
             '<h2>Fixes</h2><ul>\n<li>One thing</li>\n<li>Another <code>thing</code></li>\n</ul>');

@@ -333,21 +333,37 @@
     // What each operator accepts. Anything not listed here is not an operator,
     // and stays in the text — so a message about `http://x` or a ratio like
     // `16:9` searches for itself instead of vanishing into a filter.
-    const SEARCH_OPS = {
+    //
+    // NO PROTOTYPE. Both this and HAS_KINDS below are indexed with a key the
+    // user typed, and on a plain object literal `constructor` is a key that is
+    // always there: `SEARCH_OPS['constructor']` answers with Object, which is
+    // truthy, so `constructor:x` passed the "is this an operator?" guard and
+    // then hit `(ops[k] = ops[k] || []).push(value)` — where ops.constructor is
+    // also Object, which has no .push. That TypeError escaped the input
+    // listener, so nothing after it ran: the dropdown never repainted and the
+    // debounce that runs the search was never armed. The box was dead until the
+    // token was deleted.
+    const SEARCH_OPS = Object.assign(Object.create(null), {
         from: 'user', mentions: 'user', has: 'kind', 'in': 'channel',
         before: 'date', after: 'date', during: 'date', pinned: 'bool',
         // The reference's "Author Type" is Bot vs User. This board has neither
         // — no bots, no webhooks — so the field means the distinction that DOES
         // exist here: admins, ordinary members, and you.
         author: 'kind'
-    };
+    });
     // `has:` values, as the reference names them. `embed` and `link` are the
     // same thing to this app — an embed IS the preview of a link — and both are
     // accepted so neither vocabulary is wrong.
-    const HAS_KINDS = {
+    //
+    // Prototype-free for the reason above: `has:constructor` used to resolve to
+    // the Object function and be added to filter.types as if it were a content
+    // kind, and since it matches none of the real kinds every message was then
+    // rejected — the whole list replaced by "No loaded messages match these
+    // filters", with nothing to say why.
+    const HAS_KINDS = Object.assign(Object.create(null), {
         link: 'links', embed: 'links', file: 'files', image: 'images',
         video: 'videos', sound: 'audio', audio: 'audio'
-    };
+    });
 
     // key:value, value optionally "quoted" for names with spaces. The trailing
     // group is deliberately lazy about the closing quote so a half-typed
@@ -524,6 +540,34 @@
                (!binding.alt || !!e.altKey) && (!binding.meta || !!e.metaKey);
     }
 
+    // Make a WebAudio destination track answer for the microphone it came from.
+    //
+    // Both getUserMedia patches (noise.js, then soundboard.js) hand the consumer
+    // a MediaStreamAudioDestinationNode track instead of the real capture track.
+    // That track's getSettings() reports no deviceId at all — it is not a device —
+    // so every "which microphone is this?" check downstream compares against
+    // undefined and answers "not the one you wanted", forever. voice.js's
+    // selectSavedMic has an `already on it` guard built on exactly that
+    // comparison, so it never once held: the app asked the SDK to switch device
+    // on every single join, and setDevice() is a full close-and-reopen of the
+    // microphone (verified in the vendored SDK: onSetDevice always runs a fresh
+    // getUserMedia). The SDK's own getCurrentDeviceId() reads the same field.
+    //
+    // The mixed track genuinely IS that device's audio, so reporting its id is
+    // the honest answer rather than a convenient one.
+    function inheritDeviceId(track, srcTracks) {
+        try {
+            const src = srcTracks && srcTracks[0];
+            const s = src && src.getSettings ? src.getSettings() : null;
+            if (!s || !s.deviceId) return track;
+            const orig = track.getSettings.bind(track);
+            track.getSettings = () => Object.assign({}, orig(), {
+                deviceId: s.deviceId, groupId: s.groupId
+            });
+        } catch (e) { /* a track that will not describe itself stays as it was */ }
+        return track;
+    }
+
     return {
         esc, hueOf, avatarStyle, bannerStyle, initials, isOnlyEmoji, mentionsMe,
         timeStr, dayStr, stampStr, fmtSize, fmtDuration, splitName,
@@ -532,7 +576,7 @@
         postMatchesFilter, postFrom,
         parseSearchQuery, opAtCaret, writeOp, SEARCH_OPS, HAS_KINDS,
         FONT_SIZES, fontSizeIndex,
-        matchesPttBinding,
+        matchesPttBinding, inheritDeviceId,
         URL_RE
     };
 }));

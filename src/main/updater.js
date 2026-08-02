@@ -340,6 +340,22 @@ function linesToBlocks(rawLines, out) {
 
         if (BULLET.test(line)) { flushPara(); items.push(line.replace(BULLET, '').trim()); return; }
 
+        // A plain line sitting directly under a bullet, with no blank line
+        // between them, is that bullet CONTINUING — markdown's lazy
+        // continuation, and the shape every wrapped bullet in these notes has,
+        // because they are written to a column width.
+        //
+        // Started as a new paragraph instead, and every one of them rendered in
+        // the release-notes modal as a bullet cut off mid-sentence followed by
+        // an orphan fragment of its own second half: "• The title bar, which is
+        // on screen at all times and holds the connection dot —" and then, as a
+        // paragraph of its own, "green, amber or red." Every release shipped so
+        // far reads that way.
+        //
+        // A blank line still ends the list (flushItems above), so a genuine
+        // paragraph after one is unaffected.
+        if (items.length) { items[items.length - 1] += ' ' + line; return; }
+
         flushItems();
         para.push(line);
     });
@@ -540,7 +556,18 @@ function startDownload() {
     const u = load();
     if (!u) return { ok: false };
     if (state.status === 'downloading' || state.status === 'ready') return { ok: true };
-    emit({ status: 'downloading', progress: state.progress || 0 });
+    // ZERO, not whatever the last download left behind.
+    //
+    // `progress` is only ever reset by a real download-progress event, and
+    // update-downloaded parks it at 100. So the SECOND update of a session —
+    // left un-installed, then superseded by a newer release — opened its
+    // download at "100% downloaded" with a full bar and nothing transferred.
+    // With differentialPackage the blockmap round trips run before the first
+    // progress event, so it sat there long enough to read as a finished
+    // download that would not install. The guard above means no progress has
+    // been reported for THIS transfer, so zero is the only honest figure, and
+    // the first real event supersedes it either way.
+    emit({ status: 'downloading', progress: 0 });
     u.downloadUpdate().catch((e) => emit({ status: 'available', error: e.message }));
     return { ok: true };
 }

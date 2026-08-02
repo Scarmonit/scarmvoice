@@ -484,36 +484,56 @@
         return best;
     }
 
+    // The tail is a LOOP, the nesting is the recursion.
+    //
+    // This used to finish with `if (after) renderFormatted(container, after, ctx)`,
+    // which made the stack depth the number of formatted spans on one LINE —
+    // and there is no maxlength on the composer (see index.html), so the only
+    // ceiling is the server's 250,000-character MAX_BODY. Measured: 6,000 spans
+    // render, 20,000 (60,000 characters, a quarter of what the server accepts)
+    // throw RangeError out of renderMessage, past renderMessages, into the poll.
+    // Nothing on that path catches it, so the row never appears AND neither
+    // does anything after it — verified: the perfectly ordinary message below
+    // the offending one vanished too, and every later poll threw at the same
+    // place, so one crafted message wedged the channel for everyone until it
+    // aged out of the page.
+    //
+    // Looping the tail leaves depth tracking how deeply spans are NESTED
+    // (`**_a_**`), which is bounded by the syntax itself.
     function renderFormatted(container, text, ctx) {
-        const best = fmtMatch(text);
-        if (!best) { appendTextWithMentions(container, text, ctx); return; }
-        if (best.start > 0) appendTextWithMentions(container, text.slice(0, best.start), ctx);
+        let rest = text;
+        for (;;) {
+            const best = fmtMatch(rest);
+            if (!best) { appendTextWithMentions(container, rest, ctx); return; }
+            if (best.start > 0) appendTextWithMentions(container, rest.slice(0, best.start), ctx);
 
-        let host;
-        if (best.f.kind === 'spoiler') {
-            host = document.createElement('span');
-            host.className = 'spoiler';
-            host.setAttribute('role', 'button');
-            host.setAttribute('tabindex', '0');
-            host.title = 'Click to reveal spoiler';
-            host.addEventListener('click', () => host.classList.add('revealed'));
-            host.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); host.classList.add('revealed'); }
-            });
-            container.appendChild(host);
-        } else {
-            host = document.createElement(best.f.kind);
-            if (best.f.wrap) {
-                const outer = document.createElement(best.f.wrap);
-                outer.appendChild(host);
-                container.appendChild(outer);
-            } else {
+            let host;
+            if (best.f.kind === 'spoiler') {
+                host = document.createElement('span');
+                host.className = 'spoiler';
+                host.setAttribute('role', 'button');
+                host.setAttribute('tabindex', '0');
+                host.title = 'Click to reveal spoiler';
+                host.addEventListener('click', () => host.classList.add('revealed'));
+                host.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); host.classList.add('revealed'); }
+                });
                 container.appendChild(host);
+            } else {
+                host = document.createElement(best.f.kind);
+                if (best.f.wrap) {
+                    const outer = document.createElement(best.f.wrap);
+                    outer.appendChild(host);
+                    container.appendChild(outer);
+                } else {
+                    container.appendChild(host);
+                }
             }
+            // Nested spans still recurse — that depth is what the syntax bounds.
+            renderFormatted(host, best.inner, ctx);
+            rest = rest.slice(best.end);
+            if (!rest) return;
         }
-        renderFormatted(host, best.inner, ctx);
-        const after = text.slice(best.end);
-        if (after) renderFormatted(container, after, ctx);
     }
 
     // `code` and ``code`` spans first, so formatting characters inside them stay
@@ -5804,6 +5824,15 @@
                     isMe: p.client_id === settings.clientId ||
                         !!(account && p.user_id && p.user_id === account.id),
                     muted: !!p.muted,
+                    // Carried for the same reason `muted` is. These two travel
+                    // together in the presence payload and both renderVoiceUsers
+                    // and renderMembers draw a badge for each, but this branch —
+                    // the one that builds a row for somebody with no SFU peer,
+                    // which is EVERY row when you have not joined the call — took
+                    // only the mic. So a person who deafened themselves showed a
+                    // mic-off badge if they were also muted and never a
+                    // headset-off badge at all.
+                    deafened: !!p.deafened,
                     remoteOnly: true
                 });
             }
@@ -7526,6 +7555,24 @@
         // has already run above and stashed whatever was open, so this is what
         // actually throws it away.
         threadDrafts.clear();
+        // …and the composer that is ACTUALLY ON SCREEN, which is neither of the
+        // two maps above and so survived every one of these lines.
+        //
+        // The whole argument for clearing the drafts applies harder here,
+        // because this one needs no coincidence of ids: whatever the outgoing
+        // account had typed, the files it had staged and the message it was
+        // replying to were still sitting in the field when the next person
+        // signed in. enterApp() does not reset them either. One keystroke
+        // re-enabled Send and one Enter posted the previous account's text and
+        // uploaded its staged files under the new account's credential.
+        //
+        // After closeDm() above, not before: its moveComposer()/restoreDraft()
+        // repopulates this very field.
+        input.value = '';
+        clearStaged();
+        clearReply();
+        autosize();
+        updateSendEnabled();
         // Same rule as the drafts: remembered pages are somebody's messages,
         // and the next person to sign in on this machine must not open a
         // channel and find them already painted.
@@ -9158,8 +9205,19 @@
             row.className = 'np-radio';
             row.innerHTML = `<span>${esc(label)}</span>` +
                 `<input type="radio" name="np-level" value="${value}"${mode === value ? ' checked' : ''}>`;
-            row.querySelector('input').addEventListener('change', () => {
-                setChannelAlertMode(name, value);
+            row.querySelector('input').addEventListener('change', async () => {
+                // AWAITED, or the repaint below undoes the click.
+                //
+                // setChannelAlertMode goes through saveSettings, which only
+                // reassigns `settings` once the IPC write resolves — and
+                // renderNotifPop() rebuilds these radios from
+                // channelAlertMode(name), i.e. from `settings`. Fired in the same
+                // tick it read the OLD level back and re-checked it, so picking
+                // "Only @mentions" put the tick straight back on "All Messages"
+                // while quietly saving the new value. It looked like the control
+                // had refused the click, and a second click was what made it
+                // stick.
+                await setChannelAlertMode(name, value);
                 // Left OPEN, like the reference: picking a level is a setting, not
                 // a command, and the radio moving is the confirmation.
                 renderNotifPop();
@@ -11502,6 +11560,7 @@
                 cancelKeyRecorder = null;
                 btn.classList.remove('recording');
                 window.removeEventListener('keydown', onKey, true);
+                window.removeEventListener('keyup', onKeyUp, true);
                 window.removeEventListener('mousedown', onMouse, true);
                 if (binding || clear) {
                     await saveSettings({ [settingKey]: binding });
@@ -11511,6 +11570,25 @@
                 if (afterSave) afterSave();
             };
 
+            // A MODIFIER IS THE START OF A CHORD, NOT THE END OF THE RECORDING.
+            //
+            // This used to commit on the first keydown whatever it was, and a
+            // chord always begins with its modifier — so Ctrl+Shift+M recorded
+            // "ControlLeft" and nothing else. The `ctrl:`/`shift:` fields below
+            // were written to suppress a modifier that IS the code, which shows
+            // the intent, but they could never be true: by the time the M
+            // arrived the recorder had already closed. Every modified binding
+            // was therefore unrecordable, and the hint that suggests one ("try
+            // one with Ctrl, Alt or Shift", raised when a bare key will not
+            // register) was advice the recorder refused to take.
+            //
+            // Held instead, and resolved on the way up: a modifier released with
+            // nothing after it is still a binding on its own, which is what the
+            // suppression above was protecting and what the hint's fallback
+            // relies on.
+            let pendingMod = null;
+            const MODIFIER = /^(Control|Shift|Alt|Meta|OS)/;
+
             const onKey = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -11518,13 +11596,22 @@
                 // Backspace/Delete clears the binding entirely (the toggles are
                 // optional; PTT falls back to its default key).
                 if (e.key === 'Backspace' || e.key === 'Delete') return finish(null, true);
+                if (MODIFIER.test(e.code)) { pendingMod = e.code; return; }
+                pendingMod = null;
+                // e.code cannot be a modifier here, so these need no suppression.
                 finish({
                     type: 'key', code: e.code,
-                    ctrl: e.ctrlKey && !/^Control/.test(e.code),
-                    shift: e.shiftKey && !/^Shift/.test(e.code),
-                    alt: e.altKey && !/^Alt/.test(e.code),
-                    meta: e.metaKey && !/^Meta|^OS/.test(e.code)
+                    ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey
                 });
+            };
+            const onKeyUp = (e) => {
+                // Pressed and let go with nothing in between: the modifier was
+                // the whole binding.
+                if (!pendingMod || e.code !== pendingMod) return;
+                e.preventDefault();
+                e.stopPropagation();
+                pendingMod = null;
+                finish({ type: 'key', code: e.code, ctrl: false, shift: false, alt: false, meta: false });
             };
             const onMouse = (e) => {
                 // Only the extra side buttons — hijacking left/right click would
@@ -11535,6 +11622,7 @@
                 finish({ type: 'mouse', code: 'Mouse' + e.button, button: e.button + 1 });
             };
             window.addEventListener('keydown', onKey, true);
+            window.addEventListener('keyup', onKeyUp, true);
             window.addEventListener('mousedown', onMouse, true);
             // Escape cancels, but only if you are still looking at the sheet.
             // Closing Settings with the recorder armed used to leave both
@@ -13152,9 +13240,19 @@
         // lib.js HAS_KINDS), but only "sound" is an <option> — so a box reading
         // `has:audio` loaded a select with no matching value, which HTML resolves
         // to the blank "Any content", and pressing Apply then deleted the filter.
-        // `embed` is the same shape and is normalised for the same reason.
-        const has = first('has');
-        $('fm-has').value = has === 'audio' ? 'sound' : (has === 'embed' ? 'link' : has);
+        //
+        // `embed` is NOT the same shape, though it was treated as if it were.
+        // `link` and `embed` also mean the same thing to the parser, but unlike
+        // audio/sound they BOTH have an <option> (index.html: "Links" and
+        // "Embeds"). Rewriting embed to link therefore did the very thing this
+        // mapping exists to prevent: it showed the user an operator they had not
+        // typed, made "Embeds" impossible to see as selected, and pressing Apply
+        // silently rewrote `has:embed` in the box to `has:link`.
+        //
+        // Lowercased first so `has:Audio` reaches the alias too, rather than
+        // missing every option and being deleted on Apply.
+        const has = first('has').toLowerCase();
+        $('fm-has').value = has === 'audio' ? 'sound' : has;
         $('fm-author').value = first('author');
         // A bare `pinned:` means true; the select's blank is "either".
         const pin = first('pinned');
@@ -13282,6 +13380,13 @@
         ['fm-from', 'fm-in', 'fm-has', 'fm-mentions', 'fm-author', 'fm-pinned']
             .forEach((id) => { $(id).value = ''; });
         $('fm-date-value').value = '';
+        // …and the original the field could not display, exactly as the date
+        // row's own Clear does. Without it, applyFiltersModal's `|| fmDateRaw`
+        // fallback handed the cleared date straight back: Clear, then Add date,
+        // then Apply with the row still empty, and a date the user had just
+        // wiped reappeared in the box — under whatever operator the mode select
+        // had reset to.
+        fmDateRaw = '';
         $('fm-date-mode').value = 'during';
         $('fm-date-row').hidden = true;
         $('fm-date-add').hidden = false;
@@ -15819,6 +15924,16 @@
                 // they happened to be under the cursor is not what Enter meant.
                 if (!roster && !dmPick.chosen.size) {
                     dmPick.chosen.add(u.id);
+                    // REPAINT FIRST. renderDmPicker() is what clears
+                    // `ok.disabled` (it sets it from `chosen.size === 0`, and the
+                    // run that built this row saw an empty set), and click() on a
+                    // disabled control is dropped before it dispatches — so Enter
+                    // on a person did nothing at all, no dm/create, not even a
+                    // tick on the row. A second Enter then took the toggle branch
+                    // below and removed the id again, so the palette could never
+                    // open a conversation from the keyboard however many times
+                    // you pressed it — while its own footer said "Enter to go".
+                    renderDmPicker();
                     return $('dm-picker-ok').click();
                 }
                 row.click();

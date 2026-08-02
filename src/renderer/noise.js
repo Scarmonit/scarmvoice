@@ -125,6 +125,11 @@
 
             const track = dest.stream.getAudioTracks()[0];
             const srcTracks = raw.getAudioTracks();
+            // Keep the real microphone's identity on the track we hand out —
+            // see ScarmLib.inheritDeviceId for what reads it and what broke.
+            if (window.ScarmLib && window.ScarmLib.inheritDeviceId) {
+                window.ScarmLib.inheritDeviceId(track, srcTracks);
+            }
             let done = false;
             active++;
             // Hoisted above cleanup: the upstream-death path below calls it.

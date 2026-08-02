@@ -420,6 +420,10 @@
         // enableAudio/disableAudio share one lock in the SDK and it is not a
         // queue — see applyTransmit. Everything goes through this chain instead.
         let txChain = Promise.resolve();
+        // The saved microphone still has to be selected, but the mic is shut and
+        // selecting it would open it — see the join path. Cleared the first time
+        // the mic is legitimately open.
+        let micPending = false;
 
         let localSharing = false;
         // Every live presenter, keyed by participant id. The SFU happily carries
@@ -1302,6 +1306,19 @@
                 // the chain and reaches the recovery below instead of escaping to
                 // a catch that could only ignore it.
                 return Promise.resolve(fn.call(meeting.self)).then(() => { txSent = target; });
+            }).then(() => {
+                // The deferred device selection, from the PTT join above. Runs
+                // the first time the microphone is actually open, and inside
+                // this chain so it is ordered against enable/disable rather than
+                // racing the SDK's toggleAudio lock. selectSavedMic swallows its
+                // own failures, so it can never break the chain — and with the
+                // track now reporting its real deviceId (see
+                // ScarmLib.inheritDeviceId) it does nothing at all when the SDK
+                // already landed on the saved microphone, which is the usual case
+                // and what keeps the first press free of a device swap.
+                if (!micPending || lastTransmit !== true) return null;
+                micPending = false;
+                return selectSavedMic(joinGen).then(() => applyStreamPriorities());
             }).catch((e) => {
                 // Both directions can fail, and they fail into opposite states:
                 // acquiring the mic (device unplugged, permission revoked) leaves
@@ -1508,6 +1525,7 @@
                 muted = false;
                 lastTransmit = null;
                 txSent = null;              // a new engine has been told nothing
+                micPending = false;         // decided a few lines below, per join
 
                 // YOU ARE IN THE CALL HERE. Audio is flowing, so the UI is told
                 // now — everything below is tuning, and none of it changes that.
@@ -1546,14 +1564,35 @@
                 // it would otherwise resume and call setDevice() on a meeting
                 // leave() had already discarded — re-opening the microphone
                 // behind the login gate.
-                selectSavedMic(gen).then(() => {
-                    if (gen !== joinGen) return;
-                    // Bandwidth priority: without this, audio and a multi-megabit
-                    // screen share compete as equals on the same bundle, and
-                    // voice is what breaks up when the uplink saturates. After
-                    // the mic swap, because that replaces the sender it applies to.
+                // …but NOT while the microphone is meant to be shut.
+                //
+                // setDevice() is not a preference, it is an acquisition: the
+                // vendored SDK's AudioMediaHandler.onSetDevice always runs a
+                // fresh getUserMedia and merely hands back a track with
+                // `enabled = false` when the track was disabled (its video
+                // counterpart refuses the switch outright in that case; the
+                // audio one has no such guard). So on a push-to-talk join —
+                // where mediaConfiguration deliberately asks for audio:false and
+                // applyTransmit() has just closed the mic — this reopened the
+                // capture device and held it for the whole call. Somebody who
+                // joined on PTT and never pressed the key still had the Windows
+                // "microphone in use" indicator lit from join to leave.
+                //
+                // Deferred to the first time the mic is genuinely opened, in the
+                // txChain below so it cannot race enable/disable.
+                if (modeAllowsTransmit()) {
+                    selectSavedMic(gen).then(() => {
+                        if (gen !== joinGen) return;
+                        // Bandwidth priority: without this, audio and a multi-megabit
+                        // screen share compete as equals on the same bundle, and
+                        // voice is what breaks up when the uplink saturates. After
+                        // the mic swap, because that replaces the sender it applies to.
+                        applyStreamPriorities();
+                    }).catch(() => {});
+                } else {
+                    micPending = true;
                     applyStreamPriorities();
-                }).catch(() => {});
+                }
 
                 // Remote participants arrive shortly after join; re-render so the
                 // roster reflects who is actually peered rather than just present.
@@ -1660,6 +1699,10 @@
         function leave() {
             if (!joined && !joining) return;
             joinGen++;   // invalidate any join() still in flight
+            // A deferred mic selection belongs to the call that deferred it; left
+            // set, the next enable in a LATER call would spend it on a join that
+            // had already chosen for itself.
+            micPending = false;
             // Detach before leaving: the SDK keeps emitting during its own async
             // teardown, and those handlers close over module state with no
             // generation check — a late audioUpdate or screenShareUpdate would

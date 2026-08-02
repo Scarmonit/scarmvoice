@@ -152,6 +152,12 @@
             if (!track) return raw;
 
             const srcTracks = raw.getAudioTracks();
+            // Same as noise.js: the mix is still that microphone's audio, and
+            // the id is what every "is this already the right device?" check
+            // downstream compares against.
+            if (window.ScarmLib && window.ScarmLib.inheritDeviceId) {
+                window.ScarmLib.inheritDeviceId(track, srcTracks);
+            }
             let done = false;
             const origStop = track.stop.bind(track);
             // Same contract as noise.js: `fromEnded` means the SOURCE died, and

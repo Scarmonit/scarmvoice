@@ -2211,6 +2211,78 @@ wraps `RTCPeerConnection` to keep a registry of peer connections and calls
 > SDK is now self-hosted on the site. This app flags a participant who is in
 > presence but not an SFU peer with a ⚠ so the mismatch can't hide again.
 
+### Four invariants the 0.75 audit pass turned up
+
+Each of these was a rule the code already believed it was following, with
+nothing anywhere to notice that it was not. They are recorded together because
+the shape repeats: a decision made in one place, and a second place that had to
+agree with it and quietly stopped.
+
+**`store.get()` answers `{}` until `store.init()` has run, and says nothing
+about it.** `cache` starts as `null` and `get()` is `Object.assign({}, cache)`,
+so a read before init sees no stored value *and none of the defaults either* —
+it cannot be told apart from a profile that simply has no preference. `main.js`
+has exactly one module-scope read, the hardware-acceleration switch, and it has
+to be there because `app.disableHardwareAcceleration()` is only legal before the
+app is ready. `store.init()` was inside `whenReady()`, so the test was
+`undefined === false` on every launch and the switch had never once worked.
+`init()` needs only `app.getPath('userData')`, which is legal pre-ready —
+`migrateLegacyProfile()` on the line above has always relied on that — so it now
+runs at module scope and the `whenReady()` call is gone. **Any future
+module-scope `store.get()` is subject to the same trap**; there is a test
+pinning the ordering, and it is checked by launching the real binary against a
+throwaway profile rather than by a stand-in, because the whole defect lives in
+what happens before the app exists.
+
+**`app.exit()` is not a quit.** It skips `before-quit` and `will-quit`, which is
+where `store.flush()`, `retirePresence()`, `ptt.shutdown()`, `rt.stop()` and
+`log.close()` live. `app:relaunch` used it, so the restart offered *by the
+hardware-acceleration switch* raced the 250 ms settings debounce and usually
+discarded the very setting it was restarting to apply — as well as leaving the
+member-list row behind and handing the system-wide keyboard hook to the
+replacement process while the old one still held it. `app.relaunch()` is armed
+independently of how the process ends, so `app.quit()` is always the right
+partner for it, including through the deferred second pass `before-quit` takes
+to retire presence.
+
+**The client's replica-read set has to match the server's.** Four board
+handlers open a D1 read-replication session — `list`, `thread`, `pins` and
+`threads`, i.e. the ones calling `boardDb()` and passing the session to `json()`
+so it echoes `x-d1-bookmark`. `net.js` sent the bookmark for three of them. The
+fourth arrived bare, so the server defaulted it to `first-unconstrained` and any
+replica could answer however far behind — and it never spent `forcePrimary`
+either, which is the only read-your-writes lever available, because writes echo
+no bookmark of their own. Starting a thread and opening the Threads panel could
+therefore show a list without it, with `success: true` so the local-derivation
+fallback never ran. Both halves now read one `REPLICA_READS` set, so they cannot
+drift apart again.
+
+**A parser whose keys come from the user must not have a prototype.**
+`SEARCH_OPS` and `HAS_KINDS` in `lib.js` are indexed with whatever is typed into
+the search box, and `constructor` is a key every object literal has.
+`SEARCH_OPS['constructor']` answered with `Object` — truthy — so `constructor:x`
+passed the "is this an operator?" guard and then called `.push` on `Object`. The
+`TypeError` escaped the input listener, so the dropdown never repainted and the
+220 ms `runSearch` debounce was never armed: the box was dead until the token was
+deleted. `has:constructor` was the quieter twin, resolving to the `Object`
+function, going into `filter.types` as though it were a content kind and matching
+nothing, so every message was rejected. Both maps are
+`Object.assign(Object.create(null), {…})` now.
+
+> **Recursion depth must track nesting, not repetition (fixed 0.75.0).**
+> `renderFormatted()` handled the text after a match by calling itself, so the
+> stack depth was the number of formatted spans on one *line*. The composer has
+> no `maxlength` — the only ceiling is the server's 250,000-character
+> `MAX_BODY` — so a single line of `*a*` repeated enough times threw
+> `RangeError` out of `renderMessage`, past `renderMessages`, into the poll,
+> with nothing on that path catching it. Measured: 6,000 spans render, 20,000
+> (60,000 characters, a quarter of what the server accepts) do not — and the
+> row after the offending one did not render either, so one message wedged the
+> channel for everyone in it until it aged out of the page. The tail is a loop
+> now; only the nested call still recurses, and that depth is bounded by the
+> syntax. The same question is worth asking of any other "handle the rest"
+> recursion added later.
+
 ## Not implemented yet
 
 Carried by the website but not yet ported:
