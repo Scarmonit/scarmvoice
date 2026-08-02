@@ -9616,6 +9616,19 @@
         { key: 'search', elId: 'search-box', name: 'Header search', group: 'Details', move: false },
         { key: 'toolbar', elId: 'format-bar', name: 'Formatting bar', group: 'Details', move: false }
     ];
+    // Which node inside an element lays its contents out, and which way it runs
+    // by default. This is what Orientation and Order in the options popup
+    // rewrite — an element without one is simply not offered them, because a
+    // control that does nothing is worse than no control.
+    const EL_FLOW = {
+        rail: { sel: '#rail', axis: 'column', orient: true, order: true },
+        mebar: { sel: '#me-bar', axis: 'row', orient: true, order: true },
+        header: { sel: '#chan-head', axis: 'row', orient: true, order: true },
+        composer: { sel: '.composer-row', axis: 'row', orient: true, order: true },
+        channels: { sel: '#sidebar', axis: 'column', orient: false, order: true },
+        members: { sel: '#members-panel', axis: 'column', orient: false, order: true }
+    };
+
     const EL_BY_KEY = new Map(EDIT_ELEMENTS.map((e) => [e.key, e]));
     const MOVABLE = EDIT_ELEMENTS.filter((e) => e.move);
     const EDIT_GROUPS = ['Panels', 'Bars', 'Details'];
@@ -9645,6 +9658,12 @@
         for (const el of EDIT_ELEMENTS) {
             const s = (els[el.key] && typeof els[el.key] === 'object') ? els[el.key] : {};
             const rec = { hidden: !!s.hidden };
+            const flow = EL_FLOW[el.key];
+            if (flow) {
+                rec.orient = (flow.orient && (s.orient === 'row' || s.orient === 'column'))
+                    ? s.orient : flow.axis;
+                rec.reverse = !!(flow.order && s.reverse);
+            }
             if (el.move && [s.x, s.y, s.w, s.h].every((n) => Number.isFinite(Number(n)))) {
                 rec.x = clamp01(s.x);
                 rec.y = clamp01(s.y);
@@ -9685,6 +9704,11 @@
         const size = Math.round(Number(p.gridSize));
         return {
             showGrid: p.showGrid !== false,
+            // Two behaviours, two answers. One toggle for both is a toggle that
+            // cannot be believed: element snapping off used to leave the grid
+            // still catching every drag, which reads as the switch doing
+            // nothing at all.
+            snapGrid: p.snapGrid !== false,
             snapElements: p.snapElements !== false,
             gridSize: Number.isFinite(size) ? Math.max(GRID_MIN, Math.min(GRID_MAX, size)) : 24
         };
@@ -9734,6 +9758,18 @@
                     node.style.zIndex = '';
                 }
             }
+        }
+        // Orientation and Order, written onto whichever node inside the element
+        // does its laying out. One attribute, so the four combinations are four
+        // rules rather than a matrix of overrides.
+        for (const [key, flow] of Object.entries(EL_FLOW)) {
+            const node = document.querySelector(flow.sel);
+            if (!node) continue;
+            const st = lay.els[key] || {};
+            const axis = st.orient || flow.axis;
+            const dir = axis + (st.reverse ? '-reverse' : '');
+            if (dir === flow.axis) node.removeAttribute('data-flow');
+            else node.dataset.flow = dir;
         }
         placeComposerFor(lay);
         // The conversation drawer is placed by grid track, which says nothing in
@@ -9845,7 +9881,10 @@
 
     const gridPx = () => editorPrefs().gridSize;
 
+    // Off means OFF: the value comes back untouched, so a drag lands where it
+    // was let go, to the pixel.
     function snapValue(v, origin) {
+        if (!editorPrefs().snapGrid) return v;
         const g = gridPx();
         return origin + Math.round((v - origin) / g) * g;
     }
@@ -9853,10 +9892,13 @@
     // Candidate lines to align with: the app's own edges and centre, and every
     // other visible element's edges and centre.
     function snapLines(exceptKey) {
+        // Nothing at all when it is off — the WINDOW'S OWN EDGES included. They
+        // used to be kept regardless, so an element let go anywhere near a side
+        // still jumped to it and the toggle looked broken.
+        if (!editorPrefs().snapElements) return { v: [], h: [] };
         const box = appBox();
         const v = [box.left, box.left + box.width / 2, box.left + box.width];
         const h = [box.top, box.top + box.height / 2, box.top + box.height];
-        if (!editorPrefs().snapElements) return { v, h };
         for (const el of visibleMovable()) {
             if (el.key === exceptKey) continue;
             const r = rectOf(el.key);
@@ -10075,13 +10117,16 @@
         hideBtn.className = 'keycap';
         hideBtn.textContent = work.els[selectedKey].hidden ? 'Show' : 'Hide';
         hideBtn.addEventListener('click', () => setHidden(selectedKey, !work.els[selectedKey].hidden));
-        const resetBtn = document.createElement('button');
-        resetBtn.type = 'button';
-        resetBtn.className = 'keycap';
-        resetBtn.textContent = 'Reset this';
-        resetBtn.addEventListener('click', () => resetElement(selectedKey));
+        const moreBtn = document.createElement('button');
+        moreBtn.type = 'button';
+        moreBtn.className = 'keycap';
+        moreBtn.textContent = 'More options…';
+        moreBtn.addEventListener('click', () => {
+            const b = $('edit-panel').getBoundingClientRect();
+            openElementOptions(selectedKey, Math.max(8, b.left - 262), b.top + 40);
+        });
         btns.appendChild(hideBtn);
-        btns.appendChild(resetBtn);
+        btns.appendChild(moreBtn);
         host.appendChild(name);
         host.appendChild(dims);
         host.appendChild(btns);
@@ -10123,6 +10168,213 @@
         paintSelected();
     }
 
+    // ---- per-element options ----------------------------------------------
+    //
+    // Right-click an element (or More options on the selected one) and it opens
+    // a small panel of the adjustments THAT element has, the way the reference's
+    // per-frame menus do: how its contents run, how big it is, and the two
+    // undos that belong to one element rather than to the whole layout.
+    //
+    // Built per element rather than from a fixed form. An element with nothing
+    // to say about orientation is not offered orientation.
+
+    let optionsKey = null;
+
+    const optionsOpen = () => !$('el-options').hidden;
+
+    function closeElementOptions() {
+        const pop = $('el-options');
+        if (!pop || pop.hidden) return;
+        pop.hidden = true;
+        optionsKey = null;
+    }
+
+    // A labelled row with a slider and its value, in per-cent of the window.
+    function sizeRow(label, get, set) {
+        const row = document.createElement('div');
+        row.className = 'ep-row ep-stack';
+        const head = document.createElement('span');
+        head.className = 'ep-label';
+        const val = document.createElement('b');
+        const paint = () => { val.textContent = Math.round(get() * 100) + '%'; };
+        head.textContent = label + ' ';
+        head.appendChild(val);
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = '5';
+        input.max = '100';
+        input.step = '1';
+        input.value = String(Math.round(get() * 100));
+        input.setAttribute('aria-label', label);
+        input.addEventListener('input', () => {
+            set(Number(input.value) / 100);
+            paint();
+        });
+        paint();
+        row.appendChild(head);
+        row.appendChild(input);
+        return row;
+    }
+
+    // A two-button choice, drawn like the reference's segmented options.
+    function choiceRow(label, options, get, set) {
+        const row = document.createElement('div');
+        row.className = 'ep-row ep-stack';
+        const head = document.createElement('span');
+        head.className = 'ep-label';
+        head.textContent = label;
+        const seg = document.createElement('div');
+        seg.className = 'ep-seg';
+        const paint = () => {
+            [...seg.children].forEach((b) => {
+                const on = b.dataset.value === String(get());
+                b.classList.toggle('on', on);
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+        };
+        for (const o of options) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.dataset.value = String(o.value);
+            b.textContent = o.label;
+            b.addEventListener('click', () => { set(o.value); paint(); });
+            seg.appendChild(b);
+        }
+        paint();
+        row.appendChild(head);
+        row.appendChild(seg);
+        return row;
+    }
+
+    function elementEdit(key, patch) {
+        Object.assign(work.els[key], patch);
+        dirty = true;
+        applyLayout(work);
+        renderFrames();
+        paintSelected();
+    }
+
+    // Size sliders write a rectangle, so they need one to write into.
+    function ensureRect(key) {
+        materialize();
+        return work.els[key];
+    }
+
+    function openElementOptions(key, x, y) {
+        const el = EL_BY_KEY.get(key);
+        if (!el || !editing) return;
+        optionsKey = key;
+        select(key);
+
+        const pop = $('el-options');
+        const body = $('el-options-body');
+        $('el-options-title').textContent = el.name;
+        body.textContent = '';
+
+        const flow = EL_FLOW[key];
+        if (flow && flow.orient) {
+            body.appendChild(choiceRow('Orientation', [
+                { value: 'row', label: 'Horizontal' },
+                { value: 'column', label: 'Vertical' }
+            ], () => work.els[key].orient || flow.axis, (v) => elementEdit(key, { orient: v })));
+        }
+        if (flow && flow.order) {
+            body.appendChild(choiceRow('Order', [
+                { value: false, label: 'Normal' },
+                { value: true, label: 'Reversed' }
+            ], () => !!work.els[key].reverse, (v) => elementEdit(key, { reverse: v })));
+        }
+        if (el.move) {
+            body.appendChild(sizeRow('Width', () => {
+                const st = work.els[key];
+                if (st.w === undefined) return rectOf(key).w / appBox().width;
+                return st.w;
+            }, (v) => { ensureRect(key); elementEdit(key, { w: v }); }));
+            body.appendChild(sizeRow('Height', () => {
+                const st = work.els[key];
+                if (st.h === undefined) return rectOf(key).h / appBox().height;
+                return st.h;
+            }, (v) => { ensureRect(key); elementEdit(key, { h: v }); }));
+        }
+        const vis = document.createElement('div');
+        vis.className = 'ep-row';
+        const visLabel = document.createElement('span');
+        visLabel.className = 'ep-label';
+        visLabel.textContent = 'Shown';
+        const visBtn = document.createElement('button');
+        visBtn.type = 'button';
+        visBtn.className = 'switch';
+        visBtn.setAttribute('role', 'switch');
+        const paintVis = () => visBtn.setAttribute('aria-checked', work.els[key].hidden ? 'false' : 'true');
+        visBtn.innerHTML = '<span class="switch-knob"></span>';
+        visBtn.addEventListener('click', () => { setHidden(key, !work.els[key].hidden); paintVis(); });
+        paintVis();
+        vis.appendChild(visLabel);
+        vis.appendChild(visBtn);
+        body.appendChild(vis);
+
+        // Reset To Default Position is only meaningful for something that HAS a
+        // position; an element that is only ever shown or hidden does not.
+        $('el-reset').hidden = !el.move;
+
+        pop.hidden = false;
+        // Placed at the pointer, then pulled back inside the window — right-
+        // clicking an element near an edge is the common case, not the rare one.
+        const w = pop.offsetWidth || 250;
+        const h = pop.offsetHeight || 300;
+        pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x)) + 'px';
+        pop.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y)) + 'px';
+    }
+
+    // This element back to how it was when Edit Mode opened — the per-element
+    // half of Revert All Changes.
+    function revertElement(key) {
+        const was = entrySnapshot && entrySnapshot.els[key];
+        if (!was) return;
+        work.els[key] = JSON.parse(JSON.stringify(was));
+        // A layout that has since become custom needs a rectangle for every
+        // element, and the entry snapshot may predate that.
+        if (work.custom && work.els[key].x === undefined) resetElement(key);
+        dirty = true;
+        applyLayout(work);
+        renderFrames();
+        renderElementList();
+        paintSelected();
+        if (optionsKey === key) openElementOptions(key,
+            parseFloat($('el-options').style.left), parseFloat($('el-options').style.top));
+    }
+
+    (function wireElementOptions() {
+        const pop = $('el-options');
+        if (!pop) return;
+        $('el-options-close').addEventListener('click', closeElementOptions);
+        $('el-revert').addEventListener('click', () => { if (optionsKey) revertElement(optionsKey); });
+        $('el-reset').addEventListener('click', () => {
+            if (!optionsKey) return;
+            materialize();
+            resetElement(optionsKey);
+        });
+        // A right-click anywhere on the shield opens the options for whatever is
+        // under it. The browser menu is refused: the app has its own, and in
+        // edit mode nothing underneath is interactive anyway.
+        $('edit-shield').addEventListener('contextmenu', (e) => {
+            if (!editing) return;
+            e.preventDefault();
+            const el = elementAt(e.clientX, e.clientY);
+            if (!el) { closeElementOptions(); return; }
+            openElementOptions(el.key, e.clientX, e.clientY);
+        });
+        document.addEventListener('mousedown', (e) => {
+            if (!optionsOpen()) return;
+            // `closest` only exists on elements, and the target of a synthetic
+            // event can be the document itself — which threw in here and left
+            // the popup open with no way to shut it.
+            const t = e.target;
+            if (t && t.closest && t.closest('#el-options')) return;
+            closeElementOptions();
+        });
+    })();
+
     // ---- the control panel -------------------------------------------------
 
     function renderElementList() {
@@ -10150,13 +10402,17 @@
                 name.textContent = el.name;
                 row.appendChild(box);
                 row.appendChild(name);
-                if (!el.move) {
-                    const tag = document.createElement('span');
-                    tag.className = 'ep-el-tag';
-                    tag.textContent = 'shown/hidden';
-                    row.appendChild(tag);
+                // No inline tag: the rows are half a panel wide now, and the
+                // distinction lives in the tooltip instead.
+                row.title = el.move ? el.name + ' — move, resize, show or hide'
+                    : el.name + ' — shown or hidden only';
+                if (el.move) {
+                    row.addEventListener('click', () => select(el.key));
+                    row.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        openElementOptions(el.key, e.clientX, e.clientY);
+                    });
                 }
-                if (el.move) row.addEventListener('click', () => select(el.key));
                 host.appendChild(row);
             }
         }
@@ -10187,6 +10443,7 @@
     function paintEditorPrefs() {
         const p = editorPrefs();
         $('edit-show-grid').setAttribute('aria-checked', p.showGrid ? 'true' : 'false');
+        $('edit-snap-grid').setAttribute('aria-checked', p.snapGrid ? 'true' : 'false');
         $('edit-snap-elements').setAttribute('aria-checked', p.snapElements ? 'true' : 'false');
         $('edit-grid-size').value = String(p.gridSize);
         $('edit-grid-size-val').textContent = String(p.gridSize);
@@ -10238,6 +10495,7 @@
             applyLayout(entrySnapshot);
             await saveSettings({ activeLayout: entryActiveId });
         }
+        closeElementOptions();
         editing = false;
         work = null;
         entrySnapshot = null;
@@ -10504,6 +10762,8 @@
 
         wireSwitch('edit-show-grid', () => editorPrefs().showGrid,
             async (v) => { await saveEditorPrefs({ showGrid: v }); });
+        wireSwitch('edit-snap-grid', () => editorPrefs().snapGrid,
+            async (v) => { await saveEditorPrefs({ snapGrid: v }); });
         wireSwitch('edit-snap-elements', () => editorPrefs().snapElements,
             async (v) => { await saveEditorPrefs({ snapElements: v }); });
         $('edit-grid-size').addEventListener('input', (e) => {

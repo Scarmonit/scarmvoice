@@ -788,6 +788,16 @@
         <input type="range" id="edit-grid-size" min="4" max="96" step="2" value="24"
                aria-label="Grid size">
       </div>
+      <!-- Two snapping questions, because they are two behaviours and one
+           toggle for both is a toggle that cannot be believed: turning element
+           snapping off used to leave the grid still catching everything, which
+           reads as the switch not working. -->
+      <div class="ep-row">
+        <span class="ep-label">Snap to Grid</span>
+        <button type="button" class="switch" id="edit-snap-grid" role="switch" aria-checked="true">
+          <span class="switch-knob"></span>
+        </button>
+      </div>
       <div class="ep-row">
         <span class="ep-label">Snap to Elements</span>
         <button type="button" class="switch" id="edit-snap-elements" role="switch" aria-checked="true">
@@ -808,6 +818,24 @@
     <footer class="ep-foot">
       <button type="button" class="keycap" id="edit-revert">Revert All Changes</button>
       <button type="button" class="keycap primary" id="edit-save">Save</button>
+    </footer>
+  </section>
+
+  <!-- Per-element options, opened by right-clicking an element (or from More
+       options on the selected one). Built per element: an element is only
+       offered the adjustments it actually has, because a control that does
+       nothing is worse than no control. -->
+  <section id="el-options" role="dialog" aria-label="Element options" hidden>
+    <header id="el-options-head">
+      <span class="ep-title" id="el-options-title"></span>
+      <button type="button" class="ep-x" id="el-options-close" title="Close">
+        <span class="ico" data-icon="x"></span>
+      </button>
+    </header>
+    <div class="ep-body" id="el-options-body"></div>
+    <footer class="ep-foot">
+      <button type="button" class="keycap" id="el-revert">Revert Changes</button>
+      <button type="button" class="keycap" id="el-reset">Reset To Default Position</button>
     </footer>
   </section>
 </div>

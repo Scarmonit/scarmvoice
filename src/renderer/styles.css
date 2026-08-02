@@ -6238,25 +6238,81 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 }
 #edit-grid-size { width: 100%; }
 
-/* The element list - grouped, scrollable, one checkbox each. */
-.ep-list { display: flex; flex-direction: column; gap: 2px; }
+/* The element list - grouped, scrollable, one checkbox each, in TWO COLUMNS.
+   One column made the panel taller than most windows: ten rows plus their group
+   headings is most of a screen before the footer, and the footer is where Save
+   and Revert live. The reference puts its checkboxes in two columns for the
+   same reason. */
+.ep-list { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 6px; align-items: start; }
 .ep-group {
+  grid-column: 1 / -1;                 /* a heading spans both columns */
   margin: 8px 0 2px; padding-left: 2px;
   color: var(--dim); font-size: 10.5px; font-weight: 800;
   letter-spacing: .06em; text-transform: uppercase;
 }
 .ep-group:first-child { margin-top: 0; }
 .ep-el {
-  display: flex; align-items: center; gap: 9px;
-  padding: 5px 8px; border-radius: 6px; cursor: pointer;
-  background: none; border: 0; width: 100%;
-  color: var(--text); font: inherit; font-size: 12.5px; text-align: left;
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 6px; border-radius: 6px; cursor: pointer;
+  background: none; border: 0; width: 100%; min-width: 0;
+  color: var(--text); font: inherit; font-size: 12px; text-align: left;
 }
 .ep-el:hover { background: var(--hover); }
 .ep-el.sel { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .ep-el input[type="checkbox"] { flex: 0 0 auto; accent-color: var(--accent); cursor: pointer; }
 .ep-el .ep-el-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ep-el .ep-el-tag { color: var(--dim); font-size: 10.5px; font-weight: 700; }
+
+/* ---------- Orientation and Order ----------------------------------------
+
+   One attribute on whichever node inside an element lays its contents out, so
+   the four combinations are four rules rather than a matrix of overrides.
+   Written under #app deliberately: the base rules are id selectors (#rail,
+   #me-bar, #chan-head), and an attribute alone would lose to every one of them.
+   This needs no !important; it simply outranks them. */
+#app [data-flow="row"] { flex-direction: row; }
+#app [data-flow="row-reverse"] { flex-direction: row-reverse; }
+#app [data-flow="column"] { flex-direction: column; }
+#app [data-flow="column-reverse"] { flex-direction: column-reverse; }
+/* A bar turned on its side stops stretching its contents across a width it no
+   longer has, and gives them the height instead. */
+#app [data-flow^="column"] > * { flex-shrink: 0; }
+
+/* The two-way choices in the options popup. */
+.ep-seg { display: flex; gap: 4px; }
+.ep-seg button {
+  flex: 1; min-width: 0; padding: 6px 8px;
+  border-radius: 6px; cursor: pointer;
+  background: var(--input); border: 1px solid transparent; color: var(--text);
+  font: inherit; font-size: 12px; font-weight: 600;
+}
+.ep-seg button:hover { background: var(--elev); }
+.ep-seg button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/* ---------- the per-element options popup -------------------------------- */
+
+#el-options {
+  position: absolute;
+  width: 250px; max-height: calc(100vh - 56px);
+  display: flex; flex-direction: column;
+  pointer-events: auto;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-lg, var(--shadow-xs));
+  overflow: hidden;
+  z-index: 2;
+}
+#el-options[hidden] { display: none; }
+#el-options-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 8px 9px 12px;
+  background: var(--elev, var(--panel));
+  box-shadow: 0 1px 0 var(--line);
+}
+#el-options .ep-body { padding: 10px 12px; }
+#el-options .ep-foot { flex-direction: column; gap: 6px; }
+#el-options .keycap { min-width: 0; width: 100%; }
+#el-options input[type="range"] { width: 100%; }
 
 /* What the selected element can be told beyond move and resize. */
 .ep-sel {

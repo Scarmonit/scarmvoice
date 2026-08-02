@@ -161,7 +161,7 @@ const DEFAULTS = {
     // The editor's own controls, remembered between sessions the way the
     // reference remembers them: grid on/off, its pitch in pixels, whether
     // elements snap to each other, and where the panel was left.
-    editorPrefs: { showGrid: true, gridSize: 24, snapElements: true },
+    editorPrefs: { showGrid: true, gridSize: 24, snapGrid: true, snapElements: true },
 
     // Chat
     // Ctrl+Up / Ctrl+Down in the message box walks back through what you have

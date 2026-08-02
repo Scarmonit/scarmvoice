@@ -322,6 +322,61 @@ describe('moving an element', () => {
         expect(r.y % 50).toBe(0);
     });
 
+    // THE TOGGLES HAVE TO BE BELIEVABLE. Turning element snapping off used to
+    // leave the window's own edges in the candidate list AND the grid catching
+    // every drag regardless — so an element let go anywhere near a side still
+    // jumped, and the switch read as doing nothing at all.
+    it('lands exactly where it was let go with both snaps off', async () => {
+        await boot({ editorPrefs: { gridSize: 24, showGrid: true, snapGrid: false, snapElements: false } });
+        await settle();
+        stubRects();
+        await openEditor();
+        const c = centreOf('user-dock');
+        gesture(c, { x: c.x + 37, y: c.y - 63 });
+        await settle();
+        const r = boxOf('user-dock');
+        expect(r.x).toBe(0 + 37);
+        expect(r.y).toBe(640 - 63);
+    });
+
+    it('stops snapping to other elements when that is switched off', async () => {
+        await boot({ editorPrefs: { gridSize: 24, showGrid: true, snapGrid: false, snapElements: true } });
+        await settle();
+        stubRects();
+        await openEditor();
+        // The channels list's left edge is at 72. Let go three pixels short of
+        // it: with element snapping ON that is a snap, and nothing else is
+        // within reach of the me bar's other two vertical edges — a target has
+        // to be unambiguous or the test is really about which line won.
+        const c = centreOf('user-dock');
+        gesture(c, { x: c.x + 69, y: c.y });
+        await settle();
+        expect(boxOf('user-dock').x).toBe(72);
+
+        $('edit-snap-elements').click();
+        await settle();
+        gesture(centreOf('user-dock'), { x: centreOf('user-dock').x - 3, y: centreOf('user-dock').y });
+        await settle();
+        expect(boxOf('user-dock').x).toBe(69);
+    });
+
+    it('stops snapping to the grid when that is switched off', async () => {
+        await boot({ editorPrefs: { gridSize: 50, showGrid: true, snapGrid: true, snapElements: false } });
+        await settle();
+        stubRects();
+        await openEditor();
+        const c = centreOf('user-dock');
+        gesture(c, { x: c.x + 63, y: c.y });
+        await settle();
+        expect(boxOf('user-dock').x % 50).toBe(0);
+
+        $('edit-snap-grid').click();
+        await settle();
+        gesture(centreOf('user-dock'), { x: centreOf('user-dock').x + 7, y: centreOf('user-dock').y });
+        await settle();
+        expect(boxOf('user-dock').x % 50).not.toBe(0);
+    });
+
     it('never lets an element leave the window', async () => {
         await boot({});
         await settle();
@@ -751,7 +806,194 @@ describe('leaving', () => {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Right-click an element and it offers the adjustments THAT element has.
+
+describe('per-element options', () => {
+    function rightClick(id) {
+        const c = centreOf(id);
+        $('edit-shield').dispatchEvent(new window.MouseEvent('contextmenu', {
+            bubbles: true, cancelable: true, clientX: c.x, clientY: c.y
+        }));
+    }
+    const labels = () => [...$('el-options-body').querySelectorAll('.ep-label')]
+        .map((l) => l.textContent.trim().replace(/\s+\d+%$/, ''));
+    const seg = (label) => {
+        const row = [...$('el-options-body').querySelectorAll('.ep-row')]
+            .find((r) => r.querySelector('.ep-label').textContent.startsWith(label));
+        return row ? [...row.querySelectorAll('.ep-seg button')] : [];
+    };
+
+    it('opens on a right-click, named for what was under the pointer', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        expect($('el-options').hidden).toBe(true);
+
+        rightClick('user-dock');
+        await settle();
+        expect($('el-options').hidden).toBe(false);
+        expect($('el-options-title').textContent).toBe('Me bar');
+        // …and selects it, so the outline says which one is being adjusted.
+        expect($('edit-selected').querySelector('.ep-sel-name').textContent).toBe('Me bar');
+    });
+
+    it('offers a bar its orientation, its order and its size', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('user-dock');
+        await settle();
+        expect(labels()).toEqual(['Orientation', 'Order', 'Width', 'Height', 'Shown']);
+    });
+
+    // A control that does nothing is worse than no control: the member list has
+    // no meaningful orientation, so it is not offered one.
+    it('offers a panel only what a panel has', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('members-panel');
+        await settle();
+        expect(labels()).toEqual(['Order', 'Width', 'Height', 'Shown']);
+
+        rightClick('main');
+        await settle();
+        expect(labels()).toEqual(['Width', 'Height', 'Shown']);
+    });
+
+    it('turns a bar on its side', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('user-dock');
+        await settle();
+        expect($('me-bar').dataset.flow).toBe(undefined);
+
+        seg('Orientation').find((b) => b.textContent === 'Vertical').click();
+        await settle();
+        expect($('me-bar').dataset.flow).toBe('column');
+
+        seg('Orientation').find((b) => b.textContent === 'Horizontal').click();
+        await settle();
+        // Back to its own default means no attribute at all, not one that
+        // restates it.
+        expect($('me-bar').dataset.flow).toBe(undefined);
+    });
+
+    it('reverses the order of what is inside', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('chan-head');
+        await settle();
+        seg('Order').find((b) => b.textContent === 'Reversed').click();
+        await settle();
+        expect($('chan-head').dataset.flow).toBe('row-reverse');
+    });
+
+    it('resizes from the sliders', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('members-panel');
+        await settle();
+        const width = [...$('el-options-body').querySelectorAll('input[type="range"]')][0];
+        width.value = '40';
+        width.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle();
+        expect(boxOf('members-panel').w).toBe(400);
+    });
+
+    it('reverts just that element, leaving the others alone', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        gesture(centreOf('user-dock'), { x: 500, y: 200 });
+        await settle();
+        gesture(centreOf('sidebar'), { x: 300, y: 300 });
+        await settle();
+        const movedSidebar = boxOf('sidebar');
+
+        rightClick('user-dock');
+        await settle();
+        $('el-revert').click();
+        await settle();
+        expect(boxOf('user-dock')).toEqual({ x: 0, y: 640, w: 372, h: 60 });
+        expect(boxOf('sidebar')).toEqual(movedSidebar);
+    });
+
+    it('puts one element back where the default arrangement has it', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        gesture(centreOf('members-panel'), { x: 300, y: 300 });
+        await settle();
+        expect(boxOf('members-panel').x).not.toBe(736);
+
+        rightClick('members-panel');
+        await settle();
+        $('el-reset').click();
+        await settle();
+        expect(boxOf('members-panel')).toEqual({ x: 736, y: 48, w: 264, h: 652 });
+    });
+
+    it('closes on a click outside, and with edit mode', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('user-dock');
+        await settle();
+        document.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+        await settle();
+        expect($('el-options').hidden).toBe(true);
+
+        rightClick('user-dock');
+        await settle();
+        $('edit-close').click();
+        await settle();
+        expect($('el-options').hidden).toBe(true);
+    });
+
+    it('says nothing when the right-click lands on nothing', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        $('edit-shield').dispatchEvent(new window.MouseEvent('contextmenu', {
+            bubbles: true, cancelable: true, clientX: 4000, clientY: 4000
+        }));
+        await settle();
+        expect($('el-options').hidden).toBe(true);
+    });
+});
+
 describe('the stylesheet behind it', () => {
+    it('lays the checkbox list out in two columns', () => {
+        expect(CSS).toMatch(/\.ep-list \{[^}]*grid-template-columns: 1fr 1fr/);
+        expect(CSS).toMatch(/\.ep-group \{[^}]*grid-column: 1 \/ -1/);
+    });
+
+    // The base rules are id selectors (#rail, #me-bar, #chan-head); an attribute
+    // alone loses to every one of them. Scoping under #app outranks them without
+    // reaching for !important.
+    it('outranks the elements’ own flex rules without !important', () => {
+        expect(CSS).toMatch(/#app \[data-flow="row-reverse"\] \{ flex-direction: row-reverse; \}/);
+        expect(CSS).toMatch(/#app \[data-flow="column"\] \{ flex-direction: column; \}/);
+        expect(CSS).not.toMatch(/data-flow[^}]*!important/);
+    });
+});
+
+describe('the stylesheet behind the shell', () => {
     it('keeps the default arrangement a grid, and only that', () => {
         expect(CSS).toMatch(/#app \{[^}]*grid-template-areas:\s*\n?\s*"rail side head head"/);
         expect(CSS).toMatch(/#app\[data-layout="custom"\] \{[^}]*display: block/);
