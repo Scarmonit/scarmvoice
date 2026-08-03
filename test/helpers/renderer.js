@@ -217,6 +217,12 @@ export async function bootRenderer(opts = {}) {
     globalThis.requestAnimationFrame = globalThis.requestAnimationFrame || ((f) => setTimeout(f, 0));
 
     const run = (f) => new Function(fs.readFileSync(path.join(RENDERER, f), 'utf8')).call(window);
+    // The composer IS a CodeMirror instance now, so the editor has to be on
+    // window before app.js runs. The vendored bundle is a classic script, which
+    // is exactly what `run` executes — and CodeMirror initialises under jsdom
+    // even though every measurement it takes comes back zero, because the
+    // document model these specs drive is not the part that measures anything.
+    run('vendor/codemirror.js');
     run('lazy.js');
     run('lib.js');
     run('audio.js');
@@ -279,9 +285,39 @@ export async function bootRenderer(opts = {}) {
 
 // Type into the composer the way a person does, so the input listeners
 // (autosize, send-button state, typing broadcast) all run.
+// The message box is a CodeMirror instance now, not an element with an id.
+// CodeMirror hangs the instance off its own wrapper, which is the public way in
+// and needs nothing exposed from the app for the tests' benefit.
+export const cmEditor = () => {
+    const wrap = document.querySelector('.composer-field .CodeMirror');
+    return wrap ? wrap.CodeMirror : null;
+};
+
+// …wearing the shape the specs were written against, so a spec that says
+// `input().value` still reads. The app has an adapter of its own for the same
+// reason; this is the test-side twin of it and deliberately no bigger.
+export function composerInput() {
+    const cm = cmEditor();
+    if (!cm) return null;
+    return {
+        get value() { return cm.getValue(); },
+        set value(v) { cm.setValue(String(v == null ? '' : v)); },
+        get selectionStart() { return cm.indexFromPos(cm.getCursor('from')); },
+        get selectionEnd() { return cm.indexFromPos(cm.getCursor('to')); },
+        setSelectionRange(a, b) {
+            cm.setSelection(cm.posFromIndex(a), cm.posFromIndex(b === undefined ? a : b));
+        },
+        focus() { cm.focus(); },
+        get placeholder() { return cm.getOption('placeholder'); },
+        get spellcheck() { return cm.getInputField().spellcheck; },
+        getAttribute(k) { return cm.getInputField().getAttribute(k); },
+        dispatchEvent(ev) { cm.getInputField().dispatchEvent(ev); return true; },
+        get element() { return cm.getWrapperElement(); }
+    };
+}
+
 export function type(text) {
-    const input = $('composer-input');
-    input.value = text;
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    return input;
+    const cm = cmEditor();
+    cm.setValue(String(text == null ? '' : text));
+    return composerInput();
 }

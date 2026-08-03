@@ -154,6 +154,9 @@ beforeAll(async () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 }));
     globalThis.requestAnimationFrame = globalThis.requestAnimationFrame || ((cb) => setTimeout(cb, 0));
 
+    // The composer IS a CodeMirror instance now, so the editor has to be on
+    // window before app.js runs.
+    run('vendor/codemirror.js');
     run('lib.js');
     run('audio.js');
     run('voice.js');

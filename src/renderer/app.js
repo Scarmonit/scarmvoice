@@ -2291,7 +2291,7 @@
         const server = document.querySelector('#server-head .sh-name');
         if (box) box.placeholder = 'Search ' + ((server && server.textContent) || 'ScarmVoice');
         $('chan-title').textContent = name;
-        $('composer-input').placeholder = 'Message #' + name;
+        input.placeholder = 'Message #' + name;
     }
 
     // Everything that has to be forgotten when the conversation on screen is
@@ -2826,7 +2826,7 @@
             e.preventDefault();
             e.stopPropagation();
             box.querySelectorAll('.msg.kb').forEach((m) => m.classList.remove('kb'));
-            $('composer-input').focus();
+            input.focus();
         }
     });
 
@@ -3763,30 +3763,143 @@
 
     // ---------- composer --------------------------------------------------
 
-    const input = $('composer-input');
-
-    // The composer grows to fit what is in it, up to 180px, and then scrolls.
+    // THE MESSAGE BOX IS A CODEMIRROR DOCUMENT, and that document is the
+    // Markdown. Not a rich-text model over the top of it, and not a textarea
+    // with a picture painted behind it — the characters the editor holds are the
+    // characters that get sent, and `cm.getValue()` is the message.
+    //
+    // Which is the whole point of the change. A caret that keeps up with typing,
+    // arrows that stay inside a code block, Tab that indents rather than walking
+    // off to the next button, selection, copy and paste: all of those are the
+    // editor's now, instead of this file re-implementing them one bug at a time.
+    //
+    // WHAT DID NOT CHANGE is everything built on top of the old textarea —
+    // @mentions, message recall, drafts, the formatting toolbar, the send path.
+    // They all speak to `input`, so `input` is still a textarea-shaped thing:
+    // an adapter with .value, .selectionStart, .setSelectionRange, .focus and
+    // the events they listen for, forwarding to the editor underneath. That is
+    // what kept this from being a rewrite of the whole composer.
     const COMPOSER_MAX_PX = 180;
-    // Past this, the answer is always "the maximum" — and asking anyway is not
-    // free. Reading scrollHeight after height:auto forces Chromium to lay out the
-    // ENTIRE textarea, and this runs on every keystroke; with the character cap
-    // gone the field can hold a quarter of a megabyte, where that measurement is
-    // milliseconds of blocked typing per key. 6000 characters cannot fit in 180px
-    // at any font size the chat offers, so the measurement is skippable, not
-    // merely cached.
-    const AUTOSIZE_MEASURE_MAX = 6000;
+
+    const cm = window.CodeMirror($('composer-field'), {
+        value: '',
+        mode: { name: 'markdown', fencedCodeBlockHighlighting: true, highlightFormatting: true },
+        lineWrapping: true,
+        lineNumbers: false,
+        // The line numbers belong to code blocks, not to the message — see
+        // codeLineNumber(). The gutter is only mounted while there is a block.
+        gutters: [],
+        indentUnit: 4,
+        indentWithTabs: false,
+        smartIndent: true,
+        electricChars: false,
+        // Enter SENDS. Everything about that decision lives in the keymap below
+        // rather than in a listener that has to beat CodeMirror to the event.
+        extraKeys: {},
+        viewportMargin: Infinity,
+        placeholder: 'Message #general',
+        // The app draws its own scrollbars nowhere else either.
+        scrollbarStyle: 'native',
+        spellcheck: true,
+        autocorrect: true,
+        autocapitalize: false,
+        inputStyle: 'textarea'
+    });
+    // CodeMirror's own input field is a real textarea, which is what lets the
+    // main process still offer its spell-check menu on a right-click and lets
+    // the key handlers below stay ordinary DOM listeners.
+    const cmInput = cm.getInputField();
+    const cmWrap = cm.getWrapperElement();
+
+    // Grows with the message up to a ceiling, then scrolls — the behaviour the
+    // textarea's autosize() used to hand-roll on every keystroke.
+    cmWrap.style.maxHeight = COMPOSER_MAX_PX + 'px';
+
+    // ---- the textarea-shaped adapter --------------------------------------
+    //
+    // Everything this file already had goes through here unchanged. The two
+    // that need explaining:
+    //   • `value` writes are DOCUMENT REPLACEMENTS, not typing, so they do not
+    //     fire the input event — the same as assigning to textarea.value. The
+    //     callers that need the app to notice call autosize()/an input event
+    //     themselves, exactly as they did before.
+    //   • `style.height` is accepted and ignored. CodeMirror sizes itself, and
+    //     the old callers write to it on paths that are awkward to unpick.
+    // Programmatic writes are marked ON THE CHANGE, not with a flag held across
+    // the call. CodeMirror delivers change signals at the END of an operation,
+    // which is after a synchronous flag has already been put back — so the flag
+    // suppressed nothing, and a recalled message reset the recall walk the
+    // instant it was pasted in. An origin travels with the edit and cannot be
+    // early or late.
+    const ADAPTER_ORIGIN = 'scarm-adapter';
+    const inputListeners = { input: [], keydown: [], keyup: [], click: [], scroll: [], blur: [], focus: [] };
+
+    const input = {
+        get value() { return cm.getValue(); },
+        set value(v) {
+            const text = String(v == null ? '' : v);
+            if (cm.getValue() === text) return;
+            const at = cm.getCursor();
+            const last = cm.lastLine();
+            // replaceRange rather than setValue, so the edit carries an origin
+            // AND the undo history survives — assigning to a textarea's value
+            // used to throw that away, and nothing was better for it.
+            cm.replaceRange(text, { line: 0, ch: 0 },
+                { line: last, ch: cm.getLine(last).length }, ADAPTER_ORIGIN);
+            try { cm.setCursor(at); } catch (e) { /* the document got shorter */ }
+        },
+        get selectionStart() { return cm.indexFromPos(cm.getCursor('from')); },
+        get selectionEnd() { return cm.indexFromPos(cm.getCursor('to')); },
+        setSelectionRange(a, b) {
+            cm.setSelection(cm.posFromIndex(a), cm.posFromIndex(b === undefined ? a : b));
+        },
+        select() { cm.execCommand('selectAll'); },
+        focus() { cm.focus(); },
+        blur() { cmInput.blur(); },
+        get placeholder() { return cm.getOption('placeholder'); },
+        set placeholder(v) { cm.setOption('placeholder', v); },
+        get spellcheck() { return cmInput.spellcheck; },
+        set spellcheck(v) { cmInput.spellcheck = !!v; },
+        setAttribute(k, v) { cmInput.setAttribute(k, v); },
+        getAttribute(k) { return cmInput.getAttribute(k); },
+        get scrollTop() { return cm.getScrollInfo().top; },
+        set scrollTop(v) { cm.scrollTo(null, v); },
+        get scrollHeight() { return cm.getScrollInfo().height; },
+        get style() { return cmWrap.style; },
+        getBoundingClientRect() { return cmWrap.getBoundingClientRect(); },
+        contains(node) { return cmWrap.contains(node); },
+        addEventListener(type, fn) {
+            if (inputListeners[type]) inputListeners[type].push(fn);
+            else cmWrap.addEventListener(type, fn);
+        },
+        dispatchEvent(ev) { fireInput(ev && ev.type ? ev.type : 'input'); return true; },
+        // For the handful of comparisons that ask "did this event come from the
+        // message box?" — the answer is now "from anywhere inside the editor".
+        get element() { return cmWrap; }
+    };
+
+    function fireInput(type) {
+        const ev = { type, target: input, preventDefault() {}, stopPropagation() {} };
+        (inputListeners[type] || []).forEach((fn) => fn(ev));
+    }
+
+    cm.on('change', (_, chg) => { if (!chg || chg.origin !== ADAPTER_ORIGIN) fireInput('input'); });
+    cm.on('scroll', () => fireInput('scroll'));
+    cm.on('blur', () => fireInput('blur'));
+    cm.on('focus', () => fireInput('focus'));
+    // Key events land on CodeMirror's own textarea, so these stay ordinary DOM
+    // listeners and everything that inspects e.key, e.ctrlKey or preventDefault
+    // keeps working.
+    cmInput.addEventListener('keydown', (e) => (inputListeners.keydown || []).forEach((fn) => fn(e)));
+    cmInput.addEventListener('keyup', (e) => (inputListeners.keyup || []).forEach((fn) => fn(e)));
+    cmWrap.addEventListener('click', (e) => (inputListeners.click || []).forEach((fn) => fn(e)));
+
+    // Kept as a name because a great many callers say it. The editor sizes
+    // itself; what is left is telling it to re-measure after a programmatic
+    // write, and repainting the code blocks' chrome.
     function autosize() {
-        // The live-formatting layer is repainted from here rather than from the
-        // input event, because it has to follow every write to the field — the
-        // toolbar, a recalled message, a restored draft, the clear after a send,
-        // the teardown — and this is the one call all of them already make.
-        paintMirror();
-        if (input.value.length > AUTOSIZE_MEASURE_MAX) {
-            input.style.height = COMPOSER_MAX_PX + 'px';
-            return;
-        }
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, COMPOSER_MAX_PX) + 'px';
+        cm.refresh();
+        paintCodeBlocks();
     }
 
     input.addEventListener('input', () => {
@@ -4139,49 +4252,11 @@
         ['keyup', 'mouseup'].forEach((ev) => input.addEventListener(ev, paintFormatState));
     })();
 
-    input.addEventListener('keydown', (e) => {
-        // Checked before Enter, and before anything else looks at the key: the
-        // whole point of the chord is that it is unambiguous.
-        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey &&
-            (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-            // Off means OFF — not "off but still swallowing the keystroke".
-            if (!messageRecallOn()) return;
-            e.preventDefault();
-            stepRecall(e.key === 'ArrowUp' ? 1 : -1);
-            return;
-        }
-        // Formatting chords. Deliberately the ones every text box on this
-        // machine already uses for the same three marks, plus the reference's
-        // own Ctrl+Shift+X for the bar.
-        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-            const k = e.key.toLowerCase();
-            if (!e.shiftKey && k === 'b') { e.preventDefault(); applyWrap('bold'); return; }
-            if (!e.shiftKey && k === 'i') { e.preventDefault(); applyWrap('italic'); return; }
-            if (!e.shiftKey && k === 'u') { e.preventDefault(); applyWrap('underline'); return; }
-            if (!e.shiftKey && k === 'k') { e.preventDefault(); insertLink(); return; }
-            if (e.shiftKey && k === 'x') { e.preventDefault(); setFormatBar(!formatBarOpen(), true); return; }
-            if (e.shiftKey && k === 's') { e.preventDefault(); applyWrap('strike'); return; }
-            if (e.shiftKey && k === 'c') { e.preventDefault(); applyWrap('code'); return; }
-            // Ctrl+Shift+8 and 7 are the list chords the reference uses. `code`
-            // rather than `key`, because with Shift held the key IS '*' and '&'.
-            if (e.shiftKey && e.code === 'Digit8') { e.preventDefault(); applyLineMark('bullet'); return; }
-            if (e.shiftKey && e.code === 'Digit7') { e.preventDefault(); applyLineMark('number'); return; }
-            if (e.shiftKey && e.code === 'Digit9') { e.preventDefault(); applyLineMark('quote'); return; }
-        }
-        // Ctrl+Alt+C opens the language menu rather than inserting a bare fence:
-        // the language is what decides how the block is highlighted, so it is
-        // part of inserting one.
-        if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'c') {
-            e.preventDefault();
-            if (!formatBarOpen()) setFormatBar(true, true);
-            openLangPop(null, $('btn-more'));
-            return;
-        }
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            $('composer').requestSubmit();
-        }
-    });
+    // EVERY CHORD THIS COMPOSER ANSWERS IS IN THE EDITOR'S KEYMAP, not in a DOM
+    // listener beside it — see composerKeymap(). It used to be both for a
+    // while, which is a bug with a very quiet symptom: Enter submitted twice
+    // (the second time with the box already cleared) and Ctrl+Up walked the
+    // recall history two entries at a time. A key belongs to one handler.
 
     // ---- the toolbar's little menus ---------------------------------------
     //
@@ -4360,443 +4435,23 @@
         input.focus();
     }
 
-    // ---- the code block's own keyboard -------------------------------------
+    // ---- the code block, as the editor draws it ----------------------------
     //
-    // A fenced block is drawn as an editor, so it has to answer like one. Two
-    // things it was getting wrong, and they have the same root: the block is
-    // three or more lines of an ordinary textarea, and a textarea has no idea
-    // any of them are special.
+    // Everything this used to hand-roll is now the editor's. The caret, the
+    // arrows, selection, copy and paste come from CodeMirror; what is left here
+    // is telling it what a fenced block LOOKS like — a titled panel with
+    // numbered lines — and the three behaviours it cannot know about because
+    // they are about Markdown rather than about text.
     //
-    // THE FENCE LINES ARE CHROME NOW. The opening ``` carries the title bar and
-    // the closing one is the panel's bottom edge — both have their ink turned
-    // off. So an Up from the first line of code put the caret INSIDE THE TITLE
-    // BAR, where there is nothing to see and anything typed corrupts the fence.
-    // That is what "the arrows escape the block" is: not the caret leaving, but
-    // the caret landing somewhere it cannot be seen. It steps over them now, so
-    // Up from the first line of code goes to the line above the block and Down
-    // from the last goes below it — which is leaving on purpose, and is the only
-    // way arrows leave.
-    //
-    // TAB BELONGS TO THE CODE. Everywhere else in the app it still moves focus,
-    // which is what it is for; inside a block it indents, and Shift+Tab
-    // outdents, because that is what it is for there.
-    const CODE_INDENT = '    ';
-
-    // Which lines are fences and which are inside a block. An UNCLOSED fence
-    // runs to the end, the same way fenceBlocks() reads it and the same way the
-    // renderer does.
-    function fenceLineInfo() {
-        const lines = input.value.split('\n');
-        const fence = new Set();
-        const inside = new Set();
-        const opening = new Set();
-        let open = false;
-        lines.forEach((line, i) => {
-            if (FENCE_RE.test(line)) {
-                fence.add(i);
-                if (!open) opening.add(i);
-                open = !open;
-                return;
-            }
-            if (open) inside.add(i);
-        });
-        return { lines, fence, inside, opening };
-    }
-
-    function lineIndexAt(pos) {
-        const v = input.value;
-        let n = 0;
-        for (let i = 0; i < pos && i < v.length; i++) if (v[i] === '\n') n++;
-        return n;
-    }
-
-    const caretLine = () => lineIndexAt(input.selectionStart);
-    const caretInCode = () => fenceLineInfo().inside.has(caretLine());
-
-    // Put the caret on `line`, keeping the column it had where the line is long
-    // enough to hold it.
-    function caretToLine(line, col) {
-        const r = lineRangeAt(line);
-        if (!r) return;
-        const at = Math.min(r.start + col, r.end);
-        input.setSelectionRange(at, at);
-    }
-
-    // The first line in `dir` that is not chrome.
-    function nextRealLine(from, dir, info) {
-        let i = from + dir;
-        while (i >= 0 && i < info.lines.length && info.fence.has(i)) i += dir;
-        return (i >= 0 && i < info.lines.length) ? i : -1;
-    }
-
-    // A caret that has ALREADY landed on a fence line, moved off it. This is the
-    // net: it catches a click on the title bar, a wrapped line the keydown path
-    // deliberately leaves alone, an undo, anything. `dir` is the way the caret
-    // was travelling; a click has no direction, and lands in the code.
-    let settling = false;
-    function settleCaret(dir) {
-        if (settling || input.selectionStart !== input.selectionEnd) return;
-        const info = fenceLineInfo();
-        if (!info.fence.size) return;
-        const idx = caretLine();
-        if (!info.fence.has(idx)) return;
-        const col = input.selectionStart - lineRangeAt(idx).start;
-        let way = dir || (info.opening.has(idx) ? 1 : -1);
-        let target = nextRealLine(idx, way, info);
-        if (target === -1) target = nextRealLine(idx, -way, info);
-        if (target === -1) return;              // a message that is only a fence
-        settling = true;
-        caretToLine(target, col);
-        settling = false;
-    }
-
-    // Indent or outdent, the way an editor does: a selection moves every line it
-    // touches, a bare caret inserts where it is.
-    function indentCode(out) {
-        const v = input.value;
-        const s = input.selectionStart, e = input.selectionEnd;
-        if (!out && s === e) {
-            replaceRange(s, e, CODE_INDENT, s + CODE_INDENT.length, s + CODE_INDENT.length);
-            return;
-        }
-        const { start, end, lines } = selectedLines();
-        const next = lines.map((line) => {
-            if (!out) return CODE_INDENT + line;
-            // Up to one indent's worth of leading space, or a single tab.
-            const m = /^(\t| {1,4})/.exec(line);
-            return m ? line.slice(m[0].length) : line;
-        });
-        const text = next.join('\n');
-        // Keep the same text selected — an indent that collapses the selection
-        // makes indenting twice impossible without reselecting.
-        const firstDelta = next[0].length - lines[0].length;
-        const total = text.length - (end - start);
-        const ns = s === e ? Math.max(start, s + firstDelta)
-            : Math.max(start, s + firstDelta);
-        const ne = s === e ? ns : Math.max(ns, e + total);
-        replaceRange(start, end, text, ns, ne);
-    }
-
-    // A fence line the caret is ACTUALLY ON shows its own text again, and its
-    // title bar steps aside for as long as it does.
-    //
-    // Nothing else in the app can put the caret there any more — the arrows step
-    // over these lines, a click settles off them and Backspace refuses to eat
-    // into one — but TYPING one still can: the moment ``` is typed the line
-    // becomes a fence and the bar covers it, so the language typed after it went
-    // in blind. This is the one place the raw syntax is worth seeing.
-    function refreshFenceReveal() {
-        const m = $('composer-mirror');
-        const chrome = $('composer-chrome');
-        if (!m || !chrome || m.hidden) return;
-        const info = fenceLineInfo();
-        const on = (document.activeElement === input && info.fence.has(caretLine()))
-            ? caretLine() : -1;
-        const rows = m.querySelectorAll('.cm-line');
-        rows.forEach((row, i) => row.classList.toggle('cm-at-caret', i === on));
-        chrome.querySelectorAll('.codechip').forEach((c) => {
-            c.hidden = Number(c.dataset.line) === on;
-        });
-    }
-
-    // The block a line belongs to — its fences included — or null.
-    function blockAtLine(idx) {
-        return fenceBlocks(input.value).find((b) => idx >= b.start && idx <= b.end) || null;
-    }
-
-    // Everything between the fences. '' is the state this is all about: the
-    // user has backspaced the last character of code out of the block.
-    function blockBodyLines(block) {
-        const lines = input.value.split('\n');
-        const from = block.start + 1;
-        const to = block.closed ? block.end - 1 : block.end;
-        return from > to ? [] : lines.slice(from, to + 1);
-    }
-    const blockIsEmpty = (block) => blockBodyLines(block).join('\n') === '';
-
-    // Take the whole thing out — fences and all — and close the gap it leaves.
-    // Through replaceRange, so one Ctrl+Z brings it back: this deletes several
-    // lines at once and is exactly the edit somebody will want to undo.
-    function deleteWholeBlock(block) {
-        const v = input.value;
-        let from = lineRangeAt(block.start).start;
-        let to = lineRangeAt(block.end).end;
-        // One of the newlines around it goes too, or the block leaves a blank
-        // line behind — which is its own small ghost.
-        if (v[to] === '\n') to += 1;
-        else if (from > 0 && v[from - 1] === '\n') from -= 1;
-        replaceRange(from, to, '', from, from);
-    }
-
-    input.addEventListener('keydown', (e) => {
-        const info = fenceLineInfo();
-        if (!info.fence.size) return;
-        const idx = caretLine();
-
-        // AN EMPTY BLOCK HAS TO BE DELETABLE. Backspacing the last character of
-        // code out leaves the shell — a title bar, one numbered line and a
-        // bottom edge — and the next Backspace used to eat the newline between
-        // the code and the fence, putting the caret INSIDE the title bar where
-        // the text is invisible. From there every further press deleted a
-        // character of ```javascript that nobody could see, and let go of
-        // halfway it left a broken fence. One more press removes the block
-        // instead, which is what the key was being held down for.
-        if (input.selectionStart === input.selectionEnd &&
-            (e.key === 'Backspace' || e.key === 'Delete')) {
-            const block = blockAtLine(idx);
-            if (block) {
-                if (blockIsEmpty(block)) {
-                    e.preventDefault();
-                    deleteWholeBlock(block);
-                    return;
-                }
-                // With code still in it, the fences are not the user's to
-                // delete by accident: they are drawn as the panel's own edges,
-                // so eating one is invisible damage. The keys that would reach
-                // them do nothing at all.
-                const first = block.start + 1;
-                const last = block.closed ? block.end - 1 : block.end;
-                const at = input.selectionStart;
-                const eatsOpen = e.key === 'Backspace' && idx === first && at === lineRangeAt(first).start;
-                const eatsClose = e.key === 'Delete' && idx === last && at === lineRangeAt(last).end;
-                if (eatsOpen || eatsClose) { e.preventDefault(); return; }
-                if (info.fence.has(idx)) { e.preventDefault(); settleCaret(0); return; }
-            }
-            return;
-        }
-
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-        if (e.key === 'Tab' && (info.inside.has(idx) || info.fence.has(idx))) {
-            // Only inside a block. Everywhere else Tab is how somebody who does
-            // not use a mouse gets to the send button.
-            e.preventDefault();
-            indentCode(e.shiftKey);
-            return;
-        }
-
-        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-        const dir = e.key === 'ArrowUp' ? -1 : 1;
-        const neighbour = idx + dir;
-        if (neighbour < 0 || neighbour >= info.lines.length) return;
-        if (!info.fence.has(neighbour)) return;         // nothing in the way
-
-        // A WRAPPED line is left to the browser: inside one, Up and Down move
-        // between the rows of that line rather than between lines, and there is
-        // no way to know from here which row the caret is on. The settle pass on
-        // keyup catches whatever comes of it.
-        // Stated as "only when we can SEE that it wrapped", not as "only when we
-        // can see that it did not": where there is nothing to measure — no
-        // layer, no layout — the common case is one row, and standing down
-        // there would mean standing down always.
-        const row = $('composer-mirror').querySelectorAll('.cm-line')[idx];
-        const lh = row ? parseFloat(getComputedStyle(row).lineHeight) || 0 : 0;
-        if (lh > 0 && row.offsetHeight > lh * 1.6) return;
-
-        const target = nextRealLine(idx, dir, info);
-        if (target === -1) return;                      // let it run off the end
-        e.preventDefault();
-        caretToLine(target, input.selectionStart - lineRangeAt(idx).start);
-    });
-
-    // The net. `keyup` rather than the keydown above, because this is for the
-    // moves that were deliberately not intercepted.
-    input.addEventListener('keyup', (e) => {
-        if (e.key === 'ArrowUp' || e.key === 'PageUp') settleCaret(-1);
-        else if (e.key === 'ArrowDown' || e.key === 'PageDown') settleCaret(1);
-        else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
-                 e.key === 'Home' || e.key === 'End') settleCaret(0);
-        refreshFenceReveal();
-    });
-    // A click on the title bar or the bottom band belongs to the code, not to
-    // the fence it landed on.
-    input.addEventListener('click', () => { settleCaret(0); refreshFenceReveal(); });
-    input.addEventListener('blur', () => refreshFenceReveal());
-
-    // ---- the formatting drawn under the caret ------------------------------
-    //
-    // #composer-mirror holds EXACTLY the characters in the textarea, styled, and
-    // the textarea is painted transparent on top of it. That equality is the
-    // whole mechanism — one character more or fewer and the caret stops lining
-    // up with the glyph it is beside — so every branch below emits the text it
-    // consumed, markers included, and test/format-bar.test.js asserts
-    // mirror.textContent === input.value over a pile of awkward strings.
-    //
-    // It shares FMT and fmtMatch with the message renderer, so what looks bold
-    // here is bold there by construction rather than by agreement.
-
-    // `esc` is lib.js's, imported at the top of this file. It escapes quotes as
-    // well as the angle brackets, which is more than a text node needs and is
-    // exactly why it is the one to use: every string below is interpolated into
-    // markup, and the composer's contents are the least trustworthy text in the
-    // app — it is whatever the user typed or pasted, re-parsed on every keystroke.
-    const MIRROR_CLASS = {
-        strong: 'cm-b', em: 'cm-i', u: 'cm-u', del: 'cm-s', spoiler: 'cm-spoiler'
-    };
-
-    // Past this the preview is switched off for the message and the field paints
-    // its own text again. The parse is linear-ish but it runs on every keystroke,
-    // and a quarter-megabyte paste (which the server accepts) must not turn
-    // typing into a slideshow.
-    const MIRROR_MAX = 12000;
-
-    function mirrorInline(text) {
-        let rest = String(text), out = '';
-        for (;;) {
-            if (!rest) return out;
-            // Code spans first, exactly as renderInline does it: formatting
-            // characters inside a span are literal, and the preview has to agree.
-            const c = CODE_SPAN_RE.exec(rest);
-            const f = fmtMatch(rest);
-            const cAt = c ? c.index : Infinity;
-            const fAt = f ? f.start : Infinity;
-            if (cAt === Infinity && fAt === Infinity) return out + esc(rest);
-            if (cAt <= fAt) {
-                out += esc(rest.slice(0, c.index));
-                out += '<span class="cm-code">' + esc(c[0]) + '</span>';
-                rest = rest.slice(c.index + c[0].length);
-                continue;
-            }
-            out += esc(rest.slice(0, f.start));
-            const whole = rest.slice(f.start, f.end);
-            // The marks are symmetric, so what is not the inner text is half a
-            // marker at each end. That holds for every entry in FMT — ||, ***,
-            // **, ___, __, ~~, * and _ alike.
-            const mlen = (whole.length - f.inner.length) / 2;
-            const open = whole.slice(0, mlen), close = whole.slice(whole.length - mlen);
-            const cls = [MIRROR_CLASS[f.f.kind] || '', f.f.wrap ? MIRROR_CLASS[f.f.wrap] || '' : '']
-                .filter(Boolean).join(' ');
-            out += '<span class="cm-mark">' + esc(open) + '</span>' +
-                '<span class="' + cls + '">' + mirrorInline(f.inner) + '</span>' +
-                '<span class="cm-mark">' + esc(close) + '</span>';
-            rest = rest.slice(f.end);
-        }
-    }
-
-    function mirrorLine(line) {
-        let m = /^([ \t]*)(#{1,3})([ \t]+)([\s\S]*)$/.exec(line);
-        if (m) {
-            return esc(m[1]) + '<span class="cm-mark">' + esc(m[2] + m[3]) + '</span>' +
-                '<span class="cm-head">' + mirrorInline(m[4]) + '</span>';
-        }
-        m = /^([ \t]*)(>[ \t]?)([\s\S]*)$/.exec(line);
-        if (m) {
-            return esc(m[1]) + '<span class="cm-mark">' + esc(m[2]) + '</span>' +
-                '<span class="cm-quote">' + mirrorInline(m[3]) + '</span>';
-        }
-        m = /^([ \t]*)([-*+]|\d{1,9}[.)])([ \t]+)([\s\S]*)$/.exec(line);
-        if (m) {
-            return esc(m[1]) + '<span class="cm-list">' + esc(m[2]) + '</span>' +
-                esc(m[3]) + mirrorInline(m[4]);
-        }
-        return mirrorInline(line);
-    }
-
-    // ---- the code block, drawn as an editor -------------------------------
-    //
-    // A fenced block in the message box is drawn the way the reference draws it:
-    // a titled panel with the language on it, numbered lines down the side and
-    // the code coloured.
-    //
-    // All three of those are the same problem — they need horizontal room and a
-    // full-width background, and the layer may not change the width of a single
-    // character (see the note on .cm-mark). So:
-    //   • the mirror renders ONE BLOCK PER LINE rather than one run of text with
-    //     newlines in it. A block can carry a background across the whole width;
-    //     a span can only cover its own glyphs.
-    //   • the numbers are absolutely positioned in a gutter, so they take no
-    //     inline space at all, and the gutter is made by padding BOTH boxes.
-    //   • colouring is colour only — the highlighter's own bold and italic are
-    //     turned off in the stylesheet, for the same reason nothing else here
-    //     may set them.
-    // And because a code block is what the box is mostly holding when it holds
-    // one, the whole field switches to the mono face while there is one. Both
-    // boxes switch together, which is the only reason that is allowed.
+    // The fence's own text is replaced by an ATOMIC MARK carrying the language
+    // chip. Atomic is the important word: CodeMirror steps over the whole mark
+    // when moving the caret, so the arrows cannot land inside ```javascript.
+    // That is the bug that started all this, and it is now a property of the
+    // editor rather than something this file has to keep re-fixing.
     const FENCE_RE = /^[ \t]*```(.*)$/;
 
-    // (lang + line) -> highlighted html. Small and bounded: the same lines are
-    // re-rendered on every keystroke, and re-highlighting them is the only part
-    // of this that is not linear in the length of the line.
-    const cmHlCache = new Map();
-    let cmHlWanted = false;
-
-    function highlightLine(lang, text) {
-        if (!text) return '';
-        const canon = LANG_ALIAS[lang] || lang;
-        if (!canon) return esc(text);
-        // A BUNDLE THAT IS NOT ALL THERE is the same case as no bundle at all,
-        // and it is a real one: a stand-in on `window.hljs` with only the
-        // methods somebody else needed threw straight through the preview and
-        // took the whole layer down with it.
-        const hl = window.hljs;
-        const ready = hl && typeof hl.getLanguage === 'function' && typeof hl.highlight === 'function';
-        if (!ready) {
-            // Fetched on first sight of a fence; until it lands the code is
-            // plain, which is exactly what it looked like before.
-            if (!cmHlWanted && !hl) {
-                cmHlWanted = true;
-                window.ScarmLazy.hljs().then((got) => { if (got) paintMirror(); });
-            }
-            return esc(text);
-        }
-        if (!hl.getLanguage(canon)) return esc(text);
-        const key = canon + '\n' + text;
-        const hit = cmHlCache.get(key);
-        if (hit !== undefined) return hit;
-        let html;
-        try {
-            html = hl.highlight(text, { language: canon, ignoreIllegals: true }).value;
-        } catch (e) {
-            html = esc(text);
-        }
-        cachePut(cmHlCache, key, html);
-        return html;
-    }
-
-    // One <div> per source line. An EMPTY line gets a <br>, which gives it a
-    // height without adding a character — the invariant this whole layer rests
-    // on is that its text is the field's text, and a filler character would
-    // break it as surely as a different font would.
-    function mirrorHtml(src) {
-        const lines = String(src).split('\n');
-        let fence = null;                 // { lang, n } while inside one
-        const out = [];
-        for (const line of lines) {
-            const m = FENCE_RE.exec(line);
-            if (m) {
-                if (fence) {
-                    out.push('<div class="cm-line cm-fl cm-fl-close"><span class="cm-mark">' +
-                        esc(line) + '</span></div>');
-                    fence = null;
-                } else {
-                    const tag = m[1].trim().toLowerCase();
-                    fence = { lang: /^[\w+#._-]{0,20}$/.test(tag) ? tag : '', n: 0 };
-                    out.push('<div class="cm-line cm-fl cm-fl-open"><span class="cm-mark">' +
-                        esc(line) + '</span></div>');
-                }
-                continue;
-            }
-            if (fence) {
-                fence.n++;
-                out.push('<div class="cm-line cm-fl cm-fl-body">' +
-                    // The number is GENERATED CONTENT, not text: this layer's
-                    // whole invariant is that its text is the field's text, and
-                    // a number in the markup would break it as surely as an
-                    // extra character typed in.
-                    '<i class="cm-num" aria-hidden="true" data-n="' + fence.n + '"></i>' +
-                    (line ? highlightLine(fence.lang, line) : '<br>') + '</div>');
-                continue;
-            }
-            const body = mirrorLine(line);
-            out.push('<div class="cm-line">' + (body || '<br>') + '</div>');
-        }
-        // A trailing empty line needs somewhere to be, or the caret sits below
-        // its own text whenever the message ends on Shift+Enter.
-        out.push('<div class="cm-line"><br></div>');
-        return out.join('');
-    }
-
-    // Every fenced block in the field: which lines it spans and its language.
+    // Every fenced block in the text: which lines it spans, its language, and
+    // whether it was ever closed. Pure, and the same reading the renderer uses.
     function fenceBlocks(src) {
         const lines = String(src).split('\n');
         const out = [];
@@ -4815,122 +4470,262 @@
         return out;
     }
 
+    function blockBodyRange(block) {
+        return { first: block.start + 1, last: block.closed ? block.end - 1 : block.end };
+    }
+    function blockIsEmpty(block) {
+        const { first, last } = blockBodyRange(block);
+        if (first > last) return true;
+        return cm.getRange({ line: first, ch: 0 }, { line: last, ch: cm.getLine(last).length }) === '';
+    }
+
     function richComposerOn() { return settings.richComposer !== false; }
 
     // Both composer preferences, applied together on entry and again whenever
-    // one of them is changed. `!== false` for the same reason messageRecallOn()
-    // uses it: a settings file older than the feature has no key at all, and
-    // that has to read as the default the store declares.
+    // one of them is changed. Drawing the formatting is the editor's mode now:
+    // turned off, the box is a plain-text editor and the message is the same
+    // string either way.
     function applyComposerPrefs() {
         setFormatBar(!!settings.formatBarOpen, false);
-        paintMirror();
+        // highlightFormatting is what marks the ** and the > and the # as
+        // FORMATTING rather than as text, which is what lets the stylesheet dim
+        // them. Left out of this rebuild it silently undid the option the editor
+        // was created with.
+        cm.setOption('mode', richComposerOn()
+            ? { name: 'markdown', fencedCodeBlockHighlighting: true, highlightFormatting: true }
+            : null);
+        paintCodeBlocks();
     }
 
-    function paintMirror() {
-        const m = $('composer-mirror');
-        if (!m) return;
-        const on = richComposerOn() && input.value.length <= MIRROR_MAX;
-        document.body.classList.toggle('rich-composer', on);
-        m.hidden = !on;
-        if (!on) { m.textContent = ''; return; }
+    // ---- what a block looks like -------------------------------------------
+
+    let cbMarks = [];
+    let cbLines = [];
+    // doc line -> its number within its own block. The gutter numbers CODE, not
+    // the message, so a block always starts at 1.
+    let cbNumbers = new Map();
+
+    function clearCodeBlockDecor() {
+        cbMarks.forEach((m) => m.clear());
+        cbMarks = [];
+        cbLines.forEach(({ line, where, cls }) => {
+            try { cm.removeLineClass(line, where, cls); } catch (e) { /* line went */ }
+        });
+        cbLines = [];
+    }
+
+    function lineClass(line, where, cls) {
+        cm.addLineClass(line, where, cls);
+        cbLines.push({ line, where, cls });
+    }
+
+    // The chip that stands in for ```javascript: the language, a way to change
+    // it, and the block's own menu.
+    function buildCodeChip(block) {
+        const chip = document.createElement('span');
+        chip.className = 'cb-chip';
+        const lang = document.createElement('button');
+        lang.type = 'button';
+        lang.className = 'cb-chip-lang';
+        lang.title = 'Change the language';
+        lang.appendChild(window.ScarmIcons.build('code-block'));
+        const label = document.createElement('span');
+        label.textContent = languageLabel(block.lang);
+        lang.appendChild(label);
+        lang.appendChild(window.ScarmIcons.build('chevron-down'));
+        lang.addEventListener('mousedown', (e) => e.preventDefault());
+        lang.addEventListener('click', (e) => { e.stopPropagation(); openLangPop(block, e.currentTarget); });
+
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'cb-chip-more';
+        more.title = 'Code block options';
+        more.appendChild(window.ScarmIcons.build('more'));
+        more.addEventListener('mousedown', (e) => e.preventDefault());
+        more.addEventListener('click', (e) => { e.stopPropagation(); openCodeBlockMenu(e.currentTarget, block); });
+
+        chip.appendChild(lang);
+        chip.appendChild(more);
+        return chip;
+    }
+
+    let painting = false;
+    function paintCodeBlocks() {
+        if (!cm || painting) return;
+        painting = true;
         try {
-            m.innerHTML = mirrorHtml(input.value);
-            paintCodeChrome();
-        } catch (e) {
-            // A preview is never worth a broken message box: fall all the way
-            // back to the field painting its own text.
-            document.body.classList.remove('rich-composer');
-            document.querySelector('.composer-field').classList.remove('cm-code');
-            m.hidden = true;
-            m.textContent = '';
-            $('composer-chrome').textContent = '';
-            return;
+            clearCodeBlockDecor();
+            cbNumbers = new Map();
+            const blocks = fenceBlocks(cm.getValue());
+            const last = cm.lastLine();
+
+            for (const b of blocks) {
+                if (b.start > last) continue;
+                lineClass(b.start, 'wrap', 'cb-open');
+                // The fence text becomes the title bar. `atomic` is what stops
+                // the caret ever landing inside it.
+                const openLen = cm.getLine(b.start).length;
+                cbMarks.push(cm.markText(
+                    { line: b.start, ch: 0 }, { line: b.start, ch: openLen },
+                    {
+                        replacedWith: buildCodeChip(b),
+                        // INCLUSIVE ON BOTH SIDES. Atomic alone still lets the
+                        // caret sit at ch 0 and at the end of the line — which
+                        // is a caret parked on the title bar, the very thing
+                        // this is here to stop. Inclusive puts those two
+                        // positions inside the mark, so an Up from the first
+                        // line of code carries on to the line above the block.
+                        atomic: true, inclusiveLeft: true, inclusiveRight: true,
+                        handleMouseEvents: false, clearWhenEmpty: false
+                    }));
+
+                const { first, lastLine } = { first: b.start + 1, lastLine: b.closed ? b.end - 1 : b.end };
+                for (let i = first; i <= lastLine && i <= last; i++) {
+                    lineClass(i, 'wrap', 'cb-body');
+                    cbNumbers.set(i, i - first + 1);
+                }
+                if (b.closed && b.end <= last) {
+                    lineClass(b.end, 'wrap', 'cb-close');
+                    const closeLen = cm.getLine(b.end).length;
+                    if (closeLen) {
+                        cbMarks.push(cm.markText(
+                            { line: b.end, ch: 0 }, { line: b.end, ch: closeLen },
+                            {
+                                replacedWith: document.createElement('span'),
+                                atomic: true, inclusiveLeft: true, inclusiveRight: true,
+                                handleMouseEvents: false, clearWhenEmpty: false
+                            }));
+                    }
+                }
+            }
+
+            // The gutter only exists while there is code to number, and
+            // spellcheck stops while there is code to squiggle — a textarea
+            // checks all of itself or none of itself, and red lines under every
+            // identifier are worse than none under the sentence above them.
+            const has = blocks.length > 0;
+            if (!!cm.getOption('lineNumbers') !== has) cm.setOption('lineNumbers', has);
+            cmInput.spellcheck = !has;
+            cmInput.setAttribute('spellcheck', has ? 'false' : 'true');
+            document.getElementById('composer-field').classList.toggle('has-code', has);
+        } finally {
+            painting = false;
         }
-        m.scrollTop = input.scrollTop;
     }
 
-    // The gutter, the mono face and the block's own title bar.
-    //
-    // The title bar is a REAL control drawn over the ``` line — the one line of
-    // a code block nobody wants to hand-edit — so the language can be changed
-    // from where it is shown. Everything else in the layer stays inert, because
-    // the field underneath has to keep every other click.
-    function paintCodeChrome() {
-        const field = document.querySelector('.composer-field');
-        const chrome = $('composer-chrome');
-        if (!field || !chrome) return;
-        const blocks = fenceBlocks(input.value);
-        // The whole field goes monospace and gains a gutter while it holds a
-        // block. BOTH boxes, in one rule, which is the only reason a font change
-        // is allowed here at all.
-        field.classList.toggle('cm-code', blocks.length > 0);
-        // CODE IS NOT PROSE. A textarea spell-checks all of itself or none of
-        // itself, so while the message holds a block the whole field stops —
-        // the same trade the mono face makes, and for the same reason. Red
-        // squiggles under every identifier are worse than no squiggles under
-        // the sentence above them.
-        const wantSpell = blocks.length === 0;
-        if (input.spellcheck !== wantSpell) {
-            input.spellcheck = wantSpell;
-            // Chromium only re-runs the checker when the attribute changes, and
-            // only clears the marks it has already drawn on a re-render.
-            input.setAttribute('spellcheck', wantSpell ? 'true' : 'false');
-        }
-        chrome.textContent = '';
-        if (!blocks.length) return;
-
-        const lines = $('composer-mirror').querySelectorAll('.cm-line');
-        for (const b of blocks) {
-            const head = lines[b.start];
-            if (!head) continue;
-            const chip = document.createElement('div');
-            chip.className = 'codechip';
-            // The opening line's EXACT box, because the bar is that line as far
-            // as anybody looking at it is concerned.
-            chip.style.top = head.offsetTop + 'px';
-            chip.style.height = head.offsetHeight + 'px';
-            chip.dataset.line = String(b.start);
-
-            const name = document.createElement('button');
-            name.type = 'button';
-            name.className = 'codechip-lang';
-            name.title = 'Change the language';
-            name.appendChild(window.ScarmIcons.build('code-block'));
-            const label = document.createElement('span');
-            label.textContent = languageLabel(b.lang);
-            name.appendChild(label);
-            name.appendChild(window.ScarmIcons.build('chevron-down'));
-            name.addEventListener('mousedown', (e) => e.preventDefault());
-            name.addEventListener('click', () => openLangPop(b));
-
-            const more = document.createElement('button');
-            more.type = 'button';
-            more.className = 'codechip-more';
-            more.title = 'Code block options';
-            more.appendChild(window.ScarmIcons.build('more'));
-            more.addEventListener('mousedown', (e) => e.preventDefault());
-            more.addEventListener('click', (e) => openCodeBlockMenu(e.currentTarget, b));
-
-            chip.appendChild(name);
-            chip.appendChild(more);
-            chrome.appendChild(chip);
-        }
-        chrome.style.transform = 'translateY(' + (-input.scrollTop) + 'px)';
-        refreshFenceReveal();
-    }
-
-    // No `input` listener of its own: autosize() already repaints this and is
-    // called from the input handler, from the toolbar, from a recalled message,
-    // from a restored draft and from the clear after a send. A second listener
-    // here would parse the whole field twice per keystroke for no difference.
-    //
-    // The field scrolls past 180px; the layer under it has to go with it.
-    input.addEventListener('scroll', () => {
-        const m = $('composer-mirror');
-        if (m && !m.hidden) m.scrollTop = input.scrollTop;
-        const chrome = $('composer-chrome');
-        if (chrome) chrome.style.transform = 'translateY(' + (-input.scrollTop) + 'px)';
+    // Repaint whenever the text changes shape. Cheap: it walks the lines once
+    // and the marks are rebuilt only for the blocks that exist.
+    cm.on('changes', () => paintCodeBlocks());
+    cm.setOption('lineNumberFormatter', (line) => {
+        const n = cbNumbers.get(line - 1);
+        return n === undefined ? '' : String(n);
     });
+
+    // ---- the three things the editor cannot know ---------------------------
+    //
+    // Everything else about editing — caret, arrows, selection, copy, paste,
+    // undo — is CodeMirror's and is not re-implemented anywhere in this file.
+    // These three are about MARKDOWN rather than about text, so they are the
+    // app's to say.
+    const CM_PASS = window.CodeMirror.Pass;
+
+    function caretBlock() {
+        const line = cm.getCursor().line;
+        return fenceBlocks(cm.getValue()).find((b) => line >= b.start && line <= b.end) || null;
+    }
+
+    function composerKeymap() {
+        return {
+            // ENTER SENDS. In the keymap rather than in a listener racing the
+            // editor for the event.
+            Enter: () => {
+                if (mentionPopOpen()) return CM_PASS;
+                $('composer').requestSubmit();
+            },
+            'Shift-Enter': 'newlineAndIndent',
+
+            // TAB INDENTS INSIDE CODE, and nowhere else moves focus to the next
+            // control — which is how somebody who does not use a mouse reaches
+            // the send button.
+            Tab: (editor) => {
+                const b = caretBlock();
+                if (!b) return CM_PASS;
+                if (editor.somethingSelected()) editor.execCommand('indentMore');
+                else editor.replaceSelection('    ', 'end');
+            },
+            'Shift-Tab': () => {
+                const b = caretBlock();
+                if (!b) return CM_PASS;
+                cm.execCommand('indentLess');
+            },
+
+            // AN EMPTY BLOCK HAS TO BE DELETABLE. Backspacing the last character
+            // of code out leaves the shell, and nothing in the editor knows the
+            // two fences are a pair.
+            Backspace: () => {
+                const b = caretBlock();
+                if (!b) return CM_PASS;
+                if (blockIsEmpty(b)) { deleteBlock(b); return; }
+                // At the very start of the code, the next thing backwards is the
+                // fence — one atomic mark, which CodeMirror would remove whole,
+                // leaving a block with no top and no way to see what happened.
+                const { first } = blockBodyRange(b);
+                const at = cm.getCursor();
+                if (at.line === first && at.ch === 0) return;
+                return CM_PASS;
+            },
+            Delete: () => {
+                const b = caretBlock();
+                if (!b) return CM_PASS;
+                if (blockIsEmpty(b)) { deleteBlock(b); return; }
+                const { last } = blockBodyRange(b);
+                const at = cm.getCursor();
+                if (at.line === last && at.ch === cm.getLine(last).length) return;
+                return CM_PASS;
+            },
+
+            // The app's own chords, claimed here so the editor's defaults never
+            // fire on them — Ctrl-U is its undoSelection and Ctrl-D its
+            // deleteLine, and both would otherwise happen underneath ours.
+            'Ctrl-B': () => applyWrap('bold'),
+            'Ctrl-I': () => applyWrap('italic'),
+            'Ctrl-U': () => applyWrap('underline'),
+            'Ctrl-K': () => insertLink(),
+            'Ctrl-D': () => CM_PASS,
+            'Shift-Ctrl-X': () => setFormatBar(!formatBarOpen(), true),
+            'Shift-Ctrl-S': () => applyWrap('strike'),
+            'Shift-Ctrl-C': () => applyWrap('code'),
+            'Shift-Ctrl-7': () => applyLineMark('number'),
+            'Shift-Ctrl-8': () => applyLineMark('bullet'),
+            'Shift-Ctrl-9': () => applyLineMark('quote'),
+            'Ctrl-Alt-C': () => { if (!formatBarOpen()) setFormatBar(true, true); openLangPop(null, $('btn-more')); },
+            'Ctrl-Up': () => { if (!messageRecallOn()) return CM_PASS; stepRecall(1); },
+            'Ctrl-Down': () => { if (!messageRecallOn()) return CM_PASS; stepRecall(-1); }
+        };
+    }
+
+    // Fences and all, closing the gap it leaves — one of the surrounding
+    // newlines goes too, or the block leaves a blank line behind.
+    function deleteBlock(block) {
+        const lastLine = cm.lastLine();
+        let from = { line: block.start, ch: 0 };
+        let to = { line: Math.min(block.end, lastLine), ch: cm.getLine(Math.min(block.end, lastLine)).length };
+        if (to.line < lastLine) to = { line: to.line + 1, ch: 0 };
+        else if (from.line > 0) from = { line: from.line - 1, ch: cm.getLine(from.line - 1).length };
+        cm.replaceRange('', from, to, '+delete');
+        cm.setCursor(from);
+    }
+
+    window.CodeMirror.keyMap.scarmvoice = {
+        // `false` is not "do nothing" — it is "do not handle this at all", which
+        // leaves the browser to move the focus. Reached only when the handler in
+        // extraKeys passes, which it does whenever the caret is outside a block.
+        Tab: false,
+        'Shift-Tab': false,
+        fallthrough: 'default'
+    };
+    cm.setOption('keyMap', 'scarmvoice');
+    cm.setOption('extraKeys', composerKeymap());
 
     // ---- the language menu -------------------------------------------------
 
@@ -6178,7 +5973,7 @@
     // Capture on the document so this beats the composer's own Enter handler —
     // on the input itself, listener order would decide it, which is fragile.
     document.addEventListener('keydown', (e) => {
-        if (e.target !== input || !mentionPopOpen()) return;
+        if (!mentionPopOpen() || !input.contains(e.target)) return;
         // A MODIFIED arrow is not list navigation. This runs in the capture
         // phase, ahead of the composer's own keydown, so without the guard an
         // open suggestion list swallowed Ctrl+Up and message recall did nothing
@@ -14089,7 +13884,7 @@
 
     wireSwitch('set-rich-composer', richComposerOn, async (v) => {
         await saveSettings({ richComposer: v });
-        paintMirror();
+        applyComposerPrefs();
         toast(v ? 'Formatting will be drawn as you type' : 'The message box will show plain text');
     });
     wireSwitch('set-format-bar', () => !!settings.formatBarOpen, async (v) => {
@@ -17488,7 +17283,7 @@
         if (t && t.unread) { t.unread = 0; renderDmSection(); }
         renderDmSection();
         setComposerPlaceholder();
-        $('composer-input').focus();
+        input.focus();
     }
 
     // "Message this person", from wherever you are looking at them — a message
@@ -17929,8 +17724,6 @@
     // One place decides what the field says, so the channel and DM paths cannot
     // disagree about it.
     function setComposerPlaceholder() {
-        const input = $('composer-input');
-        if (!input) return;
         input.placeholder = dmOpen
             ? 'Message ' + (dmOpen.isGroup ? dmOpen.title : '@' + dmOpen.title)
             : 'Message #' + channel;

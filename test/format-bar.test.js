@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bootRenderer, settle, type, $ } from './helpers/renderer.js';
+import { bootRenderer, settle, type, $, composerInput, cmEditor } from './helpers/renderer.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The BUILT bundle, not the script that builds it: what matters is which
@@ -48,8 +48,8 @@ function router() {
 }
 
 const boot = (settings) => bootRenderer({ board: router(), settings });
-const input = () => $('composer-input');
-const mirror = () => $('composer-mirror');
+const input = () => composerInput();
+const cm = () => cmEditor();
 
 // Put the caret where a person would have it, then press a toolbar button.
 function select(start, end) {
@@ -72,10 +72,13 @@ function pickFromMore(label) {
     openMenu('btn-more');
     menuItem(label).click();
 }
-function chord(key, opts = {}) {
-    input().dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({
-        key, ctrlKey: true, bubbles: true, cancelable: true
-    }, opts)));
+// The chords are the EDITOR'S KEYMAP, which is what it consults; jsdom's
+// synthetic key events carry none of the codes CodeMirror maps from. Real
+// keystrokes are checked in a browser instead.
+function chord(name) {
+    const fn = cm().getOption('extraKeys')[name];
+    if (!fn) return 'unbound';
+    return fn(cm());
 }
 
 async function withText(text, settings) {
@@ -121,7 +124,7 @@ describe('the Format toggle', () => {
     it('opens on Ctrl+Shift+X, the way the reference does', async () => {
         await boot({});
         await settle();
-        chord('x', { shiftKey: true });
+        chord('Shift-Ctrl-X');
         await settle();
         expect($('format-bar').hidden).toBe(false);
     });
@@ -280,30 +283,30 @@ describe('the marks that belong to a line', () => {
 
 describe('the keyboard chords', () => {
     it('binds the three every text box on this machine already uses', async () => {
-        for (const [key, want] of [['b', '**x**'], ['i', '*x*'], ['u', '__x__']]) {
+        for (const [name, want] of [['Ctrl-B', '**x**'], ['Ctrl-I', '*x*'], ['Ctrl-U', '__x__']]) {
             const el = await withText('x');
             select(0, 1);
-            chord(key);
-            expect(el.value, key).toBe(want);
+            chord(name);
+            expect(el.value, name).toBe(want);
         }
     }, 20000);
 
-    // With Shift held the key IS '*' and '&', so these have to be read off the
-    // physical code rather than the character.
-    it('reads the list chords off the key position, not the character', async () => {
+    it('binds the list chords the reference uses', async () => {
         const el = await withText('one');
         select(0);
-        input().dispatchEvent(new window.KeyboardEvent('keydown', {
-            key: '*', code: 'Digit8', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
-        }));
+        chord('Shift-Ctrl-8');
         expect(el.value).toBe('- one');
+        chord('Shift-Ctrl-7');
+        expect(el.value).toBe('1. one');
+        chord('Shift-Ctrl-9');
+        expect(el.value).toBe('> one');
     });
 
     it('leaves an unmodified letter alone', async () => {
-        const el = await withText('x');
-        select(0, 1);
-        input().dispatchEvent(new window.KeyboardEvent('keydown', { key: 'b', bubbles: true, cancelable: true }));
-        expect(el.value).toBe('x');
+        await withText('x');
+        await settle();
+        // A bare letter is not bound at all — typing it is the editor's job.
+        expect(chord('B')).toBe('unbound');
     });
 });
 
@@ -395,618 +398,293 @@ describe('inserting a code block', () => {
 // The live layer. Every one of these is really the same assertion: the mirror
 // holds the same characters as the field.
 
-describe('the formatting drawn under the caret', () => {
-    const SAMPLES = [
-        '',
-        'plain text',
-        '**bold** and *italic*',
-        '__underline__ ~~strike~~ ||spoiler||',
-        '***all three***',
-        '`code span` and ``a ` inside``',
-        '# heading\n> quote\n- item\n1. numbered',
-        '```js\nconst a = 1;\n```',
-        'unclosed **bold',
-        '*',
-        '**',
-        'a_b_c snake_case_name',
-        '<script>alert(1)</script>',
-        '&amp; & <b>',
-        'line one\n\nline three\n',
-        '  indented **bold**  ',
-        '- [link](https://example.com)',
-        '>>> not a quote marker exactly',
-        '```\nno language\n```\ntail'
-    ];
+// ---------------------------------------------------------------------------
+// The message box is a CodeMirror document whose text IS the Markdown. What was
+// once a decorative layer painted behind a textarea — and every caret bug that
+// came with keeping two copies of the same string in step — is now the editor's
+// own rendering of its own document. There is nothing left to drift.
 
-    // The invariant, in its new shape. The layer is a stack of line boxes now
-    // rather than one run of text with newlines in it — a block can carry a
-    // background across the full width and hold a line number out in the
-    // gutter, and a span cannot — so the characters are compared line by line.
-    const mirrorText = () => [...mirror().querySelectorAll('.cm-line')]
-        .map((l) => l.textContent).join('\n');
-
-    it('holds exactly the characters in the field', async () => {
+describe('the message box is the editor', () => {
+    it('holds the message as its document, character for character', async () => {
         await boot({});
         await settle();
-        for (const s of SAMPLES) {
+        for (const s of [
+            '', 'plain text', '**bold** and *italic*', '```js\nconst a = 1;\n```',
+            '# heading\n> quote\n- item', 'a_b_c snake_case_name', '<script>alert(1)</script>'
+        ]) {
             type(s);
-            // The one deliberate difference: a trailing empty line, so a message
-            // that ends on Shift+Enter has a final row with height.
-            expect(mirrorText(), JSON.stringify(s)).toBe(s + '\n');
+            expect(cm().getValue(), JSON.stringify(s)).toBe(s);
+            expect(input().value, JSON.stringify(s)).toBe(s);
         }
     });
 
-    it('gives every source line exactly one line box', async () => {
+    it('reads Markdown, so the formatting is the mode’s and not a second parser', async () => {
         await boot({});
         await settle();
-        for (const s of SAMPLES) {
-            type(s);
-            expect(mirror().querySelectorAll('.cm-line').length, JSON.stringify(s))
-                .toBe(s.split('\n').length + 1);
-        }
+        const mode = cm().getOption('mode');
+        expect(mode.name).toBe('markdown');
+        expect(mode.fencedCodeBlockHighlighting).toBe(true);
     });
 
-    // THE RULE THE WHOLE LAYER RESTS ON.
-    //
-    // The caret is the textarea's, the glyphs are the layer's, and a textarea
-    // can carry exactly one font — so any style here that changes how wide a
-    // character is makes the drawn text drift away from the caret, cumulatively,
-    // one character at a time.
-    //
-    // v0.76.0 shipped with the mono face and 0.92em on code spans and fences:
-    // typing inside a ``` block left the caret further behind with every key.
-    // Bold and italic were the same bug, slower. Emphasis is painted now —
-    // colour, background, decorations and -webkit-text-stroke — and this is the
-    // check that keeps it that way, because it is not a thing to remember.
-    it('never changes a character’s width, in any of its marks', () => {
-        const banned = /(^|[;{\s])(font-family|font-size|font-weight|font-style|font-stretch|font-variant|font|letter-spacing|word-spacing|text-transform|zoom|transform)\s*:/;
-        // Comments stripped first: one of them MENTIONS .cm-mark, and an
-        // unguarded scan ran from that word into the next real rule and blamed
-        // it for whatever it found there.
-        const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
-        const rules = bare.match(/\.cm-[\w-]+[^{}]*\{[^}]*\}/g) || [];
-        expect(rules.length, 'no .cm-* rules found — did they move?').toBeGreaterThan(8);
-        for (const rule of rules) {
-            const selector = rule.split('{')[0].trim();
-            // ONE exception, and it is the reason the exception is stated by
-            // NAME rather than by trusting the author: a rule that changes both
-            // boxes at once cannot pull them apart. The mono face for a message
-            // holding a code block is that rule, and it names #composer-input.
-            if (selector.includes('#composer-input')) continue;
-            const body = rule.slice(rule.indexOf('{'));
-            // …and anything taken OUT OF THE FLOW cannot push a glyph anywhere:
-            // the line numbers live in the gutter, absolutely positioned, and
-            // what they are set in is their own business.
-            if (/position:\s*absolute/.test(body)) continue;
-            expect(banned.test(body), selector + ' changes glyph metrics').toBe(false);
-        }
-    });
-
-    // The fences are the panel's own edges — the opening line carries the title
-    // bar and the closing one is its bottom rule — so neither shows its
-    // backticks. The text is still there; only its ink is gone.
-    // THE PANEL IS DRAWN, NOT LAID OUT. A border, rounded corners, an inset and
-    // a gutter are all boxes the text would have to move for — and nothing here
-    // may move the text at all. So it is an absolutely-positioned slice behind
-    // each of the block's lines, which exists as far as the eye is concerned and
-    // not at all as far as the caret is.
-    it('draws the block’s panel behind the text rather than around it', () => {
-        const flat = CSS.replace(/\s+/g, ' ');
-        const rule = /\.cm-fl::before \{([^}]*)\}/.exec(flat);
-        expect(rule, 'the panel must be a ::before, not a box on .cm-fl').toBeTruthy();
-        expect(rule[1]).toContain('position: absolute');
-        // Reaching left across the gutter the padding made, so the numbers are
-        // inside the panel and not floating beside it.
-        expect(rule[1]).toContain('calc(var(--cm-inset) - var(--cm-gutter))');
-        expect(flat).toMatch(/\.cm-fl-open::before \{[^}]*border-radius: 8px 8px 0 0/);
-        expect(flat).toMatch(/\.cm-fl-close::before \{[^}]*border-radius: 0 0 8px 8px/);
-        // …and .cm-fl itself keeps no background of its own, or the slice would
-        // be drawn on top of a slab that ends at the text.
-        const plain = /\.cm-fl \{([^}]*)\}/.exec(flat);
-        expect(plain === null || !/background/.test(plain[1])).toBe(true);
-    });
-
-    it('makes the title bar span the panel, not sit in a corner of it', () => {
-        const flat = CSS.replace(/\s+/g, ' ');
-        const rule = /\.codechip \{([^}]*)\}/.exec(flat);
-        expect(rule).toBeTruthy();
-        expect(rule[1]).toContain('left: var(--cm-inset)');
-        expect(rule[1]).toContain('right: var(--cm-inset)');
-        expect(rule[1]).toContain('border-radius: 8px 8px 0 0');
-    });
-
-    it('turns the backticks into the block’s edges', () => {
-        const flat = CSS.replace(/\s+/g, ' ');
-        expect(flat).toContain('.cm-fl-open .cm-mark, .cm-fl-close .cm-mark { opacity: 0; }');
-    });
-
-    // The gutter and the mono face are made by padding and typesetting BOTH
-    // boxes in one rule. Named together on purpose: separately they drift, and
-    // drift is the caret sitting beside the wrong glyph.
-    it('makes the gutter and the mono face on both boxes at once', () => {
-        const flat = CSS.replace(/\s+/g, ' ');
-        const rule = /\.composer-field\.cm-code #composer-input, \.composer-field\.cm-code #composer-mirror \{([^}]*)\}/
-            .exec(flat);
-        expect(rule, 'the gutter/mono rule must name both boxes').toBeTruthy();
-        expect(rule[1]).toContain('font-family: var(--mono)');
-        expect(rule[1]).toContain('padding-left');
-    });
-
-    it('still draws code, bold and headings as something', () => {
-        // Paint-only is the constraint, not an excuse to draw nothing.
-        const rule = (sel) => (CSS.match(new RegExp('\\' + sel + '[^{}]*\\{[^}]*\\}')) || [''])[0];
-        expect(rule('.cm-b')).toMatch(/-webkit-text-stroke/);
-        expect(rule('.cm-head')).toMatch(/-webkit-text-stroke/);
-        expect(rule('.cm-code, .cm-fence')).toMatch(/background/);
-    });
-
-    // The layer is positioned against a wrapper holding it and the field, NOT
-    // against the composer row — the row also holds the attach button and the
-    // tool cluster, and measured against that every character would sit one
-    // button's width to the left of the caret it belongs to. jsdom cannot see
-    // the misalignment, but it can see the structure that prevents it.
-    it('shares a positioning wrapper with the field, and only with the field', async () => {
+    // Turning the drawing off leaves the same document — the message is the
+    // same string either way, which is the point of Markdown being the format.
+    it('drops to plain text when the setting says so, without touching the text', async () => {
         await boot({});
-        await settle();
-        const field = mirror().parentElement;
-        expect(field.classList.contains('composer-field')).toBe(true);
-        expect(input().parentElement).toBe(field);
-        expect([...field.children].map((c) => c.id))
-            .toEqual(['composer-mirror', 'composer-input', 'composer-chrome']);
-    });
-
-    it('marks the syntax and formats what it wraps', async () => {
-        await boot({});
-        await settle();
-        type('a **bold** b');
-        expect(mirror().querySelector('.cm-b').textContent).toBe('bold');
-        expect([...mirror().querySelectorAll('.cm-mark')].map((n) => n.textContent)).toEqual(['**', '**']);
-    });
-
-    it('uses the message renderer’s own reading of the syntax', async () => {
-        await boot({});
-        await settle();
-        // ***x*** is bold AND italic to the renderer; the preview must not have
-        // a second opinion about it.
-        type('***x***');
-        const inner = mirror().querySelector('.cm-b.cm-i, .cm-i.cm-b');
-        expect(inner).toBeTruthy();
-        expect(inner.textContent).toBe('x');
-    });
-
-    it('leaves everything inside a fence alone', async () => {
-        await boot({});
-        await settle();
-        type('```js\n**not bold**\n```');
-        expect(mirror().querySelector('.cm-b')).toBe(null);
-        expect(mirror().querySelector('.cm-fl-body').textContent).toBe('**not bold**');
-    });
-
-    it('escapes what it is given, because it is the least trusted text here', async () => {
-        await boot({});
-        await settle();
-        type('<img src=x onerror=1>');
-        expect(mirror().querySelector('img')).toBe(null);
-        expect(mirrorText()).toBe('<img src=x onerror=1>\n');
-    });
-
-    it('is off, and the field paints its own text, when the setting says so', async () => {
-        await boot({ richComposer: false });
         await settle();
         type('**bold**');
-        expect(mirror().hidden).toBe(true);
-        expect(document.body.classList.contains('rich-composer')).toBe(false);
+        $('btn-settings').click();
+        await settle();
+        $('set-rich-composer').click();
+        await settle();
+        expect(cm().getOption('mode')).toBe(null);
+        expect(input().value).toBe('**bold**');
     });
 
-    // The parse runs on every keystroke and the server accepts a quarter of a
-    // megabyte. Past the ceiling the field goes back to painting itself, which
-    // is exactly what it did before this feature existed.
-    it('gives up on a message too big to reparse per keystroke', async () => {
+    it('never leaves a second copy of the text anywhere', async () => {
         await boot({});
         await settle();
-        type('x'.repeat(12001));
-        expect(mirror().hidden).toBe(true);
-        expect(document.body.classList.contains('rich-composer')).toBe(false);
-        type('short again');
-        expect(mirror().hidden).toBe(false);
-    });
-
-    it('follows text the app writes into the box, not only typing', async () => {
-        await boot({ messageHistory: ['**recalled**'] });
-        await settle();
-        input().dispatchEvent(new window.KeyboardEvent('keydown', {
-            key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true
-        }));
-        expect(mirrorText()).toBe('**recalled**\n');
+        type('anything');
+        expect($('composer-mirror')).toBe(null);
+        expect($('composer-chrome')).toBe(null);
     });
 });
 
-// ---------------------------------------------------------------------------
-// The reference draws a fenced block in the composer as an editor: a titled
-// panel with the language on it, numbered lines and coloured code.
-
 describe('a code block while it is being written', () => {
-    const chip = () => $('composer-chrome').querySelector('.codechip');
-    const field = () => document.querySelector('.composer-field');
+    // Read off the MARKS, not the document. A replacedWith widget only enters
+    // the DOM when CodeMirror renders the line it is on, and jsdom lays nothing
+    // out, so nothing is ever rendered here — but the mark and its node exist
+    // either way, and they are what the app actually builds. The rendered
+    // article is checked in a browser.
+    const chips = () => cm().getAllMarks()
+        .map((m) => m.replacedWith)
+        .filter((n) => n && n.classList && n.classList.contains('cb-chip'));
+    const chipLang = () => {
+        const n = chips()[0];
+        return n ? n.querySelector('.cb-chip-lang span').textContent : null;
+    };
+    const panelLines = () => {
+        let n = 0;
+        for (let i = cm().firstLine(); i <= cm().lastLine(); i++) {
+            const cls = cm().lineInfo(i).wrapClass || '';
+            if (/cb-(open|body|close)/.test(cls)) n++;
+        }
+        return n;
+    };
 
-    it('turns the box into a code editor while it holds a block', async () => {
-        await boot({});
+    it('titles the block with its language', async () => {
+        await withText('```js\nconst a = 1;\n```');
         await settle();
-        expect(field().classList.contains('cm-code')).toBe(false);
-        type('```js\nconst a = 1;\n```');
-        expect(field().classList.contains('cm-code')).toBe(true);
-        type('no code here');
-        expect(field().classList.contains('cm-code')).toBe(false);
+        expect(chipLang()).toBe('JavaScript');
+        expect(panelLines()).toBe(3);
     });
 
-    it('numbers the lines of the block, and only those', async () => {
-        await boot({});
+    it('gives each block in a message its own title', async () => {
+        await withText('```js\na\n```\ntext\n```python\nb\n```');
         await settle();
-        type('before\n```js\none\ntwo\nthree\n```\nafter');
-        const nums = [...mirror().querySelectorAll('.cm-num')].map((n) => n.dataset.n);
-        expect(nums).toEqual(['1', '2', '3']);
+        expect(chips().map((n) => n.querySelector('.cb-chip-lang span').textContent))
+            .toEqual(['JavaScript', 'Python']);
     });
 
-    // Generated content, not text. The invariant this layer rests on is that its
-    // text is the field's text — a number in the markup would break it as
-    // surely as an extra character typed in.
-    it('keeps the numbers out of the text', async () => {
-        await boot({});
+    it('titles an unclosed fence too, because it is still a block', async () => {
+        await withText('```rust\nfn main() {');
         await settle();
-        type('```js\nconst a = 1;\n```');
-        const text = [...mirror().querySelectorAll('.cm-line')].map((l) => l.textContent).join('\n');
-        expect(text).toBe('```js\nconst a = 1;\n```\n');
+        expect(chipLang()).toBe('Rust');
     });
 
-    it('titles the block with its language, and can change it', async () => {
+    it('changes the language from the chip, rewriting the fence', async () => {
         const el = await withText('```js\nconst a = 1;\n```');
         await settle();
-        expect(chip()).toBeTruthy();
-        expect(chip().querySelector('.codechip-lang span').textContent).toBe('JavaScript');
-
-        chip().querySelector('.codechip-lang').click();
+        chips()[0].querySelector('.cb-chip-lang').click();
         await settle();
         $('lang-search').value = 'python';
         $('lang-search').dispatchEvent(new window.Event('input', { bubbles: true }));
         await settle();
         $('lang-list').querySelector('.lang-item').click();
         await settle();
-
         expect(el.value).toBe('```python\nconst a = 1;\n```');
-        expect(chip().querySelector('.codechip-lang span').textContent).toBe('Python');
     });
 
     it('offers the block its own menu', async () => {
         const el = await withText('```js\nconst a = 1;\n```');
         await settle();
-        chip().querySelector('.codechip-more').click();
+        chips()[0].querySelector('.cb-chip-more').click();
         await settle();
         expect([...$('fmt-menu').querySelectorAll('.fm-label')].map((l) => l.textContent))
             .toEqual(['Change language', 'Copy code', 'Remove code block']);
-
         menuItem('Remove code block').click();
         await settle();
         expect(el.value).toBe('const a = 1;');
     });
 
-    // CODE IS NOT PROSE. A textarea spell-checks all of itself or none of
-    // itself, so while the message holds a block the whole field stops — red
-    // squiggles under every identifier are worse than none under the sentence
-    // above them.
+    // The gutter numbers CODE, not the message, so a block always starts at 1
+    // and the prose around it is not numbered at all.
+    it('numbers the code and only the code', async () => {
+        await withText('before\n```js\none\ntwo\n```\nafter');
+        await settle();
+        const fmt = cm().getOption('lineNumberFormatter');
+        expect([0, 1, 2, 3, 4, 5].map((i) => fmt(i + 1))).toEqual(['', '', '1', '2', '', '']);
+        expect(cm().getOption('lineNumbers')).toBe(true);
+    });
+
+    it('takes the gutter away when there is no code', async () => {
+        await withText('just a sentence');
+        await settle();
+        expect(cm().getOption('lineNumbers')).toBe(false);
+    });
+
+    // CODE IS NOT PROSE. One field checks all of itself or none of itself, so
+    // the whole box stops while the message holds a block.
     it('turns spellcheck off while there is code in the box', async () => {
         await boot({});
         await settle();
         expect(input().spellcheck).toBe(true);
-
         type('```js\nconst a = 1;\n```');
+        await settle();
         expect(input().spellcheck).toBe(false);
-        expect(input().getAttribute('spellcheck')).toBe('false');
-
         type('just a sentence');
+        await settle();
         expect(input().spellcheck).toBe(true);
-        expect(input().getAttribute('spellcheck')).toBe('true');
     });
 
-    // The bar covers the opening line EXACTLY — it is that line, as far as
-    // anybody looking at it is concerned, which is why the line's own ink is off.
-    it('sizes the title bar to the line it stands in for', async () => {
+    // The fence's own text is replaced by an ATOMIC mark. Atomic is what keeps
+    // the caret out of it — the arrows step over the whole thing rather than
+    // landing inside ```javascript where there is nothing to see.
+    it('makes the fence a single atomic mark', async () => {
         await withText('```js\nconst a = 1;\n```');
         await settle();
-        const open = mirror().querySelector('.cm-fl-open');
-        expect(chip().style.top).toBe(open.offsetTop + 'px');
-        expect(chip().style.height).toBe(open.offsetHeight + 'px');
-    });
-
-    it('is one block per fence, however many there are', async () => {
-        await withText('```js\na\n```\ntext\n```python\nb\n```');
-        await settle();
-        expect($('composer-chrome').querySelectorAll('.codechip').length).toBe(2);
-    });
-
-    it('titles an unclosed fence too, because it is still a block', async () => {
-        await withText('```rust\nfn main() {');
-        await settle();
-        expect(chip().querySelector('.codechip-lang span').textContent).toBe('Rust');
-    });
-
-    // A stand-in on window.hljs with only the methods somebody else needed used
-    // to throw straight through the preview and take the whole layer down.
-    it('survives a highlighter that is not all there', async () => {
-        await boot({});
-        await settle();
-        const real = window.hljs;
-        window.hljs = { highlightElement: () => {} };
-        try {
-            type('```js\nconst a = 1;\n```');
-            expect(mirror().hidden).toBe(false);
-            const text = [...mirror().querySelectorAll('.cm-line')].map((l) => l.textContent).join('\n');
-            expect(text).toBe('```js\nconst a = 1;\n```\n');
-        } finally {
-            if (real === undefined) delete window.hljs; else window.hljs = real;
-        }
+        const marks = cm().getAllMarks().filter((m) => m.atomic);
+        expect(marks.length).toBe(2);          // the opening fence and the closing one
+        expect(marks.every((m) => m.inclusiveLeft && m.inclusiveRight)).toBe(true);
     });
 });
 
 // ---------------------------------------------------------------------------
-// A block is drawn as an editor, so it has to answer like one.
+// The three behaviours the editor cannot know about, because they are about
+// Markdown rather than about text. Everything else — caret, arrows, selection,
+// copy, paste, undo — is CodeMirror's and is not re-implemented anywhere.
+//
+// These drive the KEYMAP rather than synthesising keystrokes: the keymap is
+// what the editor consults, and jsdom's key events do not carry the codes
+// CodeMirror reads. Real keystrokes are checked in a browser instead.
 
-describe('the keyboard inside a code block', () => {
-    // before / ```js / code one / code two / ``` / after
-    const DOC = 'before\n```js\ncode one\ncode two\n```\nafter';
-    const L = { before: 0, open: 7, one: 13, two: 22, close: 31, after: 35 };
+describe('the keys the editor cannot answer on its own', () => {
+    const keymap = () => cm().getOption('extraKeys');
+    const press = (name) => keymap()[name](cm());
 
-    function key(k, opts = {}) {
-        const ev = new window.KeyboardEvent('keydown', Object.assign({
-            key: k, bubbles: true, cancelable: true
-        }, opts));
-        input().dispatchEvent(ev);
-        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: k, bubbles: true }));
-        return ev;
-    }
-    async function inBlock(text) {
-        const el = await withText(text === undefined ? DOC : text);
+    it('sends on Enter', async () => {
+        const el = await withText('hello');
+        let asked = 0;
+        const form = $('composer');
+        const real = form.requestSubmit;
+        form.requestSubmit = () => { asked++; };
+        try { press('Enter'); } finally { form.requestSubmit = real; }
+        expect(asked).toBe(1);
+        expect(el.value).toBe('hello');       // Enter did not also insert a line
+    });
+
+    it('indents inside a block and passes Tab on outside one', async () => {
+        const el = await withText('```js\none\n```');
         await settle();
-        return el;
-    }
+        select(6);
+        press('Tab');
+        expect(el.value).toBe('```js\n    one\n```');
 
-    // THE FENCE LINES ARE CHROME. The opening ``` carries the title bar and the
-    // closing one is the panel's bottom edge, both with their ink off — so an
-    // Up from the first line of code used to put the caret INSIDE THE TITLE BAR,
-    // where there is nothing to see and anything typed corrupts the fence. That
-    // is what "the arrows escape the block" was.
-    it('steps over the title bar going up, not into it', async () => {
-        const el = await inBlock();
-        select(L.one);
-        const ev = key('ArrowUp');
-        expect(ev.defaultPrevented).toBe(true);
-        expect(el.selectionStart).toBe(L.before);
-    });
-
-    it('steps over the bottom edge going down', async () => {
-        const el = await inBlock();
-        select(L.two);
-        const ev = key('ArrowDown');
-        expect(ev.defaultPrevented).toBe(true);
-        expect(el.selectionStart).toBe(L.after);
-    });
-
-    // Between lines of code it does nothing at all: the browser already moves
-    // the caret correctly, and column memory is its business.
-    it('leaves an ordinary move between code lines alone', async () => {
-        await inBlock();
-        select(L.one);
-        expect(key('ArrowDown').defaultPrevented).toBe(false);
-    });
-
-    it('keeps the column it had', async () => {
-        const el = await inBlock();
-        select(L.one + 4);                       // "code| one"
-        key('ArrowUp');
-        expect(el.selectionStart).toBe(L.before + 4);
-    });
-
-    // Off the end of the message there is nowhere to step to, so it is left to
-    // do whatever it would have done.
-    it('lets the caret run off the end when there is nothing past the block', async () => {
-        await inBlock('```js\ncode\n```');
-        select(6);                               // the one line of code
-        expect(key('ArrowUp').defaultPrevented).toBe(false);
-    });
-
-    // The net, for the moves that are deliberately not intercepted — a click on
-    // the title bar, a wrapped line, an undo.
-    it('moves a caret that has landed on the title bar into the code', async () => {
-        const el = await inBlock();
-        select(L.open + 2);
-        input().dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-        expect(el.selectionStart).toBe(L.one + 2);
-    });
-
-    it('moves a caret that has landed on the bottom edge back up into it', async () => {
-        const el = await inBlock();
-        select(L.close + 1);
-        input().dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-        expect(el.selectionStart).toBe(L.two + 1);
-    });
-
-    it('sends it the way it was travelling when it was an arrow', async () => {
-        const el = await inBlock();
-        select(L.close);
-        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }));
-        expect(el.selectionStart).toBe(L.after);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Backspacing the last character of code out of a block used to leave the shell
-// behind — a title bar, one numbered line and a bottom edge — and the next press
-// ate the newline between the code and the fence, putting the caret inside the
-// title bar where the text is invisible. From there every further press deleted
-// a character of ```javascript that nobody could see.
-
-describe('emptying a code block', () => {
-    function del(key, opts = {}) {
-        const ev = new window.KeyboardEvent('keydown', Object.assign({
-            key, bubbles: true, cancelable: true
-        }, opts));
-        input().dispatchEvent(ev);
-        return ev;
-    }
-
-    it('takes the whole block away once it is empty', async () => {
-        const el = await withText('```js\n\n```');
+        type('just a sentence');
         await settle();
-        select(6);                                // the empty body line
-        const ev = del('Backspace');
-        expect(ev.defaultPrevented).toBe(true);
-        expect(el.value).toBe('');
-        expect(el.selectionStart).toBe(0);
+        select(4);
+        // Passing is what lets the browser move the focus to the next control,
+        // which is how somebody who does not use a mouse reaches Send.
+        expect(press('Tab')).toBe(window.CodeMirror.Pass);
     });
 
-    it('closes the gap it leaves in a longer message', async () => {
+    it('outdents on Shift-Tab, and stops at the margin', async () => {
+        const el = await withText('```js\n        deep\n```');
+        await settle();
+        select(10);
+        press('Shift-Tab');
+        expect(el.value).toBe('```js\n    deep\n```');
+        press('Shift-Tab');
+        expect(el.value).toBe('```js\ndeep\n```');
+        press('Shift-Tab');
+        expect(el.value).toBe('```js\ndeep\n```');
+    });
+
+    it('removes an empty block whole, and closes the gap', async () => {
         const el = await withText('before\n```js\n\n```\nafter');
         await settle();
         select(13);
-        del('Backspace');
+        press('Backspace');
         expect(el.value).toBe('before\nafter');
-        expect(el.selectionStart).toBe(7);
     });
 
-    it('works from anywhere in an empty block, including its fences', async () => {
-        for (const at of [0, 3, 6, 8]) {
-            const el = await withText('```js\n\n```');
-            await settle();
-            select(at);
-            del('Backspace');
-            expect(el.value, 'from ' + at).toBe('');
-        }
-    }, 20000);
-
-    it('answers Delete the same way', async () => {
+    it('removes one that is the whole message', async () => {
         const el = await withText('```js\n\n```');
         await settle();
         select(6);
-        expect(del('Delete').defaultPrevented).toBe(true);
+        press('Backspace');
         expect(el.value).toBe('');
     });
 
-    it('leaves an unclosed block deletable too', async () => {
+    it('removes an unclosed one too', async () => {
         const el = await withText('```js');
         await settle();
         select(5);
-        del('Backspace');
+        press('Backspace');
         expect(el.value).toBe('');
     });
 
-    // With code still in it the fences are not the user's to delete by accident
-    // — they are drawn as the panel's own edges, so eating one is damage nobody
-    // can see happening.
+    // With code still in it the fences are not the user's to delete by
+    // accident: they are one atomic mark, which the editor would take whole,
+    // leaving a block with no top and nothing on screen to say why.
     it('refuses to eat the fence while there is still code', async () => {
         const el = await withText('```js\ncode\n```');
         await settle();
-        select(6);                                // start of the first code line
-        expect(del('Backspace').defaultPrevented).toBe(true);
+        select(6);                             // start of the first code line
+        expect(press('Backspace')).toBe(undefined);
         expect(el.value).toBe('```js\ncode\n```');
 
-        select(10);                               // end of the last code line
-        expect(del('Delete').defaultPrevented).toBe(true);
+        select(10);                            // end of the last code line
+        expect(press('Delete')).toBe(undefined);
         expect(el.value).toBe('```js\ncode\n```');
     });
 
-    it('leaves an ordinary delete inside the code alone', async () => {
+    it('leaves an ordinary delete inside the code to the editor', async () => {
         await withText('```js\ncode\n```');
         await settle();
         select(8);
-        expect(del('Backspace').defaultPrevented).toBe(false);
+        expect(press('Backspace')).toBe(window.CodeMirror.Pass);
     });
 
-    // Nothing else can put the caret on a fence line any more, but TYPING one
-    // still can: the moment ``` is typed the bar covers what is being typed, so
-    // the language went in blind.
-    it('shows the fence again while the caret is on it', async () => {
+    it('claims the chords the editor would otherwise answer itself', async () => {
+        await withText('x');
+        await settle();
+        // Ctrl-U is the editor's undoSelection and Ctrl-D its deleteLine. Both
+        // would happen underneath the app's own bindings if they were not taken.
+        for (const name of ['Ctrl-B', 'Ctrl-I', 'Ctrl-U', 'Ctrl-K', 'Ctrl-D',
+            'Shift-Ctrl-X', 'Shift-Ctrl-S', 'Shift-Ctrl-C',
+            'Shift-Ctrl-7', 'Shift-Ctrl-8', 'Shift-Ctrl-9',
+            'Ctrl-Alt-C', 'Ctrl-Up', 'Ctrl-Down']) {
+            expect(typeof keymap()[name], name).toBe('function');
+        }
+    });
+
+    it('writes the marks the chords stand for', async () => {
+        const el = await withText('x');
+        await settle();
+        select(0, 1);
+        press('Ctrl-B');
+        expect(el.value).toBe('**x**');
+    });
+
+    // Tab has to be able to reach the browser, and the editor's own default
+    // keymap binds it. A keymap that binds it to `false` is what tells
+    // CodeMirror to leave the event alone entirely.
+    it('has a keymap that lets Tab out', async () => {
         await withText('');
         await settle();
-        type('```js');
-        input().focus();
-        select(5);
-        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: 'j', bubbles: true }));
-
-        const open = mirror().querySelector('.cm-fl-open');
-        expect(open.classList.contains('cm-at-caret')).toBe(true);
-        expect($('composer-chrome').querySelector('.codechip').hidden).toBe(true);
-    });
-
-    it('hides it again once the caret leaves', async () => {
-        await withText('```js\ncode\n```');
-        await settle();
-        input().focus();
-        select(8);
-        input().dispatchEvent(new window.KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }));
-        expect(mirror().querySelector('.cm-at-caret')).toBe(null);
-        expect($('composer-chrome').querySelector('.codechip').hidden).toBe(false);
-    });
-});
-
-describe('Tab inside a code block', () => {
-    const DOC = '```js\none\ntwo\n```';
-
-    function tab(shift) {
-        const ev = new window.KeyboardEvent('keydown', {
-            key: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true
-        });
-        input().dispatchEvent(ev);
-        return ev;
-    }
-
-    it('indents instead of moving the focus away', async () => {
-        const el = await withText(DOC);
-        await settle();
-        select(6);                               // start of "one"
-        const ev = tab();
-        expect(ev.defaultPrevented).toBe(true);
-        expect(el.value).toBe('```js\n    one\ntwo\n```');
-    });
-
-    it('indents every line a selection touches', async () => {
-        const el = await withText(DOC);
-        await settle();
-        select(6, 13);                           // "one\ntwo"
-        tab();
-        expect(el.value).toBe('```js\n    one\n    two\n```');
-    });
-
-    it('outdents on Shift+Tab, and stops at the margin', async () => {
-        const el = await withText('```js\n        deep\n```');
-        await settle();
-        select(8);
-        tab(true);
-        expect(el.value).toBe('```js\n    deep\n```');
-        select(8);
-        tab(true);
-        expect(el.value).toBe('```js\ndeep\n```');
-        select(6);
-        tab(true);
-        expect(el.value).toBe('```js\ndeep\n```');
-    });
-
-    it('keeps the selection over the same text, so it can be indented twice', async () => {
-        const el = await withText(DOC);
-        await settle();
-        select(6, 13);
-        tab();
-        tab();
-        expect(el.value).toBe('```js\n        one\n        two\n```');
-    });
-
-    // Everywhere else Tab is how somebody who does not use a mouse reaches the
-    // send button, and it stays that way.
-    it('still moves the focus outside a code block', async () => {
-        const el = await withText('just a sentence');
-        await settle();
-        select(4);
-        const ev = tab();
-        expect(ev.defaultPrevented).toBe(false);
-        expect(el.value).toBe('just a sentence');
+        expect(cm().getOption('keyMap')).toBe('scarmvoice');
+        expect(window.CodeMirror.keyMap.scarmvoice.Tab).toBe(false);
+        expect(window.CodeMirror.keyMap.scarmvoice['Shift-Tab']).toBe(false);
     });
 });
 

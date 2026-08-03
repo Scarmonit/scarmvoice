@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bootRenderer, $, settle, type } from './helpers/renderer.js';
+import { bootRenderer, $, settle, type, composerInput } from './helpers/renderer.js';
 
 const RENDERER = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer');
@@ -162,7 +162,7 @@ describe('signing out empties the composer that is on screen', () => {
 
         type('payroll numbers attached, do not forward');
         await settle();
-        expect($('composer-input').value).not.toBe('');
+        expect(composerInput().value).not.toBe('');
 
         // The account-token path: net answers "you need an account", which is
         // one of the two ways every background call reaches teardownSession().
@@ -170,7 +170,7 @@ describe('signing out empties the composer that is on screen', () => {
         h.resync();
         await settle(20);
 
-        expect($('composer-input').value).toBe('');
+        expect(composerInput().value).toBe('');
     });
 });
 

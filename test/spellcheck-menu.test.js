@@ -18,7 +18,7 @@
 // proves the halves it cannot see — that the event fires at all, that Chromium
 // really flags the word, and that replaceMisspelling edits the textarea.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { bootRenderer, $, settle } from './helpers/renderer.js';
+import { bootRenderer, $, settle, composerInput } from './helpers/renderer.js';
 
 // One message in the channel, so the "a message is still not a text field" case
 // below has a row to right-click without booting a second renderer into the same
@@ -247,9 +247,12 @@ describe('the menu and the field it belongs to', () => {
     // from not holding, and the failure mode is a menu item that silently does
     // nothing at all.
     it('puts focus back on the field before running a command', async () => {
-        const input = $('composer-input');
+        const input = composerInput();
         input.focus();
-        expect(document.activeElement).toBe(input);
+        // The message box is an editor now, so "focused" means the caret is in
+        // it — the element holding it is CodeMirror's own, not one this spec
+        // should be naming.
+        expect(input.element.contains(document.activeElement)).toBe(true);
 
         h.rightClickField({ canPaste: true });
         await settle();
@@ -259,7 +262,7 @@ describe('the menu and the field it belongs to', () => {
         itemFor('Paste').click();
         await settle();
 
-        expect(document.activeElement).toBe(input);
+        expect(input.element.contains(document.activeElement)).toBe(true);
         expect(h.lounge.edit.paste).toHaveBeenCalled();
     });
 

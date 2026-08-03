@@ -17,7 +17,7 @@
 // else, and it should not start here. Each surface keeps its own and gets it
 // back on return.
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { bootRenderer, settle, type, $ } from './helpers/renderer.js';
+import { bootRenderer, settle, type, $, composerInput } from './helpers/renderer.js';
 
 const ME = { id: 1, username: 'Me', role: 'member' };
 const ALICE = { id: 2, username: 'Alice', role: 'member' };
@@ -72,40 +72,40 @@ describe('a draft written for a channel', () => {
 
         // The box the user is now looking at belongs to Alice. Anything left in
         // it is one keystroke away from being sent to her.
-        expect($('composer-input').value).toBe('');
-        expect($('composer-input').placeholder).toBe('Message @Alice');
+        expect(composerInput().value).toBe('');
+        expect(composerInput().placeholder).toBe('Message @Alice');
     });
 
     it('is handed back on the way out, rather than thrown away', async () => {
         await backToChannel();
-        expect($('composer-input').value).toBe('private note for #general');
-        expect($('composer-input').placeholder).toBe('Message #general');
+        expect(composerInput().value).toBe('private note for #general');
+        expect(composerInput().placeholder).toBe('Message #general');
     });
 });
 
 describe('a draft written for a conversation', () => {
     it('stays with that conversation and does not reach the channel', async () => {
         await openConversation('Alice');
-        expect($('composer-input').value).toBe('');
+        expect(composerInput().value).toBe('');
         type('for alice only');
         await settle();
 
         await backToChannel();
         // The channel's own draft is what comes back — not Alice's.
-        expect($('composer-input').value).toBe('private note for #general');
+        expect(composerInput().value).toBe('private note for #general');
 
         await openConversation('Alice');
-        expect($('composer-input').value).toBe('for alice only');
+        expect(composerInput().value).toBe('for alice only');
     });
 
     it('does not reach a DIFFERENT conversation either', async () => {
         // Keyed per thread, not per surface-kind: typing to Alice and then
         // clicking Bob is the same misdelivery, one row apart in the sidebar.
         await openConversation('Bob');
-        expect($('composer-input').value).toBe('');
+        expect(composerInput().value).toBe('');
 
         await openConversation('Alice');
-        expect($('composer-input').value).toBe('for alice only');
+        expect(composerInput().value).toBe('for alice only');
     });
 });
 
@@ -158,6 +158,6 @@ describe('signing out', () => {
         expect($('app').hidden).toBe(false);
 
         await openConversation('Alice');
-        expect($('composer-input').value).toBe('');
+        expect(composerInput().value).toBe('');
     });
 });

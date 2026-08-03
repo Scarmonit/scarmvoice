@@ -57,6 +57,18 @@ function checkVendoredWorklet() {
             '  current scripts/rnnoise-processor.js. Run `npm run vendor` and re-run.');
     }
     console.log('  preflight ok — the vendored RNNoise worklet is current');
+
+    // The message box IS the editor. A release built without it is an app with
+    // no way to type, which is not a subtle failure but is a silent one at
+    // build time — vendor/ is gitignored, so what ships is whatever the last
+    // vendor run left on disk.
+    const cmFile = path.join(__dirname, '..', 'src', 'renderer', 'vendor', 'codemirror.js');
+    if (!fs.existsSync(cmFile)) die('src/renderer/vendor/codemirror.js is missing — run `npm run vendor`.');
+    const cmSrc = fs.readFileSync(cmFile, 'utf8');
+    if (!/defineMode\("markdown"/.test(cmSrc)) {
+        die('the vendored CodeMirror has no markdown mode — the composer would load without one.');
+    }
+    console.log('  preflight ok — the vendored editor is present, with its markdown mode');
 }
 
 // The notes are checked FIRST and they are checked HERE, before anything is

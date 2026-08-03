@@ -27,6 +27,7 @@
 <title>ScarmVoice</title>
 <!-- Same highlight.js theme the website pulls from its CDN; vendored because the
      CSP above allows no remote script or style. -->
+<link rel="stylesheet" href="vendor/codemirror.css">
 <link rel="stylesheet" href="vendor/hljs-theme.css">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -531,22 +532,22 @@
              also holds the attach button and the tool cluster — measured
              against the row it would start under the paperclip and every
              character would be one button's width to the left of its caret. -->
-        <div class="composer-field">
-          <!-- A DIV DRAWN UNDER A TRANSPARENT TEXTAREA, holding exactly the
-               same characters with the formatted runs styled and the markers
-               dimmed. That is the whole of the "WYSIWYG": there is no second
-               editor and no rich-text document, so the textarea remains the
-               source of truth and every existing behaviour — selection, undo,
-               IME, spellcheck, drag-and-drop, the send path — is untouched.
-               aria-hidden, because the textarea it mirrors is the real control
-               and a screen reader must not meet the same text twice. -->
-          <div id="composer-mirror" aria-hidden="true"></div>
-          <textarea id="composer-input" rows="1" placeholder="Message #general"></textarea>
-          <!-- The code block's own controls, drawn over its header line. The
-               layer is inert; only the chip inside it takes clicks, because the
-               textarea underneath has to keep every other one. -->
-          <div id="composer-chrome" aria-hidden="true"></div>
-        </div>
+        <!-- THE MESSAGE BOX IS A CODEMIRROR DOCUMENT, and that document is the
+             Markdown. Not a rich-text model over the top of it and not a
+             textarea with a picture painted behind it: the characters the
+             editor holds are the characters that get sent.
+
+             Which is the point. A caret that keeps up with typing, arrows that
+             stay in the code, Tab that indents, selection, copy and paste — all
+             of those now come from the editor rather than from this app
+             re-implementing them one bug at a time.
+
+             The textarea is gone. `composerInput` in app.js is a small
+             textarea-shaped adapter over the editor (value, selectionStart,
+             setSelectionRange, focus, events), so everything built on the old
+             one — mentions, message recall, drafts, the toolbar — still speaks
+             to it the same way. -->
+        <div class="composer-field" id="composer-field"></div>
         <div class="composer-tools">
           <button type="button" id="btn-format" title="Show formatting options (Ctrl+Shift+X)"
                   aria-pressed="false" aria-expanded="false">
@@ -2435,6 +2436,11 @@
      lazy.js instead. The SDK still evaluates AFTER voice.js/noise.js, so its
      RTCPeerConnection/getDisplayMedia/getUserMedia patches are installed in
      time — by minutes rather than by milliseconds. -->
+<!-- The message box's editor. Eager, unlike hljs: the composer is on screen
+     from the first paint and there is no useful state in which it is not there.
+     One local file, no network, no modules — see scripts/vendor-codemirror.js
+     for why it is CodeMirror 5 and why it is concatenated rather than bundled. -->
+<script src="vendor/codemirror.js"></script>
 <script src="lazy.js"></script>
 <!-- lib.js holds the renderer's pure helpers (the unit-tested half); audio.js
      owns the single AudioContext and the shared meter tick. Both have to be

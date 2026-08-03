@@ -12,8 +12,8 @@
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
-    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js && node scripts/make-icon.js",
-    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js",
+    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-codemirror.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js && node scripts/make-icon.js",
+    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-codemirror.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js",
     "icon": "node scripts/make-icon.js",
     "start": "electron .",
     "dev": "electron . --dev",
@@ -43,6 +43,7 @@
     "@electron/fuses": "^2.1.3",
     "@jitsi/rnnoise-wasm": "^0.2.1",
     "@playwright/test": "^1.61.1",
+    "codemirror": "^5.65.21",
     "electron": "33.4.11",
     "electron-builder": "^25.1.8",
     "highlight.js": "^11.9.0",
