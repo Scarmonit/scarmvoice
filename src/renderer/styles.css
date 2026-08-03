@@ -6291,6 +6291,28 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    longer has, and gives them the height instead. */
 #app [data-flow^="column"] > * { flex-shrink: 0; }
 
+/* …AND IT NEEDS ROOM ON THE AXIS IT WAS TURNED ONTO, which in the default
+   arrangement is the grid's to give. This is why Orientation looked like a
+   control that did nothing: flex-direction was being set correctly all along,
+   but the header's row is a flat 48px and the rail's column a flat 72, so the
+   contents duly restacked inside a box that could not grow and were clipped by
+   it. The stack was there; there was just nowhere to see it.
+   The track becomes `auto` for exactly the element that was turned, so nothing
+   about the arrangement changes for anybody who has not turned one.
+   (A custom layout is not laid out by this grid at all — there each element
+   carries its own rectangle, and refitToAxis() in app.js resizes it instead.) */
+#app:not([data-layout="custom"]):has(> #chan-head[data-flow^="column"]) {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+#app:not([data-layout="custom"]):has(> #rail[data-flow^="row"]) {
+  grid-template-columns: auto var(--w-side) minmax(0, 1fr) auto;
+}
+/* A bar that has been turned is sized by what is in it, not by the height it
+   had when it ran the other way. #chan-head carries no height of its own — its
+   row does — but the composer row and the me bar both do. */
+#app .composer-row[data-flow^="column"] { min-height: 0; height: auto; }
+#app #me-bar[data-flow^="column"] { height: auto; }
+
 /* The two-way choices in the options popup. */
 .ep-seg { display: flex; gap: 4px; }
 .ep-seg button {
@@ -6315,13 +6337,18 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
   z-index: 2;
 }
 #el-options[hidden] { display: none; }
+/* The handle. Same treatment as #edit-panel-head, because it is the same
+   affordance: this popup opens over the thing it is about, so it has to be
+   possible to push it aside. */
 #el-options-head {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 8px;
   padding: 9px 8px 9px 12px;
   background: var(--elev, var(--panel));
   box-shadow: 0 1px 0 var(--line);
+  cursor: move; user-select: none;
 }
+#el-options-head .ep-x { cursor: pointer; }
 #el-options .ep-body { padding: 10px 12px; }
 #el-options .ep-foot { flex-direction: column; gap: 6px; }
 #el-options .keycap { min-width: 0; width: 100%; }

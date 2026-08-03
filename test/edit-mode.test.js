@@ -975,6 +975,102 @@ describe('per-element options', () => {
         await settle();
         expect($('el-options').hidden).toBe(true);
     });
+
+    // It opens ON the element it is about, which is the element you are trying
+    // to watch while you change it. Pushing it aside is how the popup gets used
+    // at all — the same affordance the control panel has always had.
+    describe('and it can be pushed out of the way', () => {
+        const dragHead = (from, to) => {
+            const head = $('el-options-head');
+            const o = { bubbles: true, cancelable: true, button: 0, pointerId: 1 };
+            head.dispatchEvent(new window.PointerEvent('pointerdown', Object.assign({ clientX: from.x, clientY: from.y }, o)));
+            head.dispatchEvent(new window.PointerEvent('pointermove', Object.assign({ clientX: to.x, clientY: to.y }, o)));
+            head.dispatchEvent(new window.PointerEvent('pointerup', Object.assign({ clientX: to.x, clientY: to.y }, o)));
+        };
+
+        it('drags by its title bar', async () => {
+            await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            const before = $('el-options').style.left;
+            dragHead({ x: 200, y: 200 }, { x: 520, y: 400 });
+            await settle();
+            expect($('el-options').style.left).not.toBe(before);
+            expect(parseFloat($('el-options').style.left)).toBe(320);
+            expect(parseFloat($('el-options').style.top)).toBe(200);
+        });
+
+        it('stays where it was put, for the next element too', async () => {
+            await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            dragHead({ x: 200, y: 200 }, { x: 520, y: 400 });
+            await settle();
+
+            // Another element, opened from a right-click somewhere else
+            // entirely: it must not jump back on top of what it is about.
+            rightClick('chan-head');
+            await settle();
+            expect($('el-options-title').textContent).toBe('Channel header');
+            expect(parseFloat($('el-options').style.left)).toBe(320);
+            expect(parseFloat($('el-options').style.top)).toBe(200);
+        });
+
+        it('is not dragged by the close button', async () => {
+            await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            const left = $('el-options').style.left;
+            const o = { bubbles: true, cancelable: true, button: 0, pointerId: 1 };
+            $('el-options-close').dispatchEvent(new window.PointerEvent('pointerdown', Object.assign({ clientX: 200, clientY: 200 }, o)));
+            $('el-options-head').dispatchEvent(new window.PointerEvent('pointermove', Object.assign({ clientX: 600, clientY: 400 }, o)));
+            await settle();
+            expect($('el-options').style.left).toBe(left);
+        });
+
+        it('remembers where it was put across a restart', async () => {
+            const h = await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            dragHead({ x: 200, y: 200 }, { x: 520, y: 400 });
+            await settle();
+            const saved = h.lounge.settings.set.mock.calls.map((c) => c[0])
+                .filter((p) => p && p.editorPrefs).pop();
+            expect(saved.editorPrefs.optionsPanel).toEqual({ x: 320, y: 200 });
+        });
+
+        // saveEditorPrefs() merges its patch over whatever editorPrefs()
+        // returns, so a key that function does not carry is a key the next
+        // unrelated save deletes. Dragging a panel and then touching Show Grid
+        // used to forget where the panel was.
+        it('is not forgotten by the next unrelated setting', async () => {
+            const h = await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            dragHead({ x: 200, y: 200 }, { x: 520, y: 400 });
+            await settle();
+            $('edit-show-grid').click();
+            await settle();
+            const saved = h.lounge.settings.set.mock.calls.map((c) => c[0])
+                .filter((p) => p && p.editorPrefs).pop();
+            expect(saved.editorPrefs.optionsPanel).toEqual({ x: 320, y: 200 });
+        });
+    });
 });
 
 describe('the stylesheet behind it', () => {
@@ -990,6 +1086,23 @@ describe('the stylesheet behind it', () => {
         expect(CSS).toMatch(/#app \[data-flow="row-reverse"\] \{ flex-direction: row-reverse; \}/);
         expect(CSS).toMatch(/#app \[data-flow="column"\] \{ flex-direction: column; \}/);
         expect(CSS).not.toMatch(/data-flow[^}]*!important/);
+    });
+
+    // Setting flex-direction was never the missing half. Orientation read as a
+    // control that did nothing because the DEFAULT arrangement is a grid with
+    // fixed tracks — the header's row is 48px, the rail's column 72 — so the
+    // contents restacked inside a box that could not grow and were clipped by
+    // it. The stack was there; there was nowhere to see it.
+    it('gives a turned element room on the axis it was turned onto', () => {
+        expect(CSS).toMatch(/#app:not\(\[data-layout="custom"\]\):has\(> #chan-head\[data-flow\^="column"\]\)\s*\{[^}]*grid-template-rows:\s*auto/);
+        expect(CSS).toMatch(/#app:not\(\[data-layout="custom"\]\):has\(> #rail\[data-flow\^="row"\]\)\s*\{[^}]*grid-template-columns:\s*auto/);
+    });
+
+    // The two bars that carry a height of their own rather than taking one
+    // from a grid track.
+    it('lets a turned bar be sized by what is in it', () => {
+        expect(CSS).toMatch(/\.composer-row\[data-flow\^="column"\]\s*\{[^}]*height:\s*auto/);
+        expect(CSS).toMatch(/#me-bar\[data-flow\^="column"\]\s*\{[^}]*height:\s*auto/);
     });
 });
 

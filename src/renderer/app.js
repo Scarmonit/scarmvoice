@@ -10222,8 +10222,23 @@
             // nothing at all.
             snapGrid: p.snapGrid !== false,
             snapElements: p.snapElements !== false,
-            gridSize: Number.isFinite(size) ? Math.max(GRID_MIN, Math.min(GRID_MAX, size)) : 24
+            gridSize: Number.isFinite(size) ? Math.max(GRID_MIN, Math.min(GRID_MAX, size)) : 24,
+            // Where the two draggable panels were left. Carried through here
+            // rather than only written: saveEditorPrefs() merges its patch over
+            // whatever THIS returns, so a key missing from this object is a key
+            // the next unrelated save deletes. Dragging the control panel and
+            // then touching Show Grid used to forget where the panel was.
+            panel: xy(p.panel),
+            optionsPanel: xy(p.optionsPanel)
         };
+    }
+
+    // A remembered position, or null. Written by a drag, so it is pixels rather
+    // than fractions — a panel is placed against the window, not the app box.
+    function xy(v) {
+        if (!v || typeof v !== 'object') return null;
+        return (Number.isFinite(Number(v.x)) && Number.isFinite(Number(v.y)))
+            ? { x: Number(v.x), y: Number(v.y) } : null;
     }
 
     const sameLayout = (a, b) => JSON.stringify(normalizeLayout(a)) === JSON.stringify(normalizeLayout(b));
@@ -10772,6 +10787,65 @@
         return work.els[key];
     }
 
+    // ---- turning an element onto its other axis ----------------------------
+    //
+    // In a CUSTOM layout the stored rectangle is the whole of an element's
+    // size, so orientation on its own achieves nothing there: the contents
+    // restack inside a box still the shape of the other axis and spill out of
+    // the panel drawn around them — a me bar turned vertical stacked its name
+    // over its controls and dropped the controls through the bottom of its own
+    // card. So the rectangle is re-fitted to what the new axis needs.
+    //
+    // ONE AXIS ONLY. Turning a bar vertical says what its height should be; it
+    // says nothing about its width, and a width taken from the content would
+    // shrink a full-width header down to its longest child.
+    function refitToAxis(key, axis) {
+        const el = EL_BY_KEY.get(key);
+        const st = work.els[key];
+        // Nothing to refit until an element has a rectangle of its own — in the
+        // default arrangement the grid gives it the room instead (see the
+        // data-flow rules in styles.css).
+        if (!el || !el.move || !st || st.x === undefined) return;
+        const node = $(el.elId);
+        if (!node) return;
+        const down = axis === 'column';
+        const prop = down ? 'height' : 'width';
+        // Measured with the size taken OFF, which is the only way to ask an
+        // absolutely-positioned box how big it would like to be.
+        const held = node.style[prop];
+        node.style[prop] = 'auto';
+        const grown = node.getBoundingClientRect();
+        node.style[prop] = held;
+
+        const box = appBox();
+        // A measurement that says nothing — a hidden element, a box not laid
+        // out yet — must not be written down. Zero here is an element saved
+        // with no height at all, and the layout is what persists.
+        const grew = down ? grown.height : grown.width;
+        const span = down ? box.height : box.width;
+        if (!(grew > 0) || !(span > 0)) return;
+        if (down) {
+            st.h = clamp01(Math.max(grown.height, el.minH || 0) / box.height);
+            st.y = clamp01(Math.min(st.y, 1 - st.h));
+        } else {
+            st.w = clamp01(Math.max(grown.width, el.minW || 0) / box.width);
+            st.x = clamp01(Math.min(st.x, 1 - st.w));
+        }
+    }
+
+    // Orientation is not an ordinary elementEdit: the layout has to be applied
+    // once for the new axis to exist at all, THEN measured, then applied again
+    // at the size that measurement asked for.
+    function setOrientation(key, axis) {
+        Object.assign(work.els[key], { orient: axis });
+        dirty = true;
+        applyLayout(work);
+        refitToAxis(key, axis);
+        applyLayout(work);
+        renderFrames();
+        paintSelected();
+    }
+
     function openElementOptions(key, x, y) {
         const el = EL_BY_KEY.get(key);
         if (!el || !editing) return;
@@ -10788,7 +10862,7 @@
             body.appendChild(choiceRow('Orientation', [
                 { value: 'row', label: 'Horizontal' },
                 { value: 'column', label: 'Vertical' }
-            ], () => work.els[key].orient || flow.axis, (v) => elementEdit(key, { orient: v })));
+            ], () => work.els[key].orient || flow.axis, (v) => setOrientation(key, v)));
         }
         if (flow && flow.order) {
             body.appendChild(choiceRow('Order', [
@@ -10830,12 +10904,17 @@
         $('el-reset').hidden = !el.move;
 
         pop.hidden = false;
-        // Placed at the pointer, then pulled back inside the window — right-
-        // clicking an element near an edge is the common case, not the rare one.
+        // At the pointer, UNLESS it has been dragged somewhere — and then there,
+        // every time. The popup opens over the element it belongs to, which is
+        // the element you are trying to look at while you change it; moving it
+        // out of the way is worth nothing if the next right-click puts it back.
+        const moved = editorPrefs().optionsPanel;
         const w = pop.offsetWidth || 250;
         const h = pop.offsetHeight || 300;
-        pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x)) + 'px';
-        pop.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y)) + 'px';
+        const left = moved ? moved.x : x;
+        const top = moved ? moved.y : y;
+        pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, left)) + 'px';
+        pop.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, top)) + 'px';
     }
 
     // This element back to how it was when Edit Mode opened — the per-element
@@ -10859,6 +10938,48 @@
     (function wireElementOptions() {
         const pop = $('el-options');
         if (!pop) return;
+
+        // DRAGGED BY ITS TITLE BAR, exactly as the control panel is. It opens on
+        // top of the element it is about — which is the element you are trying
+        // to watch while you change it — so being able to push it aside is not
+        // a convenience, it is how the popup gets used at all.
+        (function dragOptions() {
+            const head = $('el-options-head');
+            if (!head) return;
+            let id = null, ox = 0, oy = 0;
+            head.addEventListener('pointerdown', (e) => {
+                // Not the close button, and not a right-click: a contextmenu on
+                // the popup's own header must not start a drag.
+                if (e.button !== 0 || e.target.closest('button')) return;
+                id = e.pointerId;
+                const r = pop.getBoundingClientRect();
+                ox = e.clientX - r.left; oy = e.clientY - r.top;
+                try { head.setPointerCapture(id); } catch (err) { /* best effort */ }
+            });
+            head.addEventListener('pointermove', (e) => {
+                if (id === null || e.pointerId !== id) return;
+                const w = pop.offsetWidth, h = pop.offsetHeight;
+                pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - ox)) + 'px';
+                // Bottom clamp is the window less a title bar's worth, not less
+                // the popup's height: a tall popup dragged low is still usable
+                // by its top, and clamping to its full height would refuse to
+                // let it go anywhere near the bottom of the window at all.
+                pop.style.top = Math.max(8, Math.min(window.innerHeight - 40, e.clientY - oy)) + 'px';
+            });
+            const done = () => {
+                if (id === null) return;
+                id = null;
+                // The position just written, not a fresh measurement of it: this
+                // is the number the drag already clamped into the window, and
+                // asking the layout engine for it again can only disagree.
+                const x = parseFloat(pop.style.left), y = parseFloat(pop.style.top);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+                saveEditorPrefs({ optionsPanel: { x: Math.round(x), y: Math.round(y) } });
+            };
+            head.addEventListener('pointerup', done);
+            head.addEventListener('pointercancel', done);
+        })();
+
         $('el-options-close').addEventListener('click', closeElementOptions);
         $('el-revert').addEventListener('click', () => { if (optionsKey) revertElement(optionsKey); });
         $('el-reset').addEventListener('click', () => {
