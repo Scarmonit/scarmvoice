@@ -6313,6 +6313,19 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 #app .composer-row[data-flow^="column"] { min-height: 0; height: auto; }
 #app #me-bar[data-flow^="column"] { height: auto; }
 
+/* …AND WHAT IS NESTED INSIDE IT TURNS TOO, where that is itself a row or a
+   column. Turning only the outer box leaves the sub-groups running the old way
+   — a vertical me bar whose three controls are still shoulder to shoulder in
+   one wide row underneath the profile, which is neither the shape asked for nor
+   narrow. The mic keeps its own caret beside it (.me-ctl is one control, not
+   two), so only the group of controls turns. */
+#app #me-bar[data-flow^="column"] { align-items: stretch; }
+#app #me-bar[data-flow^="column"] .me-actions { flex-direction: column; align-items: center; }
+#app #me-bar[data-flow^="column"] .me-id { justify-content: center; }
+/* The rail's dividers are a drawn line, so they run across the rail — which
+   means across the OTHER axis from the one it flows on. */
+#app #rail[data-flow^="row"] .rail-sep { width: 2px; height: 32px; flex: 0 0 2px; }
+
 /* The two-way choices in the options popup. */
 .ep-seg { display: flex; gap: 4px; }
 .ep-seg button {

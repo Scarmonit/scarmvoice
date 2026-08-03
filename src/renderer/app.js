@@ -10142,6 +10142,21 @@
     };
 
     const EL_BY_KEY = new Map(EDIT_ELEMENTS.map((e) => [e.key, e]));
+
+    // The smallest an element may be made — and the two numbers SWAP when it is
+    // turned onto its other axis, because they describe a shape rather than an
+    // element. The me bar's 160x40 is "at least wide enough to read, no taller
+    // than a bar"; stood on end that same sentence is 40x160, and holding it to
+    // 160 wide would refuse to let a vertical bar be narrow, which is the whole
+    // point of turning it.
+    function minsFor(key, layout) {
+        const el = EL_BY_KEY.get(key);
+        const w = (el && el.minW) || 40, h = (el && el.minH) || 30;
+        const flow = EL_FLOW[key];
+        const st = ((layout || work || {}).els || {})[key] || {};
+        const turned = flow && flow.orient && (st.orient || flow.axis) !== flow.axis;
+        return turned ? { w: h, h: w } : { w, h };
+    }
     const MOVABLE = EDIT_ELEMENTS.filter((e) => e.move);
     const EDIT_GROUPS = ['Panels', 'Bars', 'Details'];
 
@@ -10587,7 +10602,7 @@
 
         // Never smaller than it can be used at, and never off the edge — the two
         // ways a layout becomes one you cannot get out of without a reset.
-        const minW = el.minW || 40, minH = el.minH || 30;
+        const { w: minW, h: minH } = minsFor(drag.key);
         r.w = Math.max(minW, Math.min(box.width, r.w));
         r.h = Math.max(minH, Math.min(box.height, r.h));
         r.x = Math.max(box.left, Math.min(box.left + box.width - r.w, r.x));
@@ -10799,50 +10814,97 @@
     // ONE AXIS ONLY. Turning a bar vertical says what its height should be; it
     // says nothing about its width, and a width taken from the content would
     // shrink a full-width header down to its longest child.
-    function refitToAxis(key, axis) {
+    // BOTH AXES, because orientation is the panel's SHAPE and not an
+    // arrangement inside a shape that stays as it was. Turning the me bar
+    // vertical has to leave a tall narrow bar — profile, mic, headset, cog
+    // stacked down it — not a bar still 354px wide with its contents in a
+    // column down the left of all that empty space. Turning the rail
+    // horizontal has to leave a wide short one.
+    //
+    // v0.79.3 fitted ONE axis and deliberately left the other alone. That was
+    // wrong: it made the panel grow rather than turn.
+    function reshapeToAxis(key) {
         const el = EL_BY_KEY.get(key);
         const st = work.els[key];
-        // Nothing to refit until an element has a rectangle of its own — in the
-        // default arrangement the grid gives it the room instead (see the
-        // data-flow rules in styles.css).
         if (!el || !el.move || !st || st.x === undefined) return;
         const node = $(el.elId);
         if (!node) return;
-        const down = axis === 'column';
-        const prop = down ? 'height' : 'width';
-        // Measured with the size taken OFF, which is the only way to ask an
-        // absolutely-positioned box how big it would like to be.
-        const held = node.style[prop];
-        node.style[prop] = 'auto';
-        const grown = node.getBoundingClientRect();
-        node.style[prop] = held;
+
+        // Measured with BOTH sizes taken off, which is the only way to ask an
+        // absolutely-positioned box what shape it would like to be. `auto` on
+        // width shrink-wraps it to its contents, which is what makes a turned
+        // bar narrow rather than merely taller.
+        const heldW = node.style.width, heldH = node.style.height;
+        node.style.width = 'auto';
+        node.style.height = 'auto';
+        const want = node.getBoundingClientRect();
+        node.style.width = heldW;
+        node.style.height = heldH;
 
         const box = appBox();
         // A measurement that says nothing — a hidden element, a box not laid
         // out yet — must not be written down. Zero here is an element saved
-        // with no height at all, and the layout is what persists.
-        const grew = down ? grown.height : grown.width;
-        const span = down ? box.height : box.width;
-        if (!(grew > 0) || !(span > 0)) return;
-        if (down) {
-            st.h = clamp01(Math.max(grown.height, el.minH || 0) / box.height);
-            st.y = clamp01(Math.min(st.y, 1 - st.h));
-        } else {
-            st.w = clamp01(Math.max(grown.width, el.minW || 0) / box.width);
-            st.x = clamp01(Math.min(st.x, 1 - st.w));
-        }
+        // with no size at all, and the layout is what persists.
+        if (!(want.width > 0) || !(want.height > 0)) return;
+        if (!(box.width > 0) || !(box.height > 0)) return;
+
+        const min = minsFor(key);
+        st.w = clamp01(Math.max(want.width, min.w) / box.width);
+        st.h = clamp01(Math.max(want.height, min.h) / box.height);
+        // Reshaping around the top-left corner it already had, then pulled back
+        // inside the app — a bar that grew tall from near the bottom would
+        // otherwise hang off the edge of the window.
+        st.x = clamp01(Math.min(st.x, 1 - st.w));
+        st.y = clamp01(Math.min(st.y, 1 - st.h));
     }
 
-    // Orientation is not an ordinary elementEdit: the layout has to be applied
-    // once for the new axis to exist at all, THEN measured, then applied again
-    // at the size that measurement asked for.
+    // THE SHAPE EACH ELEMENT HAD ON EACH AXIS, so turning one back gives back
+    // what it was rather than a fresh guess at it. Fitting to content is right
+    // the first time an element is turned and wrong every time after: the rail
+    // is full height because the window is that tall, not because two icons
+    // need 138px, so a content fit on the way back left it a stub.
+    //
+    // Deliberately NOT part of the saved layout. It is scratch — what you had a
+    // moment ago while you were trying the two — and a layout file is a
+    // description of an arrangement, not a history of the arrangements it was
+    // nearly. A fresh session that has never seen the other axis fits content,
+    // which is the only honest answer it has.
+    const shapeMemory = new Map();
+    const shapeKey = (key, axis) => key + ':' + axis;
+
+    // Orientation is not an ordinary elementEdit.
+    //
+    // It MATERIALISES first. In the default arrangement the grid decides every
+    // element's shape, and the grid cannot be talked into a tall narrow me bar:
+    // its cell is one wide row across the bottom, spanning two columns. A panel
+    // can only take a shape of its own once it HAS one, so turning a section is
+    // — like dragging or resizing one — a thing that makes the layout custom.
+    //
+    // Then: apply, so the new axis exists and can be measured; take the shape
+    // this element last had on that axis or measure a new one; apply again.
     function setOrientation(key, axis) {
-        Object.assign(work.els[key], { orient: axis });
+        materialize();
+        const st = work.els[key];
+        const flow = EL_FLOW[key];
+        const was = st.orient || (flow && flow.axis);
+        if (was && st.w !== undefined) shapeMemory.set(shapeKey(key, was), { w: st.w, h: st.h });
+
+        Object.assign(st, { orient: axis });
         dirty = true;
         applyLayout(work);
-        refitToAxis(key, axis);
+
+        const remembered = shapeMemory.get(shapeKey(key, axis));
+        if (remembered && st.x !== undefined) {
+            st.w = remembered.w;
+            st.h = remembered.h;
+            st.x = clamp01(Math.min(st.x, 1 - st.w));
+            st.y = clamp01(Math.min(st.y, 1 - st.h));
+        } else {
+            reshapeToAxis(key);
+        }
         applyLayout(work);
         renderFrames();
+        renderElementList();
         paintSelected();
     }
 

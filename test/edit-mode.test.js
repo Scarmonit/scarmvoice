@@ -885,6 +885,98 @@ describe('per-element options', () => {
         expect($('me-bar').dataset.flow).toBe(undefined);
     });
 
+    // ORIENTATION IS THE PANEL'S SHAPE, not an arrangement inside a shape that
+    // stays as it was. v0.79.3 restacked the contents and fitted ONE axis, so
+    // the me bar turned vertical was still 354px wide with its contents in a
+    // column down the left of all that empty space.
+    //
+    // The shape can only be the element's own once it HAS one: in the default
+    // arrangement the grid decides, and the grid cannot be talked into a tall
+    // narrow me bar — its cell is one wide row across the bottom spanning two
+    // columns. So turning a section materialises the layout, exactly as
+    // dragging or resizing one does. (The pixels themselves are measured in a
+    // browser; jsdom has no layout engine to shrink-wrap anything.)
+    it('gives the panel a shape of its own to be turned into', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        expect(mode()).toBe('grid');
+
+        rightClick('user-dock');
+        await settle();
+        seg('Orientation').find((b) => b.textContent === 'Vertical').click();
+        await settle();
+        expect(mode()).toBe('custom');
+        expect($('me-bar').dataset.flow).toBe('column');
+        // …and every other element keeps exactly where it was, the way it does
+        // when the layout is materialised by a drag.
+        expect(boxOf('sidebar')).toEqual({ x: 72, y: 0, w: 300, h: 700 });
+    });
+
+    // Fitting to content is right the first time an element is turned and wrong
+    // every time after: the rail is full height because the window is that
+    // tall, not because two icons need 138px of it.
+    it('gives back the shape it had when it is turned back', async () => {
+        await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        rightClick('user-dock');
+        await settle();
+        const wide = boxOf('user-dock').w;
+
+        seg('Orientation').find((b) => b.textContent === 'Vertical').click();
+        await settle();
+        // Give the vertical shape a width of its own, so the two are different.
+        const width = [...$('el-options-body').querySelectorAll('input[type="range"]')][0];
+        width.value = '12';
+        width.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle();
+        const narrow = boxOf('user-dock').w;
+        expect(narrow).toBe(120);
+        expect(narrow).not.toBe(wide);
+
+        seg('Orientation').find((b) => b.textContent === 'Horizontal').click();
+        await settle();
+        expect(boxOf('user-dock').w).toBe(wide);
+
+        seg('Orientation').find((b) => b.textContent === 'Vertical').click();
+        await settle();
+        expect(boxOf('user-dock').w).toBe(narrow);
+    });
+
+    // 160x40 is "wide enough to read, no taller than a bar". Stood on end that
+    // same sentence is 40x160, and holding a turned bar to 160 wide would
+    // refuse to let it be narrow — which is the point of turning it.
+    it('lets a turned bar be dragged as narrow as it was short', async () => {
+        await boot({ editorPrefs: { gridSize: 4, showGrid: true, snapElements: false } });
+        await settle();
+        stubRects();
+        await openEditor();
+
+        // While it runs horizontally, 160 is as narrow as it goes.
+        gesture(centreOf('user-dock'), centreOf('user-dock'));
+        await settle();
+        let r = $('user-dock').getBoundingClientRect();
+        gesture({ x: r.right, y: r.top + r.height / 2 }, { x: r.left + 60, y: r.top + r.height / 2 });
+        await settle();
+        expect(boxOf('user-dock').w).toBe(160);
+
+        rightClick('user-dock');
+        await settle();
+        seg('Orientation').find((b) => b.textContent === 'Vertical').click();
+        await settle();
+
+        // Turned, the same two numbers mean the other way round, and 40 is.
+        gesture(centreOf('user-dock'), centreOf('user-dock'));
+        await settle();
+        r = $('user-dock').getBoundingClientRect();
+        gesture({ x: r.right, y: r.top + r.height / 2 }, { x: r.left + 12, y: r.top + r.height / 2 });
+        await settle();
+        expect(boxOf('user-dock').w).toBe(40);
+    });
+
     it('reverses the order of what is inside', async () => {
         await boot({});
         await settle();
@@ -1103,6 +1195,17 @@ describe('the stylesheet behind it', () => {
     it('lets a turned bar be sized by what is in it', () => {
         expect(CSS).toMatch(/\.composer-row\[data-flow\^="column"\]\s*\{[^}]*height:\s*auto/);
         expect(CSS).toMatch(/#me-bar\[data-flow\^="column"\]\s*\{[^}]*height:\s*auto/);
+    });
+
+    // Turning only the outer box leaves the sub-groups running the old way: a
+    // vertical me bar whose mic, headset and cog are still shoulder to shoulder
+    // in one wide row under the profile, which is neither the shape asked for
+    // nor narrow.
+    it('turns what is nested inside a turned bar too', () => {
+        expect(CSS).toMatch(/#me-bar\[data-flow\^="column"\] \.me-actions\s*\{[^}]*flex-direction:\s*column/);
+        // The rail's dividers are a drawn line, so they run across the rail —
+        // the other axis from the one it flows on.
+        expect(CSS).toMatch(/#rail\[data-flow\^="row"\] \.rail-sep\s*\{[^}]*width:\s*2px[^}]*height:\s*32px/);
     });
 });
 
