@@ -177,6 +177,62 @@ describe('the toolbar menu is a layer over the app, not a part of it', () => {
     });
 });
 
+// v0.79.0 capped the message box by putting a max-height on the editor's
+// WRAPPER, which is `overflow: hidden`. The scroller inside it went on sizing
+// itself to the whole document, so nothing was ever a scrolling box: a code
+// block showed eight lines and clipped the rest where no scrollbar, no wheel
+// and no caret could reach them.
+//
+// The ceiling is the editor's own now, set through setSize — grow to fit, then
+// a fixed 30 lines, which is the one mode CodeMirror scrolls in. jsdom has no
+// layout, so the heights themselves are measured in a browser (dev/harness.html
+// drives the real renderer); what is pinned here is that neither the stylesheet
+// nor the boot path puts a ceiling back on the wrapper.
+describe('the message box grows and then scrolls', () => {
+    const composerCmRule = () => {
+        const m = /\.composer-field \.CodeMirror \{([^}]*)\}/.exec(CSS);
+        return m ? m[1] : '';
+    };
+
+    it('leaves the wrapper unclamped in the stylesheet', () => {
+        const r = composerCmRule();
+        expect(r).toMatch(/height:\s*auto/);
+        // The property that caused it. A ceiling on this element clips, because
+        // CodeMirror's own rule makes it overflow: hidden.
+        expect(r).not.toMatch(/max-height/);
+    });
+
+    it('leaves the wrapper unclamped at boot, too', async () => {
+        await boot({});
+        await settle();
+        const wrap = document.querySelector('.composer-field .CodeMirror');
+        expect(wrap).toBeTruthy();
+        // app.js used to write COMPOSER_MAX_PX here on the way past.
+        expect(wrap.style.maxHeight).toBe('');
+    });
+
+    it('keeps the editor scrollable rather than hiding its overflow', () => {
+        // CodeMirror's own scroller must keep `overflow: scroll` — its
+        // stylesheet says so in as many words — so nothing in the app's layer
+        // may take it away.
+        const m = /\.composer-field \.CodeMirror-scroll \{([^}]*)\}/.exec(CSS);
+        expect(m ? m[1] : '').not.toMatch(/overflow/);
+    });
+
+    it('dresses the scrollbar in the app\'s own, at the app\'s own width', () => {
+        expect(CSS).toMatch(/\.composer-field \.CodeMirror-vscrollbar \{[^}]*width:\s*12px/);
+    });
+
+    it('still takes a long message and gives every line back', async () => {
+        const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n');
+        const el = await withText(lines);
+        await settle();
+        // Nothing is dropped, whatever the box is showing of it.
+        expect(el.value.split('\n')).toHaveLength(60);
+        expect(el.value.endsWith('line 60')).toBe(true);
+    });
+});
+
 describe('the marks a button writes', () => {
     it('wraps a selection in the syntax the renderer reads', async () => {
         const el = await withText('hello world');

@@ -6408,15 +6408,36 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    rather than renamed, because two things answering to one prefix in one
    subtree is how a stylesheet starts lying. */
 .composer-field { flex: 1 1 auto; min-width: 0; position: relative; }
+/* NO max-height HERE, and that is the point. The wrapper is `overflow: hidden`
+   (CodeMirror's own rule, and load-bearing — it is what hides the 50px magic
+   margin the scroller uses to keep native scrollbars out of the layout). A
+   ceiling on THIS element therefore clips: the scroller inside it goes on
+   sizing itself to the whole document, so there is no scrolling box anywhere
+   and the lines past the ceiling are drawn where nothing can reach them. That
+   was the composer for two versions — eight lines and a wall.
+   The height is the editor's own, set through setSize by
+   applyComposerHeight(): auto while the message is short, a fixed 30 lines
+   once it is not, which is the one mode CodeMirror scrolls in. */
 .composer-field .CodeMirror {
   height: auto;
-  max-height: 45vh;
   background: none;
   color: var(--text);
   font-family: inherit; font-size: 15px; line-height: 1.375;
   padding: 14px 0;
 }
 .composer-field .CodeMirror-scroll { min-height: 0; }
+/* The bar that appears once the box has stopped growing.
+   It is a real scrolling element of CodeMirror's own — `scrollbarStyle:
+   'native'` — so the app's global ::-webkit-scrollbar theme dresses it, and it
+   is the same 12px rounded 13%-white thumb as the message list and the member
+   list without a word here about colour.
+   The width is pinned because CodeMirror sizes this element from what it
+   measured the platform's scrollbar to be. On Windows that is the app's own
+   12px and this rule changes nothing; where a browser uses overlay scrollbars
+   instead it measures zero and falls back to a guessed 18, which would leave
+   six dead pixels between the bar and the edge of the box. !important because
+   the number is written onto the element itself. */
+.composer-field .CodeMirror-vscrollbar { width: 12px !important; }
 .composer-field .CodeMirror-lines { padding: 0; }
 .composer-field .CodeMirror pre.CodeMirror-line,
 .composer-field .CodeMirror pre.CodeMirror-line-like { padding: 0; }

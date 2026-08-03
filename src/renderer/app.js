@@ -3779,7 +3779,22 @@
     // an adapter with .value, .selectionStart, .setSelectionRange, .focus and
     // the events they listen for, forwarding to the editor underneath. That is
     // what kept this from being a rewrite of the whole composer.
-    const COMPOSER_MAX_PX = 180;
+    // GROW TO FIT, THEN SCROLL — and the ceiling is counted in LINES, not in
+    // pixels. It used to be a flat 180px, which is eight lines of code and no
+    // way at all to see a ninth: the editor was left on auto height, so its
+    // scroller sized itself to the whole document while the wrapper — which is
+    // `overflow: hidden` — was clamped to 180. Everything past line 8 was
+    // drawn, clipped, and unreachable; there was nothing to scroll because
+    // nothing was a scrolling box.
+    const COMPOSER_MAX_LINES = 30;
+    // …and a backstop, because thirty lines is around 570px and the window can
+    // be shorter than the box would like to be — the default is 760px tall and
+    // the minimum is 560. Expressed as what the REST of the window keeps rather
+    // than as a share of it: the conversation, its header and the toolbar need
+    // room whatever the composer is doing, and a message box that has swallowed
+    // the messages is a worse bug than the one this fixes. On a maximised
+    // window this never binds and the thirty lines is what applies.
+    const COMPOSER_RESERVE_PX = 240;
 
     const cm = window.CodeMirror($('composer-field'), {
         value: '',
@@ -3811,9 +3826,55 @@
     const cmInput = cm.getInputField();
     const cmWrap = cm.getWrapperElement();
 
-    // Grows with the message up to a ceiling, then scrolls — the behaviour the
-    // textarea's autosize() used to hand-roll on every keystroke.
-    cmWrap.style.maxHeight = COMPOSER_MAX_PX + 'px';
+    // The two heights the box can have, and the decision between them.
+    //
+    // CodeMirror has exactly one mode in which it scrolls: a FIXED height, set
+    // through setSize, where its scroller is the scrolling box and everything
+    // built on that — the scrollbar, the viewport, keeping the caret in view —
+    // works because the editor knows how tall it is. Auto height is the other
+    // mode, and in it the editor is not a scrolling box at all. So this picks
+    // between the two rather than trying to make one behave like the other,
+    // which is what a max-height on the wrapper was doing.
+    //
+    // THE CEILING IS MEASURED IN THE DOCUMENT'S OWN LINES. heightAtLine(n) is
+    // the y offset of line n — the exact height of the n lines above it,
+    // whatever they happen to be. A code block's lines are smaller than the
+    // prose around them and a wrapped line is taller than both, so no pixel
+    // constant means "thirty lines" for more than one message; this does.
+    let sizedTo = null;
+    function applyComposerHeight() {
+        // The last line's bottom, i.e. the height the box would like to be.
+        const content = cm.heightAtLine(cm.lastLine(), 'local') + cm.defaultTextHeight();
+        const ceiling = Math.max(120, Math.min(
+            cm.heightAtLine(COMPOSER_MAX_LINES, 'local'),
+            window.innerHeight - COMPOSER_RESERVE_PX
+        ));
+        // A hair of slack, so a document that lands within a pixel of the
+        // ceiling does not flip between the two modes as it is edited.
+        const want = content > ceiling + 1 ? Math.round(ceiling) : 'auto';
+        if (want === sizedTo) return;
+        sizedTo = want;
+        cm.setSize(null, want);
+    }
+
+    // THE CARET IS FOLLOWED BY HAND, and it has to be. CodeMirror keeps its own
+    // cursor in view after an edit, but every keystroke in this composer is
+    // also followed by cm.refresh() and a repaint of the code blocks' chrome —
+    // the line classes are cleared and re-added and the fence's atomic mark is
+    // rebuilt — and re-measuring a scroller puts it back at the top. So the
+    // editor scrolls to the caret, the repaint scrolls back to line 1, and
+    // somebody typing line 40 watches line 1 the whole time.
+    //
+    // Last, therefore: after the resize, after the refresh, after the repaint.
+    // Only while the box is actually scrolling (there is nowhere to scroll on
+    // auto height) and only while it has the focus, so a draft loaded into a
+    // composer nobody is typing in does not yank itself about.
+    function keepCaretInView() {
+        if (sizedTo === 'auto' || !cm.hasFocus()) return;
+        cm.scrollIntoView(null);
+    }
+    // A shorter window lowers the ceiling, so the box has to be asked again.
+    window.addEventListener('resize', applyComposerHeight);
 
     // ---- the textarea-shaped adapter --------------------------------------
     //
@@ -3898,8 +3959,10 @@
     // itself; what is left is telling it to re-measure after a programmatic
     // write, and repainting the code blocks' chrome.
     function autosize() {
+        applyComposerHeight();
         cm.refresh();
         paintCodeBlocks();
+        keepCaretInView();
     }
 
     input.addEventListener('input', () => {
