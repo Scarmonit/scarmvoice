@@ -12,8 +12,8 @@
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
-    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js && node scripts/make-icon.js",
-    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js",
+    "postinstall": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-codemirror.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js && node scripts/make-icon.js",
+    "vendor": "node scripts/vendor-sdk.js && node scripts/vendor-hljs.js && node scripts/vendor-codemirror.js && node scripts/vendor-rnnoise.js && node scripts/vendor-qrcode.js",
     "icon": "node scripts/make-icon.js",
     "start": "electron .",
     "dev": "electron . --dev",
