@@ -148,6 +148,9 @@ beforeAll(() => {
 
     window.addEventListener('error', (e) => errors.push(e.message));
 
+    // The composer IS a CodeMirror instance now, so the editor has to be on
+    // window before app.js runs.
+    run('vendor/codemirror.js');
     run('lib.js');
     run('audio.js');
     run('lazy.js');

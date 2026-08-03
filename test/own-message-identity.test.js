@@ -201,6 +201,9 @@ beforeAll(async () => {
     // The very first page establishes the watermark; nothing chimes for it.
     listPosts = [post(1, 99, SOMEONE_ELSE, 'Someone')];
 
+    // The composer IS a CodeMirror instance now, so the editor has to be on
+    // window before app.js runs.
+    run('vendor/codemirror.js');
     run('lib.js');
     run('audio.js');
     run('lazy.js');

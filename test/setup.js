@@ -33,6 +33,24 @@ if (typeof Element !== 'undefined' && Element.prototype) {
     Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || noop;
 }
 
+// The message box is a CodeMirror instance, and CodeMirror measures. jsdom
+// implements Range but not its geometry, so the editor's very first layout pass
+// (hasBadBidiRects, which asks a Range how wide one character is) throws before
+// the document these specs actually drive has been touched.
+//
+// A zero rect is the honest answer here: jsdom lays nothing out, so every
+// measurement is zero already. Nothing in this suite asserts on composer
+// geometry — that is checked in a real browser, where the numbers are real.
+if (typeof Range !== 'undefined' && Range.prototype) {
+    const zeroRect = () => ({
+        x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0,
+        toJSON() { return this; }
+    });
+    Range.prototype.getBoundingClientRect = Range.prototype.getBoundingClientRect || zeroRect;
+    Range.prototype.getClientRects = Range.prototype.getClientRects ||
+        function () { return Object.assign([], { item: () => null }); };
+}
+
 const originalResolve = Module._resolveFilename;
 Module._resolveFilename = function (request, ...rest) {
     if (STUBS[request]) return STUBS[request];

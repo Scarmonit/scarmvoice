@@ -155,6 +155,18 @@
   --field-line: transparent;
   --code-bg: var(--rail);
   --code-text: #dcdce0;
+  /* The syntax palette, shared by the message box and the sent message so a
+     block looks the same while it is being written as it does once posted.
+     Tokens rather than literals for the same reason everything else here is:
+     the light theme only works because there is one place to retint. */
+  --code-kw: #c678dd;
+  --code-str: #98c379;
+  --code-num: #d19a66;
+  --code-comment: #5c6370;
+  --code-fn: #61aeee;
+  --code-var: #e06c75;
+  --code-class: #e6c07b;
+  --code-atom: #56b6c2;
   --spoiler: #2e2e33;
   --spoiler-hover: #383840;
   /* A revealed spoiler keeps a faint plate so you can see what was hidden. It was
@@ -6384,237 +6396,135 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    cluster (.composer-tools > button), not here — one place, so it cannot be
    half-styled again. */
 
-/* ---------- live formatting in the message box ---------------------------
+/* ---------- the message box, which is an editor ---------------------------
 
-   The mirror sits UNDER the textarea and holds exactly the same characters, so
-   the two only stay aligned if they are typeset identically. That is why the
-   metrics live in one rule that names both: a font, a size, a line-height or a
-   padding changed on one of them alone is a composer whose text does not line
-   up with itself.
+   CodeMirror, themed to look like the box it replaced. Its own stylesheet is
+   vendored untouched (vendor/codemirror.css) so it stays replaceable; every
+   colour and metric this app cares about is layered here.
 
-   The textarea keeps every one of its own behaviours — it is still the control,
-   still focused, still the thing the caret is in. It only stops painting its
-   own glyphs. */
-#composer-mirror,
-#composer-input {
+   The `.cm-` prefix belongs to CODEMIRROR'S TOKEN CLASSES now — .cm-strong,
+   .cm-header, .cm-quote and the rest come from its markdown mode. The layer
+   this replaced used the same prefix for its own marks; those rules are gone
+   rather than renamed, because two things answering to one prefix in one
+   subtree is how a stylesheet starts lying. */
+.composer-field { flex: 1 1 auto; min-width: 0; position: relative; }
+.composer-field .CodeMirror {
+  height: auto;
+  max-height: 45vh;
+  background: none;
+  color: var(--text);
   font-family: inherit; font-size: 15px; line-height: 1.375;
   padding: 14px 0;
-  letter-spacing: normal; word-spacing: normal;
-  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
-  tab-size: 4;
 }
-/* The wrapper is the positioning context, and it is exactly the field's column
-   of the row — NOT the row, which also holds the attach button and the tools.
-   Measured against the row, every character in the layer would sit one button's
-   width to the left of the caret it belongs to. */
-.composer-field { flex: 1 1 auto; min-width: 0; position: relative; display: flex; }
-#composer-mirror {
-  position: absolute; inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  color: var(--text);
-  z-index: 0;
-}
-/* ONE BLOCK PER SOURCE LINE, rather than one run of text with newlines in it.
-   A block can carry a background across the full width and can hold an
-   absolutely-positioned line number; a span can only cover its own glyphs. The
-   wrapping properties are inherited from the rule above, which is what keeps a
-   long line breaking in the same place in both boxes. */
-.cm-line { position: relative; margin: 0; padding: 0; }
-/* An empty line's height comes from a <br>, not from a filler character: the
-   invariant this whole layer rests on is that its text is the field's text. */
+.composer-field .CodeMirror-scroll { min-height: 0; }
+.composer-field .CodeMirror-lines { padding: 0; }
+.composer-field .CodeMirror pre.CodeMirror-line,
+.composer-field .CodeMirror pre.CodeMirror-line-like { padding: 0; }
+.composer-field .CodeMirror-cursor { border-left: 1.5px solid var(--text); }
+.composer-field .CodeMirror-placeholder { color: var(--placeholder); }
+.composer-field .CodeMirror-selected { background: var(--accent-line, rgba(88, 101, 242, .35)); }
+.composer-field .CodeMirror-focused .CodeMirror-selected { background: var(--accent-line, rgba(88, 101, 242, .45)); }
+/* No focus ring of its own — the composer row already draws one. */
+.composer-field .CodeMirror-focused { outline: none; }
 
-/* ---------- a code block, drawn as an editor -----------------------------
-
-   The reference draws a fenced block as a titled panel with numbered lines and
-   coloured code. All three of those need horizontal room and a full-width
-   background, and NOTHING here may change the width of a character — so the
-   room is made by padding BOTH boxes, the numbers are absolutely positioned out
-   in it, and the colouring is colour only.
-
-   The mono face is the one exception, and it is allowed for the same reason:
-   the field and the layer switch to it TOGETHER, so they still typeset the
-   same string identically. It applies while the message holds a block at all,
-   because a message that holds one is mostly code. */
-:root { --cm-gutter: 34px; --cm-inset: 2px; }
-.composer-field.cm-code #composer-input,
-.composer-field.cm-code #composer-mirror {
-  font-family: var(--mono);
-  padding-left: var(--cm-gutter);
+/* The gutter carries CODE line numbers, so it is only mounted while there is
+   code. Sized to sit outside the text rather than indenting it. */
+.composer-field .CodeMirror-gutters { background: none; border: 0; }
+.composer-field .CodeMirror-linenumber {
+  color: var(--placeholder); font-family: var(--mono); font-size: 0.82em;
+  padding: 0 10px 0 0;
 }
 
-/* THE PANEL IS DRAWN, NOT LAID OUT.
+/* Markdown, as the mode marks it up. Colour and weight only — the editor owns
+   the layout, so unlike the layer this replaced there is nothing here that can
+   put the caret out of step with the text. */
+.composer-field .cm-header { color: var(--text); font-weight: 700; }
+.composer-field .cm-strong { font-weight: 700; }
+.composer-field .cm-em { font-style: italic; }
+.composer-field .cm-strikethrough { text-decoration: line-through; }
+.composer-field .cm-link { color: var(--accent); }
+.composer-field .cm-url { color: var(--muted); }
+.composer-field .cm-quote { color: var(--muted); }
+.composer-field .cm-variable-2 { color: var(--accent); }      /* list bullets */
+.composer-field .cm-formatting { color: var(--placeholder); }
+.composer-field .cm-comment { color: var(--code-text); }
 
-   A code block wants what a code block always wants: a border, rounded corners,
-   an inset from the edges and a gutter down the side. Every one of those is a
-   box the text would have to move for — and nothing in this layer may move the
-   text by so much as a pixel, or the caret stops pointing at it.
+/* ---------- a fenced block, drawn as a panel -----------------------------
 
-   So the panel is an absolutely-positioned slice behind each of the block's
-   lines. It can reach left across the gutter the padding made, stop short of
-   the right edge, round its first and last corners and carry a border, all
-   without existing as far as the text is concerned. */
-.cm-fl::before {
-  content: '';
-  position: absolute; z-index: -1;
-  top: 0; bottom: 0;
-  left: calc(var(--cm-inset) - var(--cm-gutter));
-  right: var(--cm-inset);
+   Three line classes and one atomic mark. CodeMirror's lines are real block
+   elements, so the panel is a background on the line rather than a rectangle
+   painted behind it — and the gutter, the border and the rounding cost nothing,
+   because the editor is laying the text out rather than a second copy of it. */
+.composer-field .cb-open,
+.composer-field .cb-body,
+.composer-field .cb-close {
   background: var(--code-bg);
   box-shadow: inset 1px 0 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
 }
-.cm-fl-open::before {
+.composer-field .cb-open {
   border-radius: 8px 8px 0 0;
   box-shadow: inset 1px 1px 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
+  background: var(--code-head, rgba(127, 127, 127, .08));
 }
-.cm-fl-close::before {
+.composer-field .cb-close {
   border-radius: 0 0 8px 8px;
   box-shadow: inset 1px -1px 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
+  min-height: 10px;
 }
-/* The fences themselves are the panel's own edges: the opening line carries the
-   title bar and the closing one is its bottom rule, so neither shows its
-   backticks. The text is still there, still selectable, still what gets sent —
-   only its ink is gone. */
-.cm-fl-open .cm-mark,
-.cm-fl-close .cm-mark { opacity: 0; }
-/* …unless the caret is on that very line, which only happens while somebody is
-   typing the fence itself. Hiding what is being typed is how a language ends up
-   entered blind. */
-.cm-fl.cm-at-caret .cm-mark { opacity: 1; color: var(--placeholder); }
-.cm-fl-body { color: var(--code-text); }
-/* Out in the gutter the padding made, inside the panel that reaches across it.
-   `position: absolute` is what keeps it from taking any inline space at all. */
-.cm-num::before { content: attr(data-n); }
-.cm-num {
-  position: absolute; right: 100%; margin-right: 14px; top: 0;
-  min-width: 14px; text-align: right;
-  color: var(--placeholder); font-style: normal;
-  font-variant-numeric: tabular-nums;
-  user-select: none;
-}
-/* The highlighter's theme sets weight and slant on some tokens. Colour is all
-   that may survive in here — see the note on .cm-mark. */
-#composer-mirror [class^="hljs"],
-#composer-mirror [class*=" hljs"] { font-weight: inherit; font-style: normal; }
+/* Code is set in the code face; the rest of the message is not. Safe here in a
+   way it never was before — the editor measures what it draws. */
+.composer-field .cb-body { font-family: var(--mono); font-size: 0.92em; color: var(--code-text); }
+.composer-field .cb-body .CodeMirror-linenumber,
+.composer-field .cb-open .CodeMirror-linenumber { color: var(--placeholder); }
 
-/* The block's own title bar, drawn over its ``` line. The layer is inert; only
-   this is not, because the field underneath has to keep every other click. */
-#composer-chrome {
-  position: absolute; inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 2;
+/* THE CODE'S OWN COLOURS, scoped to the block so they cannot reach the
+   markdown tokens outside it — the editor uses the same `cm-` prefix for both.
+   These are the values the SENT message is highlighted with (atom-one-dark, in
+   vendor/hljs-theme.css), so a block looks the same while it is being written
+   as it does once it has been posted, which is the whole promise of writing it
+   in the box rather than guessing. */
+.composer-field .cb-body .cm-keyword,
+.composer-field .cb-body .cm-operator { color: var(--code-kw); }
+.composer-field .cb-body .cm-string,
+.composer-field .cb-body .cm-string-2 { color: var(--code-str); }
+.composer-field .cb-body .cm-number,
+.composer-field .cb-body .cm-attribute,
+.composer-field .cb-body .cm-type { color: var(--code-num); }
+.composer-field .cb-body .cm-comment { color: var(--code-comment); }
+.composer-field .cb-body .cm-def,
+.composer-field .cb-body .cm-property,
+.composer-field .cb-body .cm-tag { color: var(--code-fn); }
+.composer-field .cb-body .cm-variable,
+.composer-field .cb-body .cm-variable-2,
+.composer-field .cb-body .cm-variable-3 { color: var(--code-var); }
+.composer-field .cb-body .cm-builtin,
+.composer-field .cb-body .cm-qualifier { color: var(--code-class); }
+.composer-field .cb-body .cm-atom,
+.composer-field .cb-body .cm-meta { color: var(--code-atom); }
+.composer-field .cb-body .cm-bracket,
+.composer-field .cb-body .cm-punctuation { color: var(--code-text); }
+/* The block's own text, where the mode has nothing to say about it. */
+.composer-field .cb-body .CodeMirror-line { color: var(--code-text); }
+
+/* The title bar: the fence's own text, replaced by an atomic mark. Atomic is
+   what keeps the caret out of it. */
+.cb-chip {
+  display: inline-flex; align-items: center; gap: 2px; width: 100%;
+  padding: 1px 2px;
+  vertical-align: middle;
 }
-#composer-chrome:empty { display: none; }
-/* The block's TITLE BAR — not a pill floating in the corner of it. It covers
-   the opening ``` line exactly, which is why that line's own ink is turned off:
-   the bar IS the fence, as far as anybody looking at it is concerned. */
-.codechip {
-  position: absolute;
-  left: var(--cm-inset); right: var(--cm-inset);
-  display: flex; align-items: center; gap: 2px;
-  padding: 0 4px 0 6px;
-  border-radius: 8px 8px 0 0;
-  background: var(--code-head, rgba(127, 127, 127, .08));
-  box-shadow: inset 1px 1px 0 var(--line-2, var(--line)),
-              inset -1px 0 0 var(--line-2, var(--line)),
-              0 1px 0 var(--line-2, var(--line));
-  pointer-events: none;
-}
-.codechip-lang, .codechip-more {
-  pointer-events: auto;
+.cb-chip-lang, .cb-chip-more {
   display: inline-flex; align-items: center; gap: 5px;
   height: 18px; padding: 0 6px;
   border: 0; border-radius: 4px; cursor: pointer;
   background: none; color: var(--dim);
   font: inherit; font-family: var(--font); font-size: 11.5px; font-weight: 700;
-  letter-spacing: .01em;
 }
-.codechip-lang:hover, .codechip-more:hover { background: var(--hover); color: var(--text); }
-.codechip-lang .ico { width: 13px; height: 13px; flex: 0 0 13px; }
-.codechip-lang .ico:last-child { width: 11px; height: 11px; flex: 0 0 11px; margin-left: -1px; }
-.codechip-more { margin-left: auto; padding: 0 4px; }
-.codechip-more .ico { width: 14px; height: 14px; }
-
-/* ---------- the toolbar's little menus ---------------------------------- */
-
-.fmt-menu {
-  position: fixed; z-index: 120;
-  min-width: 200px; padding: 5px;
-  border-radius: 8px;
-  background: var(--elev, var(--panel)); border: 1px solid var(--line);
-  box-shadow: var(--shadow-lg, var(--shadow-xs));
-}
-.fmt-menu[hidden] { display: none; }
-.fm-item {
-  display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 7px 9px; border: 0; border-radius: 6px; cursor: pointer;
-  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left;
-}
-.fm-item:hover { background: var(--hover); }
-.fm-item.on { color: var(--accent); }
-.fm-item .ico { width: 16px; height: 16px; flex: 0 0 16px; color: var(--dim); }
-.fm-item.on .ico { color: var(--accent); }
-.fm-label { flex: 1; min-width: 0; }
-.fm-hint { color: var(--dim); font-size: 11px; font-weight: 600; }
-.fm-sep { height: 1px; margin: 4px 6px; background: var(--line); }
-#composer-mirror[hidden] { display: none; }
-/* The textarea is transparent ONLY while the mirror is drawing. Anything that
-   turns the mirror off — the setting, a parse that threw — leaves the field
-   painting its own text, which is the state this app shipped in for years. */
-body.rich-composer #composer-input { color: transparent; caret-color: var(--text); }
-/* A solid selection would hide the mirror's glyphs behind it, because they are
-   painted underneath. Translucent lets the text read through at the cost of
-   nothing that matters. */
-body.rich-composer #composer-input::selection { background: var(--accent-line, rgba(88, 101, 242, .45)); }
-/* The textarea has to win the paint order, so its caret and its selection are
-   above the layer rather than behind it. */
-body.rich-composer #composer-input { position: relative; z-index: 1; background: none; }
-
-/* The marks themselves. Dimmed markers, real formatting — the point is that a
-   `**` you have typed is visibly punctuation and the word between it is
-   visibly bold, at the same time. */
-/* THE ONE RULE THESE ALL OBEY: nothing here may change how wide a character is.
- *
- * The caret belongs to the textarea, the glyphs belong to this layer, and the
- * two only agree while every character advances by the same amount in both. The
- * textarea can carry exactly one font, so anything here that changes the family,
- * the size, the weight, the slant or the tracking makes the drawn text drift
- * away from the caret — a little per character, all of it cumulative.
- *
- * It shipped that way in v0.76.0: code spans and fences were set in the mono
- * face at 0.92em, so typing inside a ``` block left the caret further behind
- * every character. Bold and italic were the same bug in slower motion.
- *
- * So emphasis is drawn with PAINT, never with metrics:
- *   colour, background, and the two decorations — all free
- *   weight  -> -webkit-text-stroke, which thickens the glyph it already laid out
- *   slant   -> not available at all; italics are shown by tint and their marks
- *
- * test/format-bar.test.js fails on any metric-changing property appearing in a
- * .cm-* rule, because this is not a thing to remember. */
-.cm-mark { color: var(--placeholder); }
-/* Faux bold. A stroke is a paint operation on glyphs whose advances are already
-   decided, so this is heavier text in exactly the same space. */
-.cm-b { -webkit-text-stroke: .38px currentColor; }
-/* Italic has no paint-only form — `font-style` reshapes the glyphs and their
-   advances with them. A tint plus the dimmed * marks is what is left, and it is
-   worth more than a caret that no longer points at anything. */
-.cm-i { color: var(--author, var(--text)); }
-.cm-u { text-decoration: underline; }
-.cm-s { text-decoration: line-through; }
-/* Code keeps its tinted plate and its own colour; the mono face it used to take
-   is exactly what broke the caret. */
-.cm-code, .cm-fence {
-  background: var(--code-bg); color: var(--code-text);
-  border-radius: 3px;
-}
-.cm-fence { display: inline; }
-.cm-quote { color: var(--muted); }
-.cm-head { -webkit-text-stroke: .45px currentColor; }
-.cm-link { color: var(--accent); }
-.cm-spoiler { background: var(--hover); border-radius: 3px; }
-.cm-list { color: var(--accent); -webkit-text-stroke: .3px currentColor; }
+.cb-chip-lang:hover, .cb-chip-more:hover { background: var(--hover); color: var(--text); }
+.cb-chip-lang .ico { width: 13px; height: 13px; flex: 0 0 13px; }
+.cb-chip-lang .ico:last-child { width: 11px; height: 11px; flex: 0 0 11px; margin-left: -1px; }
+.cb-chip-more { margin-left: auto; padding: 0 4px; }
+.cb-chip-more .ico { width: 14px; height: 14px; }
 
 /* ---------- the code block's language menu ------------------------------- */
 

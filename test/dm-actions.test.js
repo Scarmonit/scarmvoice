@@ -25,6 +25,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// The message box is a CodeMirror instance; the editor hangs off its wrapper.
+function composerInput() {
+    const wrap = document.querySelector('.composer-field .CodeMirror');
+    const cm = wrap && wrap.CodeMirror;
+    if (!cm) return null;
+    return {
+        get value() { return cm.getValue(); },
+        set value(v) { cm.setValue(String(v == null ? '' : v)); },
+        get placeholder() { return cm.getOption('placeholder'); },
+        focus() { cm.focus(); },
+        dispatchEvent(ev) { cm.getInputField().dispatchEvent(ev); return true; },
+        get element() { return cm.getWrapperElement(); }
+    };
+}
+
+
 const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer');
 
 const noop = () => {};
@@ -205,6 +221,9 @@ beforeAll(async () => {
     globalThis.requestAnimationFrame = globalThis.requestAnimationFrame || ((f) => setTimeout(f, 0));
 
     const run = (f) => new Function(fs.readFileSync(path.join(RENDERER, f), 'utf8')).call(window);
+    // The composer IS a CodeMirror instance now, so the editor has to be on
+    // window before app.js runs.
+    run('vendor/codemirror.js');
     run('lib.js');
     run('audio.js');
     run('noise.js');
@@ -407,7 +426,7 @@ describe('a message inside a conversation', () => {
         // in that channel, over the socket and the HTTP fallback both.
         window.lounge.rt.sendTyping.mockClear();
         board.mockClear();
-        const input = $('composer-input');
+        const input = composerInput();
         input.value = 'typing at alice';
         input.dispatchEvent(new window.Event('input', { bubbles: true }));
         await settle();
@@ -458,7 +477,7 @@ describe('the same message in a channel', () => {
 
     it('announces typing again', async () => {
         window.lounge.rt.sendTyping.mockClear();
-        const input = $('composer-input');
+        const input = composerInput();
         input.value = 'typing in general';
         input.dispatchEvent(new window.Event('input', { bubbles: true }));
         await settle();

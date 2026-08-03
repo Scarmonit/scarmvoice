@@ -12,7 +12,7 @@
 //     keypress that did not register;
 //   • the history is written to disk, so signing out has to take it with it.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { bootRenderer, settle, type, $ } from './helpers/renderer.js';
+import { bootRenderer, settle, type, $, composerInput, cmEditor } from './helpers/renderer.js';
 
 const POST = {
     id: 7, body: 'hello', name: 'Alice', client_id: 'alice', user_id: 2,
@@ -31,12 +31,17 @@ function router() {
 
 const boot = (settings) => bootRenderer({ board: router(), settings });
 
-const input = () => $('composer-input');
+const input = () => composerInput();
 
-function press(key, opts = {}) {
-    input().dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({
-        key, ctrlKey: true, bubbles: true, cancelable: true
-    }, opts)));
+// The chords live in the EDITOR'S KEYMAP now, which is what the editor
+// consults — so that is what these press. jsdom's synthetic key events carry
+// none of the codes CodeMirror maps from, so dispatching one would be testing
+// the synthesiser rather than the app. Real keystrokes are checked in a browser.
+const keymap = () => cmEditor().getOption('extraKeys');
+function press(name) {
+    const fn = keymap()[name];
+    if (!fn) return 'unbound';
+    return fn(cmEditor());
 }
 
 async function send(text) {
@@ -52,9 +57,9 @@ describe('recalling a sent message', () => {
         await boot({ messageHistory: ['second', 'first'] });
         await settle();
 
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('second');
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('first');
     });
 
@@ -62,10 +67,10 @@ describe('recalling a sent message', () => {
         await boot({ messageHistory: ['second', 'first'] });
         await settle();
 
-        press('ArrowUp');
-        press('ArrowUp');
+        press('Ctrl-Up');
+        press('Ctrl-Up');
         expect(input().value).toBe('first');
-        press('ArrowDown');
+        press('Ctrl-Down');
         expect(input().value).toBe('second');
     });
 
@@ -75,9 +80,9 @@ describe('recalling a sent message', () => {
         await settle();
         type('half a thought');
 
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('second');
-        press('ArrowDown');
+        press('Ctrl-Down');
         expect(input().value).toBe('half a thought');
     });
 
@@ -87,10 +92,10 @@ describe('recalling a sent message', () => {
         await boot({ messageHistory: ['b', 'a'] });
         await settle();
 
-        press('ArrowUp'); press('ArrowUp'); press('ArrowUp'); press('ArrowUp');
+        press('Ctrl-Up'); press('Ctrl-Up'); press('Ctrl-Up'); press('Ctrl-Up');
         expect(input().value).toBe('a');
 
-        press('ArrowDown'); press('ArrowDown'); press('ArrowDown');
+        press('Ctrl-Down'); press('Ctrl-Down'); press('Ctrl-Down');
         expect(input().value).toBe('');
     });
 
@@ -98,7 +103,7 @@ describe('recalling a sent message', () => {
         await boot({ messageHistory: [] });
         await settle();
         type('typing');
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('typing');
     });
 
@@ -109,17 +114,17 @@ describe('recalling a sent message', () => {
         await settle();
         type('mine');
 
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('second');
         type('mine again');
-        press('ArrowDown');
+        press('Ctrl-Down');
         expect(input().value).toBe('mine again');
     });
 
     it('leaves the caret at the end of what it recalled', async () => {
         await boot({ messageHistory: ['a longer message'] });
         await settle();
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().selectionStart).toBe('a longer message'.length);
         expect(input().selectionEnd).toBe('a longer message'.length);
     });
@@ -131,7 +136,7 @@ describe('the keys it is deliberately not bound to', () => {
         await settle();
         type('line one\nline two');
 
-        press('ArrowUp', { ctrlKey: false });
+        press('Up');
         expect(input().value).toBe('line one\nline two');
     });
 
@@ -141,9 +146,9 @@ describe('the keys it is deliberately not bound to', () => {
         await settle();
         type('untouched');
 
-        press('ArrowUp', { shiftKey: true });
-        expect(input().value).toBe('untouched');
-        press('ArrowUp', { altKey: true });
+        // Shift+Ctrl+Up selects by line; Alt belongs to the window manager.
+        expect(press('Shift-Ctrl-Up')).toBe('unbound');
+        expect(press('Ctrl-Alt-Up')).toBe('unbound');
         expect(input().value).toBe('untouched');
     });
 
@@ -156,7 +161,7 @@ describe('the keys it is deliberately not bound to', () => {
         type('hey @a');
         await settle();
 
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('second');
     });
 });
@@ -167,9 +172,9 @@ describe('the toggle', () => {
         await settle();
         type('mine');
 
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('mine');
-        press('ArrowDown');
+        press('Ctrl-Down');
         expect(input().value).toBe('mine');
     });
 
@@ -190,7 +195,7 @@ describe('the toggle', () => {
         await boot({ messageHistory: ['second'] });
         await settle();
         expect(await switchState()).toBe('true');
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('second');
     });
 
@@ -256,7 +261,7 @@ describe('what gets remembered', () => {
         await settle();
         await send('just now');
 
-        press('ArrowUp');
+        press('Ctrl-Up');
         expect(input().value).toBe('just now');
     });
 });

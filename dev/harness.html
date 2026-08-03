@@ -20,8 +20,11 @@ const NOW = Date.now();
 
 // Two days of messages, so day separators and grouping both have something to
 // render. Ids are stable so a capture is comparable run to run.
+// Two authors, not one: a message list with nobody but the signed-in user in it
+// is a poor stand-in — @mention suggestions filter you out of your own, so a
+// one-person roster can never offer anything.
 const POSTS = [
-  { id: 1, client_id: 'ctest', name: 'Scarmonit', body: 'first', created_at: NOW - 86400000, channel: 'general' },
+  { id: 1, client_id: 'other', name: 'Parker', body: 'first', created_at: NOW - 86400000, channel: 'general' },
   { id: 2, client_id: 'ctest', name: 'Scarmonit', body: 'test message', created_at: NOW, channel: 'general' }
 ];
 
@@ -194,8 +197,12 @@ window.scene = {
     .replace(/^[\s\S]*?<body>/, '').replace(/<\/body>[\s\S]*$/, ''));
   const css = document.createElement('link');
   css.rel = 'stylesheet'; css.href = '/src/renderer/styles.css';
+  const cmcss = document.createElement('link');
+  cmcss.rel = 'stylesheet'; cmcss.href = '/src/renderer/vendor/codemirror.css';
+  document.head.appendChild(cmcss);
   document.head.appendChild(css);
-  for (const f of ['lib.js', 'icons.js', 'audio.js', 'lazy.js', 'noise.js', 'soundboard.js', 'voice.js', 'sounds.js', 'app.js']) {
+  // vendor/codemirror.js first: the composer IS a CodeMirror instance now.
+  for (const f of ['vendor/codemirror.js', 'lib.js', 'icons.js', 'audio.js', 'lazy.js', 'noise.js', 'soundboard.js', 'voice.js', 'sounds.js', 'app.js']) {
     await new Promise((res) => {
       const s = document.createElement('script');
       s.src = '/src/renderer/' + f;

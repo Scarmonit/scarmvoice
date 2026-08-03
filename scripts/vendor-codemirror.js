@@ -86,6 +86,10 @@ function main() {
 
     // Core first: every mode's UMD wrapper looks for the global it defines.
     parts.push(read('lib/codemirror.js'));
+    // …then the mode helpers some modes are BUILT ON. dockerfile and powershell
+    // are defined through defineSimpleMode, which does not exist until this is
+    // in — and a mode that fails to define takes the whole script down with it.
+    parts.push(read('addon/mode/simple.js'));
     for (const m of MODES) parts.push(read('mode/' + m + '.js'));
     for (const a of ADDONS) parts.push(read('addon/' + a + '.js'));
 

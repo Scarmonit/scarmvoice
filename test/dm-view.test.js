@@ -194,6 +194,9 @@ beforeAll(async () => {
     globalThis.requestAnimationFrame = globalThis.requestAnimationFrame || ((f) => setTimeout(f, 0));
 
     const run = (f) => new Function(fs.readFileSync(path.join(RENDERER, f), 'utf8')).call(window);
+    // The composer IS a CodeMirror instance now, so the editor has to be on
+    // window before app.js runs.
+    run('vendor/codemirror.js');
     run('lib.js');
     run('audio.js');
     run('noise.js');
