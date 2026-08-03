@@ -6526,6 +6526,45 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .cb-chip-more { margin-left: auto; padding: 0 4px; }
 .cb-chip-more .ico { width: 14px; height: 14px; }
 
+/* ---------- the toolbar's little menus -----------------------------------
+
+   #fmt-menu is the popup behind the toolbar's "…" and "Aa", and behind a code
+   block's own chip menu — one element, refilled per open.
+
+   IT IS A FIXED OVERLAY, and that is not decoration. openFmtMenu() measures the
+   button that opened it and writes viewport coordinates into style.left/top,
+   which `position: fixed` is what makes mean anything. Static, the left/top are
+   ignored and the menu lands wherever the flow puts it — as the LAST CHILD OF
+   <body>, so: a full-width block under the app, in the bottom-left corner, over
+   the me bar, and 87px of new content in the page that shoves the whole window
+   — sidebar, message list, composer — up by its own height. Both halves of the
+   v0.79.0 layout regression were this one missing rule, dropped with the mirror
+   layer it happened to sit next to. */
+.fmt-menu {
+  position: fixed; z-index: 120;
+  min-width: 200px; padding: 5px;
+  border-radius: 8px;
+  background: var(--elev, var(--panel)); border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg, var(--shadow-xs));
+}
+.fmt-menu[hidden] { display: none; }
+.fm-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 9px; border: 0; border-radius: 6px; cursor: pointer;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left;
+}
+.fm-item:hover { background: var(--hover); }
+.fm-item.on { color: var(--accent); }
+.fm-item .ico { width: 16px; height: 16px; flex: 0 0 16px; color: var(--dim); }
+.fm-item.on .ico { color: var(--accent); }
+/* SCOPED TO THE ITEM, because .fm-label and .fm-hint are also the New Message
+   modal's field label and field hint (.fm-modal, further up) — bare selectors
+   here and the two components style each other. That collision is what made a
+   menu row read as a 16px heading with its shortcut stacked underneath. */
+.fm-item .fm-label { flex: 1; min-width: 0; display: block; font-size: 13px; font-weight: 400; color: inherit; margin: 0; }
+.fm-item .fm-hint { flex: 0 0 auto; margin: 0; color: var(--dim); font-size: 11px; font-weight: 600; }
+.fm-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+
 /* ---------- the code block's language menu ------------------------------- */
 
 .lang-pop {

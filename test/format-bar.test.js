@@ -130,6 +130,53 @@ describe('the Format toggle', () => {
     });
 });
 
+// v0.79.0 shipped without these rules: they sat beside the mirror layer the
+// CodeMirror migration deleted and went with it. The menu is the last child of
+// <body> and openFmtMenu() writes viewport coordinates into style.left/top, so
+// with nothing making it a positioned overlay it became ordinary content — a
+// full-width block in the bottom-left corner over the me bar, whose height
+// pushed the sidebar, the message list and the composer up by its own 87px.
+//
+// jsdom has no layout, so what is pinned here is the stylesheet itself.
+describe('the toolbar menu is a layer over the app, not a part of it', () => {
+    const rule = (sel) => {
+        const m = new RegExp('(^|\\})[^{}]*?\\' + sel + '\\s*\\{([^}]*)\\}', 'm').exec(CSS);
+        return m ? m[2] : '';
+    };
+
+    it('is taken out of the flow, so opening it moves nothing', () => {
+        const r = rule('.fmt-menu');
+        expect(r).toMatch(/position:\s*fixed/);
+        expect(r).toMatch(/z-index:\s*\d+/);
+    });
+
+    it('is drawn as a menu rather than as bare text on the page', () => {
+        const r = rule('.fmt-menu');
+        expect(r).toMatch(/background:/);
+        expect(r).toMatch(/border(-radius)?:/);
+    });
+
+    // .fm-label and .fm-hint are ALSO the New Message modal's field label and
+    // hint. Unscoped, that sheet's 16px bold heading styled every menu row and
+    // stacked the shortcut underneath it.
+    it('styles its own rows without borrowing the modal\'s', () => {
+        expect(rule('.fm-item .fm-label')).toMatch(/font-size:\s*13px/);
+        expect(rule('.fm-item .fm-hint')).toMatch(/font-size:\s*11px/);
+    });
+
+    it('still opens filled and hidden-when-closed', async () => {
+        await withText('');
+        openMenu('btn-more');
+        await settle();
+        expect($('fmt-menu').hidden).toBe(false);
+        expect(menuItem('Link')).toBeTruthy();
+        // Anything outside it closes it — the same listener the me bar sits under.
+        document.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+        await settle();
+        expect($('fmt-menu').hidden).toBe(true);
+    });
+});
+
 describe('the marks a button writes', () => {
     it('wraps a selection in the syntax the renderer reads', async () => {
         const el = await withText('hello world');

@@ -4756,9 +4756,9 @@
         // Placed against whatever opened it, then pulled back inside the window:
         // the composer sits at the bottom of a narrow column, so a menu dropped
         // from it would hang off the bottom edge on every open.
-        const el = anchor ||
-            document.querySelector('.codechip[data-line="' + (block ? block.start : -1) + '"]') ||
-            $('btn-more');
+        // Every caller passes the button it was opened from; btn-more is the
+        // fallback for the chord, which has no button at all.
+        const el = anchor || $('btn-more');
         const r = el ? el.getBoundingClientRect() : { left: 40, top: window.innerHeight - 80 };
         const h = pop.offsetHeight || 320;
         const w = pop.offsetWidth || 232;
@@ -4858,7 +4858,7 @@
         document.addEventListener('mousedown', (e) => {
             if (!langPopOpen()) return;
             const t = e.target;
-            if (t && t.closest && (t.closest('#lang-pop') || t.closest('.codechip'))) return;
+            if (t && t.closest && (t.closest('#lang-pop') || t.closest('.cb-chip'))) return;
             closeLangPop();
         });
     })();
