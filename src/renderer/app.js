@@ -3795,6 +3795,12 @@
     // the messages is a worse bug than the one this fixes. On a maximised
     // window this never binds and the thirty lines is what applies.
     const COMPOSER_RESERVE_PX = 240;
+    // …and a FLOOR, but only while there is code. A block that opens one line
+    // tall is a box you have to fill before you can see what you are writing.
+    const COMPOSER_CODE_MIN_LINES = 20;
+    // The box's own padding — `.composer-field .CodeMirror { padding: 14px 0 }`
+    // — which counts against a border-box height.
+    const COMPOSER_PAD_PX = 28;
 
     const cm = window.CodeMirror($('composer-field'), {
         value: '',
@@ -3842,19 +3848,58 @@
     // prose around them and a wrapped line is taller than both, so no pixel
     // constant means "thirty lines" for more than one message; this does.
     let sizedTo = null;
+    // WHAT n LINES WOULD MEASURE, which is not the same question as how tall
+    // the first n lines of this document are. heightAtLine stops at the end of
+    // the document, so on a three-line document it answers the same number for
+    // 20 as for 30 — and a ceiling that collapses onto a short document is a
+    // ceiling that also crushes the floor under it. That is why a fresh code
+    // block opened five lines tall instead of twenty.
+    //
+    // So: measure what is there, and count the rest at the height of the kind
+    // of line the box is currently full of. A code line is set smaller than the
+    // prose around it, and "twenty lines" here means twenty of the lines this
+    // is about.
+    function textHeightOfLines(n) {
+        const have = cm.lineCount();
+        const known = cm.heightAtLine(Math.min(n, have), 'local');
+        if (n <= have) return known;
+        return known + (n - have) * composerLineUnit();
+    }
+
+    function composerLineUnit() {
+        const line = document.querySelector('#composer-field .CodeMirror .cb-body');
+        const h = line ? line.getBoundingClientRect().height : 0;
+        return h > 0 ? h : cm.defaultTextHeight();
+    }
+
+    const hasCodeBlock = () => !!document.getElementById('composer-field')
+        && document.getElementById('composer-field').classList.contains('has-code');
+
     function applyComposerHeight() {
-        // The last line's bottom, i.e. the height the box would like to be.
+        // Everything here is TEXT height. The padding is added once, at the end,
+        // where the box is actually sized — the wrapper is border-box, so a
+        // ceiling compared against a height that already included its padding
+        // would be a ceiling 28px lower than it says it is.
         const content = cm.heightAtLine(cm.lastLine(), 'local') + cm.defaultTextHeight();
         const ceiling = Math.max(120, Math.min(
-            cm.heightAtLine(COMPOSER_MAX_LINES, 'local'),
-            window.innerHeight - COMPOSER_RESERVE_PX
+            textHeightOfLines(COMPOSER_MAX_LINES),
+            window.innerHeight - COMPOSER_RESERVE_PX - COMPOSER_PAD_PX
         ));
-        // A hair of slack, so a document that lands within a pixel of the
-        // ceiling does not flip between the two modes as it is edited.
-        const want = content > ceiling + 1 ? Math.round(ceiling) : 'auto';
+        // A CODE BLOCK OPENS AS AN EDITOR, not as a one-line slot you have to
+        // fill before you can see anything. Never past the ceiling: on a short
+        // window there is no room for twenty lines either, and the conversation
+        // still has to be visible.
+        const floor = hasCodeBlock()
+            ? Math.min(textHeightOfLines(COMPOSER_CODE_MIN_LINES), ceiling) : 0;
+        // A hair of slack, so a document that lands within a pixel of either
+        // bound does not flip between modes as it is edited.
+        let want;
+        if (content > ceiling + 1) want = Math.round(ceiling);
+        else if (content < floor - 1) want = Math.round(floor);
+        else want = 'auto';
         if (want === sizedTo) return;
         sizedTo = want;
-        cm.setSize(null, want);
+        cm.setSize(null, want === 'auto' ? 'auto' : want + COMPOSER_PAD_PX);
     }
 
     // THE CARET IS FOLLOWED BY HAND, and it has to be. CodeMirror keeps its own
@@ -3958,15 +4003,30 @@
     // Kept as a name because a great many callers say it. The editor sizes
     // itself; what is left is telling it to re-measure after a programmatic
     // write, and repainting the code blocks' chrome.
+    //
+    // Paint BEFORE measuring: the line classes are what make a code line a code
+    // line, and a code line is set smaller than the prose around it. Measured
+    // first, the height is the height of the document it was a moment ago.
     function autosize() {
-        applyComposerHeight();
-        cm.refresh();
         paintCodeBlocks();
+        cm.refresh();
+        applyComposerHeight();
+        keepCaretInView();
+    }
+
+    // TYPING IS NOT THAT. cm.refresh() is a full re-measure of the editor, for
+    // when something OUTSIDE it changed — the field shown after being hidden,
+    // the drawer opening, a value written straight into the document. After a
+    // keystroke the editor has already done the work, and the call costs 3ms a
+    // character on a long block for nothing.
+    function composerTyped() {
+        paintCodeBlocks();
+        applyComposerHeight();
         keepCaretInView();
     }
 
     input.addEventListener('input', () => {
-        autosize();
+        composerTyped();
         updateSendEnabled();
         const now = Date.now();
         // Never while a conversation is open. A DM has no channel to broadcast
@@ -4557,7 +4617,9 @@
         cm.setOption('mode', richComposerOn()
             ? { name: 'markdown', fencedCodeBlockHighlighting: true, highlightFormatting: true }
             : null);
-        paintCodeBlocks();
+        // Forced: the mode changed under the decoration, which the structure
+        // signature knows nothing about.
+        paintCodeBlocks(true);
     }
 
     // ---- what a block looks like -------------------------------------------
@@ -4613,13 +4675,30 @@
     }
 
     let painting = false;
-    function paintCodeBlocks() {
+    // WHAT THE DECORATION ACTUALLY DEPENDS ON: which lines open, fill and close
+    // a block, and what each block is called. Not the code in it.
+    //
+    // This is the difference between a composer you can type in and one you
+    // cannot. Repainting means clearing a line class off every line of the
+    // block and adding it back, and CodeMirror re-renders each line as it goes:
+    // measured at 37.8ms for a 40-line block, on EVERY KEYSTROKE, which is what
+    // made typing in a code block feel like typing through treacle. Typing a
+    // character does not move a fence, so the common case is no repaint at all.
+    let cbSignature = null;
+    const decorSignature = (blocks, last) =>
+        last + '|' + blocks.map((b) => [b.start, b.end, b.closed ? 1 : 0, b.lang || ''].join(',')).join(';');
+
+    function paintCodeBlocks(force) {
         if (!cm || painting) return;
+        const blocksNow = fenceBlocks(cm.getValue());
+        const sig = decorSignature(blocksNow, cm.lastLine());
+        if (!force && sig === cbSignature) return;
+        cbSignature = sig;
         painting = true;
         try {
             clearCodeBlockDecor();
             cbNumbers = new Map();
-            const blocks = fenceBlocks(cm.getValue());
+            const blocks = blocksNow;
             const last = cm.lastLine();
 
             for (const b of blocks) {
@@ -4699,13 +4778,23 @@
 
     function composerKeymap() {
         return {
-            // ENTER SENDS. In the keymap rather than in a listener racing the
-            // editor for the event.
+            // ENTER SENDS — EXCEPT INSIDE A CODE BLOCK, where the two swap.
+            //
+            // In prose, Enter is the end of the message and a newline is the
+            // exception. In code the opposite is true of every editor anybody
+            // has ever used: Enter is the next line, and sending is the thing
+            // worth reaching for a modifier for. Having Enter send from inside
+            // a block also meant a half-written function went out the moment
+            // you finished a line of it.
             Enter: () => {
                 if (mentionPopOpen()) return CM_PASS;
+                if (caretBlock()) return CM_PASS;      // the editor's own newline
                 $('composer').requestSubmit();
             },
-            'Shift-Enter': 'newlineAndIndent',
+            'Shift-Enter': (editor) => {
+                if (caretBlock()) { $('composer').requestSubmit(); return; }
+                editor.execCommand('newlineAndIndent');
+            },
 
             // TAB INDENTS INSIDE CODE, and nowhere else moves focus to the next
             // control — which is how somebody who does not use a mouse reaches
@@ -10168,6 +10257,11 @@
     const GRID_MIN = 4, GRID_MAX = 96;
 
     const clamp01 = (n) => Math.max(0, Math.min(1, Number(n) || 0));
+    const SCALE_MIN = 0.25, SCALE_MAX = 4;
+    const clampScale = (n) => {
+        const v = Number(n);
+        return Number.isFinite(v) && v > 0 ? Math.max(SCALE_MIN, Math.min(SCALE_MAX, v)) : 1;
+    };
 
     // A layout, held to its shape on the way in. settings.json is a text file
     // that outlives any one build, and a rectangle with a NaN in it is an
@@ -10197,6 +10291,13 @@
                 // A zero-sized element is one nobody can find again.
                 rec.w = Math.max(0.02, clamp01(s.w));
                 rec.h = Math.max(0.02, clamp01(s.h));
+                // HOW BIG THE CONTENTS ARE DRAWN, as a multiple of their normal
+                // size. Resizing a section scales what is IN it — the avatar,
+                // the name, the icons — rather than leaving them their old size
+                // in a bigger frame. Bounded, because a section at 20x is a
+                // window with one icon in it and no way back to the control
+                // that did it.
+                rec.scale = clampScale(s.scale);
             }
             out.els[el.key] = rec;
         }
@@ -10282,10 +10383,32 @@
                 node.dataset.el = el.key;
                 node.classList.toggle('el-hidden', !!st.hidden);
                 if (lay.custom && el.move && st.x !== undefined) {
+                    // SCALING A SECTION SCALES WHAT IS IN IT. The rectangle in
+                    // the layout is the VISUAL one; the box is laid out at
+                    // 1/scale of it and scaled back up from its top-left, so
+                    // the panel lands exactly where the layout says while the
+                    // avatar, the name and the icons inside it are drawn that
+                    // many times bigger.
+                    //
+                    // A transform rather than `zoom`, and that was measured
+                    // rather than assumed: zoom re-resolves the percentages
+                    // against a containing block it has not scaled, so the same
+                    // numbers put the panel at half size (and, once its offsets
+                    // were divided too, in the wrong place entirely). A
+                    // transform leaves layout alone, which is what makes the
+                    // arithmetic here a division and nothing more.
+                    const z = clampScale(st.scale);
                     node.style.left = pct(st.x);
                     node.style.top = pct(st.y);
-                    node.style.width = pct(st.w);
-                    node.style.height = pct(st.h);
+                    node.style.width = pct(st.w / z);
+                    node.style.height = pct(st.h / z);
+                    if (z === 1) {
+                        node.style.transform = '';
+                        node.style.transformOrigin = '';
+                    } else {
+                        node.style.transformOrigin = '0 0';
+                        node.style.transform = 'scale(' + z + ')';
+                    }
                     // WITHOUT THIS, an element dragged over another vanishes
                     // behind it: absolutely-positioned siblings stack in
                     // document order, and the message area is declared after
@@ -10298,6 +10421,8 @@
                 } else {
                     node.style.left = node.style.top = node.style.width = node.style.height = '';
                     node.style.zIndex = '';
+                    node.style.transform = '';
+                    node.style.transformOrigin = '';
                 }
             }
         }
@@ -10556,7 +10681,13 @@
         const onHandle = handleRects().find((h) => hit(h.rect, x, y));
         if (onHandle) {
             materialize();
-            drag = { key: selectedKey, mode: 'resize', handle: onHandle.handle, x, y, base: rectOf(selectedKey) };
+            drag = {
+                key: selectedKey, mode: 'resize', handle: onHandle.handle, x, y,
+                base: rectOf(selectedKey),
+                // The scale to multiply the drag's factor by. Held from the
+                // start so a slow drag does not compound it a hundred times.
+                baseScale: clampScale((work.els[selectedKey] || {}).scale)
+            };
             return true;
         }
         const el = elementAt(x, y);
@@ -10608,10 +10739,32 @@
         r.x = Math.max(box.left, Math.min(box.left + box.width - r.w, r.x));
         r.y = Math.max(box.top, Math.min(box.top + box.height - r.h, r.y));
 
-        work.els[drag.key].x = (r.x - box.left) / box.width;
-        work.els[drag.key].y = (r.y - box.top) / box.height;
-        work.els[drag.key].w = r.w / box.width;
-        work.els[drag.key].h = r.h / box.height;
+        const st = work.els[drag.key];
+        // A RESIZE IS A ZOOM. Making a section bigger makes the section bigger,
+        // contents and all — not an emptier frame around the same small avatar
+        // and the same small icons, which is what a rectangle on its own does.
+        //
+        // A CORNER, and only a corner. Contents are scaled uniformly, so the
+        // gesture that scales them has to be the one that changes both axes —
+        // an edge drag changes one, and "scale by that" either overflows the
+        // side it did not touch or leaves the section's own contents adrift in
+        // it. Corners zoom, edges resize, which is what a corner has meant in
+        // every editor that has them. The Scale row in the options popup is the
+        // way to say it outright.
+        //
+        // The smaller of the two factors, so the contents grow to the tighter
+        // of the two edges rather than through the other one. Measured against
+        // the rectangle at the START of the drag, so one gesture scales once by
+        // however far it went rather than compounding on every pointermove.
+        const corner = drag.mode === 'resize' && drag.handle && drag.handle.length === 2;
+        if (corner && drag.base && drag.base.w > 0 && drag.base.h > 0) {
+            const factor = Math.min(r.w / drag.base.w, r.h / drag.base.h);
+            st.scale = clampScale((drag.baseScale || 1) * factor);
+        }
+        st.x = (r.x - box.left) / box.width;
+        st.y = (r.y - box.top) / box.height;
+        st.w = r.w / box.width;
+        st.h = r.h / box.height;
         dirty = true;
         applyLayout(work);
         renderFrames();
@@ -10682,13 +10835,23 @@
         const was = app.dataset.layout;
         app.dataset.layout = 'grid';
         const node = $(EL_BY_KEY.get(key).elId);
-        const saved = { left: node.style.left, top: node.style.top, width: node.style.width, height: node.style.height };
+        const saved = {
+            left: node.style.left, top: node.style.top,
+            width: node.style.width, height: node.style.height,
+            // The scale comes off for the measurement too, or the rectangle
+            // read back is the default one multiplied by whatever zoom this
+            // element happened to be at.
+            transform: node.style.transform
+        };
         node.style.left = node.style.top = node.style.width = node.style.height = '';
+        node.style.transform = '';
         const box = app.getBoundingClientRect();
         const r = node.getBoundingClientRect();
         const next = {
             x: (r.left - box.left) / box.width, y: (r.top - box.top) / box.height,
-            w: r.width / box.width, h: r.height / box.height
+            w: r.width / box.width, h: r.height / box.height,
+            // Default position means default size, contents included.
+            scale: 1
         };
         Object.assign(node.style, saved);
         app.dataset.layout = was;
@@ -10731,8 +10894,9 @@
         optionsKey = null;
     }
 
-    // A labelled row with a slider and its value, in per-cent of the window.
-    function sizeRow(label, get, set) {
+    // A labelled row with a slider and its value, in per-cent — of the window
+    // for the two size rows, of normal size for Scale.
+    function sizeRow(label, get, set, range) {
         const row = document.createElement('div');
         row.className = 'ep-row ep-stack';
         const head = document.createElement('span');
@@ -10743,9 +10907,9 @@
         head.appendChild(val);
         const input = document.createElement('input');
         input.type = 'range';
-        input.min = '5';
-        input.max = '100';
-        input.step = '1';
+        input.min = String((range && range.min) || 5);
+        input.max = String((range && range.max) || 100);
+        input.step = String((range && range.step) || 1);
         input.value = String(Math.round(get() * 100));
         input.setAttribute('aria-label', label);
         input.addEventListener('input', () => {
@@ -10943,6 +11107,28 @@
                 if (st.h === undefined) return rectOf(key).h / appBox().height;
                 return st.h;
             }, (v) => { ensureRect(key); elementEdit(key, { h: v }); }));
+            // HOW BIG THE CONTENTS ARE DRAWN. Dragging a corner already scales
+            // them — that is what resizing a section means now — but Width and
+            // Height are one axis each and a one-axis drag cannot scale
+            // anything uniformly. This is the control that says it plainly, and
+            // the way back to 100% after a drag went too far.
+            body.appendChild(sizeRow('Scale', () => clampScale(work.els[key].scale),
+                (v) => {
+                    ensureRect(key);
+                    const st = work.els[key];
+                    const next = clampScale(v);
+                    // THE PANEL GROWS WITH ITS CONTENTS, the way it does when a
+                    // corner is dragged. Scaling the contents alone would zoom
+                    // them inside a frame that stayed put, and the section would
+                    // simply overflow its own edges.
+                    const ratio = next / clampScale(st.scale);
+                    elementEdit(key, {
+                        scale: next,
+                        w: Math.max(0.02, clamp01(st.w * ratio)),
+                        h: Math.max(0.02, clamp01(st.h * ratio))
+                    });
+                },
+                { min: SCALE_MIN * 100, max: SCALE_MAX * 100, step: 5 }));
         }
         const vis = document.createElement('div');
         vis.className = 'ep-row';
@@ -13003,6 +13189,10 @@
         ['Messages', [
             ['Send', ['Enter']],
             ['New line without sending', ['Shift', 'Enter']],
+            // The two swap over inside a code block, where a newline is the
+            // common thing and sending is the exception.
+            ['New line — inside a code block', ['Enter']],
+            ['Send — inside a code block', ['Shift', 'Enter']],
             ['Accept the @mention being suggested', ['Tab']],
             ['Reveal a spoiler', ['Enter']]
         ]],

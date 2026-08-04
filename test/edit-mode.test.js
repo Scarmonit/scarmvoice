@@ -65,11 +65,17 @@ function stubRects() {
     window.Element.prototype.getBoundingClientRect = function () {
         if (this.id === 'app') return mk(APP.x, APP.y, APP.w, APP.h);
         // A custom layout writes percentages inline; that IS the element's box.
+        // …times whatever it is scaled by. A scaled section is laid out at
+        // 1/scale and transformed back up from its top-left, so the box a
+        // browser reports is the transformed one — and a stub that ignored the
+        // transform would report a section as twice the size it looks.
         const st = this.style;
         if (st && st.left && st.width) {
             const f = (v) => parseFloat(v) / 100;
+            const m = /scale\(([\d.]+)\)/.exec(st.transform || '');
+            const z = m ? parseFloat(m[1]) : 1;
             return mk(APP.x + f(st.left) * APP.w, APP.y + f(st.top) * APP.h,
-                f(st.width) * APP.w, f(st.height) * APP.h);
+                f(st.width) * APP.w * z, f(st.height) * APP.h * z);
         }
         if (GRID[this.id]) return mk(...GRID[this.id]);
         return mk(0, 0, 0, 0);
@@ -846,7 +852,7 @@ describe('per-element options', () => {
         await openEditor();
         rightClick('user-dock');
         await settle();
-        expect(labels()).toEqual(['Orientation', 'Order', 'Width', 'Height', 'Shown']);
+        expect(labels()).toEqual(['Orientation', 'Order', 'Width', 'Height', 'Scale', 'Shown']);
     });
 
     // A control that does nothing is worse than no control: the member list has
@@ -858,11 +864,11 @@ describe('per-element options', () => {
         await openEditor();
         rightClick('members-panel');
         await settle();
-        expect(labels()).toEqual(['Order', 'Width', 'Height', 'Shown']);
+        expect(labels()).toEqual(['Order', 'Width', 'Height', 'Scale', 'Shown']);
 
         rightClick('main');
         await settle();
-        expect(labels()).toEqual(['Width', 'Height', 'Shown']);
+        expect(labels()).toEqual(['Width', 'Height', 'Scale', 'Shown']);
     });
 
     it('turns a bar on its side', async () => {
@@ -975,6 +981,132 @@ describe('per-element options', () => {
         gesture({ x: r.right, y: r.top + r.height / 2 }, { x: r.left + 12, y: r.top + r.height / 2 });
         await settle();
         expect(boxOf('user-dock').w).toBe(40);
+    });
+
+    // RESIZING A SECTION SCALES WHAT IS IN IT. A rectangle on its own grows the
+    // frame and leaves the avatar, the name and the icons their old size in the
+    // middle of it, which is a bigger panel rather than a bigger section.
+    //
+    // Corners only: the contents scale uniformly, so the gesture that scales
+    // them has to be the one that changes both axes. An edge drag stays a plain
+    // resize, which is also what every test above this one relies on.
+    describe('scaling a section', () => {
+        const scaleOf = (id) => {
+            const m = /scale\(([\d.]+)\)/.exec($(id).style.transform || '');
+            return m ? Math.round(parseFloat(m[1]) * 1000) / 1000 : 1;
+        };
+        async function grab(id, corner) {
+            gesture(centreOf(id), centreOf(id));
+            await settle();
+            const r = $(id).getBoundingClientRect();
+            return corner === 'se' ? { x: r.right, y: r.bottom } : { x: r.right, y: r.top + r.height / 2 };
+        }
+
+        it('scales the contents when a corner is dragged', async () => {
+            await boot({ editorPrefs: { gridSize: 4, showGrid: true, snapElements: false } });
+            await settle();
+            stubRects();
+            await openEditor();
+            const before = boxOf('user-dock');
+            const at = await grab('user-dock', 'se');
+            gesture(at, { x: at.x + before.w, y: at.y + before.h });
+            await settle();
+
+            const after = boxOf('user-dock');
+            expect(after.w).toBeGreaterThan(before.w);
+            expect(after.h).toBeGreaterThan(before.h);
+            // The contents are drawn that many times bigger, and the box is laid
+            // out at 1/that so the panel still lands where the layout says.
+            expect(scaleOf('user-dock')).toBeGreaterThan(1);
+            const z = scaleOf('user-dock');
+            expect(parseFloat($('user-dock').style.width) / 100 * APP.w * z).toBeCloseTo(after.w, 0);
+        });
+
+        it('leaves an edge drag a plain resize', async () => {
+            await boot({ editorPrefs: { gridSize: 4, showGrid: true, snapElements: false } });
+            await settle();
+            stubRects();
+            await openEditor();
+            const before = boxOf('user-dock');
+            const at = await grab('user-dock', 'e');
+            gesture(at, { x: at.x + 120, y: at.y });
+            await settle();
+            expect(boxOf('user-dock').w).toBeGreaterThan(before.w);
+            expect(scaleOf('user-dock')).toBe(1);
+        });
+
+        it('is a control of its own, and it takes the panel with it', async () => {
+            await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            const before = boxOf('user-dock');
+            const row = [...$('el-options-body').querySelectorAll('.ep-row')]
+                .find((r) => r.querySelector('.ep-label').textContent.startsWith('Scale'));
+            expect(row).toBeTruthy();
+            const slider = row.querySelector('input[type="range"]');
+            slider.value = '200';
+            slider.dispatchEvent(new window.Event('input', { bubbles: true }));
+            await settle();
+
+            expect(scaleOf('user-dock')).toBe(2);
+            // Scaled contents inside a frame that stayed put would simply
+            // overflow it, so the frame comes too.
+            expect(boxOf('user-dock').w).toBe(before.w * 2);
+            expect(boxOf('user-dock').h).toBe(before.h * 2);
+        });
+
+        // It is part of the layout, so it comes back off the settings file with
+        // the rest of it — position, size, show/hide and now how big the
+        // section is drawn.
+        it('comes back with a saved layout', async () => {
+            const els = {};
+            for (const k of ['rail', 'channels', 'members', 'chat', 'header', 'mebar', 'composer']) {
+                els[k] = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
+            }
+            els.mebar.scale = 1.5;
+            await boot({ activeLayout: 'L1', layouts: [{ id: 'L1', name: 'Big', custom: true, els }] });
+            await settle();
+            expect(mode()).toBe('custom');
+            expect(scaleOf('user-dock')).toBe(1.5);
+            // Laid out at 1/scale, so the panel is still the rectangle stored.
+            expect(parseFloat($('user-dock').style.width)).toBeCloseTo(20 / 1.5, 2);
+        });
+
+        it('refuses a scale that is not a number, or is off the end of the scale', async () => {
+            const els = {};
+            for (const k of ['rail', 'channels', 'members', 'chat', 'header', 'mebar', 'composer']) {
+                els[k] = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
+            }
+            els.mebar.scale = 'huge';
+            els.header.scale = 9999;
+            await boot({ activeLayout: 'L1', layouts: [{ id: 'L1', name: 'Odd', custom: true, els }] });
+            await settle();
+            expect(scaleOf('user-dock')).toBe(1);
+            expect(scaleOf('chan-head')).toBe(4);
+        });
+
+        it('goes back to normal size with the element', async () => {
+            await boot({});
+            await settle();
+            stubRects();
+            await openEditor();
+            rightClick('user-dock');
+            await settle();
+            const row = [...$('el-options-body').querySelectorAll('.ep-row')]
+                .find((r) => r.querySelector('.ep-label').textContent.startsWith('Scale'));
+            row.querySelector('input[type="range"]').value = '150';
+            row.querySelector('input[type="range"]').dispatchEvent(new window.Event('input', { bubbles: true }));
+            await settle();
+            expect(scaleOf('user-dock')).toBe(1.5);
+
+            $('el-reset').click();
+            await settle();
+            expect(scaleOf('user-dock')).toBe(1);
+            expect(boxOf('user-dock')).toEqual({ x: 0, y: 640, w: 372, h: 60 });
+        });
     });
 
     it('reverses the order of what is inside', async () => {
