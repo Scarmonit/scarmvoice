@@ -4646,7 +4646,9 @@
         node.style.height = (lines * codeLineUnit()).toFixed(2) + 'px';
         // handleMouseEvents so a click in the empty part of the block lands in
         // the code above it rather than nowhere at all.
-        const widget = cm.addLineWidget(line, node, { handleMouseEvents: true, noHScroll: true });
+        const widget = cm.addLineWidget(line, node, {
+            above: true, handleMouseEvents: true, noHScroll: true
+        });
         cbFillers.push({ widget, node, lines });
     }
 
@@ -4739,18 +4741,30 @@
                 }
 
                 // THE BLOCK ITSELF OPENS ROOMY. Not the message box around it —
-                // that was the last attempt, and it left exactly what was
-                // reported: a one-line block sitting in a tall empty composer.
+                // that was the attempt before last, and it left a one-line
+                // block sitting in a tall empty composer.
                 //
                 // The room is a WIDGET, not blank lines. Twenty newlines in the
                 // document would be twenty newlines in the message, and the
                 // point of this editor is that its document IS what gets sent.
-                // A widget hangs under the last line of code, carries the
-                // block's own fill, and shrinks as real lines take its place.
+                //
+                // ABOVE THE CLOSING FENCE, and that is the whole of the last
+                // fix. A line's box CONTAINS its widgets, so hanging it under
+                // the last line of code made that line 361px tall — and a
+                // CodeMirror caret is drawn the height of the line it is on, so
+                // the caret became a 342px bar down the middle of the block and
+                // the one line of code was stretched over the whole of it. The
+                // closing fence is an atomic mark: no caret ever sits on it, so
+                // it is the one line in the block that can afford to be tall.
+                // `above` puts the room between the last code line and the
+                // block's bottom edge, which is where it looks like it belongs.
+                //
+                // Only for a CLOSED block: an unclosed one has no such line, and
+                // a fence half-typed is not a block anybody is looking at yet.
                 const bodyEnd = Math.min(lastLine, last);
                 const bodyLines = Math.max(0, bodyEnd - first + 1);
                 const shortBy = CODE_MIN_LINES - bodyLines;
-                if (shortBy > 0) addCodeFiller(bodyLines > 0 ? bodyEnd : b.start, shortBy);
+                if (shortBy > 0 && b.closed && b.end <= last) addCodeFiller(b.end, shortBy);
                 if (b.closed && b.end <= last) {
                     lineClass(b.end, 'wrap', 'cb-close');
                     const closeLen = cm.getLine(b.end).length;

@@ -6576,6 +6576,19 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 /* The block's own text, where the mode has nothing to say about it. */
 .composer-field .cb-body .CodeMirror-line { color: var(--code-text); }
 
+/* NOTHING IN THE MESSAGE BOX IS PAINTED AS AN ERROR. CodeMirror's own default
+   theme is still on the editor for the handful of things this stylesheet does
+   not name, and two of its rules are `.cm-error { color: #f00 }` and
+   `.cm-invalidchar { color: #f00 }` — pure red. A mode emits `error` for any
+   half-written construct, which while you are TYPING is most of them: a string
+   you have opened, a regex you are in the middle of. So a line being written
+   turned red as it was written, which reads as the app calling it wrong.
+   A message box is not a linter. */
+.composer-field .cm-error,
+.composer-field .cm-invalidchar { color: inherit; }
+.composer-field .cb-body .cm-error,
+.composer-field .cb-body .cm-invalidchar { color: var(--code-text); }
+
 /* THE ROOM A NEW BLOCK OPENS WITH. A widget under the last line of code, as
    many lines tall as the block is short of twenty, so a block you have just
    made is an editor rather than a single slot. It holds no text and is not in

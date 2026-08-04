@@ -150,6 +150,17 @@ describe('the toolbar menu is a layer over the app, not a part of it', () => {
         expect(r).toMatch(/z-index:\s*\d+/);
     });
 
+    // CodeMirror's own default theme is still on the editor for the handful of
+    // things this stylesheet does not name, and two of its rules paint text
+    // #f00. A mode emits `error` for any half-written construct — a string you
+    // have opened, a regex you are mid-way through — which while you are TYPING
+    // is most of them, so a line went red as it was written. A message box is
+    // not a linter.
+    it('paints nothing in the message box as an error', () => {
+        expect(CSS).toMatch(/\.composer-field \.cm-error,\s*\n?\s*\.composer-field \.cm-invalidchar \{[^}]*color:\s*inherit/);
+        expect(CSS).toMatch(/\.composer-field \.cb-body \.cm-error,[\s\S]{0,80}?color:\s*var\(--code-text\)/);
+    });
+
     it('is drawn as a menu rather than as bare text on the page', () => {
         const r = rule('.fmt-menu');
         expect(r).toMatch(/background:/);
@@ -612,6 +623,37 @@ describe('the room a new code block opens with', () => {
         // The whole point. A block padded with newlines would send them.
         expect(el.value).toBe('```js\nconst a = 1;\n```');
         expect(el.value.split('\n')).toHaveLength(3);
+    });
+
+    // A LINE'S BOX CONTAINS ITS WIDGETS, and a CodeMirror caret is drawn the
+    // height of the line it is on. Hung under the last line of CODE, the room
+    // made that line 361px tall, stretched its one line of text over the whole
+    // of it, and turned the caret into a 342px bar down the middle of the
+    // block. The closing fence is an atomic mark — no caret ever sits on it —
+    // so it is the one line in a block that can afford to be tall.
+    it('hangs its room on the closing fence, never on a line of code', async () => {
+        await withText('```js\nconst a = 1;\n```');
+        await settle();
+        const editor = cm();
+        const on = [];
+        for (let i = 0; i <= editor.lastLine(); i++) {
+            for (const w of (editor.lineInfo(i).widgets || [])) {
+                if (w.node && w.node.classList && w.node.classList.contains('cb-filler')) {
+                    on.push({ line: i, above: !!w.above });
+                }
+            }
+        }
+        expect(on).toHaveLength(1);
+        // Line 2 of '```js\nconst a = 1;\n```' is the closing fence.
+        expect(on[0].line).toBe(2);
+        // Above it, so the room is between the code and the block's bottom edge.
+        expect(on[0].above).toBe(true);
+    });
+
+    it('leaves an unclosed block alone', async () => {
+        await withText('```js\nconst a = 1;');
+        await settle();
+        expect(fillers()).toHaveLength(0);
     });
 
     it('takes its room away with the block', async () => {
