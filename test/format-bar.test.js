@@ -552,6 +552,78 @@ describe('the message box is the editor', () => {
     });
 });
 
+// A NEW BLOCK OPENS AS AN EDITOR. Twice this was "fixed" by making the message
+// BOX twenty lines tall, and twice what came back was the same screenshot: a
+// one-line block sitting in the top of a tall empty composer. The room has to
+// belong to the block.
+//
+// It is a widget, not blank lines. Twenty newlines in the document would be
+// twenty newlines in the message, and this editor's document IS the message —
+// so the test that matters most is the last one here.
+describe('the room a new code block opens with', () => {
+    // Read off the LINE WIDGETS, not the DOM — the same reason the chips are
+    // read off their marks. A widget only enters the document when CodeMirror
+    // renders the line it hangs from, and jsdom renders nothing; the widget and
+    // its node exist either way, and they are what the app actually built. The
+    // pixels are measured in a browser.
+    const fillers = () => {
+        const editor = cm();
+        const out = [];
+        for (let i = 0; i <= editor.lastLine(); i++) {
+            for (const w of (editor.lineInfo(i).widgets || [])) {
+                if (w.node && w.node.classList && w.node.classList.contains('cb-filler')) out.push(w.node);
+            }
+        }
+        return out;
+    };
+    let unit = 0;
+    const fillerLines = () => fillers().map((n) => Math.round(parseFloat(n.style.height) / unit));
+
+    it('gives a fresh block room for twenty lines', async () => {
+        const el = await withText('```js\n\n```');
+        await settle();
+        expect(fillers()).toHaveLength(1);
+        unit = parseFloat(fillers()[0].style.height) / 19;
+        expect(unit).toBeGreaterThan(0);
+        // One real line of code, so nineteen lines of room.
+        expect(fillerLines()).toEqual([19]);
+        // …and not one character of it is in the message.
+        expect(el.value).toBe('```js\n\n```');
+    });
+
+    it('gives back the room as real lines take it', async () => {
+        await withText('```js\n' + ['a', 'b', 'c', 'd', 'e'].join('\n') + '\n```');
+        await settle();
+        expect(fillers()).toHaveLength(1);
+        expect(Math.round(parseFloat(fillers()[0].style.height) / unit)).toBe(15);
+    });
+
+    it('stops filling once the block is twenty lines of its own', async () => {
+        const body = Array.from({ length: 20 }, (_, i) => 'line' + i).join('\n');
+        await withText('```js\n' + body + '\n```');
+        await settle();
+        expect(fillers()).toHaveLength(0);
+    });
+
+    it('adds nothing to the message', async () => {
+        const el = await withText('```js\nconst a = 1;\n```');
+        await settle();
+        expect(fillers()).toHaveLength(1);
+        // The whole point. A block padded with newlines would send them.
+        expect(el.value).toBe('```js\nconst a = 1;\n```');
+        expect(el.value.split('\n')).toHaveLength(3);
+    });
+
+    it('takes its room away with the block', async () => {
+        await withText('```js\nconst a = 1;\n```');
+        await settle();
+        expect(fillers()).toHaveLength(1);
+        type('no code here');
+        await settle();
+        expect(fillers()).toHaveLength(0);
+    });
+});
+
 describe('a code block while it is being written', () => {
     // Read off the MARKS, not the document. A replacedWith widget only enters
     // the DOM when CodeMirror renders the line it is on, and jsdom lays nothing

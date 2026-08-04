@@ -3795,9 +3795,9 @@
     // the messages is a worse bug than the one this fixes. On a maximised
     // window this never binds and the thirty lines is what applies.
     const COMPOSER_RESERVE_PX = 240;
-    // …and a FLOOR, but only while there is code. A block that opens one line
-    // tall is a box you have to fill before you can see what you are writing.
-    const COMPOSER_CODE_MIN_LINES = 20;
+    // …and the room a CODE BLOCK opens with. A block one line tall is a slot
+    // you have to fill before you can see what you are writing.
+    const CODE_MIN_LINES = 20;
     // The box's own padding — `.composer-field .CodeMirror { padding: 14px 0 }`
     // — which counts against a border-box height.
     const COMPOSER_PAD_PX = 28;
@@ -3848,55 +3848,30 @@
     // prose around them and a wrapped line is taller than both, so no pixel
     // constant means "thirty lines" for more than one message; this does.
     let sizedTo = null;
-    // WHAT n LINES WOULD MEASURE, which is not the same question as how tall
-    // the first n lines of this document are. heightAtLine stops at the end of
-    // the document, so on a three-line document it answers the same number for
-    // 20 as for 30 — and a ceiling that collapses onto a short document is a
-    // ceiling that also crushes the floor under it. That is why a fresh code
-    // block opened five lines tall instead of twenty.
-    //
-    // So: measure what is there, and count the rest at the height of the kind
-    // of line the box is currently full of. A code line is set smaller than the
-    // prose around it, and "twenty lines" here means twenty of the lines this
-    // is about.
-    function textHeightOfLines(n) {
-        const have = cm.lineCount();
-        const known = cm.heightAtLine(Math.min(n, have), 'local');
-        if (n <= have) return known;
-        return known + (n - have) * composerLineUnit();
-    }
-
-    function composerLineUnit() {
-        const line = document.querySelector('#composer-field .CodeMirror .cb-body');
-        const h = line ? line.getBoundingClientRect().height : 0;
-        return h > 0 ? h : cm.defaultTextHeight();
-    }
-
-    const hasCodeBlock = () => !!document.getElementById('composer-field')
-        && document.getElementById('composer-field').classList.contains('has-code');
-
     function applyComposerHeight() {
+        // The block's own room is a widget INSIDE the document now (see
+        // addCodeFiller), so the height the document reports already includes
+        // it and the box has nothing to add. There was a floor here that tried
+        // to do that job from the outside, and all it ever produced was a tall
+        // empty box with a one-line block sitting in the top of it — which is
+        // exactly what was reported twice.
+        //
         // Everything here is TEXT height. The padding is added once, at the end,
         // where the box is actually sized — the wrapper is border-box, so a
         // ceiling compared against a height that already included its padding
         // would be a ceiling 28px lower than it says it is.
         const content = cm.heightAtLine(cm.lastLine(), 'local') + cm.defaultTextHeight();
+        // Thirty lines. Not heightAtLine(30): that stops at the end of the
+        // document, so on a short one it answers the height of the document
+        // instead of the height of thirty lines — and now that a block carries
+        // a widget it would count that too, then add thirty lines on top.
         const ceiling = Math.max(120, Math.min(
-            textHeightOfLines(COMPOSER_MAX_LINES),
+            COMPOSER_MAX_LINES * cm.defaultTextHeight(),
             window.innerHeight - COMPOSER_RESERVE_PX - COMPOSER_PAD_PX
         ));
-        // A CODE BLOCK OPENS AS AN EDITOR, not as a one-line slot you have to
-        // fill before you can see anything. Never past the ceiling: on a short
-        // window there is no room for twenty lines either, and the conversation
-        // still has to be visible.
-        const floor = hasCodeBlock()
-            ? Math.min(textHeightOfLines(COMPOSER_CODE_MIN_LINES), ceiling) : 0;
-        // A hair of slack, so a document that lands within a pixel of either
-        // bound does not flip between modes as it is edited.
-        let want;
-        if (content > ceiling + 1) want = Math.round(ceiling);
-        else if (content < floor - 1) want = Math.round(floor);
-        else want = 'auto';
+        // A hair of slack, so a document that lands within a pixel of the
+        // ceiling does not flip between the two modes as it is edited.
+        const want = content > ceiling + 1 ? Math.round(ceiling) : 'auto';
         if (want === sizedTo) return;
         sizedTo = want;
         cm.setSize(null, want === 'auto' ? 'auto' : want + COMPOSER_PAD_PX);
@@ -4637,6 +4612,42 @@
             try { cm.removeLineClass(line, where, cls); } catch (e) { /* line went */ }
         });
         cbLines = [];
+        cbFillers.forEach((f) => { try { f.widget.clear(); } catch (e) { /* line went */ } });
+        cbFillers = [];
+    }
+
+    // ---- the room a new block opens with -----------------------------------
+
+    let cbFillers = [];
+
+    // HOW MANY LINES, NOT HOW MANY PIXELS. The stylesheet turns the count into
+    // a height from the same two tokens a code line is set with, which is the
+    // only way this is not a feedback loop.
+    //
+    // Measuring it was: the filler hangs off a line, and a line's box CONTAINS
+    // its widgets — the wrapper does and so, as it turns out, does the `pre`.
+    // So every pass measured a line that was already as tall as the filler it
+    // was about to size from it. It ran away to 7452px on the first block and
+    // 111783px on the second.
+    // A code line's height, WITHOUT measuring a code line. defaultTextHeight is
+    // the editor's own prose line box — it comes from the height model rather
+    // than from the DOM, so no widget can get into it — and a code line is that
+    // times the one ratio the stylesheet sets them apart by.
+    function codeLineUnit() {
+        const host = document.getElementById('composer-field');
+        const em = host ? parseFloat(getComputedStyle(host).getPropertyValue('--code-em')) : NaN;
+        return cm.defaultTextHeight() * (Number.isFinite(em) && em > 0 ? em : 1);
+    }
+
+    function addCodeFiller(line, lines) {
+        const node = document.createElement('div');
+        node.className = 'cb-filler';
+        node.setAttribute('aria-hidden', 'true');
+        node.style.height = (lines * codeLineUnit()).toFixed(2) + 'px';
+        // handleMouseEvents so a click in the empty part of the block lands in
+        // the code above it rather than nowhere at all.
+        const widget = cm.addLineWidget(line, node, { handleMouseEvents: true, noHScroll: true });
+        cbFillers.push({ widget, node, lines });
     }
 
     function lineClass(line, where, cls) {
@@ -4726,6 +4737,20 @@
                     lineClass(i, 'wrap', 'cb-body');
                     cbNumbers.set(i, i - first + 1);
                 }
+
+                // THE BLOCK ITSELF OPENS ROOMY. Not the message box around it —
+                // that was the last attempt, and it left exactly what was
+                // reported: a one-line block sitting in a tall empty composer.
+                //
+                // The room is a WIDGET, not blank lines. Twenty newlines in the
+                // document would be twenty newlines in the message, and the
+                // point of this editor is that its document IS what gets sent.
+                // A widget hangs under the last line of code, carries the
+                // block's own fill, and shrinks as real lines take its place.
+                const bodyEnd = Math.min(lastLine, last);
+                const bodyLines = Math.max(0, bodyEnd - first + 1);
+                const shortBy = CODE_MIN_LINES - bodyLines;
+                if (shortBy > 0) addCodeFiller(bodyLines > 0 ? bodyEnd : b.start, shortBy);
                 if (b.closed && b.end <= last) {
                     lineClass(b.end, 'wrap', 'cb-close');
                     const closeLen = cm.getLine(b.end).length;

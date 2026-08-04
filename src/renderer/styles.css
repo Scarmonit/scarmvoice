@@ -6534,7 +6534,16 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 }
 /* Code is set in the code face; the rest of the message is not. Safe here in a
    way it never was before — the editor measures what it draws. */
-.composer-field .cb-body { font-family: var(--mono); font-size: 0.92em; color: var(--code-text); }
+/* THE TWO NUMBERS A CODE LINE IS SET WITH, named once because the filler below
+   has to compute a height in them and a second copy of 0.92 is a filler that
+   drifts out of step with the lines it is standing in for. */
+.composer-field { --code-em: 0.92; --code-lh: 1.375; }
+.composer-field .cb-body {
+  font-family: var(--mono);
+  font-size: calc(var(--code-em) * 1em);
+  line-height: var(--code-lh);
+  color: var(--code-text);
+}
 .composer-field .cb-body .CodeMirror-linenumber,
 .composer-field .cb-open .CodeMirror-linenumber { color: var(--placeholder); }
 
@@ -6566,6 +6575,31 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .composer-field .cb-body .cm-punctuation { color: var(--code-text); }
 /* The block's own text, where the mode has nothing to say about it. */
 .composer-field .cb-body .CodeMirror-line { color: var(--code-text); }
+
+/* THE ROOM A NEW BLOCK OPENS WITH. A widget under the last line of code, as
+   many lines tall as the block is short of twenty, so a block you have just
+   made is an editor rather than a single slot. It holds no text and is not in
+   the document — the message is exactly the code you typed — so it is drawn as
+   more of the block's own fill and nothing else.
+
+   The plate is drawn HERE rather than inherited: CodeMirror puts a widget in
+   its own element after the line's text, outside the padding that carries the
+   line's background, so a filler with no fill of its own is a hole in the
+   middle of the block. */
+   ITS HEIGHT IS SET BY app.js, from the editor's own prose line height times
+   --code-em below. NOT measured off a code line: a line's box contains its own
+   widgets, so every reading already had the filler in it and each pass sized
+   it from a number it was already inside — it ran away to 7452px on the first
+   block and 111783px on the second. */
+.composer-field .cb-filler {
+  background: var(--code-bg);
+  box-shadow: inset 1px 0 0 var(--line-2, var(--line)), inset -1px 0 0 var(--line-2, var(--line));
+  pointer-events: none;
+}
+/* The line a filler hangs from has the block's bottom edge drawn on it, and the
+   filler is below that line — so the rounding and the closing rule belong to
+   the filler for as long as there is one. */
+.composer-field .cb-body:has(.cb-filler) { border-radius: 0; }
 
 /* The title bar: the fence's own text, replaced by an atomic mark. Atomic is
    what keeps the caret out of it. */
