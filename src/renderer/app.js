@@ -3103,15 +3103,23 @@
     let selfEchoes = [];
 
     // Drop echoes the server has caught up on, and any that have outlived the
-    // window in which a replica could still be behind.
+    // window in which a replica could still be behind. A pending echo is exempt
+    // from the age cutoff — its request is still in flight, and the send path
+    // that made it always resolves or drops it itself.
     function pruneEchoes() {
         if (!selfEchoes.length) return;
         const have = new Set(posts.map((p) => p.id));
         const cutoff = Date.now() - ECHO_MAX_MS;
-        selfEchoes = selfEchoes.filter((e) => !have.has(e.id) && e.created_at > cutoff);
+        selfEchoes = selfEchoes.filter((e) => !have.has(e.id) && (e.pending || e.created_at > cutoff));
     }
 
-    function echoPost(id, body, chan, quoteId, attachment) {
+    // `pending` marks an OPTIMISTIC echo: drawn before the server has answered,
+    // under a locally minted id, so pressing Enter puts the message on screen
+    // NOW instead of after the round trip to the edge. The send path then either
+    // resolves it onto the real id (resolveEcho) or takes it back down
+    // (dropEcho) — every branch of the send does one or the other, so a pending
+    // row can never outlive its request.
+    function echoPost(id, body, chan, quoteId, attachment, pending) {
         if (!id) return;
         // `posts` is whatever channel is on screen NOW. An echo for a different
         // one — a queued message flushing, or an upload that outlived a channel
@@ -3121,6 +3129,7 @@
         const q = (mine && quoteId) ? posts.find((p) => p.id === quoteId) : null;
         selfEchoes.push({
             id,
+            pending: !!pending,
             channel: chan,
             client_id: settings.clientId,
             user_id: myUserId() || null,
@@ -3152,6 +3161,31 @@
             clearUnread();
         }
         settleScroll();
+    }
+
+    // Locally minted ids for optimistic echoes. A string with a prefix no
+    // server id can collide with, so `have.has(e.id)` in pruneEchoes can never
+    // mistake a row the server is yet to confirm for one it has.
+    let pendingSeq = 0;
+    function pendingEchoId() { return 'send:' + (++pendingSeq); }
+
+    // The server said yes: the echo takes the real id and becomes an ordinary
+    // echo — same row, same text, now owned by the id the page will eventually
+    // carry, so the catch-up replaces it without a duplicate or a flicker.
+    function resolveEcho(tempId, realId) {
+        const e = selfEchoes.find((x) => x.id === tempId);
+        if (!e) return;
+        e.id = realId;
+        e.pending = false;
+        renderMessages();
+    }
+
+    // The server said no (or nothing): the optimistic row comes back down. The
+    // caller decides what happens to the text — outbox, toast, hand-back.
+    function dropEcho(tempId) {
+        const before = selfEchoes.length;
+        selfEchoes = selfEchoes.filter((x) => x.id !== tempId);
+        if (selfEchoes.length !== before) renderMessages();
     }
 
     // Which type(s) a post satisfies, for filtering.
@@ -5215,13 +5249,24 @@
             return;
         }
 
+        // On screen NOW — before the network, not after it. The round trip to
+        // the edge is anywhere from 100ms to the better part of a second, and it
+        // used to sit between pressing Enter and the message appearing, which is
+        // most of what made sending feel slow. The echo goes up under a local id
+        // and every branch below either resolves it onto the server's id or
+        // takes it back down; refetches can't strand it, because displayedPosts
+        // carries echoes separately from the page.
+        const pendingId = pendingEchoId();
+        echoPost(pendingId, body, forChannel, quoteId, null, true);
+
         const res = await L.board('post', {
             method: 'POST',
             body: { body, name: settings.displayName || 'Anonymous', clientId: settings.clientId, channel: forChannel, quoteId }
         });
 
-        if (authGone(res)) return;
+        if (authGone(res)) { dropEcho(pendingId); return; }
         if (!res || !res.success) {
+            dropEcho(pendingId);
             // A network failure is not the user's problem to solve — queue it
             // and retry when the connection comes back. Anything the server
             // actively rejected is handed back, because retrying won't fix it.
@@ -5235,9 +5280,9 @@
             updateSendEnabled();  // the button was disabled at submit — re-enable it
             return;
         }
-        // On screen NOW, from the id the server just handed back — not after a
-        // round trip to a replica that may not have the write yet.
-        echoPost(res.id, body, forChannel, quoteId, null);
+        // The echo now carries the id the server handed back, so the page's
+        // eventual copy of this message lands on the same row key.
+        resolveEcho(pendingId, res.id);
         announcePosted(forChannel, body);
         await loadMessages(true);
     });
@@ -18737,6 +18782,31 @@
     // Text-only DM send, used by the shared composer. Attachments go through
     // uploadOne(), which posts to the same endpoint with a key.
     async function sendDm(body, thread, quoteId) {
+        // On screen before the network, the same way the channel composer is:
+        // the round trip used to sit between Enter and the message appearing.
+        // The row goes up under a local id and is either resolved onto the real
+        // one below or taken back down — and if a refetch replaces dmMsgs while
+        // the request is in flight, the success path re-adds the confirmed copy.
+        //
+        // The echo carries the quote it was sent with, resolved from the row
+        // the chip pointed at, so the message does not appear without its
+        // quote block and then grow one when the poll catches up.
+        const q = quoteId ? dmMsgs.find((m) => m.id === quoteId) : null;
+        let temp = null;
+        if (dmOpen && dmOpen.id === thread) {
+            temp = {
+                id: pendingEchoId(), body, created_at: Date.now(),
+                fromMe: true, from: account ? account.id : null,
+                quote_id: quoteId || 0,
+                quote: q ? {
+                    id: q.id, name: dmAsPost(q).name,
+                    body: (q.body || '').slice(0, 120), att_name: q.att_name || ''
+                } : null
+            };
+            dmMsgs.push(temp);
+            renderDmMessages();
+        }
+
         // `quoteId` is the reply chip, which the one composer now carries into a
         // conversation exactly as it carries it into a channel. dm/send.js
         // refuses a quote pointing outside this conversation, so a stale chip
@@ -18744,21 +18814,31 @@
         const res = await L.board('dm/send', {
             method: 'POST', body: { thread, body, quoteId: quoteId || null }
         });
-        if (!res || !res.success) return res;
+        if (!res || !res.success) {
+            if (temp) {
+                dmMsgs = dmMsgs.filter((m) => m !== temp);
+                if (dmOpen && dmOpen.id === thread) renderDmMessages();
+            }
+            return res;
+        }
         if (dmOpen && dmOpen.id === thread) {
-            // The echo carries the quote it was sent with, resolved from the row
-            // the chip pointed at, so the message does not appear without its
-            // quote block and then grow one when the poll catches up.
-            const q = quoteId ? dmMsgs.find((m) => m.id === quoteId) : null;
-            dmMsgs.push({
-                id: res.id, body, created_at: res.created_at || Date.now(),
-                fromMe: true, from: account ? account.id : null,
-                quote_id: quoteId || 0,
-                quote: q ? {
-                    id: q.id, name: dmAsPost(q).name,
-                    body: (q.body || '').slice(0, 120), att_name: q.att_name || ''
-                } : null
-            });
+            if (dmMsgs.includes(temp)) {
+                temp.id = res.id;
+                temp.created_at = res.created_at || temp.created_at;
+            } else if (!dmMsgs.some((m) => m.id === res.id)) {
+                // A refetch swept the optimistic row away mid-flight and the
+                // page does not carry the message yet — put the confirmed copy
+                // where the temp one was.
+                dmMsgs.push({
+                    id: res.id, body, created_at: res.created_at || Date.now(),
+                    fromMe: true, from: account ? account.id : null,
+                    quote_id: quoteId || 0,
+                    quote: temp ? temp.quote : (q ? {
+                        id: q.id, name: dmAsPost(q).name,
+                        body: (q.body || '').slice(0, 120), att_name: q.att_name || ''
+                    } : null)
+                });
+            }
             renderDmMessages();
         }
         loadDmThreads();

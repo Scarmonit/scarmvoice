@@ -307,20 +307,41 @@ function load() {
     let raw = null;
     try {
         raw = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        // Merged key by key for the same reason set() is: Object.assign writes
-        // through the setter, so a "__proto__" key in a hand-edited (or
-        // corrupted) settings.json would re-point this object's prototype.
-        merged = Object.assign({}, DEFAULTS);
-        for (const key of Object.keys(raw || {})) {
-            if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
-            if (UNSAFE_KEYS.includes(key)) {
-                console.warn('[store] ignored a prototype-polluting key in settings.json: ' + key);
-                continue;
-            }
-            merged[key] = raw[key];
-        }
     } catch (e) {
-        return Object.assign({}, DEFAULTS);
+        // Falling straight back to DEFAULTS here is a full, silent reset of
+        // every setting the user has — and the failure is not always "the file
+        // is gone": an empty file after a power cut, or a transient read error
+        // in the first seconds after logon (exactly when the login item starts
+        // us, with an antivirus scan and every other autostart hammering the
+        // disk), read the same as a fresh install. writeNow() rotates the
+        // previous good file to .bak on every save, so that copy is at worst
+        // one debounce window stale — recover from it instead.
+        if (e.code !== 'ENOENT') {
+            console.error(`[store] settings.json unreadable (${e.message}) — trying the backup copy`);
+        }
+        try {
+            raw = JSON.parse(fs.readFileSync(settingsPath + '.bak', 'utf8'));
+            console.warn('[store] settings restored from the backup copy');
+        } catch (e2) {
+            if (e.code === 'ENOENT' && e2.code === 'ENOENT') {
+                console.log('[store] no stored settings — first run');
+            } else {
+                console.error('[store] settings unrecoverable — starting from defaults');
+            }
+            return Object.assign({}, DEFAULTS);
+        }
+    }
+    // Merged key by key for the same reason set() is: Object.assign writes
+    // through the setter, so a "__proto__" key in a hand-edited (or
+    // corrupted) settings.json would re-point this object's prototype.
+    merged = Object.assign({}, DEFAULTS);
+    for (const key of Object.keys(raw || {})) {
+        if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+        if (UNSAFE_KEYS.includes(key)) {
+            console.warn('[store] ignored a prototype-polluting key in settings.json: ' + key);
+            continue;
+        }
+        merged[key] = raw[key];
     }
     // autoUpdateOnLaunch changed meaning. It used to gate whether updates were
     // downloaded at all and shipped OFF, so nearly every existing profile has a
@@ -367,6 +388,13 @@ function writeNow() {
     const tmp = settingsPath + '.tmp';
     try {
         fs.writeFileSync(tmp, JSON.stringify(cache, null, 2));
+        // The outgoing file becomes the backup load() recovers from when the
+        // real one reads back broken. Rotated by rename, so it costs no extra
+        // write; the ENOENT on the very first save is the only acceptable
+        // failure. A crash between the two renames leaves no settings.json but
+        // a complete .bak — which is exactly the case load() handles.
+        try { fs.renameSync(settingsPath, settingsPath + '.bak'); }
+        catch (e) { if (e.code !== 'ENOENT') console.warn('[store] could not rotate the settings backup:', e.message); }
         fs.renameSync(tmp, settingsPath);
     } catch (e) {
         console.error('[store] failed to save settings:', e.message);

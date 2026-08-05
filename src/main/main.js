@@ -242,6 +242,10 @@ function createWindow(forceShow) {
 
     if (DEV) win.webContents.openDevTools({ mode: 'detach' });
 
+    // Registered before any other 'show' work: everything downstream (bounds
+    // persistence above all) keys off whether the user has ever seen the window.
+    win.on('show', () => { everShown = true; });
+
     win.on('focus', () => win.webContents.send('win:focus', true));
     win.on('blur', () => {
         win.webContents.send('win:focus', false);
@@ -405,6 +409,19 @@ function openExternal(url) {
 // un-maximising later would snap the window to full-screen size.
 function saveWindowState() {
     if (!win || win.isDestroyed() || win.isMinimized()) return;
+    // Only geometry the user could actually have arranged is worth writing.
+    // A window that has never been revealed this session — the --openAsHidden
+    // login item, "start minimized to the tray" — was built at whatever the
+    // displays looked like at logon, which is exactly when Windows is still
+    // enumerating monitors and settling DPI. Anything that moves or resizes it
+    // in that state (the OS re-flowing windows on a display change, a fallback
+    // position because the saved one was briefly "off-screen") is not a
+    // preference, and persisting it silently destroyed the geometry the user
+    // had chosen: reboot, log in, open the app — back at the defaults.
+    // The same is true while the window is hidden in the tray mid-session: the
+    // user cannot be dragging a window that is not on screen, and its bounds
+    // were already saved while it was.
+    if (!everShown || !win.isVisible()) return;
     // `pendingMaximize` is the saved state waiting to be applied on the first
     // reveal, and until then the window has never been maximised — it has never
     // been SHOWN. A session started hidden ("Start minimized to the tray", or the
@@ -433,8 +450,25 @@ function saveWindowState() {
 // truth and re-maximising a window the user has since restored would be wrong.
 let pendingMaximize = false;
 
+// Whether the window has been shown at least once this session. Two jobs:
+// saveWindowState() refuses to persist geometry the user never saw (see the
+// note there), and the first reveal below re-applies the saved bounds — the
+// window may have been created during logon, before the displays had finished
+// arriving, and the OS may have moved or sized it since. Set by the 'show'
+// event in createWindow, so every path that reveals the window counts.
+let everShown = false;
+
 function revealWindow() {
     if (!win || win.isDestroyed()) return;
+    // First reveal of a session that started hidden: the constructor's bounds
+    // are whatever the displays looked like at logon. Now — with the user
+    // actually looking — is the moment the saved geometry is known-good, so
+    // re-apply it if it lands on a display that exists. Done before the
+    // maximise below so it also becomes the un-maximised restore rectangle.
+    if (!everShown) {
+        const saved = usableBounds(store.get().windowBounds);
+        if (saved) win.setBounds(saved);
+    }
     if (pendingMaximize) {
         pendingMaximize = false;
         win.maximize();          // shows it too

@@ -273,6 +273,58 @@ describe('settings', () => {
     });
 });
 
+describe('settings backup', () => {
+    // A corrupt or transiently unreadable settings.json used to read as a fresh
+    // install: every setting silently back to DEFAULTS, clientId regenerated,
+    // window geometry gone. The previous good file is rotated to .bak on every
+    // save exactly so load() has somewhere to recover from.
+    it('rotates the previous settings file to .bak on save', async () => {
+        const store = await loadStore();
+        store.init();
+        store.set({ displayName: 'First' });
+        store.flush();
+        store.set({ displayName: 'Second' });
+        store.flush();
+
+        expect(JSON.parse(fs.readFileSync(at('settings.json'), 'utf8')).displayName).toBe('Second');
+        expect(JSON.parse(fs.readFileSync(at('settings.json.bak'), 'utf8')).displayName).toBe('First');
+    });
+
+    it('recovers settings from the .bak when settings.json is corrupt', async () => {
+        seedCurrent({
+            // An empty file is what a power cut mid-write leaves behind.
+            'settings.json': '',
+            'settings.json.bak': JSON.stringify({ displayName: 'Scarm', windowBounds: { x: 1, y: 2, width: 900, height: 600 } })
+        });
+
+        const store = await loadStore();
+        store.init();
+
+        expect(store.get().displayName).toBe('Scarm');
+        expect(store.get().windowBounds).toEqual({ x: 1, y: 2, width: 900, height: 600 });
+    });
+
+    it('still falls back to DEFAULTS when both copies are unreadable', async () => {
+        seedCurrent({ 'settings.json': '{ nope', 'settings.json.bak': 'also nope' });
+
+        const store = await loadStore();
+        expect(() => store.init()).not.toThrow();
+        expect(store.get().baseUrl).toBe(store.DEFAULTS.baseUrl);
+    });
+
+    it('the backup is held to the same baseUrl allow-list as the real file', async () => {
+        seedCurrent({
+            'settings.json': '',
+            'settings.json.bak': JSON.stringify({ baseUrl: 'https://evil.test' })
+        });
+
+        const store = await loadStore();
+        store.init();
+
+        expect(store.get().baseUrl).toBe(store.DEFAULTS.baseUrl);
+    });
+});
+
 describe('session storage', () => {
     it('round-trips the cookie through safeStorage without writing plaintext', async () => {
         const store = await loadStore();
