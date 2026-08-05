@@ -812,12 +812,36 @@ async function fetchRemoteImage(raw) {
     let target = safeRemoteUrl(raw);
     if (!target) throw new Error('unsupported url');
 
+    // Its own controller rather than AbortSignal.timeout, for the reason net.js
+    // spells out on the same pattern: a fetch signal aborts the response BODY as
+    // well as the header exchange, and it fires on a wall clock that knows
+    // nothing about progress. Every caller here READS the body — streamToFile()
+    // for Save and Download, boundedBuffer() for Copy image and a dragged-in
+    // image — so an armed 20 second deadline killed any transfer slower than
+    // that, which on a domestic uplink is anything past a few megabytes. The
+    // deadline covers reaching the host and getting the headers; what is behind
+    // them belongs to whoever is reading it, and a genuinely dead socket still
+    // rejects on undici's own inactivity timeouts.
+    //
+    // One deadline for the whole chain, not one per hop, so a redirect chain
+    // cannot multiply it.
+    const ac = new AbortController();
+    let deadline = setTimeout(
+        () => ac.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
+        20000
+    );
+    // The reason must stay a TimeoutError DOMException: board:fetchImage below
+    // branches on `e.name === 'TimeoutError'` to say "timed out" rather than
+    // something generic.
+    const disarm = () => { if (deadline) { clearTimeout(deadline); deadline = null; } };
+
+    try {
     for (let hop = 0; ; hop++) {
         const res = await fetch(target.href, {
-            signal: AbortSignal.timeout(20000),
+            signal: ac.signal,
             redirect: 'manual'
         });
-        if (res.status < 300 || res.status > 399) return res;
+        if (res.status < 300 || res.status > 399) { disarm(); return res; }
         // Every exit from here abandons this response, and an unconsumed body
         // pins its keep-alive connection until GC — so the cancel has to happen
         // on the throwing paths too, not just the one that loops.
@@ -833,6 +857,12 @@ async function fetchRemoteImage(raw) {
         } finally {
             try { await res.body?.cancel(); } catch (e) { /* already gone */ }
         }
+    }
+    } catch (e) {
+        // Nothing is going to read this, so the deadline has no job left — and an
+        // armed timer past the end of the request is a stray abort waiting to fire.
+        disarm();
+        throw e;
     }
 }
 
@@ -1021,20 +1051,45 @@ function registerIpc() {
     // The path that scales. `item.path` is a real file: net.uploadAttachment
     // streams it from disk into a presigned PUT, so the bytes are never held in
     // memory here, in the renderer, or in a Worker.
+    // Paths the preload handed to the renderer, from webUtils.getPathForFile on
+    // a File the USER produced — a pick or a drop. Nothing else may be read off
+    // this machine and uploaded. Same shape as `revealable` below, for the same
+    // reason: the channel accepts any string, and the renderer is the one part of
+    // this app that runs content other people wrote.
+    const uploadable = new Set();
+    const MAX_UPLOADABLE = 500;
+
+    ipcMain.on('path:granted', (event, filePath) => {
+        if (!fromMainFrame(event)) return;
+        if (!filePath || typeof filePath !== 'string') return;
+        if (uploadable.size >= MAX_UPLOADABLE) {
+            uploadable.delete(uploadable.values().next().value);
+        }
+        uploadable.add(path.resolve(filePath));
+    });
+
     handle('board:uploadAttachment', async (_e, { item, id }) => {
         const it = item || {};
         // A path arriving over IPC is renderer-supplied, and the renderer is the
         // one part of this app that runs content other people wrote. It only
         // ever gets one from webUtils.getPathForFile — a file the USER chose in
         // a picker or dropped on the window — so anything else is a bug or an
-        // attempt, and either way this process should not read it. Requiring an
-        // absolute path is not the check; the check is that we only ever read it
-        // to upload it, and the user is the one who named it.
+        // attempt, and either way this process must not read it: the same call
+        // with a path of its own choosing streams %APPDATA%\ScarmVoice\account.bin,
+        // or any other file on this machine, into a board attachment anyone can
+        // then fetch. Requiring an absolute path is no check at all, so the
+        // check is the one thing that is actually true of a legitimate path:
+        // this process handed it out.
+        const wanted = it.path ? String(it.path) : null;
+        if (wanted && !uploadable.has(path.resolve(wanted))) {
+            console.warn('[ipc] refused to upload a path this process did not hand out');
+            return { success: false, error: 'That file was not chosen in this app' };
+        }
         const clean = {
             name: String(it.name || 'file'),
             type: String(it.type || 'application/octet-stream'),
             size: Number(it.size) || 0,
-            path: it.path ? String(it.path) : null,
+            path: wanted,
             bytes: it.data || null
         };
         if (!clean.path && !clean.bytes) return { success: false, error: 'Nothing to upload' };
@@ -1045,19 +1100,28 @@ function registerIpc() {
     // (ours, cookie-gated) or by remote URL (a link preview). Everything that
     // saves or copies an image goes through here so both kinds work the same.
     // Everything an attachment can be fetched from, as a Response.
+    // Every `throw` below abandons a response whose body nothing will read, and
+    // an unconsumed body pins its keep-alive connection until GC — so each one
+    // cancels first, the way every other abandon site in this file and in net.js
+    // does.
+    async function refuse(res, message) {
+        try { await res.body?.cancel(); } catch (e) { /* already gone */ }
+        return new Error(message);
+    }
+
     async function attachmentResponse({ key, url }) {
         if (key) {
             const res = await net.fileStream(key);
-            if (!res.ok) throw new Error(`Server returned ${res.status}`);
+            if (!res.ok) throw await refuse(res, `Server returned ${res.status}`);
             return res;
         }
         // Host-restricted (see safeRemoteUrl) and content-type checked, exactly
         // like board:fetchImage: everything reaching here saves to disk or goes
         // on the clipboard, so "whatever that URL returns" is not good enough.
         const res = await fetchRemoteImage(url);
-        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        if (!res.ok) throw await refuse(res, `Server returned ${res.status}`);
         const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-        if (!type.startsWith('image/')) throw new Error('That link is not an image');
+        if (!type.startsWith('image/')) throw await refuse(res, 'That link is not an image');
         return res;
     }
 
@@ -1089,16 +1153,16 @@ function registerIpc() {
     async function imageBytes({ key, url }) {
         if (key) {
             const res = await net.fileStream(key);
-            if (!res.ok) throw new Error(`Server returned ${res.status}`);
+            if (!res.ok) throw await refuse(res, `Server returned ${res.status}`);
             return boundedBuffer(res, MAX_CLIPBOARD_IMAGE);
         }
         // Host-restricted (see safeRemoteUrl) and content-type checked, exactly
         // like board:fetchImage: everything reaching here saves to disk or goes
         // on the clipboard, so "whatever that URL returns" is not good enough.
         const res = await fetchRemoteImage(url);
-        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        if (!res.ok) throw await refuse(res, `Server returned ${res.status}`);
         const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-        if (!type.startsWith('image/')) throw new Error('That link is not an image');
+        if (!type.startsWith('image/')) throw await refuse(res, 'That link is not an image');
         return boundedBuffer(res, MAX_CLIPBOARD_IMAGE);
     }
 
@@ -1200,7 +1264,17 @@ function registerIpc() {
 
             // Capped while streaming rather than after buffering, so an
             // oversized image is refused without ever being held in memory.
-            const buf = await boundedBuffer(res, net.MAX_UPLOAD);
+            //
+            // The IMAGE ceiling, not the 1 GB attachment one. This path buffers
+            // in main and then hands the bytes across IPC, so the attachment
+            // limit meant a hostile (or merely enormous) URL claiming an image
+            // content-type could put a gigabyte in this process — copied again
+            // by the slice below and a third time by the structured clone — and
+            // take down the tray, the PTT hook and all networking with it, which
+            // is the exact failure boundedBuffer exists to prevent. A dragged-in
+            // image is the same kind of thing the clipboard handles, so it gets
+            // the same ceiling.
+            const buf = await boundedBuffer(res, MAX_CLIPBOARD_IMAGE);
 
             // Name it from the URL path, falling back to the mime subtype.
             let name = '';
@@ -1804,7 +1878,20 @@ app.whenReady().then(async () => {
     // app now would open the mic, the socket and the session for the two
     // seconds before the installer kills us. The flag keeps showWindow() from
     // doing it either, for a second launch that arrives in that gap.
-    if (verdict === 'installing') { installing = true; return; }
+    if (verdict === 'installing') {
+        installing = true;
+        // The handover can fail — a throw from quitAndInstall, or an installer
+        // that simply never takes. Without this the process stays alive with no
+        // window and no tray, and the single-instance lock makes every relaunch
+        // signal this dead one instead of starting a new app. Clearing the flag
+        // first is what lets showWindow() work again.
+        updater.onInstallGaveUp(() => {
+            if (!installing) return;
+            installing = false;
+            startApp();
+        });
+        return;
+    }
 
     startApp();
 });

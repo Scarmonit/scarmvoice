@@ -207,11 +207,14 @@
         return out;
     }
 
+    // The ceiling is a GIGABYTE, so MB cannot be the last unit: a file at the
+    // limit rendered as "1024.0 MB" next to a picker that offers 1 GB.
     function fmtSize(b) {
         if (!b) return '';
         if (b < 1024) return b + ' B';
         if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-        return (b / 1048576).toFixed(1) + ' MB';
+        if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+        return (b / 1073741824).toFixed(1) + ' GB';
     }
 
     function fmtDuration(sec) {

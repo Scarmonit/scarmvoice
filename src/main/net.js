@@ -450,6 +450,12 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     if (!cookie) return { success: false, error: 'unauthorized', needsAuth: true };
 
     const headers = {};
+    // Whether THIS request consumed the read-your-writes flag, so a request that
+    // never got an answer can put it back. Spending it on a read that then failed
+    // meant the next attempt was served by a replica: post a message, lose the
+    // link for the refetch, come back — and your own message was missing from the
+    // list until some later poll happened to see it.
+    let spentPrimary = false;
     // (The account token is attached in request() for every /api/board/ call.)
     //
     // `pins` belongs here for the same reason list and thread do: it reads
@@ -472,6 +478,7 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
         // caught up with that POST — freshness today's ordering gets by
         // accident, spent deliberately instead.
         headers['x-d1-bookmark'] = (primary || forcePrimary) ? 'first-primary' : (bookmark || 'first-unconstrained');
+        spentPrimary = forcePrimary;
         forcePrimary = false;
     }
 
@@ -498,6 +505,8 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     }
 
     if (lastErr) {
+        // No answer came back, so the read that was owed a primary still is.
+        if (spentPrimary) forcePrimary = true;
         return {
             success: false,
             error: lastErr.name === 'TimeoutError' ? 'Request timed out' : lastErr.message,

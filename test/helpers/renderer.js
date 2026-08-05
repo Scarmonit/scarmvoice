@@ -71,6 +71,7 @@ export async function bootRenderer(opts = {}) {
     const board = opts.board || vi.fn(async () => ({ success: true }));
     const settings = Object.assign({}, DEFAULT_SETTINGS, opts.settings || {});
     let rtMessage = null;
+    let rtStatus = null;
     let editContext = null;
     let resync = null;
     let winHidden = null;
@@ -129,7 +130,10 @@ export async function bootRenderer(opts = {}) {
             // Held, so a spec can deliver a socket event the way the Durable
             // Object does rather than reaching into app.js.
             onMessage: (cb) => { rtMessage = cb; return noop; },
-            onStatus: unsub
+            // Held for the same reason as onMessage: whether the socket is up
+            // decides which of the two typing pipes the renderer believes, and
+            // the interesting bugs live in the handover between them.
+            onStatus: (cb) => { rtStatus = cb; return noop; }
         },
         edit: {
             // Spies rather than no-ops: the context menu's whole job is to run one
@@ -264,6 +268,10 @@ export async function bootRenderer(opts = {}) {
     return {
         $, board, lounge, settings, voice: voiceDouble,
         rt: (msg) => { if (rtMessage) rtMessage(msg); },
+        // The realtime socket coming up or going down, as main.js reports it.
+        rtStatus: (connected, state) => {
+            if (rtStatus) rtStatus({ connected, state: state || (connected ? 'open' : 'closed') });
+        },
         // Restore-from-tray, as main.js delivers it.
         resync: () => { if (resync) resync(); },
         // The window went to / came back from the tray.

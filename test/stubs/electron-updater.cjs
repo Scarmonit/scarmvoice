@@ -34,8 +34,15 @@ const autoUpdater = {
             : Promise.resolve(null);
     },
     downloadUpdate() { state.downloads++; return Promise.resolve([]); },
+    // Recording this rather than quitting is itself one of the cases under test:
+    // the real one replaces the process, so a stub that returns normally IS the
+    // "installer never took over" scenario (see install-handover.test.js).
+    // Set `installThrows` to a message for the other one — quitAndInstall
+    // failing outright, which the real one does when it cannot spawn the
+    // installer it downloaded.
     quitAndInstall(isSilent, isForceRunAfter) {
         state.installs.push({ isSilent, isForceRunAfter, at: Date.now() });
+        if (state.installThrows) throw new Error(state.installThrows);
     }
 };
 

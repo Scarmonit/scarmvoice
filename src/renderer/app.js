@@ -1366,6 +1366,35 @@
         // A picture that 404s takes itself off and the initials underneath show
         // through — the same courtesy every other avatar in the app gets.
         wireAvatarFallback(host);
+        makeInert(host);
+    }
+
+    // A preview is a picture of the app, not the app.
+    //
+    // These rows go through the REAL renderMessage(), which is what makes the
+    // preview honest — and which also binds every real handler to them: the
+    // reaction pills call react(), and a right-click opens the full message menu.
+    // The posts they are bound to do not exist (ids -101/-102), so clicking the
+    // 🫘 pill POSTed a reaction for post -101 and answered with "Could not
+    // react", and the menu's Reply armed a quote against the same phantom — so
+    // the next REAL message sent in the channel carried quoteId -101. Hiding the
+    // hover actions in CSS covered the buttons and neither of these.
+    //
+    // Capture-phase and stopped there, so nothing downstream ever sees them.
+    //
+    // ONCE per host, not once per repaint. renderA11yPreview() runs again on
+    // every Ctrl+= and every time the pane is opened, and emptying innerHTML
+    // does not remove listeners from the container itself — rebinding here would
+    // stack a fresh set on each pass for as long as the app is open.
+    function makeInert(host) {
+        if (host.dataset.inert) return;
+        host.dataset.inert = '1';
+        ['click', 'contextmenu', 'mousedown', 'dblclick'].forEach((type) => {
+            host.addEventListener(type, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+        });
     }
 
     // ---------- dialogs ---------------------------------------------------
@@ -2717,7 +2746,19 @@
         // triggers races the row's own expiry. Names are still learned from it
         // either way, so @mention autocomplete loses nothing.
         const polledTyping = (res.typing || []).filter((t) => t.client_id !== settings.clientId);
-        if (!rtConnected) typingUsers = polledTyping;
+        if (!rtConnected) {
+            typingUsers = polledTyping;
+            // Each polled entry gets the same expiry a socket event would arm.
+            // Without one, the ONLY things that could ever remove it were a
+            // socket 'stop' for that person and the next poll — and the moment
+            // the socket came back, the first stopped arriving for anyone the
+            // poll had introduced and the second was skipped by the guard above.
+            // So a typist learned while the socket was down, who stopped typing
+            // before it reconnected, sat in "…is typing" until the channel was
+            // switched. The poll re-arms this every few seconds for as long as
+            // they really are typing, so nothing is cut short.
+            polledTyping.forEach((t) => armTypingExpiry(t.client_id));
+        }
         polledTyping.forEach((t) => addRosterName(t.name));
         voicePresence = keepKnownUids(res.voice || []);
 
@@ -16838,6 +16879,16 @@
     // Same contract as `drafts`: keyed by the surface it was typed into.
     const threadDrafts = new Map();
 
+    // …and the surface is the conversation AND the root, never the root alone.
+    // A channel thread's root comes from `posts` and a conversation's from
+    // `dm_messages` — two independent id sequences that both start at 1, the
+    // same collision graft() keys around. Keyed by the bare id, an unsent reply
+    // written in channel thread #7 was restored into the composer of a DM thread
+    // that also happened to be #7: somebody else's private conversation,
+    // pre-filled with words meant for a public channel and one Enter from
+    // sending them there.
+    const threadDraftKey = (dm, rootId) => (dm ? 'd' : 'c') + ':' + rootId;
+
     // The one thread drawer, relocated — the trick #composer and #conv-actions
     // already use, and for the same reason.
     //
@@ -16913,8 +16964,9 @@
         // AFTER the switchChannel above: that runs resetChannelView ->
         // closeThread(), which stashes and blanks the box, so restoring any
         // earlier would be undone by it.
-        $('thread-input').value = threadDrafts.get(rootId) || '';
-        threadDrafts.delete(rootId);
+        const draftKey = threadDraftKey(inDm, rootId);
+        $('thread-input').value = threadDrafts.get(draftKey) || '';
+        threadDrafts.delete(draftKey);
         threadSig = '';
         threadPosts = [];
         $('thread-panel').hidden = false;
@@ -16937,9 +16989,12 @@
         // coming back gives the text back — to the root it was written for, and
         // to no other.
         if (threadRootId) {
+            // threadDm is still the one this draft was typed in — it is cleared
+            // below, after this.
+            const key = threadDraftKey(threadDm, threadRootId);
             const draft = $('thread-input').value;
-            if (draft.trim()) threadDrafts.set(threadRootId, draft);
-            else threadDrafts.delete(threadRootId);
+            if (draft.trim()) threadDrafts.set(key, draft);
+            else threadDrafts.delete(key);
         }
         $('thread-input').value = '';
         threadRootId = 0;
@@ -17076,50 +17131,75 @@
         $('thread-send').disabled = true;
         $('thread-input').value = '';
 
+        // WHICH thread this reply belongs to, captured before the await. The
+        // drawer stays live while a send is in flight — the reply-count chips
+        // and "Reply in thread" both still open another root — so by the time
+        // this comes back the composer on screen can belong to a different
+        // conversation entirely. Handing the text back to it, or scrolling and
+        // refetching for it, acts on the wrong thread: on the failure path the
+        // returned text sat in a thread it was never written for, one Enter away
+        // from posting under that root.
+        const forRoot = threadRootId;
+        const forDm = threadDm;
+        const stillHere = () => threadRootId === forRoot && threadDm === forDm;
+        // The text only goes back to the box it came out of.
+        const handBack = () => {
+            if (stillHere()) $('thread-input').value = body;
+            else if (body.trim()) threadDrafts.set(threadDraftKey(forDm, forRoot), body);
+        };
+
         // A reply in a conversation's thread. `parentId` is what makes it a
         // reply on both paths — dm/send.js resolves it to the root exactly as
         // post.js does, and flattens a reply-to-a-reply into the same thread.
-        if (threadDm) {
-            const forThread = threadDm;
+        if (forDm) {
             const dres = await L.board('dm/send', {
-                method: 'POST', body: { thread: forThread, body, parentId: threadRootId }
+                method: 'POST', body: { thread: forDm, body, parentId: forRoot }
             });
             $('thread-send').disabled = false;
             if (authGone(dres)) return;
             if (!dres || !dres.success) {
-                $('thread-input').value = body;      // hand the text back
+                handBack();
                 return toast((dres && dres.error) || 'Could not reply', true);
             }
-            await loadThread(true);
-            $('thread-list').scrollTop = $('thread-list').scrollHeight;
+            // The counts are worth refreshing wherever the reader is now; the
+            // drawer is not, unless it is still showing what was replied to.
+            if (stillHere()) {
+                await loadThread(true);
+                $('thread-list').scrollTop = $('thread-list').scrollHeight;
+            }
             await loadDmMessages(true);              // refresh the reply count
             loadDmThreads();
-            $('thread-input').focus();
+            if (stillHere()) $('thread-input').focus();
             return;
         }
 
+        // Captured for the same reason as the root: the announcement has to name
+        // the channel this went TO, not whichever one is on screen when it lands.
+        const forChannel = channel;
         const res = await L.board('post', {
             method: 'POST',
             body: {
                 body,
                 name: settings.displayName || 'Anonymous',
                 clientId: settings.clientId,
-                channel,
-                parentId: threadRootId          // what makes it a thread reply
+                channel: forChannel,
+                parentId: forRoot               // what makes it a thread reply
             }
         });
         $('thread-send').disabled = false;
 
         if (authGone(res)) return;
         if (!res || !res.success) {
-            $('thread-input').value = body;     // hand the text back
+            handBack();
             return toast((res && res.error) || 'Could not reply', true);
         }
-        announcePosted(channel, body);
-        await loadThread(true);
-        $('thread-list').scrollTop = $('thread-list').scrollHeight;
+        announcePosted(forChannel, body);
+        if (stillHere()) {
+            await loadThread(true);
+            $('thread-list').scrollTop = $('thread-list').scrollHeight;
+        }
         await loadMessages(nearBottom());       // refresh the reply count
-        $('thread-input').focus();
+        if (stillHere()) $('thread-input').focus();
     });
 
     // ---------- threads popout ----------------------------------------------

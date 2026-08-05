@@ -71,6 +71,16 @@
                 .catch((e) => {
                     console.warn('[noise] rnnoise worklet failed to load:', e && e.message);
                     workletReady = null;    // allow a retry on the next acquisition
+                    // The context is created ABOVE this, and a new AudioContext
+                    // starts running — so a module that never loads left a 48 kHz
+                    // render thread and an open output device up for the rest of
+                    // the session. Nothing else would ever have parked it: both
+                    // suspend paths (release() and warm()'s) run only after a
+                    // SUCCESSFUL acquisition, and a failure here means there is
+                    // never going to be one. This is the leak the note above
+                    // release() says must not happen, on the one path that had no
+                    // owner. Suspending keeps the registration retryable.
+                    if (!active && ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
                     throw e;
                 });
         }
@@ -111,11 +121,17 @@
     }
 
     async function wrap(raw) {
+        // Hoisted so the failure path can take back whatever was built before it:
+        // the AudioWorkletNode constructor is the throw that actually happens
+        // here (an unregistered processor), and it comes AFTER the source node,
+        // which would otherwise be left connected to a context nothing goes on to
+        // release — `active` is only incremented once the whole graph stands.
+        let src = null;
         try {
             await ensureWorklet();
             if (ctx.state !== 'running') await ctx.resume().catch(() => {});
 
-            const src = ctx.createMediaStreamSource(raw);
+            src = ctx.createMediaStreamSource(raw);
             const node = new AudioWorkletNode(ctx, 'scarm-rnnoise', {
                 numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1]
             });
@@ -207,6 +223,9 @@
             return out;
         } catch (e) {
             console.warn('[noise] suppression unavailable, using the raw mic:', e && e.message);
+            try { if (src) src.disconnect(); } catch (_) {}
+            // Nothing acquired the context, so nothing is going to release it.
+            if (!active && ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
             markBroken(e && e.message);
             return raw;
         }

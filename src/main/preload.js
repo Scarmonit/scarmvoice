@@ -49,7 +49,16 @@ contextBridge.exposeInMainWorld('lounge', {
     // for a File with no path (a pasted blob), which is the signal to fall back
     // to sending the bytes.
     pathForFile: (file) => {
-        try { return webUtils.getPathForFile(file) || ''; } catch (e) { return ''; }
+        let p = '';
+        try { p = webUtils.getPathForFile(file) || ''; } catch (e) { return ''; }
+        // Tell main this path came from a real File — one the user picked in a
+        // dialog or dropped on the window. main refuses to read any other path
+        // for an upload; see the grant list in main.js. A path can only get here
+        // by way of webUtils, which answers for the blob backing an actual File
+        // and returns '' for anything the renderer merely constructed, so the
+        // renderer cannot nominate a path of its own choosing.
+        if (p) { try { ipcRenderer.send('path:granted', p); } catch (e) {} }
+        return p;
     },
     // `url` is the fallback for images that aren't ours (link previews): pass a
     // key for an attachment, or a remote http(s) url, not both.

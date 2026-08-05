@@ -69,6 +69,29 @@ function checkVendoredWorklet() {
         die('the vendored CodeMirror has no markdown mode — the composer would load without one.');
     }
     console.log('  preflight ok — the vendored editor is present, with its markdown mode');
+
+    // …and the SDK the voice room is built on, for the same reason with a worse
+    // failure. vendor-sdk.js WARNS and returns success when
+    // @cloudflare/realtimekit is not installed — a reasonable thing to do at
+    // postinstall, and the wrong thing during a release: the `&&` chain
+    // continues, electron-builder packages a renderer with no
+    // vendor/realtimekit.js in it, and every "Join VoiceChat" click lands in
+    // lazy.js's error path. The app ships, updates itself onto everyone, and
+    // voice is simply "unavailable" with nothing at build time having said so.
+    // Two of the five vendored files were guarded; this is the one whose
+    // absence costs a whole feature.
+    const sdk = path.join(__dirname, '..', 'src', 'renderer', 'vendor', 'realtimekit.js');
+    if (!fs.existsSync(sdk)) {
+        die('src/renderer/vendor/realtimekit.js is missing — the packaged app would have\n' +
+            '  no voice SDK at all. Run `npm install` (vendor-sdk.js skips silently when\n' +
+            '  @cloudflare/realtimekit is not installed) and try again.');
+    }
+    // A truncated or empty copy is the same outage with a file to point at.
+    if (fs.statSync(sdk).size < 100 * 1024) {
+        die('src/renderer/vendor/realtimekit.js is too small to be the SDK bundle —\n' +
+            '  it is probably a truncated copy. Run `npm run vendor` and try again.');
+    }
+    console.log('  preflight ok — the vendored voice SDK is present');
 }
 
 // The notes are checked FIRST and they are checked HERE, before anything is

@@ -79,14 +79,22 @@ function load() {
     // for updates" in Settings while the call was still running. The promise the
     // banner had already made ("it will install when your call ends") then went
     // unkept until the next quit.
-    updater.on('checking-for-update', () => emit({ status: downloaded ? 'ready' : 'checking', error: null }));
+    // `stalled` and `error` describe the LAST attempt, and nothing else ever
+    // cleared them: a download that died left "download failed — Try again" on
+    // the pill, still naming the old error, over an update that had not been
+    // attempted yet. A new check is the moment they stop being true.
+    updater.on('checking-for-update', () => emit({ status: downloaded ? 'ready' : 'checking', error: null, stalled: false }));
     updater.on('update-available', (info) => {
         const n = parseNotes(info.releaseNotes);
         checkedAtStartup = true;
         // A genuinely newer build invalidates the one already on disk; the same
         // version being re-announced does not.
         if (info && info.version && info.version !== state.version) downloaded = false;
-        emit({ status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks });
+        emit({
+            status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks,
+            // Whatever went wrong last time was about a different attempt.
+            stalled: false, error: null
+        });
         // The check is answered, so the gate stops timing THAT and starts timing
         // the download instead.
         gateFound(info.version);
@@ -153,6 +161,11 @@ function load() {
         });
         // An update we cannot fetch must never be a launch we cannot make.
         gateSettle('launch', 'update error: ' + ((err && err.message) || 'unknown'));
+        // …and neither must one we cannot INSTALL. Past the gate this settles
+        // nothing (it has already resolved 'installing'), and electron-updater
+        // reports a failed handover here rather than by throwing, so this is the
+        // one signal that the process waiting to be replaced will never be.
+        installFailed((err && err.message) || 'unknown');
     });
     return updater;
 }
@@ -182,8 +195,19 @@ function load() {
 // their own app is worse than an update that waits for the next launch.
 const GATE_CHECK_MS = 15000;             // "is there one?" — a feed round trip
 const GATE_DOWNLOAD_MS = 5 * 60 * 1000;  // and then fetching it
+// How long the NSIS handover gets before startup takes its launch back. Well
+// past the second or so quitAndInstall normally needs to spawn the installer
+// and kill us, so a working update is never interrupted by it.
+const INSTALL_HANDOVER_MS = 20000;
 
 let gate = null;                 // { resolve, timer } while the gate is open
+// True between "startup gave itself to an install" and "that install happened".
+// Only the startup path sets it: a mid-session install has a whole app around
+// it, so a failure there is a pill that did not work, not a machine with no app.
+let installCommitted = false;
+// Set by main.js — start the app after all. See installFailed().
+let onInstallFailed = null;
+let installGaveUp = false;
 // Set only when the feed actually ANSWERED, so checkOnLaunch doesn't ask twice
 // for something we already know — but does ask when the gate gave up on a
 // timeout or an error, rather than leaving the app three hours from its next
@@ -231,11 +255,45 @@ function gateInstall() {
     if (!gate) return false;
     gateSay('installing', 100);
     gateSettle('installing', 'downloaded at startup');
+    installCommitted = true;
     // A beat, so "Installing update…" is actually on screen rather than a frame
     // nobody sees before the window disappears. installNow() flushes settings
     // and hands over to the NSIS installer, which relaunches us.
     setTimeout(installNow, 500);
+    // …and if it does not, this process is the app. The gate has already
+    // resolved 'installing', so main.js has built no window, no tray and no
+    // session and is waiting to be replaced — a handover that never happens
+    // leaves a live process with no interface, which the single-instance lock
+    // then makes unfixable: every relaunch just signals this one, and the
+    // `installing` flag turns those signals away too. The only way out was Task
+    // Manager. quitAndInstall can fail outright (it throws, and installNow only
+    // logs it) or quietly — AV holding the downloaded installer, a spawn that
+    // never takes — so the launch is claimed back on a deadline rather than
+    // waiting for a failure that may never be reported.
+    setTimeout(() => installFailed('the installer did not take over'), INSTALL_HANDOVER_MS);
     return true;
+}
+
+// The install that startup handed itself to is not going to happen. Give the
+// launch back exactly once — a normal start with the update still on disk, and
+// autoInstallOnAppQuit already armed, so it applies on the next quit instead.
+function installFailed(why) {
+    if (!installCommitted) return;
+    installCommitted = false;
+    console.error('[update] install did not take over (' + why + ') — launching instead');
+    // Registration happens the moment the gate resolves, long before any of the
+    // failure paths can fire — but a fallback that depends on that ordering to
+    // exist at all is the same class of bug as the one it is here to fix, so a
+    // failure that beats it is remembered rather than dropped.
+    installGaveUp = true;
+    fireInstallFailed();
+}
+
+function fireInstallFailed() {
+    if (!installGaveUp || typeof onInstallFailed !== 'function') return;
+    const cb = onInstallFailed;
+    onInstallFailed = null;      // once, whichever side arrives second
+    try { cb(); } catch (e) { console.error('[update] launch fallback threw', e && e.message); }
 }
 
 // True while startup is being held. main.js asks so that a second launch (or
@@ -537,7 +595,16 @@ function checkOnLaunch() {
     // then never again — so the longer it ran the more out of date it got.
     if (!recheck) {
         recheck = setInterval(() => {
-            if (state.status === 'ready' || state.status === 'downloading') return;
+            // Skipped while bytes are moving — a check mid-download is a round
+            // trip whose answer is already being acted on.
+            //
+            // NOT skipped for 'ready'. A ready update mid-session waits for a
+            // click (see scheduleAutoRestart), and an app left in the tray can
+            // sit there for days — so bailing here meant the first update of a
+            // session was the last one it ever heard about, including the fix
+            // that superseded it. update-available already handles being told
+            // about a newer version than the one on disk.
+            if (state.status === 'downloading') return;
             u.checkForUpdates().catch(() => {});
         }, RECHECK_MS);
     }
@@ -600,7 +667,17 @@ function installNow() {
     // downstream has to be quick enough.
     try { store.flush(); } catch (e) { /* the quit path flushes again */ }
     // isSilent=true (silent install), isForceRunAfter=true (relaunch app).
-    setImmediate(() => { try { u.quitAndInstall(true, true); } catch (e) { console.error('[update] install failed', e.message); } });
+    setImmediate(() => {
+        try {
+            u.quitAndInstall(true, true);
+        } catch (e) {
+            console.error('[update] install failed', e.message);
+            // At startup there is no app behind this to fall back to — see
+            // gateInstall — so say so now rather than leaving the deadline to
+            // notice twenty seconds later.
+            installFailed(e.message);
+        }
+    });
     return { ok: true };
 }
 
@@ -709,8 +786,11 @@ async function history(force) {
 
 // ---- exports -------------------------------------------------------------
 
+// main.js hands this the "start the app anyway" it cannot do itself.
+function onInstallGaveUp(cb) { onInstallFailed = cb; fireInstallFailed(); }
+
 module.exports = {
     init, checkOnLaunch, checkNow, startDownload, installNow, setAuto,
     postpone, setBusy, getState, available, parseNotes, history,
-    startupGate, gateOpen
+    startupGate, gateOpen, onInstallGaveUp
 };
