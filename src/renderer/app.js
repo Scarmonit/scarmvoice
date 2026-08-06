@@ -12067,6 +12067,13 @@
         // to cross — attenuation compounds per layer. One field, one sheet:
         // the backdrop steps out of the way while an underlay is active.
         document.documentElement.classList.toggle('tm-underlay', !!chrome.underlay);
+        // While the customizer is docked, the native caption buttons sit ON
+        // the panel — which is pinned to the stock float surface, not the
+        // themed page — so the strip wears the panel's colour or it renders
+        // as a wrong-coloured notch in the panel's top-right corner.
+        if (document.documentElement.classList.contains('tm-docked')) {
+            chrome.color = chrome.base === 'light' ? '#ffffff' : '#242429';
+        }
         L.app.setTheme(chrome);
     }
 
@@ -12201,26 +12208,35 @@
         // being previewed. Close it; the panel's footer offers the way back.
         closeSettings();
         tmPaint();
-        applyTheme();
-        tmModal.hidden = false;
         // The app steps aside rather than sliding under the panel — see
         // html.tm-docked in styles.css. On <html>, because #app is rebuilt
         // around sign-in and a class there would not survive it.
+        // BEFORE applyTheme: the docked class is what tells it to hand the
+        // native caption strip the panel's colour rather than the page's.
         document.documentElement.classList.add('tm-docked');
+        applyTheme();
+        tmModal.hidden = false;
     }
 
     function closeThemeModal() {
         if (tmModal.hidden) return;
         tmModal.hidden = true;
         document.documentElement.classList.remove('tm-docked');
+        // Hand the caption strip back to the page: while docked it wore the
+        // panel's own colour.
+        applyTheme();
         if (tmSaveTimer) tmFlushSave();
     }
 
     $('btn-theme-custom').addEventListener('click', openThemeModal);
     $('tm-close').addEventListener('click', closeThemeModal);
-    // The road back to where the panel was opened from — the sheet was closed
-    // on the way in so the app could be seen.
-    $('tm-back').addEventListener('click', () => { closeThemeModal(); openSettings(); });
+    // The road back to WHERE the panel was opened from: the Appearance pane's
+    // theme section, not the sheet's first pane — openSettings lands on
+    // Account by default, which is nowhere near where this journey started.
+    $('tm-back').addEventListener('click', () => {
+        closeThemeModal();
+        openSettings().then(() => showSettingsPane(settingsPaneByTitle('Appearance')));
+    });
     // Document-level and CAPTURE: the panel is docked, not focus-trapped, so
     // the keystroke can land anywhere in the app — and it must not fall
     // through to the global Escape chain and close something else as well.

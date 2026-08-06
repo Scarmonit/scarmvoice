@@ -126,8 +126,10 @@ describe('the dark surface ramp', () => {
         // The PAGE — rail, sidebars, message column, member list, user dock — is
         // not, which is the whole difference between this and an inversion.
         // --on-accent is the text drawn ON the accent, not a surface.
+        // --tm-float is the theme customizer's PINNED copy of --float (the
+        // editor answers to no theme), so it is paper for the same reason.
         expect(whites.sort()).toEqual(
-            ['--field', '--float', '--input', '--menu', '--on-accent', '--sheet']);
+            ['--field', '--float', '--input', '--menu', '--on-accent', '--sheet', '--tm-float']);
     });
 
     it('never uses a near-black for text', () => {

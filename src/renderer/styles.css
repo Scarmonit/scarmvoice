@@ -295,6 +295,24 @@
      this heavy is depth on a dark app and a smudge on a light one. */
   --shadow-pop: 0 8px 20px rgba(0, 0, 0, .48), 0 2px 6px rgba(0, 0, 0, .34);
 
+  /* The theme customizer panel's pinned surfaces. The editor answers to no
+     theme — the custom engine re-hues every surface token, and with a
+     multi-colour theme the panel's background and its controls landed on
+     DIFFERENT hues of the ladder, so the panel read as contrasting patches.
+     The reference draws this panel in one solid neutral whatever theme it is
+     previewing. Values mirror the stock ramp above by hand. */
+  --tm-float: #242429; --tm-float-2: #2c2c31;
+  --tm-float-edge: #29292c; --tm-float-rule: #323237;
+  --tm-ctl: #323237; --tm-ctl-hover: #3a3a41;
+  --tm-ctl-line: #35353b; --tm-ctl-line-hover: #45454d;
+  --tm-ctl-sunk: #202024; --tm-ctl-sunk-line: #37373d; --tm-ctl-sunk-line-hi: #43434a;
+  --tm-track: #474851;
+  /* Translucent plates the custom theme's underlay reads through — the user
+     dock's pills and the composer's fill. Smoke on a dark base; the light
+     block lifts paper instead. */
+  --theme-plate: rgba(0, 0, 0, .25);
+  --theme-plate-2: rgba(0, 0, 0, .28);
+
   --radius: 10px;
   --tb: 31px;
   /* A barely-there vertical lift, layered over a surface colour rather than
@@ -347,6 +365,43 @@ html, body {
    the measured chroma more than doubled the moment the gradient exited the
    panelled area. One field, one sheet. */
 html.tm-underlay #app { background: transparent; }
+
+/* ---- what the themed window keeps its shape with ------------------------
+   Under a custom theme the nested surfaces go fully transparent (see
+   theme.js NESTED), which dissolved three structures the reference keeps
+   visible on every theme:
+
+   THE USER DOCK read as a brighter loose block: its card margins let the raw
+   gradient frame it while the dock itself was clear glass-less gradient, so
+   the voice panel, the action pills and the me bar broke into separate
+   shaded chunks. The reference runs its bottom-left section as one seamless
+   extension of the sidebar column, flush to the window edges — so the dock
+   drops the card look and wears the SAME glass the sidebar wears, making
+   the whole corner one continuous surface with only the existing hairline
+   between voice and me bar.
+
+   THE COMPOSER had no fill at all, so the message field sat flush against
+   the me bar with nothing saying where one ended and the other began. The
+   reference gives its themed composer a translucent dark plate; that plate
+   is also what makes the 8px inset read as an actual gap.
+
+   THE SETTINGS SHEET was see-through: --sheet aliases --chat-2, a nested
+   token, so the whole modal went transparent and the scrimmed app showed
+   through it. Its opaque backdrop rule lives with the settings section. */
+html.tm-underlay #user-dock {
+  margin: 0; border: 0; border-radius: 0; box-shadow: none;
+  background: var(--side);
+}
+/* One family of pills: half the tray sat on --float-2 (opaque, hue-tinted)
+   and half on --sunk (transparent) — visibly mismatched blocks inside the
+   dock. All four share one translucent plate; the .on states keep their
+   lifted opaque fill, which is the state indicator. */
+html.tm-underlay #user-dock .btn-share,
+html.tm-underlay #btn-nsai, html.tm-underlay #btn-ptt {
+  background: var(--theme-plate);
+}
+html.tm-underlay #btn-nsai.on, html.tm-underlay #btn-ptt.on { background: var(--float-2); }
+html.tm-underlay .composer-row { background: var(--theme-plate-2); }
 
 /* Column layout, so the update banner steals height from the app instead of
    pushing its bottom edge off-screen. */
@@ -2848,6 +2903,14 @@ input[readonly] { opacity: .75; cursor: default; }
   grid-template-rows: 48px minmax(0, 1fr);
   grid-template-areas: "nav head" "nav body";
 }
+/* Under a custom theme --sheet aliases a NESTED token and goes transparent,
+   which turned the whole sheet see-through over the scrimmed app. The modal
+   composites the column glass over the underlay itself — the exact pixel a
+   themed column shows — as its own OPAQUE backdrop, so the glass tokens
+   inside it land on this instead of on whatever the app shows behind. */
+html.tm-underlay .settings-modal {
+  background: linear-gradient(var(--chat), var(--chat)), var(--theme-underlay);
+}
 /* A fixed column with the nav against its left edge. The old layout put a 194px
    nav at the far right of a 604px column — a 400px gutter of nothing, which is
    exactly the pre-redesign shape. */
@@ -4064,6 +4127,17 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --shadow:    0 6px 18px rgba(24, 28, 38, .10), 0 2px 5px rgba(24, 28, 38, .07);
   --shadow-lg: 0 16px 44px rgba(24, 28, 38, .16), 0 4px 12px rgba(24, 28, 38, .09);
   --shadow-pop: 0 8px 20px rgba(24, 28, 38, .12), 0 2px 6px rgba(24, 28, 38, .08);
+
+  /* The theme customizer panel's pinned surfaces, paper edition — see the
+     dark block. */
+  --tm-float: #ffffff; --tm-float-2: #f2f4f7;
+  --tm-float-edge: #e2e5ea; --tm-float-rule: #e8eaee;
+  --tm-ctl: #edf0f3; --tm-ctl-hover: #e3e7ec;
+  --tm-ctl-line: #dadee4; --tm-ctl-line-hover: #c8cdd5;
+  --tm-ctl-sunk: #f1f3f6; --tm-ctl-sunk-line: #dde0e6; --tm-ctl-sunk-line-hi: #c6cbd3;
+  --tm-track: #d7dae0;
+  --theme-plate: rgba(255, 255, 255, .4);
+  --theme-plate-2: rgba(255, 255, 255, .45);
 }
 
 /* The rail pill and the unread pill are white-on-dark by nature; invert them. */
@@ -6822,11 +6896,28 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    with no canvas involved. The hue strip is one rainbow gradient. Both
    thumbs are positioned by app.js from the current colour. */
 .tm-panel {
-  position: fixed; top: var(--tb); right: 0; bottom: 0; width: 290px;
+  /* To the ABSOLUTE top edge, not the title bar's underside: the reference
+     runs this panel the full height of the window with the native caption
+     buttons sitting on its head. The header below clears them. */
+  position: fixed; top: 0; right: 0; bottom: 0; width: 290px;
   z-index: 350;   /* over the drawers, under the lightbox/dialog tier (400+) */
   display: flex; flex-direction: column;
   background: var(--float); border-left: 1px solid var(--float-edge);
   box-shadow: var(--shadow-drawer);
+  /* THE EDITOR ANSWERS TO NO THEME. Its surfaces are pinned to the stock
+     ramp via the --tm-* tokens (each theme block carries its own set),
+     because the custom engine re-hues every surface token — with a
+     multi-colour theme the panel's background and its controls landed on
+     DIFFERENT hues of the ladder and the panel read as contrasting patches.
+     The reference draws this panel in one solid neutral whatever theme it
+     is previewing; so do we. */
+  --float: var(--tm-float); --float-2: var(--tm-float-2);
+  --float-edge: var(--tm-float-edge); --float-rule: var(--tm-float-rule);
+  --ctl: var(--tm-ctl); --ctl-hover: var(--tm-ctl-hover);
+  --ctl-line: var(--tm-ctl-line); --ctl-line-hover: var(--tm-ctl-line-hover);
+  --ctl-sunk: var(--tm-ctl-sunk); --ctl-sunk-line: var(--tm-ctl-sunk-line);
+  --ctl-sunk-line-hi: var(--tm-ctl-sunk-line-hi);
+  --track: var(--tm-track);
 }
 /* The app SHIFTS aside for the panel rather than sliding under it. Overlaying
    swallowed the right edge of the chat header — the search field and the
@@ -6836,7 +6927,12 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 html.tm-docked #app { margin-right: 290px; }
 .tm-head {
   flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 14px 16px 6px;
+  /* The panel starts at the window's top edge, and Windows draws the native
+     minimise/maximise/close over its first --tb pixels — the header's
+     content starts below that strip so the caption buttons never sit on the
+     title or the close control, which is exactly where the reference puts
+     its own header. */
+  padding: calc(var(--tb) + 10px) 16px 6px;
 }
 /* Title UNDER the section-label size gap it used to tower over: 16px near-
    white, with the palette glyph riding after the text. */
