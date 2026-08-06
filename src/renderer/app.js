@@ -2883,12 +2883,19 @@
     // Measured in SCREENFULS instead, because that is what "a meaningful amount
     // back" actually means and a pixel count cannot express it — 400px is a
     // third of a maximised window and most of a narrow one. You now have to put
-    // more than a full screen of conversation between yourself and the newest
-    // message, whatever size the window is. The floor covers a very short
-    // window (a half-height one, the panel with a thread open beside it), where
-    // a pure multiple would put the banner back within a notch or two.
-    const JUMP_SHOW_SCREENS = 1.25;
-    const JUMP_SHOW_MIN_PX = 800;
+    // SEVERAL screens of conversation between yourself and the newest message,
+    // whatever size the window is. The floor covers a very short window (a
+    // half-height one, the panel with a thread open beside it), where a pure
+    // multiple would put the banner back within a notch or two.
+    //
+    // Four screens rather than the one it first became: one screenful is a
+    // single Page Down, which is still ordinary reading rather than going back
+    // through the conversation. Deliberately far out — the banner is only worth
+    // showing to somebody who could genuinely have lost the live edge, and the
+    // cost of it appearing late is nothing, while the cost of it appearing
+    // early is a pill over the chat every time you look up a few lines.
+    const JUMP_SHOW_SCREENS = 4;
+    const JUMP_SHOW_MIN_PX = 2400;
     function jumpShowPx() {
         return Math.max(JUMP_SHOW_MIN_PX, ($('messages').clientHeight || 0) * JUMP_SHOW_SCREENS);
     }

@@ -17,6 +17,12 @@ import { bootRenderer, $, settle } from './helpers/renderer.js';
 
 const NAMES = ['alice', 'bob', 'carla'];
 
+// Comfortably past the threshold for the 600px viewport these tests use — the
+// banner wants FOUR screenfuls, so this is genuinely away rather than a scroll
+// that happens to clear the line by a pixel. The tests that care about where
+// the line actually falls say so themselves, below.
+const FAR = 4000;
+
 function makePosts(n, fromMe) {
     const base = 1700000000000;
     return Array.from({ length: n }, (_, i) => ({
@@ -85,7 +91,7 @@ describe('the older-messages banner', () => {
     });
 
     it('appears once you are properly away from the bottom', async () => {
-        await scrollAway(1200);
+        await scrollAway(FAR);
         expect(shown()).toBe(true);
         expect(banner().getAttribute('aria-hidden')).toBe('false');
     });
@@ -96,29 +102,33 @@ describe('the older-messages banner', () => {
     // VIEWPORT now (with a floor), which is the only way to say "a meaningful
     // amount back" on both a maximised window and a short one.
     it('ignores a small scroll — a glance back is not viewing older messages', async () => {
-        // clientHeight is 600 throughout, so these are well inside one screen.
+        // The viewport is 600 here, so the banner wants 2400px back. These are
+        // all ordinary reading: a couple of notches, half a screen, and even
+        // three whole screenfuls.
         await scrollAway(200);
         expect(shown(), '200px back is nothing').toBe(false);
         await scrollAway(500);
         expect(shown(), '500px back used to trigger it, and must not').toBe(false);
+        await scrollAway(1800);
+        expect(shown(), 'three screens back is still reading, not the past').toBe(false);
         // …and it still comes back once you are genuinely away.
-        await scrollAway(1200);
+        await scrollAway(FAR);
         expect(shown()).toBe(true);
     });
 
     // A pixel count cannot mean the same thing on a maximised window and a
     // half-height one, which is the whole reason this scales.
     it('asks for more scrolling on a taller window', async () => {
-        // 1200px is a full screenful short of the 2000px this window wants,
-        // and the very same 1200px shows the banner on the 600px one above.
-        await scrollAway(1200, 1600);
-        expect(shown(), '1200px is under a screenful here').toBe(false);
-        await scrollAway(2400, 1600);
+        // 4000px shows the banner on the 600px window above. On this one it is
+        // not even two screenfuls, so it must not.
+        await scrollAway(FAR, 1600);
+        expect(shown(), 'under two screenfuls here').toBe(false);
+        await scrollAway(FAR * 3, 1600);
         expect(shown()).toBe(true);
     });
 
     it('is not itself clickable — only the button is', async () => {
-        await scrollAway(1200);
+        await scrollAway(FAR);
         expect(shown()).toBe(true);
 
         // Watch the jump itself, not whether the banner is still up: jsdom's
@@ -147,7 +157,7 @@ describe('the older-messages banner', () => {
         // anything for messages that land AFTER you scrolled away. Arriving
         // first, then scrolling, is the case that must read zero — and does,
         // which is why the earlier tests show no badge.
-        await scrollAway(1200);
+        await scrollAway(FAR);
         expect($('jump-count').hidden, 'nothing new yet').toBe(true);
 
         state.posts = state.posts.concat([
@@ -160,7 +170,7 @@ describe('the older-messages banner', () => {
         ]);
         app.rt({ t: 'posted', channel: 'general' });
         await settle(30);
-        await scrollAway(1200);
+        await scrollAway(FAR);
 
         const badge = $('jump-count');
         expect(badge.hidden).toBe(false);
