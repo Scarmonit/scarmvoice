@@ -1027,7 +1027,11 @@ body.edit-mode { overflow: hidden; }
 /* No JS toggles this container: it follows #voice-live, which the voice state
    handler already shows and hides. */
 #voice-panel { display: none; }
-#voice-panel:has(#voice-live:not([hidden])) {
+/* :has(> …), not :has(…): the child form scopes Blink's :has-invalidation to
+   direct children, and this panel's subtree churns constantly in a call
+   (speaking rings, roster updates). The descendant form made every one of
+   those mutations a candidate recheck. Same for the tm-underlay copy below. */
+#voice-panel:has(> #voice-live:not([hidden])) {
   display: block;
   padding: 12px 11px 12px 12px;
   box-shadow: 0 1px 0 var(--line);      /* the divider, inside the one card */
@@ -1538,7 +1542,10 @@ body.edit-mode { overflow: hidden; }
 .ub-read .ico { width: 15px; height: 15px; }
 /* The list starts below the bar while it is up, so the newest-first padding does
    not tuck a message under it. */
-#messages-wrap:has(.unread-bar:not([hidden])) #messages { padding-top: 32px; }
+/* Child combinator on purpose: #unread-bar is a direct child, and the
+   descendant form put the entire message list — the app's hottest subtree —
+   under :has-invalidation on every insert. */
+#messages-wrap:has(> .unread-bar:not([hidden])) #messages { padding-top: 32px; }
 
 .jump-latest {
   position: absolute; left: 50%; bottom: 14px; z-index: 30;
@@ -6963,7 +6970,7 @@ html.tm-underlay #user-dock::before {
    header + button zone wears a cool elevated veil — the reference's
    distinct sub-surface within the card. Rounded only at the top: the
    card's own corners. */
-html.tm-underlay #voice-panel:has(#voice-live:not([hidden])) {
+html.tm-underlay #voice-panel:has(> #voice-live:not([hidden])) {
   background: var(--theme-veil);
   border-radius: 5px 5px 0 0;
 }

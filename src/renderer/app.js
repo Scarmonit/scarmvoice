@@ -89,6 +89,10 @@
     let voice = null;
     let speaking = {};              // cid -> bool
     let pollTimer = null;
+    // When the poll last actually ran. Outside startPolling because the timer
+    // is re-armed on every socket status change, and the hidden-window backoff
+    // below must survive that.
+    let lastPollAt = 0;
     let presenceTimer = null;
     let typingSentAt = 0;
     // Assume NOT focused until the main process says otherwise.
@@ -1665,7 +1669,31 @@
 
     // ---------- auth ------------------------------------------------------
 
+    // One line per boot in the log: where a slow launch actually spent its
+    // time. The phases are the serial network chain between the window
+    // appearing and the first message paint — the part of startup that
+    // varies machine-to-machine and day-to-day, and the part the log could
+    // not previously explain. Costs nothing measurable per boot.
+    const bootMarks = {};
+    let bootT0 = null;
+    function bootMark(k) {
+        if (bootT0 === null || bootMarks[k] !== undefined) return;
+        bootMarks[k] = Math.round(performance.now() - bootT0);
+    }
+    function bootReport() {
+        if (bootT0 === null) return;
+        const line = '[boot] timeline (ms from renderer boot): ' +
+            Object.entries(bootMarks).map(([k, v]) => k + '=' + v).join(' ');
+        bootT0 = null;                       // one report per session
+        try { console.info(line); } catch (e) {}
+        // Into the log FILE as well: renderer console lines only reach it
+        // through this IPC (that is what the [renderer] prefix is), and an
+        // installed build has no other way to answer "why was that boot slow".
+        try { L.app.log(line); } catch (e) {}
+    }
+
     async function boot() {
+        bootT0 = performance.now();
         // The real focus state, once. A 'focus' event fired before this file
         // attached its listener is lost, and a window that starts hidden in the
         // tray never fires one at all — see the note on `windowFocused`.
@@ -1689,6 +1717,7 @@
             focusLogin('login-pw');
         }, 400);
         const st = await L.auth.status();
+        bootMark('auth');
         clearTimeout(cardDeadline);
 
         if (st.authed) {
@@ -1714,6 +1743,7 @@
         let res = null;
         try {
             res = await L.account.me();
+            bootMark('account');
             if (res && res.success && res.user) {
                 account = res.user;
                 accountJustFetched = true;
@@ -2139,8 +2169,10 @@
             // BEFORE the socket opens: this registers the install against the
             // account, and the realtime upgrade resolves that mapping server-side
             // to merge your devices. A socket opened first would carry no identity.
+            bootMark('shell');
             await refreshAccount();
             await L.rt.start();
+            bootMark('rt');
 
             // Three independent round trips that used to run strictly one after
             // another, for no reason beyond having been written on separate
@@ -2179,6 +2211,7 @@
             // message drawn without the emoji set shows `:shrug:` as text, and a
             // face drawn without the avatar map falls back to initials.
             await Promise.all([emojiReady, avatarsReady]);
+            bootMark('emojiAvatars');
             // renderMe() and the account card ran before the map existed (they
             // are part of the shell, drawn as soon as settings load), so they
             // need the repaint the message list gets for free by rendering after
@@ -2186,6 +2219,7 @@
             renderMe();
             renderAccountCard();
             await channelsReady;
+            bootMark('channels');
             // AFTER the channel list (it carries the true unread count for this
             // channel, counted server-side against the watermark that went out
             // with the request) and BEFORE the first page lands, because that is
@@ -2194,6 +2228,8 @@
             // out what happened there while it was closed.
             enterUnread();
             await loadMessages(true, null, firstPage);
+            bootMark('messages');
+            bootReport();
             startPolling();
             startTextPresence();
             loadDmThreads();
@@ -4834,8 +4870,19 @@
     const decorSignature = (blocks, last) =>
         last + '|' + blocks.map((b) => [b.start, b.end, b.closed ? 1 : 0, b.lang || ''].join(',')).join(';');
 
+    // The last document generation this ran against. Every keystroke reaches
+    // here TWICE — once from cm.on('changes') and once from the input facade's
+    // composerTyped() — and each run did a full getValue() + fence scan just
+    // to discover, via cbSignature, that nothing moved. The generation check
+    // makes the second arrival free without touching the ordering guarantee
+    // (paint before measure) that keeps these calls synchronous.
+    let cbPaintedGen = -1;
+
     function paintCodeBlocks(force) {
         if (!cm || painting) return;
+        const gen = cm.changeGeneration();
+        if (!force && gen === cbPaintedGen) return;
+        cbPaintedGen = gen;
         const blocksNow = fenceBlocks(cm.getValue());
         const sig = decorSignature(blocksNow, cm.lastLine());
         if (!force && sig === cbSignature) return;
@@ -9074,7 +9121,20 @@
             // A session that ended between ticks takes its timer with it, in
             // case anything ever arms one behind teardown again.
             if (!entered || gen !== sessionGen) { stopPolling(); return; }
-            if (appHidden() && rtConnected) return;
+            if (appHidden()) {
+                // Socket up: it delivers; the poll is only a safety net and a
+                // hidden window doesn't need one.
+                if (rtConnected) return;
+                // Socket DOWN and nobody looking: this poll is now the only
+                // way anything arrives — notifications included — so it must
+                // keep running, but a window in the tray does not need the
+                // 4-second cadence a visible one wants during an outage. It
+                // used to: three board calls every four seconds, indefinitely,
+                // from behind the tray icon, for any server hiccup that
+                // outlived the socket. Once a minute keeps the tray current.
+                if (Date.now() - lastPollAt < POLL_IDLE_MS) return;
+            }
+            lastPollAt = Date.now();
             const stick = nearBottom();
             await loadMessages(stick);
             await loadChannels();

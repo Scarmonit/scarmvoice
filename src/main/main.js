@@ -183,6 +183,7 @@ function createWindow(forceShow) {
         console.log('[window] saved position is off-screen — centring instead');
     }
 
+    winReadyToShow = false;   // this is a NEW window; the flag describes it
     win = new BrowserWindow({
         width: (bounds && bounds.width) || DEFAULT_SIZE.width,
         height: (bounds && bounds.height) || DEFAULT_SIZE.height,
@@ -224,37 +225,52 @@ function createWindow(forceShow) {
     pendingMaximize = !!store.get().windowMaximized;
 
     win.once('ready-to-show', () => {
-        // Stay hidden in the tray if the user asked to start minimized, or if
-        // Windows auto-launched us as a hidden login item (--openAsHidden).
-        //
-        // …unless this launch is the far side of an update the user asked for
-        // while looking at the app. "Start minimized to the tray" is about how
-        // the app comes up when nobody asked for it — at sign-in, in the
-        // background. Clicking "Restart Now" is the opposite of that: somebody
-        // is at the window, watching, and the app they were using has to come
-        // back. It used to vanish into the tray instead, so the button read as
-        // having closed the app.
-        const startHidden = !forceShow && !resumeVisible &&
-            (store.get().startMinimized || process.argv.includes('--openAsHidden'));
-        // One shot, consumed the moment it decides something — it must never
-        // outlive the launch it was written for and pull a later ordinary one
-        // out of the tray. Deliberately not consumed on the 'installing' path
-        // in the ready handler: that process is replaced before it builds a
-        // window, so the intent has to carry into the one that finally does.
-        if (resumeVisible) {
-            resumeVisible = false;
-            store.set({ updateResumeVisible: false });
-        }
-        if (!startHidden) revealWindow();
-        // The four events wired below are TRANSITIONS, and a window that starts
-        // in the tray is never shown — so none of them ever fires and the
-        // renderer spends the entire session believing it is on screen. Every
-        // "skip this while nobody is looking" guard is then inverted for the one
-        // configuration where it matters most: a login-item launch polls at the
-        // hidden-window cadence it should be skipping, keeps repainting panels
-        // nobody is looking at, and reports the window as up. Said once, here,
-        // where the page exists to hear it and the answer is finally known.
-        else sendVisibility();
+        winReadyToShow = true;
+        // The window is built DURING the startup update check now, so being
+        // ready to paint is no longer permission to appear: the verdict is.
+        // Usually it has already arrived and this continues immediately; a
+        // slow check keeps the shell hidden exactly as the old serial order
+        // did, and an 'installing' verdict means this window is being torn
+        // down — reveal nothing.
+        gateSettled.then((verdict) => {
+            if (verdict !== 'launch' || !win || win.isDestroyed()) return;
+            // Stay hidden in the tray if the user asked to start minimized, or
+            // if Windows auto-launched us as a hidden login item
+            // (--openAsHidden).
+            //
+            // …unless this launch is the far side of an update the user asked
+            // for while looking at the app. "Start minimized to the tray" is
+            // about how the app comes up when nobody asked for it — at
+            // sign-in, in the background. Clicking "Restart Now" is the
+            // opposite of that: somebody is at the window, watching, and the
+            // app they were using has to come back. It used to vanish into the
+            // tray instead, so the button read as having closed the app.
+            // showOnStart as well as the param: a second launch that arrived
+            // while the gate was still deciding records itself in that flag
+            // (see the second-instance handler), and the window it wanted
+            // already exists now — this reveal is where the request lands.
+            const startHidden = !forceShow && !showOnStart && !resumeVisible &&
+                (store.get().startMinimized || process.argv.includes('--openAsHidden'));
+            // One shot, consumed the moment it decides something — it must never
+            // outlive the launch it was written for and pull a later ordinary one
+            // out of the tray. Deliberately not consumed on the 'installing' path
+            // in the ready handler: that process is replaced before it builds a
+            // window, so the intent has to carry into the one that finally does.
+            if (resumeVisible) {
+                resumeVisible = false;
+                store.set({ updateResumeVisible: false });
+            }
+            if (!startHidden) revealWindow();
+            // The four events wired below are TRANSITIONS, and a window that starts
+            // in the tray is never shown — so none of them ever fires and the
+            // renderer spends the entire session believing it is on screen. Every
+            // "skip this while nobody is looking" guard is then inverted for the one
+            // configuration where it matters most: a login-item launch polls at the
+            // hidden-window cadence it should be skipping, keeps repainting panels
+            // nobody is looking at, and reports the window as up. Said once, here,
+            // where the page exists to hear it and the answer is finally known.
+            else sendVisibility();
+        });
     });
 
     if (DEV) win.webContents.openDevTools({ mode: 'detach' });
@@ -548,6 +564,20 @@ function showWindow() {
 
 let splash = null;
 let splashWanted = false;        // false for a hidden login-item launch
+
+// The startup gate's verdict, as a promise. The window is CREATED while the
+// update check is still in flight — that is the whole point, the check and the
+// window build were two independent waits queued one behind the other — but
+// nothing user-visible happens before the verdict: the reveal waits on this,
+// and the renderer's opening auth:status question is held on it too, so a
+// process the installer is about to replace still shows nothing and opens no
+// session. Resolved by default for every window built after launch (tray
+// activate, the install-gave-up fallback), where the gate has long settled.
+let gateSettled = Promise.resolve('launch');
+// Whether ready-to-show has fired, for a startApp() that runs after it —
+// win.once('ready-to-show', closeSplash) on an event already in the past
+// would leave the update screen up until its 15s fallback.
+let winReadyToShow = false;
 // The gate answered 'installing': this process is being replaced and must build
 // nothing. See showWindow().
 let installing = false;
@@ -1043,6 +1073,14 @@ function registerIpc() {
     // slow account/me delays only the question it is the answer to.
     let pendingMe = null;
     handle('auth:status', async () => {
+        // The renderer's whole session chain (account, socket, presence, mic)
+        // hangs off this answer, so holding IT is what keeps "the installer is
+        // about to replace this process" from opening a session — the window
+        // and renderer are allowed to exist during the startup update check,
+        // but the app does not BEGIN until the check says this build lives.
+        // Settled before the renderer can ask on every launch the gate waved
+        // through, so the wait is real only on the 'installing' path.
+        await gateSettled;
         const pre = await net.takePreflight();
         if (!pre) return net.status();
         const st = await pre.st;
@@ -1872,17 +1910,17 @@ const SPLASH_AFTER_MS = 700;
 
 // Everything the app is, once the gate has agreed it may exist.
 function startApp() {
-    // BEFORE createWindow, not after: creating the window is synchronous store
-    // reads plus BrowserWindow construction, and the renderer then spends about
-    // 280ms coming up before it can ask us anything. Both of the calls it opens
-    // with go out during that, so the answers are already here when it asks.
-    // Deliberately after the update gate resolved 'launch' — a process the
-    // installer is about to replace still opens no session.
-    net.prefetchSession();
-    // forceShow when a launch arrived while the gate held the window back: the
-    // user asked for it, and "start minimized" describes an automatic launch,
-    // not one they performed by hand.
-    createWindow(showOnStart);
+    // The normal launch already built the window while the update check ran —
+    // see whenReady. This path constructs one only when none exists: the
+    // install-gave-up fallback (its window was destroyed for an installer
+    // that never took over) and any future caller in the same position.
+    if (!win || win.isDestroyed()) {
+        net.prefetchSession();
+        // forceShow when a launch arrived while the gate held the window back:
+        // the user asked for it, and "start minimized" describes an automatic
+        // launch, not one they performed by hand.
+        createWindow(showOnStart);
+    }
     createTray();
 
     // The update screen stays up until the real window is ready to paint, so
@@ -1890,7 +1928,10 @@ function startApp() {
     // AFTER the app window exists, or 'window-all-closed' would fire in the gap
     // between them and quit the app we are in the middle of starting.
     if (splash) {
-        win.once('ready-to-show', closeSplash);
+        // The window may have become ready while the gate was still deciding —
+        // a once() on an event already in the past never fires.
+        if (winReadyToShow) closeSplash();
+        else win.once('ready-to-show', closeSplash);
         // A window that never becomes ready must not leave the update screen up
         // for the rest of the session.
         setTimeout(closeSplash, 15000);
@@ -1994,24 +2035,47 @@ app.whenReady().then(async () => {
     // carry into the process that finally builds a window"); the write side
     // now honours it by staying silent when it has no window to describe.
     updater.onBeforeInstall(() => {
-        if (!win || win.isDestroyed()) return;
+        // everShown, not mere existence: the startup gate now builds a hidden
+        // window while it checks, so a gate-install process OWNS a window that
+        // was never on screen. Answering "not visible" for it would overwrite,
+        // mid-chain, the TRUE a user's Restart-Now click recorded in the
+        // previous session — the exact erasure this guard has always been
+        // about. Only a window somebody could have seen gets to answer.
+        if (!win || win.isDestroyed() || !everShown) return;
         let visible = false;
         try { visible = win.isVisible(); } catch (e) {}
         store.set({ updateResumeVisible: visible });
     });
 
-    // Nothing starts until the feed has been asked. The app must ALWAYS start
-    // eventually, so every failure inside the gate resolves 'launch' on a
-    // deadline — see updater.startupGate.
+    // The update check and the window build run TOGETHER now. Measured (the
+    // installed log's own gate lines), the feed check is 450-1200ms of network
+    // in front of every launch, and the window needs ~500-700ms to come up —
+    // two independent waits that were queued one behind the other, exactly the
+    // shape the voice join had. Nothing user-visible moves before the verdict:
+    // the reveal waits on gateSettled (see ready-to-show) and the renderer's
+    // opening auth:status question is held on it too, so an 'installing'
+    // verdict still shows nothing and opens no session — the window it tears
+    // down was only ever warm plumbing.
+    //
+    // prefetchSession moved up with the window: it is two READS (auth/status,
+    // account/me) against the board with credentials already on disk, and
+    // account/me is the slowest call this app makes — starting it under the
+    // gate check instead of after it is most of a second off every signed-in
+    // boot. A process the installer then replaces has performed two GETs and
+    // opened nothing.
+    //
+    // The app must ALWAYS start eventually, so every failure inside the gate
+    // resolves 'launch' on a deadline — see updater.startupGate.
     const slowCheck = setTimeout(ensureSplash, SPLASH_AFTER_MS);
-    let verdict = 'launch';
-    try {
-        verdict = await updater.startupGate();
-    } catch (e) {
+    gateSettled = updater.startupGate().catch((e) => {
         console.error('[update] startup gate threw, launching anyway:', e && e.message);
-    } finally {
-        clearTimeout(slowCheck);
-    }
+        return 'launch';
+    });
+    net.prefetchSession();
+    createWindow(showOnStart);
+
+    const verdict = await gateSettled;
+    clearTimeout(slowCheck);
 
     // The update is applying and this process is being replaced. Building the
     // app now would open the mic, the socket and the session for the two
@@ -2019,6 +2083,13 @@ app.whenReady().then(async () => {
     // doing it either, for a second launch that arrives in that gap.
     if (verdict === 'installing') {
         installing = true;
+        // The hidden window built alongside the check never showed and never
+        // answered auth:status (held on gateSettled), so there is no session
+        // to unwind — but the window itself must go, or 'window-all-closed'
+        // semantics and the single-instance story get strange while the
+        // installer takes over.
+        try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) {}
+        win = null;
         // The handover can fail — a throw from quitAndInstall, or an installer
         // that simply never takes. Without this the process stays alive with no
         // window and no tray, and the single-instance lock makes every relaunch
