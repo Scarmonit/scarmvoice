@@ -2428,19 +2428,30 @@
             });
             list.appendChild(b);
         });
-        // The rail's server icon carries the total, the way Discord badges a
-        // server you aren't currently looking at.
-        // DMs count toward both badges — a DM is never "muted".
+        // A DM IS NOT SOMETHING THE SERVER HAPPENED IN.
+        //
+        // The rail is two places, and each badge names the one under it: the @
+        // button is where conversations live, the server icon is where channels
+        // do. Adding the DM count to BOTH meant one message from one person lit
+        // both marks at once — a red 1 on the @, and a red 1 on ScarmVoice for a
+        // server in which nothing had been posted. Clicking the server to find
+        // out what it wanted showed a channel list with nothing unread in it,
+        // and the mark stayed up until the conversation was read. The reference
+        // does not do this either: a direct message badges the button that
+        // opens direct messages, and server icons carry only what happened in
+        // that server.
+        //
+        // The TASKBAR total still counts them. That badge answers "is there
+        // anything here for me" for a window that is minimised or in the tray,
+        // where there is no rail to divide — and a DM is never muted, so it
+        // always alerts.
         const dmN = dmUnreadTotal();
-        total += dmN;
         alerting += dmN;
 
         const badge = $('rail-badge');
         badge.textContent = total > 99 ? '99+' : String(total);
         badge.hidden = !total;
 
-        // The DM button carries only its own count. Folding DMs into the server
-        // badge alone would leave the button that opens them silent about them.
         const dmBadge = $('rail-dm-badge');
         if (dmBadge) {
             dmBadge.textContent = dmN > 99 ? '99+' : String(dmN);
