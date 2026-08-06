@@ -121,12 +121,20 @@ describe('the custom tint', () => {
         // top-to-bottom — matching how the reference reads its slider, so a
         // theme carried between the two apps keeps its direction.
         expect(rootVar('--theme-underlay')).toBe('linear-gradient(0deg, #ff0000, #0000ff)');
-        // The structural panes are translucent NEUTRAL — the gradient supplies
-        // the colour, so a pane that tinted itself would fight it.
+        // The structural panes are translucent NEUTRAL, scaled toward black —
+        // the gradient supplies the colour, and compositing adds pane·alpha to
+        // EVERY channel, so a stock-grey pane would lift the gradient's dark
+        // channels into a wash (the measured ~24 floor against the
+        // reference's ~10). At intensity 80 the pane keeps only a third of
+        // its stock value.
         const chat = rgba(rootVar('--chat'));
         const rail = rgba(rootVar('--rail'));
-        expect(chat).toMatchObject({ r: 26, g: 26, b: 30 });
+        expect(chat.r).toBeLessThan(12);        // 26 stock, scaled well down
+        expect(chat.b).toBeGreaterThan(chat.r); // …but still ITSELF, not black
         expect(chat.a).toBeLessThan(1);
+        // The additive grey term — what the pane contributes to a channel the
+        // gradient leaves at zero — stays in single digits.
+        expect(chat.r * chat.a).toBeLessThan(6);
         expect(rail.a).toBe(chat.a);            // one sheet of glass, not per-pane fog
         expect(rail.r).toBeLessThan(chat.r);    // the ladder survives in the glass
         // Floating surfaces stay OPAQUE (a see-through menu is unreadable) and

@@ -239,8 +239,10 @@
         // A bare dash — remove-this-colour in the theme picker's hex row. At
         // the set's 1.8 stroke a lone horizontal line averages out to almost
         // nothing against the field; it opts into a heavier weight the way the
-        // record dot opts into a fill.
-        minus: '<path d="M5.6 12h12.8" stroke-width="2.8"/>',
+        // record dot opts into a fill. 3.4, not 2.8: at typical display
+        // scales a 2.8px line splits across pixel rows with none at full
+        // coverage, and the measured peak came out at half the ink colour.
+        minus: '<path d="M5.6 12h12.8" stroke-width="3.4"/>',
         // Two curved arrows chasing each other — the sync-with-Windows theme
         // tile's glyph.
         sync: '<path d="M4.6 10a7.6 7.6 0 0 1 12.9-3.4L19.4 8.5M19.4 4.5v4h-4"/>' +

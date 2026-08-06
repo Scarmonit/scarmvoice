@@ -259,9 +259,10 @@
         return 'linear-gradient(' + cfg.angle + 'deg, ' + cfg.colors.join(', ') + ')';
     }
 
-    function rgbaOf(hex, a) {
+    function rgbaOf(hex, a, scale) {
         const [r, g, b] = hexToRgb(hex);
-        return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')';
+        const f = scale === undefined ? 1 : scale;
+        return 'rgba(' + Math.round(r * f) + ', ' + Math.round(g * f) + ', ' + Math.round(b * f) + ', ' + a + ')';
     }
     function mixHex(a, b, t) {
         const A = hexToRgb(a), B = hexToRgb(b);
@@ -324,11 +325,21 @@
             // reference's 100% is likewise nearly bare gradient); light panes
             // keep more paper because dark text sits on them.
             const alpha = +(1 - (cfg.base === 'light' ? 0.62 : 0.92) * k).toFixed(3);
+            // …and a dark pane's own colour SHRINKS TOWARD BLACK as intensity
+            // rises. Compositing is out = pane·α + gradient·(1−α): the pane·α
+            // half is a flat grey ADDED to every channel, and a stock-grey
+            // pane lifts the gradient's near-zero channels to a measured floor
+            // of ~24 where the reference reaches ~10 — the wash. Scaling the
+            // pane toward black shrinks that additive term (multiply-like
+            // compositing) while the ladder survives, because every pane
+            // scales by the same factor and their differences scale with
+            // them. Light panes are excluded: their job is to stay paper.
+            const paneScale = cfg.base === 'light' ? 1 : +(1 - 0.85 * k).toFixed(3);
             Object.keys(TOKENS).forEach((tok) => {
                 const t = TOKENS[tok];
                 if (!t[col]) return;
                 const v = (k > 0 && STRUCTURAL.has(tok))
-                    ? rgbaOf(t[col], alpha)
+                    ? rgbaOf(t[col], alpha, paneScale)
                     : tintOf(t[col], cfg.base, cfg.colors, cfg.intensity, t[2]);
                 root.style.setProperty(tok, v);
                 applied.push(tok);

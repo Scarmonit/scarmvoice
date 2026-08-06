@@ -6909,9 +6909,12 @@ html.tm-docked #app { margin-right: 290px; }
   flex: none; width: 29px; height: 29px; display: flex;
   align-items: center; justify-content: center;
   background: transparent; border: none; border-radius: 6px;
-  color: var(--muted); cursor: pointer;
+  /* The reference draws these at ~198; --muted (173) read dim, and the
+     minus — a single thin stroke — dimmer still. Both controls in the row
+     wear the same brighter ink. */
+  color: var(--panel-name); cursor: pointer;
 }
-.tm-eyebtn:hover { background: var(--hover); color: var(--text); }
+.tm-eyebtn:hover { background: var(--hover); color: var(--text-strong); }
 .tm-eyebtn .ico { width: 15px; height: 15px; }
 /* The strip is a gradient EDITOR, not a preview of the window: the blend
    always runs along its long axis, and each chip sits at its own stop
