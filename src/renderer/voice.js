@@ -2022,12 +2022,49 @@
             // function is clearing, and they would then survive until the next
             // leave.
             unwire();
-            try {
-                if (meeting) {
-                    if (meeting.leave) meeting.leave();
-                    else if (meeting.leaveRoom) meeting.leaveRoom();
-                }
-            } catch (e) { /* leaving is best-effort */ }
+            // Through txChain, like everything else that can touch the
+            // microphone — see the comment on txChain, and applyTransmit's.
+            //
+            // meeting.leave() is not just a socket close. The SDK's teardown
+            // (SelfController.cleanupSelf) BEGINS with `await
+            // self.disableAudio()`, and disableAudio shares the one
+            // "Self.toggleAudio" lock with enableAudio. That lock is not a
+            // queue: taken, it THROWS. join() calls applyTransmit() and then
+            // pushState() on the next line, which is what puts the voice panel
+            // and its Disconnect button on screen — so the button goes live
+            // while the first microphone acquisition of the call (getUserMedia,
+            // the noise worklet, the SFU publish: hundreds of milliseconds) is
+            // still holding it.
+            //
+            // A leave landing in that window — Disconnect, tray "Leave voice",
+            // sign-out, a ban, a takeover by another device — threw INSIDE the
+            // SDK's own async teardown, where the synchronous try/catch here
+            // could not see it, and everything after the throw was skipped: the
+            // tracks were never stopped, the media handler never destructed,
+            // the transports and the SFU socket never closed. Then this
+            // function nulled `meeting`, so nothing could ever retry. The app
+            // said you had left and the board said you had left, while your
+            // microphone stayed open and publishing into the room — everyone
+            // still in the call kept hearing you, with the Windows
+            // microphone-in-use light on, for the rest of the session.
+            //
+            // Queued, not awaited: leaving must not wait on the network, and
+            // everything below is local state the UI needs now. The teardown's
+            // own promise is deliberately not returned to the chain — a later
+            // join builds a new meeting with a new peer id, and the SDK's locks
+            // are keyed per peer, so nothing has to queue behind this — and its
+            // rejection is swallowed here rather than left to surface as an
+            // unhandled one.
+            const leaving = meeting;
+            if (leaving) {
+                txChain = txChain.then(() => {
+                    try {
+                        const p = leaving.leave ? leaving.leave()
+                            : (leaving.leaveRoom ? leaving.leaveRoom() : null);
+                        Promise.resolve(p).catch(() => {});
+                    } catch (e) { /* leaving is best-effort */ }
+                }).catch(() => {});
+            }
 
             meeting = null;
 

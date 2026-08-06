@@ -2146,12 +2146,39 @@
     async function enterApp() {
         if (entered) return;
         entered = true;
+        // The session this call belongs to, checked after the long waits below.
+        //
+        // This is a ten-await function, its caller does not await it, and the
+        // shell is on screen from the third line — so everything after each
+        // await runs whenever that await happens to land, however long it took
+        // and whatever happened meanwhile. On a slow link that is seconds:
+        // net.js retries at 400ms and 1200ms and only gives up after twenty.
+        // Signing out, switching accounts, or having the board session expire
+        // while the startup burst is still in flight is an ordinary thing to
+        // do, and teardownSession() is reachable from all three.
+        //
+        // Resuming into the tail then re-armed everything teardown had just
+        // stopped — the twenty-second presence heartbeat that republishes you
+        // as online in everyone's member list, the DM poll, and the
+        // five-minute avatar sweep whose comment further down records the last
+        // time it outlived a session — and, with auto-join on, called
+        // joinVoice() and acquired the microphone behind the sign-in card. Two
+        // of the three exits (Switch Accounts, a dead account token) leave the
+        // board cookie intact deliberately, so on those all of it succeeded.
+        //
+        // The same generation the message loads, the recorder, the poll and
+        // both meters already check.
+        const gen = sessionGen;
+        const gone = () => !entered || gen !== sessionGen;
         try {
             settings = await L.settings.get();
             // Belt and braces: whatever route got us here, the name on screen is
             // the account username. A stored token that skipped the sign-in
             // panels never passed through adoptAccountName() otherwise.
             await adoptAccountName();
+            // Before the shell replaces the login card: a session that ended
+            // during those two calls must not have the app drawn over it.
+            if (gone()) return;
             $('login').hidden = true;
             $('app').hidden = false;
             $('btn-send').disabled = true;
@@ -2240,6 +2267,9 @@
             // out what happened there while it was closed.
             enterUnread();
             await loadMessages(true, null, firstPage);
+            // The tail below is all timers and acquisitions. None of it may be
+            // armed for a session that has already been torn down.
+            if (gone()) return;
             bootMark('messages');
             bootReport();
             startPolling();
@@ -2247,6 +2277,9 @@
             loadDmThreads();
             startDmPolling();
             await applyPtt();
+            // …and once more after the last await, because joinVoice() is on
+            // the other side of it and that one opens the microphone.
+            if (gone()) return;
             flushOutbox();
 
             // Somebody else changing their picture is not worth a poll of its
@@ -9502,16 +9535,41 @@
     // so without this the mic stays open until you press and release the key
     // again — the classic "I alt-tabbed and kept broadcasting" bug.
     //
-    // ONLY when the native hook is unavailable. With uiohook-napi loaded, PTT is
-    // deliberately global: holding the key while working in another window is
-    // the whole point, and releasing on blur would break it. The hook is an
-    // optional dependency, so the in-window path is what ships whenever the
-    // prebuilt binary didn't install.
+    // ONLY when push-to-talk is NOT global. A native hold and the fallback
+    // accelerator are both system-wide — holding the key while working in
+    // another window is the whole point — and releasing on blur would break
+    // them. The in-window path is what is left when neither could be arranged.
+    //
+    // Which one is in force is `ptt.apply()`'s answer, not `ptt.available()`.
+    // available() is `!!loadHook()`: whether the native module LOADED. On
+    // win32-x64 the prebuilt binary always loads, so this was true for
+    // essentially everyone — and it is not the same question as whether the
+    // hook is carrying THIS binding. Record a key uiohook cannot name and
+    // Electron cannot express as an accelerator — the Menu key, Pause,
+    // IntlBackslash on an ISO keyboard, all three of which ptt.js calls out by
+    // name — and apply() comes back 'none': push-to-talk is then driven solely
+    // by the two in-window listeners above, and Settings says exactly that
+    // ("in-app only while the window is focused"). This release is the other
+    // half of that sentence, and it was the one place still asking the old
+    // question, so it returned early and did nothing. Hold that key, alt-tab,
+    // and the keyup went to the other application: the microphone stayed open
+    // and transmitting to everyone in the call until you came back to
+    // ScarmVoice and pressed the key again.
+    //
+    // The hint text was corrected for this same confusion (see pttState). This
+    // was the call site it missed, and the only one where being wrong costs an
+    // open microphone rather than a wrong sentence.
+    //
+    // Before the first apply() of the session there is no answer yet, and
+    // available() is the best guess there is — the same fallback paintPttHint
+    // makes, and the behaviour that shipped.
     let pttHookAvailable = true;    // assume the safe answer until told otherwise
     L.ptt.available().then((ok) => { pttHookAvailable = !!ok; });
 
     window.addEventListener('blur', () => {
-        if (pttHookAvailable) return;
+        const mode = pttState && pttState.mode;
+        const globalPtt = mode ? (mode === 'native' || mode === 'toggle') : pttHookAvailable;
+        if (globalPtt) return;
         if (settings.voiceMode !== 'ptt' || !voice) return;
         voice.setPttHeld(false);
     });
@@ -12064,7 +12122,33 @@
         });
         $('edit-save').addEventListener('click', () => { saveWork(); });
 
-        $('edit-layout-select').addEventListener('change', (e) => { switchWorkTo(e.target.value); });
+        // Unsaved work is not thrown away here without asking either.
+        //
+        // switchWorkTo() replaces `work` outright and clears `dirty`, so
+        // picking another entry — to compare it, or by mis-clicking a dropdown
+        // that sits directly above the canvas — silently discarded every drag
+        // since the last save. There is no way back: Revert only restores the
+        // layout as it was when Edit Mode opened, and re-picking Default
+        // rebuilds a fresh one. Clearing `dirty` also disarmed the unsaved-
+        // changes question exitEditMode() asks, so closing the editor
+        // afterwards said nothing either.
+        //
+        // The two other destructive paths — leaving, and deleting a layout —
+        // both ask first. This dropdown was the hole in that protection.
+        $('edit-layout-select').addEventListener('change', async (e) => {
+            const id = e.target.value;
+            if (!dirty) { switchWorkTo(id); return; }
+            const save = await askConfirm(
+                'Switch layout?',
+                'Your layout has changes that have not been saved. Save them, or cancel to stay on this layout.',
+                'Save and switch', false);
+            // Declining means stay — the select has already moved, so put it
+            // back on the layout still being edited. Same if the name prompt
+            // behind Save is cancelled.
+            if (!save) { renderLayoutSelect(); return; }
+            if (!(await saveWork())) { renderLayoutSelect(); return; }
+            switchWorkTo(id);
+        });
         $('edit-layout-new').addEventListener('click', () => { createLayoutFromWork(); });
         $('edit-layout-rename').addEventListener('click', async () => {
             if (!work || work.id === DEFAULT_LAYOUT_ID) return;
@@ -14648,7 +14732,17 @@
             // Whether this is a SWITCH or a re-show of the pane already open, which
             // decides whether the scroll position is reset — see below.
             const changed = target !== items.find((it) => !it.g.hidden)?.g;
-            if (micTest && target !== voiceGroup) stopMicTest();
+            // Not `micTest && …`. The capture that has not finished opening
+            // yet is the one this most needs to reach, and micTest stays null
+            // for the 100-500ms Chromium spends opening the device — so the
+            // short-circuit skipped the call entirely, micTestGen was never
+            // bumped, and the stream then passed startMicTest's guard and
+            // installed itself on a pane that was already hidden. Microphone
+            // open, in-use light on, "Stop Test" off screen. Cancelling that
+            // capture is the whole reason the generation counter exists; the
+            // comment on it names this caller. stopMicTest() is a no-op
+            // otherwise.
+            if (target !== voiceGroup) stopMicTest();
             // A hotkey recorder dies with the pane it was armed on, exactly as
             // it dies with the sheet (see closeSettings). Its two window
             // CAPTURE listeners are detached only by finish(), so leaving the

@@ -2168,8 +2168,27 @@ app.whenReady().then(async () => {
     // A restart the user CLICKED is not that launch, even on a start-minimized
     // profile: they are watching, and an update that takes a few seconds with
     // nothing on screen looks like an app that failed to come back.
+    //
+    // Which is why `store.get().startMinimized` is not in this condition —
+    // the same correction the reveal decision in createWindow already carries,
+    // and for the same reason. The setting says how the app comes up AT
+    // SIGN-IN, and the login item already carries that intent as
+    // --openAsHidden; asking the setting here instead overruled the launches
+    // that were asked for. On a start-minimized profile — the ordinary
+    // configuration for anyone who runs this in the tray — double-clicking the
+    // shortcut on an update day drew NOTHING: no splash (this said no), no
+    // window (the reveal waits on the gate verdict) and no tray icon
+    // (createTray runs in startApp, behind the same await), for as long as the
+    // gate took. Up to fifteen seconds on a stalled feed, and the length of a
+    // download once an update is found. Clicking again did not help either —
+    // showWindow() defers to focusSplash(), which is a no-op when no splash was
+    // ever built. That is precisely the "the shortcut did nothing" failure
+    // SPLASH_AFTER_MS exists to prevent.
+    //
+    // The test is "did anybody ask for this launch", which is the expression
+    // the 'installing' branch below already writes into updateResumeVisible.
     splashWanted = resumeVisible ||
-        !(store.get().startMinimized || process.argv.includes('--openAsHidden'));
+        !(process.argv.includes('--openAsHidden') || process.argv.includes('--updated'));
 
     // update:gate drives the startup screen; update:state is the in-app banner,
     // which has nowhere to render until the app window exists.

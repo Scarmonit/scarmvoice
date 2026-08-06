@@ -108,6 +108,58 @@ describe('migrateLegacyProfile', () => {
         expect(fs.existsSync(at('settings.json'))).toBe(true);
         expect(fs.existsSync(at('session.bin'))).toBe(false);
     });
+
+    // A SAVE THAT FAILED HALFWAY LOOKED LIKE A FRESH INSTALL.
+    //
+    // writeNow() rotates settings.json to settings.json.bak and then renames
+    // the temp file over it. Between those two renames — and after the second
+    // one fails, which on Windows is an ordinary antivirus/indexer file lock
+    // rather than a crash — the profile has NO settings.json and a complete
+    // .bak. writeNow's own comment names that state, and load() recovers from
+    // it. migrateLegacyProfile ran first and tested only for settings.json, so
+    // it called that a first run and copied the old profile over the top: the
+    // .bak was orphaned (the next save rotates it away for good) and Local
+    // State — Chromium's OSCrypt key — was replaced while account.bin was not,
+    // so the surviving account token could no longer be decrypted. Settings
+    // reverted by years and the user was signed out, from one failed rename.
+    it('leaves a profile whose settings.json is mid-save alone', async () => {
+        seedCurrent({ 'settings.json.bak': JSON.stringify({ displayName: 'Current' }) });
+        seedLegacy({
+            'settings.json': JSON.stringify({ displayName: 'Legacy' }),
+            'session.bin': 'ENC:legacy',
+            'Local State': '{"os_crypt":{"encrypted_key":"legacy"}}'
+        });
+
+        const store = await loadStore();
+        store.migrateLegacyProfile();
+
+        // Nothing adopted…
+        expect(fs.existsSync(at('settings.json'))).toBe(false);
+        expect(fs.existsSync(at('session.bin'))).toBe(false);
+        expect(fs.existsSync(at('Local State'))).toBe(false);
+        // …so the backup is still there for load() to recover from, and does.
+        store.init();
+        expect(store.get().displayName).toBe('Current');
+    });
+
+    // The same mistake reachable from the other direction: a profile that has
+    // signed in but whose first settings save has not landed yet is still a
+    // profile this app has run in, and its Local State must not be replaced.
+    it('leaves a profile that holds a session or an account token alone', async () => {
+        seedCurrent({ 'session.bin': 'ENC:mine', 'account.bin': 'ENC:my-token' });
+        seedLegacy({
+            'settings.json': JSON.stringify({ displayName: 'Legacy' }),
+            'session.bin': 'ENC:legacy',
+            'Local State': '{"os_crypt":{"encrypted_key":"legacy"}}'
+        });
+
+        const store = await loadStore();
+        store.migrateLegacyProfile();
+
+        expect(fs.existsSync(at('settings.json'))).toBe(false);
+        expect(fs.existsSync(at('Local State'))).toBe(false);
+        expect(fs.readFileSync(at('session.bin'), 'utf8')).toBe('ENC:mine');
+    });
 });
 
 describe('settings', () => {

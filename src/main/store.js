@@ -310,7 +310,36 @@ function init() {
 // cannot decrypt, silently signing the user out.
 function migrateLegacyProfile() {
     const dir = app.getPath('userData');
-    if (fs.existsSync(path.join(dir, 'settings.json'))) return;
+    // "Genuinely new" is not "settings.json is missing".
+    //
+    // writeNow() saves by rotating settings.json to settings.json.bak and then
+    // renaming the temp file over it, and its own comment names the state in
+    // between: no settings.json, a complete .bak. That state is not
+    // hypothetical on Windows and does not need a crash to reach — the second
+    // rename fails outright when an antivirus scanner or the search indexer
+    // still holds a handle on the file just written, and the catch there
+    // unlinks the temp copy. It is also where a hard kill lands, which is
+    // exactly how this process ends when the update installer takes over.
+    // load() is built to recover from it, and does.
+    //
+    // Testing only for settings.json handed that profile to this function
+    // first, which read it as a first run and copied a long-abandoned "The
+    // Lounge" profile straight over the live one: settings.json — so load()
+    // never saw the .bak that still held the real settings, and the next save
+    // rotated it away for good — plus session.bin and Local State, which is
+    // Chromium's OSCrypt key. account.bin is not in that list, so it was left
+    // encrypted under a key that no longer existed: readSecret() returned
+    // nothing and the user was signed out of the account this app has required
+    // since v0.9.1. Every setting silently reverted at the same time. All of it
+    // from one failed rename, in a function whose contract above is that it
+    // "never overwrites existing settings".
+    //
+    // Any of these means this app has already run here, and nothing may be
+    // adopted over it. Local State is deliberately not among them — Chromium
+    // writes that one itself.
+    for (const mine of ['settings.json', 'settings.json.bak', 'session.bin', 'account.bin']) {
+        if (fs.existsSync(path.join(dir, mine))) return;
+    }
 
     const parent = path.dirname(dir);
     for (const legacy of LEGACY_APP_NAMES) {

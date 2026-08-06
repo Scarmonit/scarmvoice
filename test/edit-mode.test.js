@@ -798,6 +798,97 @@ describe('leaving', () => {
         expect(mode()).toBe('grid');
     });
 
+    // A second layout to switch TO. (The 'saved layouts' block above has its
+    // own copy; this one is scoped here.)
+    const OTHER = {
+        rail: { x: 0, y: 0, w: 0.05, h: 1 }, channels: { x: 0.05, y: 0, w: 0.2, h: 1 },
+        members: { x: 0.8, y: 0, w: 0.2, h: 1 }, chat: { x: 0.25, y: 0.1, w: 0.55, h: 0.7 },
+        header: { x: 0.25, y: 0, w: 0.75, h: 0.1 }, mebar: { x: 0, y: 0.9, w: 0.25, h: 0.1 },
+        composer: { x: 0.25, y: 0.8, w: 0.55, h: 0.1 }
+    };
+
+    // …AND THE LAYOUT DROPDOWN IS A WAY OUT OF THE WORK TOO.
+    //
+    // switchWorkTo() replaces `work` outright and clears `dirty`, so picking
+    // another entry — to compare it, or by mis-clicking a control that sits
+    // directly above the canvas — threw the arrangement away without a word.
+    // Revert only goes back to how things were when the editor opened, and
+    // re-picking Default rebuilds a fresh one, so there was no way back. Worse,
+    // clearing `dirty` disarmed the question above: closing the editor
+    // afterwards was silent as well. Leaving and deleting both asked; this did
+    // not.
+    it('asks before the layout dropdown drops unsaved changes', async () => {
+        await boot({ layouts: [{ id: 'L1', name: 'Mine', custom: true, els: OTHER }], activeLayout: 'default' });
+        await settle();
+        stubRects();
+        await openEditor();
+        gesture(centreOf('user-dock'), { x: 500, y: 150 });
+        await settle();
+        const moved = boxOf('user-dock');
+        expect(mode()).toBe('custom');
+
+        $('edit-layout-select').value = 'L1';
+        $('edit-layout-select').dispatchEvent(new window.Event('change', { bubbles: true }));
+        await settle();
+        expect($('dialog').hidden).toBe(false);
+        expect($('dialog-title').textContent).toMatch(/Switch layout/);
+
+        // Cancel means stay: the work survives and the select goes back to the
+        // layout still being edited, because the browser has already moved it.
+        $('dialog-cancel').click();
+        await settle();
+        expect($('dialog').hidden).toBe(true);
+        expect(boxOf('user-dock')).toEqual(moved);
+        expect($('edit-layout-select').value).toBe('default');
+
+        // …and the unsaved-changes question on the way out is still armed.
+        $('edit-close').click();
+        await settle();
+        expect($('dialog-title').textContent).toMatch(/Leave Edit Mode/);
+        $('dialog-cancel').click();
+        await settle();
+    });
+
+    it('saves the work first when the dropdown question is answered Save', async () => {
+        const h = await boot({ layouts: [{ id: 'L1', name: 'Mine', custom: true, els: OTHER }], activeLayout: 'default' });
+        await settle();
+        stubRects();
+        await openEditor();
+        gesture(centreOf('user-dock'), { x: 500, y: 150 });
+        await settle();
+
+        $('edit-layout-select').value = 'L1';
+        $('edit-layout-select').dispatchEvent(new window.Event('change', { bubbles: true }));
+        await settle();
+        // "Save and switch" — Default has no file of its own, so it asks for a
+        // name exactly as Save does.
+        $('dialog-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+        await settle();
+        $('dialog-input').value = 'Rescued';
+        $('dialog-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+        await settle();
+
+        const saved = h.lounge.settings.set.mock.calls.map((c) => c[0]).filter((p) => p && p.layouts).pop();
+        expect(saved.layouts.some((l) => l.name === 'Rescued')).toBe(true);
+        // …and it went where it was asked to go.
+        expect($('edit-layout-select').value).toBe('L1');
+    });
+
+    // The switch is unchanged when there is nothing to lose — no dialog, no
+    // extra click on the common path.
+    it('switches straight away when there are no unsaved changes', async () => {
+        await boot({ layouts: [{ id: 'L1', name: 'Mine', custom: true, els: OTHER }], activeLayout: 'default' });
+        await settle();
+        stubRects();
+        await openEditor();
+
+        $('edit-layout-select').value = 'L1';
+        $('edit-layout-select').dispatchEvent(new window.Event('change', { bubbles: true }));
+        await settle();
+        expect($('dialog').hidden).toBe(true);
+        expect(mode()).toBe('custom');
+    });
+
     it('leaves straight away when nothing has changed', async () => {
         await boot({});
         await settle();
