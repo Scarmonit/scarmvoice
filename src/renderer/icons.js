@@ -236,6 +236,8 @@
         'bell-off': '<path d="M18 8.8a6 6 0 0 0-12 0c0 6-2.4 7.6-2.4 7.6h16.8S18 14.8 18 8.8"/>' +
             '<path d="M13.7 20.2a2 2 0 0 1-3.4 0"/><path d="M3.6 3.4l16.8 17.2"/>',
         moon: '<path d="M20.4 13.6A8.6 8.6 0 0 1 10.4 3.6a8.6 8.6 0 1 0 10 10z"/>',
+        // A bare dash — remove-this-colour in the theme picker's hex row.
+        minus: '<path d="M6 12h12"/>',
         // Two curved arrows chasing each other — the sync-with-Windows theme
         // tile's glyph.
         sync: '<path d="M4.6 10a7.6 7.6 0 0 1 12.9-3.4L19.4 8.5M19.4 4.5v4h-4"/>' +

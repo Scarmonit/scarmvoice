@@ -12101,10 +12101,13 @@
         $('tm-base-light').classList.toggle('on', tmCfg.base === 'light');
         $('tm-base-light').setAttribute('aria-checked', String(tmCfg.base === 'light'));
 
-        // The strip behind the swatches wears the EXACT underlay the window
-        // gets — same string, same function — so it is the blend, not a
-        // re-derivation that could drift from it.
-        $('tm-gradstrip').style.background = window.ScarmTheme.underlayOf(tmCfg);
+        // The strip is a gradient EDITOR: the blend always runs along its
+        // long axis, whatever the window's Direction says — an angled render
+        // compressed the fade into the strip's 40px of height and divorced
+        // the chips from their stops. Direction is the slider's story.
+        $('tm-gradstrip').style.background = tmCfg.colors.length > 1
+            ? 'linear-gradient(90deg, ' + tmCfg.colors.join(', ') + ')'
+            : tmCfg.colors[0];
 
         $('tm-sv').style.setProperty('--tm-hue', String(Math.round(tmHsv[0])));
         $('tm-sv-thumb').style.left = (tmHsv[1] * 100) + '%';
@@ -12118,36 +12121,33 @@
 
         const box = $('tm-swatches');
         box.innerHTML = '';
+        const n = tmCfg.colors.length;
         tmCfg.colors.forEach((c, i) => {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'tm-sw' + (i === tmSel ? ' on' : '');
             b.style.background = c;
+            // AT ITS STOP: a chip sits where its colour falls in the blend,
+            // 8%-92% so the end chips clear the strip's rounded corners. One
+            // colour has no stops — it sits centred on its uniform wash.
+            b.style.left = (n === 1 ? 50 : 8 + (i / (n - 1)) * 84) + '%';
             b.title = c.toUpperCase();
             b.setAttribute('aria-label', 'Color ' + (i + 1) + ', ' + c);
             b.addEventListener('click', () => { tmSel = i; tmSetColor(tmCfg.colors[i]); });
-            if (tmCfg.colors.length > 1) {
-                const x = document.createElement('button');
-                x.type = 'button';
-                x.className = 'tm-sw-x';
-                x.textContent = '×';
-                x.title = 'Remove this color';
-                x.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    tmCfg.colors.splice(i, 1);
-                    tmSel = Math.min(tmSel, tmCfg.colors.length - 1);
-                    tmSetColor(tmCfg.colors[tmSel]);
-                });
-                b.appendChild(x);
-            }
             box.appendChild(b);
         });
-        $('tm-add').hidden = tmCfg.colors.length >= 4;
+        $('tm-add').hidden = n >= 4;
+        // Removal lives beside the hex field and acts on the SELECTED colour;
+        // with one colour there is nothing to remove.
+        $('tm-remove').hidden = n < 2;
 
         $('tm-angle').value = String(tmCfg.angle || 0);
         $('tm-angle-val').textContent = (tmCfg.angle || 0) + '°';
         $('tm-intensity').value = String(tmCfg.intensity);
         $('tm-intensity-val').textContent = tmCfg.intensity + '%';
+        // The travelled half of the intensity bar is filled — see styles.css;
+        // Direction deliberately has no fill, an angle is not an amount.
+        $('tm-intensity').style.setProperty('--fill', tmCfg.intensity + '%');
     }
 
     async function openThemeModal() {
@@ -12251,17 +12251,27 @@
     $('tm-intensity').addEventListener('input', () => {
         tmCfg.intensity = Math.max(0, Math.min(100, Math.round(Number($('tm-intensity').value) || 0)));
         $('tm-intensity-val').textContent = tmCfg.intensity + '%';
+        $('tm-intensity').style.setProperty('--fill', tmCfg.intensity + '%');
         tmApply();
     });
 
     // The gradient's direction. 360 IS 0 — the slider's top end wraps rather
-    // than being a distinct angle, so the readout never says 360°.
+    // than being a distinct angle, so the readout never says 360°. Only the
+    // WINDOW turns: the strip is an editor laid out along its own axis, and
+    // it holds still while the world rotates.
     $('tm-angle').addEventListener('input', () => {
         tmCfg.angle = Math.round(Number($('tm-angle').value) || 0) % 360;
         $('tm-angle-val').textContent = tmCfg.angle + '°';
-        // The strip and the window both follow the angle live.
-        $('tm-gradstrip').style.background = window.ScarmTheme.underlayOf(tmCfg);
         tmApply();
+    });
+
+    // Remove the SELECTED colour — the "−" beside the eyedropper, the way out
+    // that Add Color never had. Hidden while there is only one colour.
+    $('tm-remove').addEventListener('click', () => {
+        if (tmCfg.colors.length < 2) return;
+        tmCfg.colors.splice(tmSel, 1);
+        tmSel = Math.min(tmSel, tmCfg.colors.length - 1);
+        tmSetColor(tmCfg.colors[tmSel]);
     });
 
     $('tm-surprise').addEventListener('click', () => {

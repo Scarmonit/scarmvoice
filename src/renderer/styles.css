@@ -6907,18 +6907,22 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 }
 .tm-eyebtn:hover { background: var(--hover); color: var(--text); }
 .tm-eyebtn .ico { width: 15px; height: 15px; }
-/* The strip wearing the theme's own gradient, with one swatch per colour ON
-   it. app.js paints its background from the exact underlay string the window
-   gets. The white swatch edges are drawn on the user's own colours — the one
-   surface in the app that answers to no theme — so they are literal, like the
-   picker spectrum above them. */
+/* The strip is a gradient EDITOR, not a preview of the window: the blend
+   always runs along its long axis, and each chip sits at its own stop
+   position across it — so the strip answers "where does each colour fall in
+   the fade". The window's angle is the Direction slider's job; rendering it
+   here compressed the whole blend into 40px of height and left the chips
+   bunched in a corner with no relation to their stops. The white chip edges
+   are drawn on the user's own colours — the one surface in the app that
+   answers to no theme — so they are literal, like the picker spectrum. */
 #tm-gradstrip {
-  border-radius: 9px; padding: 7px 8px;
+  position: relative; height: 40px; border-radius: 9px;
   border: 1px solid var(--float-rule);
 }
-#tm-swatches { display: flex; gap: 10px; }
+#tm-swatches { position: absolute; inset: 0; }
 .tm-sw {
-  position: relative; width: 26px; height: 26px; border-radius: 7px;
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 26px; height: 26px; border-radius: 7px;
   border: 2px solid rgba(255, 255, 255, .55); cursor: pointer; padding: 0;
 }
 .tm-sw:hover { border-color: rgba(255, 255, 255, .8); }
@@ -6926,13 +6930,30 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
   border-color: #fff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
 }
-.tm-sw-x {
-  position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
-  border-radius: 50%; border: none; cursor: pointer;
-  background: var(--danger-solid); color: #fff;
-  font-size: 11px; line-height: 16px; padding: 0; display: none;
+
+/* The panel's sliders: the app's own 4px groove + white 16px thumb (see
+   .ap-slider) — these were falling through to the native control, whose
+   near-white track was the brightest thing on the panel. Intensity FILLS to
+   the thumb, because an intensity is a magnitude; Direction deliberately
+   does not — an angle is a position on a wheel, not an amount, and a fill
+   would claim 181° is "more" than 90°. */
+.tm-body input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  display: block; width: 100%; height: 16px; margin: 0;
+  background: none; outline: none; cursor: pointer;
 }
-.tm-sw:hover .tm-sw-x { display: block; }
+.tm-body input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px; margin-top: 6px;
+  background: linear-gradient(var(--slider), var(--slider)) 0 / var(--fill, 0%) 100% no-repeat,
+              var(--track);
+}
+#tm-angle::-webkit-slider-runnable-track { background: var(--track); }
+.tm-body input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+  background: #fff; border: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+}
+.tm-body input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .tm-row { display: flex; justify-content: space-between; align-items: center; font-size: 13.5px; }
 .tm-row span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
 #tm-intensity { width: 100%; }
@@ -6941,7 +6962,7 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    --ctl is "a button raised on a floating surface", which is exactly where
    these sit — the fill follows every theme the panel previews. */
 .tm-wide {
-  width: 100%; height: 38px; display: inline-flex; align-items: center;
+  width: 100%; height: 40px; display: inline-flex; align-items: center;
   justify-content: center; gap: 6px;
   background: var(--ctl); border: 1px solid var(--ctl-line);
   border-radius: 8px; cursor: pointer;

@@ -116,10 +116,12 @@ describe('the customizer', () => {
         $('tm-add').click();
         await settle(4);
         expect(rootVar('--theme-underlay')).toMatch(/^linear-gradient\(/);
-        // The swatch strip previews the same gradient the window gets. (The
-        // DOM re-serialises inline hex as rgb(), so match shape and angle
-        // rather than the byte-for-byte string.)
-        expect($('tm-gradstrip').style.background).toContain('linear-gradient(180deg');
+        // The strip is an EDITOR: its blend always runs along the long axis
+        // (90deg), whatever the window's Direction says, and each chip sits
+        // at its stop position across it.
+        expect($('tm-gradstrip').style.background).toContain('linear-gradient(90deg');
+        const chips = [...document.querySelectorAll('#tm-swatches .tm-sw')];
+        expect(chips.map((c) => c.style.left)).toEqual(['8%', '92%']);
 
         const angle = $('tm-angle');
         angle.value = '90';
@@ -130,9 +132,12 @@ describe('the customizer', () => {
         // CSS 0deg points up, so 90° on the slider is 270deg in the string —
         // the first colour enters from the left.
         expect(rootVar('--theme-underlay')).toContain('270deg');
+        // …and the strip does NOT turn with it: it is an editor, not a window.
+        expect($('tm-gradstrip').style.background).toContain('linear-gradient(90deg');
 
-        // Back to one colour for the tests that follow.
-        document.querySelector('#tm-swatches .tm-sw .tm-sw-x').click();
+        // Back to one colour for the tests that follow — via the "−" beside
+        // the eyedropper, which acts on the selected colour.
+        document.querySelector('#tm-remove').click();
         await settle(4);
     });
 
@@ -150,18 +155,17 @@ describe('the customizer', () => {
         expect(rootVar('--chat')).not.toBe('#1a1a1e');
     });
 
-    it('adds a second colour, then removes it', async () => {
+    it('adds a second colour, then removes it with the minus button', async () => {
+        // With one colour there is nothing to remove, so the "−" is hidden.
+        expect($('tm-remove').hidden).toBe(true);
         $('tm-add').click();
         await settle(4);
         expect(document.querySelectorAll('#tm-swatches .tm-sw').length).toBe(2);
-        // With one colour there is nothing to remove, so no × was offered;
-        // with two, every swatch carries one.
-        const x = document.querySelector('#tm-swatches .tm-sw .tm-sw-x');
-        expect(x).toBeTruthy();
-        x.click();
+        expect($('tm-remove').hidden).toBe(false);
+        $('tm-remove').click();
         await settle(4);
         expect(document.querySelectorAll('#tm-swatches .tm-sw').length).toBe(1);
-        expect(document.querySelector('#tm-swatches .tm-sw .tm-sw-x')).toBe(null);
+        expect($('tm-remove').hidden).toBe(true);
     });
 
     it('the base toggle flips the whole app to a light footing', async () => {
