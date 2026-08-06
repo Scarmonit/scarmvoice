@@ -121,10 +121,10 @@ describe('the custom tint', () => {
         // top-to-bottom — matching how the reference reads its slider, so a
         // theme carried between the two apps keeps its direction.
         // …and the stops are the SHEET colours: the picks under the one
-        // global dim (×0.8·k — at 80 that keeps ×0.64), with the luminance
+        // global dim (×0.88·k — at 80 that keeps ×0.704), with the luminance
         // floor lifting the deep blue (whose dimmed lum lands under 16)
         // proportionally back up.
-        expect(rootVar('--theme-underlay')).toBe('linear-gradient(0deg, #a30000, #0000de)');
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(0deg, #b40000, #0000de)');
         // The structural panes are the reference's FIXED overlays — pure
         // black at constant opacities, so any sheet keeps its hue and the
         // panel-to-panel contrast never depends on the palette: the rail is
@@ -194,12 +194,12 @@ describe('the custom tint', () => {
 
     it('honours the gradient direction', () => {
         T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 60, angle: 90 });
-        expect(rootVar('--theme-underlay')).toBe('linear-gradient(90deg, #7a0000, #0000de)');
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(90deg, #870000, #0000de)');
     });
 
     it('a single colour is a uniform wash, not a gradient', () => {
         T.apply('custom', { base: 'dark', colors: ['#5865f2'], intensity: 80 });
-        expect(rootVar('--theme-underlay')).toBe('#38419b');
+        expect(rootVar('--theme-underlay')).toBe('#3e47aa');
         expect(rgba(rootVar('--chat')).a).toBeLessThan(1);
     });
 
@@ -233,7 +233,7 @@ describe('the custom tint', () => {
     it('normalizeCustom refuses garbage without refusing the user', () => {
         expect(T.normalizeCustom(null)).toEqual({
             base: 'dark',
-            colors: ['#e15d3f', '#8c3f94', '#4b26f0', '#5f8594', '#76ee0f'],
+            colors: ['#cd5439', '#7f3986', '#4422da', '#567886', '#6bd80e'],
             intensity: 50, angle: 180
         });
         expect(T.normalizeCustom({ base: 'mauve', colors: ['xyz', '#ABC'], intensity: 999, angle: 999 }))

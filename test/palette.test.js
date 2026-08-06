@@ -1215,6 +1215,22 @@ describe('an empty channel', () => {
     });
 });
 
+describe('the DM place replaces the server view', () => {
+    it('unpaints the covered surfaces while the panel is open', () => {
+        // The panel COVERS the channel header, message column and member
+        // list — but covered only equals replaced while every surface is
+        // opaque, and a custom theme makes them translucent by design. The
+        // server view must not paint at all, derived from the ONE state bit
+        // that decides the place (#dm-panel's hidden attribute), and with
+        // visibility so the hidden view keeps its scroll position.
+        for (const el of ['#chan-head', '#main', '#members-panel']) {
+            expect(css).toContain(
+                `#app:not([data-layout="custom"]):has(> #dm-panel:not([hidden])) > ${el}`);
+        }
+        expect(css).toContain('#app[data-layout="custom"]:has(> #dm-panel:not([hidden])) > #main { visibility: hidden; }');
+    });
+});
+
 describe('the composer and the member list', () => {
     const src = () => fs.readFileSync(path.join(RENDERER, 'app.js'), 'utf8');
     const html = () => fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
@@ -1733,12 +1749,16 @@ describe('the scrollbar', () => {
         expect(dark).toMatch(/--scrollbar-hover:\s*rgba\(255, 255, 255, \.22\)/);
     });
 
-    it('hides itself when nothing is happening', () => {
+    it('hides the side scrollers at rest — but never the conversation\'s', () => {
         // Transparent at rest; hover brings it back, and so does actually
-        // scrolling — the case CSS alone cannot express.
-        expect(css).toMatch(/#messages::-webkit-scrollbar-thumb,[\s\S]{0,320}background: transparent/);
-        expect(css).toMatch(/#messages\.scrolling::-webkit-scrollbar-thumb/);
-        expect(css).toMatch(/#messages:hover::-webkit-scrollbar-thumb/);
+        // scrolling — the case CSS alone cannot express. The CHAT scrollers
+        // are exempt: the reference keeps a permanent thumb on the
+        // conversation itself, a position indicator as much as a handle, so
+        // #messages and #dm-messages must NOT appear in the hide list.
+        expect(css).toMatch(/#thread-list::-webkit-scrollbar-thumb,[\s\S]{0,200}background: transparent/);
+        expect(css).toMatch(/\.side-scroll:hover::-webkit-scrollbar-thumb/);
+        expect(css).not.toMatch(/#messages::-webkit-scrollbar-thumb,[\s\S]{0,320}background: transparent/);
+        expect(css).not.toMatch(/#dm-messages::-webkit-scrollbar-thumb,[\s\S]{0,320}background: transparent/);
     });
 });
 

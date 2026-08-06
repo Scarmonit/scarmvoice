@@ -122,13 +122,13 @@
     const SYMBOL = { dark: '#e9ebf0', light: '#3a3d43' };
 
     // The default/reference theme. The five PICKS are chosen so that after
-    // the global dim at the default 50% intensity (×0.40 — see sheetColor)
+    // the global dim at the default 50% intensity (×0.44 — see sheetColor)
     // the rail shows the reference's measured sheet exactly:
     //   #5a2519 0%, #38193b 25%, #1e0f60 50%, #26353b 75%, #2f5f06 100%
-    // at 180° — pick × 0.40 = sheet stop, verified stop by stop.
+    // at 180° — pick × 0.44 = sheet stop, verified stop by stop.
     const DEFAULT_CUSTOM = {
         base: 'dark',
-        colors: ['#e15d3f', '#8c3f94', '#4b26f0', '#5f8594', '#76ee0f'],
+        colors: ['#cd5439', '#7f3986', '#4422da', '#567886', '#6bd80e'],
         intensity: 50,
         angle: 180
     };
@@ -296,11 +296,13 @@
 
     // The SHEET: the user's vivid picks with the one global dim applied —
     // the reference's dark base and the intensity slider combined into a
-    // single multiplier. Measured at the slider's midpoint the combination
-    // is a ~60% black overlay, so the gain runs 0.8·k: 50% intensity keeps
-    // ×0.40 of each pick, 100% keeps ×0.80. Multiplicative, so hue and
-    // saturation survive; the per-panel overlays above this never vary, so
-    // intensity is expressed HERE and nowhere else.
+    // single multiplier. The gain runs 0.88·k: 50% intensity keeps ×0.44 of
+    // each pick. (It shipped at 0.8·k first; pixel-matching the container
+    // interiors against the reference measured them a uniform ~8-10% dark —
+    // the interiors were already true zero-overlay, so the deficit was this
+    // dim, not a stray layer.) Multiplicative, so hue and saturation
+    // survive; the per-panel overlays above this never vary, so intensity
+    // is expressed HERE and nowhere else.
     //
     // The FLOOR is the upstream safeguard: a very dark pick, dimmed and
     // then slabbed under the chat pane's fixed 22%, would crush to
@@ -309,7 +311,7 @@
     // overlays stay untouched. A light base runs the same pipeline
     // mirrored: the dim becomes a lift toward white, and the floor becomes
     // a ceiling so near-white picks cannot crush to paper.
-    const SHEET_GAIN = 0.8;
+    const SHEET_GAIN = 0.88;
     const FLOOR_LUM = 16;
 
     function sheetColor(hex, cfg) {

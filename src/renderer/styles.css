@@ -323,10 +323,19 @@
      treatment — not an accent colour). */
   --theme-ov-head: rgba(0, 0, 0, .34);
   --theme-plate: rgba(0, 0, 0, .25);
-  --theme-card-line: rgba(255, 255, 255, .11);
+  /* A whisper, not a line: at .11 the card edge read as a drawn border. */
+  --theme-card-line: rgba(255, 255, 255, .07);
   --theme-veil: rgba(45, 20, 86, .15);
   --theme-on-fill: rgba(255, 255, 255, .9);
   --theme-on-ink: #2b2d31;
+  /* Neutral raised plates on the themed field: the Edit Channel button (an
+     accent fill leaked in there) and the chip behind the voice signal. */
+  --theme-btn: rgba(255, 255, 255, .1);
+  --theme-chip: rgba(255, 255, 255, .14);
+  /* The chat scrollbar under a theme: a subtle light thumb over a slightly
+     darker groove, per the reference's measurements. */
+  --theme-scroll-thumb: rgba(255, 255, 255, .09);
+  --theme-scroll-track: rgba(0, 0, 0, .12);
 
   --radius: 10px;
   --tb: 31px;
@@ -437,18 +446,15 @@ button { font-family: inherit; background: none; border: 0; }
    stops (see app.js); hover shows it too, because that is when somebody is about
    to reach for it. Scoped to the scrollers this applies to rather than done with
    `*`, which would recalculate the whole document each time the class flips. */
-#messages::-webkit-scrollbar-thumb,
+/* The CHAT scrollers are exempt: the reference keeps a permanent thumb on
+   the conversation itself — that one is a position indicator as much as a
+   handle, and it is the one people reach for. */
 #thread-list::-webkit-scrollbar-thumb,
-#dm-messages::-webkit-scrollbar-thumb,
 .side-scroll::-webkit-scrollbar-thumb,
 #members-list::-webkit-scrollbar-thumb { background: transparent; }
 
-#messages:hover::-webkit-scrollbar-thumb,
-#messages.scrolling::-webkit-scrollbar-thumb,
 #thread-list:hover::-webkit-scrollbar-thumb,
 #thread-list.scrolling::-webkit-scrollbar-thumb,
-#dm-messages:hover::-webkit-scrollbar-thumb,
-#dm-messages.scrolling::-webkit-scrollbar-thumb,
 .side-scroll:hover::-webkit-scrollbar-thumb,
 .side-scroll.scrolling::-webkit-scrollbar-thumb,
 #members-list:hover::-webkit-scrollbar-thumb,
@@ -1052,7 +1058,7 @@ body.edit-mode { overflow: hidden; }
 .vl-status:hover .vl-face-front, .vl-status[aria-expanded="true"] .vl-face-front { transform: rotateX(180deg); }
 .vl-status:hover .vl-face-back, .vl-status[aria-expanded="true"] .vl-face-back { transform: rotateX(0deg); }
 .vl-details {
-  font-size: 14px; color: var(--voice-ok); font-weight: 700; line-height: 1.15;
+  font-size: 14px; color: var(--voice-ok); font-weight: 600; line-height: 1.15;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 #vl-where-2 {
@@ -1068,7 +1074,8 @@ body.edit-mode { overflow: hidden; }
 #voice-live .vl-signal { width: 19px; height: 19px; flex: 0 0 19px; color: var(--voice-ok); }
 .vl-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 #vl-label {
-  font-size: 14px; color: var(--voice-ok); font-weight: 700; line-height: 1.15;
+  /* 600: at 700 the line sat visibly heavier than the reference's. */
+  font-size: 14px; color: var(--voice-ok); font-weight: 600; line-height: 1.15;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* Where you are. Without it the panel reports a state and nothing else, which
@@ -2060,7 +2067,9 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 /* Dimmer than a --dim label: this is text that is not there yet. */
 #composer-input::placeholder { color: var(--placeholder); }
 #btn-attach {
-  width: 56px; height: 56px; flex: 0 0 56px;
+  /* 36 wide, not 56: the reference's + sits ~18px from the bar's left
+     edge, and the old width parked it a full button further in. */
+  width: 36px; height: 56px; flex: 0 0 36px;
   display: grid; place-items: center; align-self: flex-end;
   background: none; border: 0; cursor: pointer; color: var(--muted);
 }
@@ -4121,10 +4130,14 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
      identical on a light base; only the overlay colour inverts. */
   --theme-ov-head: rgba(255, 255, 255, .34);
   --theme-plate: rgba(255, 255, 255, .4);
-  --theme-card-line: rgba(0, 0, 0, .1);
+  --theme-card-line: rgba(0, 0, 0, .07);
   --theme-veil: rgba(255, 255, 255, .3);
   --theme-on-fill: rgba(0, 0, 0, .7);
   --theme-on-ink: #f8f9fb;
+  --theme-btn: rgba(0, 0, 0, .06);
+  --theme-chip: rgba(0, 0, 0, .08);
+  --theme-scroll-thumb: rgba(0, 0, 0, .12);
+  --theme-scroll-track: rgba(255, 255, 255, .12);
 }
 
 /* The rail pill and the unread pill are white-on-dark by nature; invert them. */
@@ -4247,6 +4260,30 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   background: var(--chat);
 }
 #dm-panel[hidden] { display: none; }
+/* WHILE THE DM PLACE IS OPEN, THE SERVER VIEW DOES NOT RENDER AT ALL.
+   The panel sits over the channel header, the message column and the member
+   list — but "covered" only equalled "replaced" while every surface was
+   opaque. A custom theme makes the surfaces translucent BY DESIGN, and the
+   whole server view read straight through the conversation on top of it:
+   two views painting into the same space, masked rather than swapped.
+
+   Mutual exclusivity is derived from the ONE state bit that already
+   decides the place — #dm-panel's hidden attribute, written only by
+   setDmMode/closeDm in app.js — so the two views cannot disagree: the
+   same bit that shows one is what unpaints the other. visibility rather
+   than display, deliberately: the hidden view keeps its layout, its grid
+   tracks and the message list's scroll position for the way back, it
+   simply paints nothing.
+
+   In a custom Edit-Mode layout the panel takes only the message area's
+   rectangle — the member list stays by design there — so only #main
+   unpaints. */
+#app:not([data-layout="custom"]):has(> #dm-panel:not([hidden])) > #chan-head,
+#app:not([data-layout="custom"]):has(> #dm-panel:not([hidden])) > #main,
+#app:not([data-layout="custom"]):has(> #dm-panel:not([hidden])) > #members-panel {
+  visibility: hidden;
+}
+#app[data-layout="custom"]:has(> #dm-panel:not([hidden])) > #main { visibility: hidden; }
 
 #dm-head {
   flex: none; height: 48px; display: flex; align-items: center; gap: 8px;
@@ -6916,7 +6953,8 @@ html.tm-underlay #user-dock {
 }
 html.tm-underlay #user-dock::before {
   content: ""; position: absolute; inset: 8px 8px 7px; z-index: -1;
-  border-radius: 12px;
+  /* 5px, measured — 12 read rounder than the reference draws it. */
+  border-radius: 5px;
   border: 1px solid var(--theme-card-line);
   background: var(--theme-underlay);
   background-attachment: fixed;
@@ -6927,7 +6965,7 @@ html.tm-underlay #user-dock::before {
    card's own corners. */
 html.tm-underlay #voice-panel:has(#voice-live:not([hidden])) {
   background: var(--theme-veil);
-  border-radius: 12px 12px 0 0;
+  border-radius: 5px 5px 0 0;
 }
 /* The composer cut-out: the same fixed-attachment window onto the sheet,
    floating in the chat slab that now runs beneath and beside it. */
@@ -6935,6 +6973,7 @@ html.tm-underlay .composer-row {
   background: var(--theme-underlay);
   background-attachment: fixed;
   border-color: var(--theme-card-line);
+  border-radius: 5px;      /* measured; the stock 8 read too round themed */
 }
 /* One family of pills on the bright card: dark constant plates, exactly
    the reference's. */
@@ -6948,6 +6987,40 @@ html.tm-underlay #btn-nsai.on, html.tm-underlay #btn-ptt.on {
   background: var(--theme-on-fill);
   color: var(--theme-on-ink);
 }
+/* The welcome header's "#" disc: .ci-mark wears --mark, a nested token
+   that goes clear under a theme — so the badge vanished. The reference
+   keeps a faint lighter disc behind the glyph. */
+html.tm-underlay .ci-mark { background: var(--hover); }
+/* Edit Channel is a neutral raised plate, not the accent: --float-2 is
+   hue-tinted under a theme and leaked in as a saturated fill. */
+html.tm-underlay .ci-btn { background: var(--theme-btn); }
+html.tm-underlay .ci-btn:hover { background: var(--theme-chip); }
+/* The signal icon rides a lighter rounded-square chip, as the reference
+   draws it in the voice header. */
+html.tm-underlay #voice-live .vl-signal {
+  width: 27px; height: 27px; flex: 0 0 27px;
+  padding: 5px; box-sizing: border-box;
+  background: var(--theme-chip); border-radius: 6px;
+}
+/* The reference's me-row glyphs are soft grey-white, not stark white —
+   and its placeholder is a muted wash, not near-white text. The danger
+   states (muted / deafened) outrank this and keep their red. */
+html.tm-underlay #me-bar .icon-btn { color: rgba(255, 255, 255, .75); }
+html.tm-underlay #me-bar .icon-btn:hover { color: rgba(255, 255, 255, .95); }
+html.tm-underlay { --placeholder: rgba(255, 255, 255, .45); }
+/* Smaller presence dot with a dark separating ring: the stock ring is
+   punched in --panel, which is transparent under a theme — the dot sat
+   bare on the bright card and read oversized. */
+html.tm-underlay .me-presence {
+  width: 14px; height: 14px; right: -2px; bottom: -2px;
+  border: 3px solid rgba(0, 0, 0, .5);
+}
+/* The chat scrollbar: a subtle light thumb over a slightly darker groove,
+   measured off the reference. */
+html.tm-underlay #messages::-webkit-scrollbar-thumb {
+  background: var(--theme-scroll-thumb); background-clip: content-box;
+}
+html.tm-underlay #messages::-webkit-scrollbar-track { background: var(--theme-scroll-track); }
 
 /* ---- custom theme picker ------------------------------------------------
    A panel DOCKED to the right edge — deliberately not a modal. Every change

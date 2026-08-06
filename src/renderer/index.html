@@ -519,7 +519,7 @@
       </div>
       <div class="composer-row">
         <button type="button" id="btn-attach" title="Attach a file (max 1 GB)">
-          <span class="ico" data-icon="plus"></span>
+          <span class="ico" data-icon="plus-circle"></span>
         </button>
         <!-- No maxlength, deliberately. It used to be 2000, which meant a long
              paste stopped dead partway through with no explanation and no way to
@@ -2578,6 +2578,11 @@
      place before the SDK ever calls getUserMedia. -->
 <script src="soundboard.js"></script>
 <script src="voice.js"></script>
+<!-- AFTER voice.js so its fetch/WebSocket/getUserMedia/RTCPeerConnection
+     wrappers are the outermost layer — a join trace then measures the whole
+     cost of each operation, RNNoise and DTX-stripping included. Dormant
+     unless a join is in flight. -->
+<script src="jointrace.js"></script>
 <script src="sounds.js"></script>
 <!-- The theme engine (Ash, Onyx, the custom tint). Before app.js, which calls
      ScarmTheme.apply from applyTheme() during boot. -->

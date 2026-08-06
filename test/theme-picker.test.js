@@ -107,10 +107,10 @@ describe('the customizer', () => {
         await settle(4);
         // The edit lands on the SELECTED swatch — the first of the default
         // five — and the underlay's first stop follows it, dimmed by the
-        // global ×0.40 at the default 50% intensity (#ff0000 → #660000).
+        // global ×0.44 at the default 50% intensity (#ff0000 → #700000).
         // The panes above are the fixed overlays; the strip above the picker
         // keeps showing the raw colour.
-        expect(rootVar('--theme-underlay')).toMatch(/^linear-gradient\(180deg, #660000,/);
+        expect(rootVar('--theme-underlay')).toMatch(/^linear-gradient\(180deg, #700000,/);
         expect(rootVar('--chat')).toBe('rgba(0, 0, 0, 0.22)');
         expect($('tm-swatch-current').style.background).toBeTruthy();
     });
@@ -198,7 +198,7 @@ describe('the customizer', () => {
         await settle(4);
         // The default is the reference gradient's five picks at 50%.
         expect(app.settings.customTheme.colors)
-            .toEqual(['#e15d3f', '#8c3f94', '#4b26f0', '#5f8594', '#76ee0f']);
+            .toEqual(['#cd5439', '#7f3986', '#4422da', '#567886', '#6bd80e']);
         expect(app.settings.customTheme.intensity).toBe(50);
     });
 

@@ -43,9 +43,15 @@
         'user-add': '<circle cx="9.5" cy="8" r="3.8"/>' +
             '<path d="M2.8 20.2a6.9 6.9 0 0 1 13.4 0"/>' +
             '<path d="M19 6.6v6.4M15.8 9.8h6.4"/>',
-        // A waveform with the noise struck out of it.
-        noise: '<g stroke-linecap="round"><path d="M3.5 10v4"/><path d="M8 6.5v11"/>' +
-            '<path d="M12.5 9v6"/><path d="M17 5.5v13"/><path d="M21 10v4"/></g>' +
+        // A waveform with the noise struck out of it. Filled bars, the
+        // reference's solid style — at button size an outlined bar is mostly
+        // outline.
+        noise: '<g fill="currentColor" stroke="none">' +
+            '<rect x="2.4" y="9.4" width="2.4" height="5.2" rx="1.2"/>' +
+            '<rect x="6.9" y="5.6" width="2.4" height="12.8" rx="1.2"/>' +
+            '<rect x="11.4" y="8" width="2.4" height="8" rx="1.2"/>' +
+            '<rect x="15.9" y="4.6" width="2.4" height="14.8" rx="1.2"/>' +
+            '<rect x="20.2" y="9.4" width="2.4" height="5.2" rx="1.2"/></g>' +
             '<path class="ico-cut" d="M3.6 20.4L20.4 3.6"/><path d="M3.6 20.4L20.4 3.6"/>',
 
         // Connection strength, not a dot. A dot can only say connected or not;
@@ -82,7 +88,7 @@
             // as part of the mic at 22px — see .ico-cut in styles.css.
             '<path class="ico-cut" d="M3.6 3.2l16.8 17.6"/>' +
             '<path d="M3.6 3.2l16.8 17.6"/>',
-        'mic-record': '<rect x="8.4" y="2.8" width="6" height="11" rx="3"/>' +
+        'mic-record': '<rect fill="currentColor" stroke="none" x="8.4" y="2.8" width="6" height="11" rx="3"/>' +
             '<path d="M5 11.2a6.4 6.4 0 0 0 12.8 0"/><path d="M11.4 17.6v3.6"/>' +
             '<circle class="rec-dot" cx="19.4" cy="4.9" r="2.7" fill="currentColor" stroke="none"/>',
 
@@ -126,7 +132,8 @@
         // it read as an eye with a line through it rather than as a phone —
         // this shape IS the hang-up, and it is wide and flat the way the
         // reference draws it.
-        'phone-hangup': '<path d="M3.4 9.2a13.6 13.6 0 0 1 17.2 0v3a1.6 1.6 0 0 1-1.6 1.6h-2a1.6 1.6 0 0 1-1.6-1.4' +
+        'phone-hangup': '<path fill="currentColor" stroke="none" ' +
+            'd="M3.4 9.2a13.6 13.6 0 0 1 17.2 0v3a1.6 1.6 0 0 1-1.6 1.6h-2a1.6 1.6 0 0 1-1.6-1.4' +
             'l-.2-1.5a10.6 10.6 0 0 0-6 0l-.2 1.5a1.6 1.6 0 0 1-1.6 1.4H5a1.6 1.6 0 0 1-1.6-1.6z"/>',
         // The slashed variant stays for "remove somebody FROM voice", where the
         // mark has to say denial rather than hang up.
@@ -141,14 +148,21 @@
         'volume-off': '<path d="M11 4.6L6.2 8.7H3.4v6.6h2.8L11 19.4z"/>' +
             '<path d="M16.4 9.6l5 4.8"/><path d="M21.4 9.6l-5 4.8"/>',
 
-        camera: '<path class="cam-lens" d="M22.4 7.6l-6.4 4.4 6.4 4.4z"/>' +
+        // Filled body and lens — the reference's solid style. Same geometry,
+        // same animation hooks (.cam-body / .cam-lens / .cam-rec).
+        camera: '<g fill="currentColor" stroke="none">' +
+            '<path class="cam-lens" d="M22.4 7.6l-6.4 4.4 6.4 4.4z"/>' +
             '<rect class="cam-body" x="1.6" y="5.2" width="14.4" height="13.6" rx="2.4"/>' +
-            '<circle class="cam-rec" cx="19.8" cy="4.6" r="2.3" fill="currentColor" stroke="none"/>',
+            '<circle class="cam-rec" cx="19.8" cy="4.6" r="2.3"/></g>',
         // The arrow rides out of the frame on hover, which is what the button
-        // does: it sends this screen outward.
-        screen: '<g class="mon-frame"><rect x="2.2" y="4" width="19.6" height="13" rx="2.2"/>' +
-            '<path d="M8 21h8M12 17v4"/></g>' +
-            '<g class="mon-arrow"><path d="M12 13.6V8M9.4 10.6L12 8l2.6 2.6"/></g>',
+        // does: it sends this screen outward. Solid: the monitor is a filled
+        // slab with the arrow PUNCHED out of it (evenodd), the reference's
+        // own treatment; the stand fills to match.
+        screen: '<g class="mon-frame" fill="currentColor" stroke="none">' +
+            '<path fill-rule="evenodd" clip-rule="evenodd" ' +
+            'd="M4.4 4A2.2 2.2 0 0 0 2.2 6.2v8.6A2.2 2.2 0 0 0 4.4 17h15.2a2.2 2.2 0 0 0 2.2-2.2V6.2' +
+            'A2.2 2.2 0 0 0 19.6 4ZM12 6.4l3.6 3.7h-2.4v4.1h-2.4v-4.1H8.4Z"/>' +
+            '<path d="M10.8 17h2.4v2.2h3a.9.9 0 0 1 0 1.8H7.8a.9.9 0 0 1 0-1.8h3Z"/></g>',
         // The same monitor WITHOUT the outbound arrow. `screen` means "send this
         // screen outward" — it is the share button — and beside the words
         // "Entire Screen" in the picker's category row that arrow reads as a
@@ -159,6 +173,12 @@
 
         // ---- navigation + generic actions -------------------------------
         plus: '<path d="M12 5v14M5 12h14"/>',
+        // The plus in a solid disc — the composer's attach affordance, the
+        // reference's exact treatment. The bare `plus` above stays for the
+        // list headers, where a disc would be a button that isn't there.
+        'plus-circle': '<path fill="currentColor" stroke="none" fill-rule="evenodd" clip-rule="evenodd" ' +
+            'd="M12 2.6a9.4 9.4 0 1 0 0 18.8a9.4 9.4 0 1 0 0-18.8Z' +
+            'M13.1 6.9v4h4v2.2h-4v4h-2.2v-4h-4v-2.2h4v-4Z"/>',
         'plus-circle': '<circle cx="12" cy="12" r="8.6"/><path d="M12 8.2v7.6M8.2 12h7.6"/>',
         chevron: '<path d="M9.4 5.6L15.8 12l-6.4 6.4"/>',
         // The same mark drawn pointing down, rather than the right-pointing one
@@ -198,7 +218,11 @@
         crown: '<path fill="currentColor" stroke="none" d="M3 18.4h18l1.6-10.2-5.4 3.6L12 4.4' +
             'l-5.2 7.4-5.4-3.6zM3 20h18v1.6H3z"/>',
         // Paper plane, drawn rather than filled so it matches everything else.
-        send: '<path d="M21.4 3.4L10.6 14.2"/><path d="M21.4 3.4l-6.8 18-3.9-8.1-8.1-3.9z"/>',
+        // The plane as a solid silhouette with the fold punched — the
+        // reference's filled style.
+        send: '<path fill="currentColor" stroke="none" ' +
+            'd="M21.9 2.1a.9.9 0 0 1 .2 1l-7 18.1a.9.9 0 0 1-1.7-.05l-2.5-6.7 5.3-6.6-6.6 5.3-6.7-2.55' +
+            'a.9.9 0 0 1 .05-1.7l16.9-8a.9.9 0 0 1 1.05.2Z"/>',
         paperclip: '<path d="M20.6 11.7l-8.8 8.8a4.9 4.9 0 0 1-6.9-6.9l9-9a3.4 3.4 0 0 1 4.8 4.8l-8.9 8.9' +
             'a1.9 1.9 0 0 1-2.7-2.7l8.2-8.2"/>',
         download: '<path d="M12 3.6v11"/><path d="M7.4 10l4.6 4.6L16.6 10"/><path d="M4 19.4h16"/>',
@@ -219,8 +243,13 @@
         // title rather than as an icon. See `threads-empty` for the illustration.
         threads: '<g stroke-width="2.6"><path d="M3.4 19L9.6 5"/><path d="M9.9 19L16.1 5"/>' +
             '<path d="M16.4 19L22.6 5"/></g>',
-        smile: '<circle cx="12" cy="12" r="8.6"/><path d="M8.6 14.2a4.2 4.2 0 0 0 6.8 0"/>' +
-            '<path d="M9.4 9.4h.01M14.6 9.4h.01" stroke-width="2.4"/>',
+        // A solid face with the features punched out (evenodd) — outlined,
+        // the smiley was the one hollow glyph left in the composer row.
+        smile: '<path fill="currentColor" stroke="none" fill-rule="evenodd" clip-rule="evenodd" ' +
+            'd="M12 3.4a8.6 8.6 0 1 0 0 17.2a8.6 8.6 0 1 0 0-17.2Z' +
+            'M9.2 8.2a1.5 1.5 0 1 1 0 3a1.5 1.5 0 1 1 0-3Z' +
+            'M14.8 8.2a1.5 1.5 0 1 1 0 3a1.5 1.5 0 1 1 0-3Z' +
+            'M7.7 13.3h8.6a4.4 4.4 0 0 1-8.6 0Z"/>',
         at: '<circle cx="12" cy="12" r="3.6"/>' +
             '<path d="M15.6 8.4v4.8a2.8 2.8 0 0 0 5.6 0V12a9.2 9.2 0 1 0-3.6 7.3"/>',
         ban: '<circle cx="12" cy="12" r="8.6"/><path d="M5.9 5.9l12.2 12.2"/>',

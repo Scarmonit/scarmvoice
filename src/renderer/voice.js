@@ -1508,6 +1508,9 @@
             joining = true;
             const gen = joinGen;
             const tStart = now();
+            // Fine-grained trace of everything the SDK does from here: each
+            // fetch, socket, ICE/DTLS transition and the first audio packets.
+            try { if (window.JoinTrace) window.JoinTrace.arm(); } catch (e) {}
             pushState();
 
             try {
@@ -1645,6 +1648,9 @@
                 render();
                 pushState();
                 mark('TOTAL to connected', tStart);
+                // Keep tracing past "connected" long enough to catch the first
+                // real audio packets, then stand down on its own timer.
+                try { if (window.JoinTrace) window.JoinTrace.done(); } catch (e) {}
 
                 startRtt();
 
@@ -1712,6 +1718,7 @@
                 meeting = null;
 
                 meetingRef = null;
+                try { if (window.JoinTrace) window.JoinTrace.disarm(); } catch (_) {}
                 pushState();
                 fail('join', e);
                 throw e;
@@ -1798,6 +1805,8 @@
         function leave() {
             if (!joined && !joining) return;
             joinGen++;   // invalidate any join() still in flight
+            // A trace belongs to the join it armed for; leaving ends it.
+            try { if (window.JoinTrace) window.JoinTrace.disarm(); } catch (e) {}
             // A deferred mic selection belongs to the call that deferred it; left
             // set, the next enable in a LATER call would spend it on a join that
             // had already chosen for itself.
