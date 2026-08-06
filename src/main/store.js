@@ -53,7 +53,14 @@ const DEFAULTS = {
     autoRestartMigrated: false,  // set once by load(); see the note there
     notifications: true,
     notificationSound: true,     // new-message chime + sound on OS notifications
-    voiceSounds: true,           // join / leave chimes while in a call
+    voiceSounds: true,           // join / leave announcements while in a call
+    // Spoken join/leave announcements ("X has joined the channel"). The texts
+    // stand in for the USERNAME when set — letters and spaces only, 20 chars,
+    // enforced at every layer that reads them. announceVoice picks which
+    // installed speech voice reads them out, for this listener's own ears.
+    greetText: '',               // spoken instead of the username on join
+    farewellText: '',            // spoken instead of the username on leave
+    announceVoice: 'female',     // 'female' | 'male'
     windowBounds: null,          // restored geometry (never the maximised rect)
     windowMaximized: false,
     // The custom theme: { base: 'dark'|'light', colors: ['#rrggbb', …], intensity: 0-100 }.

@@ -185,48 +185,130 @@
         try { el.currentTime = 0; const p = el.play(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
     }
 
+    // ---- spoken join / leave announcements ------------------------------
+    // The static "Greetings" / "See ya around" clips are replaced by SPEECH:
+    // "<name> has joined the channel" / "<name> has left the channel", where
+    // the name is the person's account username — or the custom Greeting /
+    // Leaving text they set in Settings, which travels to every peer on the
+    // realtime voice roster exactly the way muted and deafened do.
+    //
+    // speechSynthesis, not a network service: Windows ships the voices, the
+    // audio is generated on this machine, and nothing about an announcement
+    // leaves it. The one thing it cannot do is setSinkId — announcements play
+    // on the system default output device. If speech is unavailable the old
+    // chime plays instead: an arrival that makes no sound at all is the
+    // regression this feature must never cause.
+
+    function pickTtsVoice() {
+        let voices = [];
+        try { voices = window.speechSynthesis.getVoices() || []; } catch (e) { return null; }
+        if (!voices.length) return null;
+        const en = voices.filter((v) => /^en/i.test(v.lang || ''));
+        const pool = en.length ? en : voices;
+        // Windows names its stock voices after people; these cover every en-*
+        // install back to Windows 10. Falls back to the first English voice
+        // rather than to silence when the wanted gender is not installed.
+        const want = settings.announceVoice === 'male'
+            ? /david|mark|guy|james|george|ryan|liam|\bmale\b/i
+            : /zira|jenny|aria|eva|hazel|susan|libby|sonia|michelle|\bfemale\b/i;
+        return pool.find((v) => want.test(v.name || '')) || pool[0] || null;
+    }
+
+    function speak(text) {
+        try {
+            if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
+            const u = new window.SpeechSynthesisUtterance(text);
+            const v = pickTtsVoice();
+            if (v) u.voice = v;
+            u.volume = 0.9;
+            u.rate = 1;
+            window.speechSynthesis.speak(u);
+            return true;
+        } catch (e) { return false; }
+    }
+
+    // One announcement. `who` is the person's custom text when they set one,
+    // else the name the roster carries — which the server resolved from their
+    // account, not from anything a client typed.
+    function announce(kind, who, force) {
+        if (!force && (!voiceEnabled() || settings.dnd)) return;
+        const said = String(who || 'Someone');
+        const ok = speak(said + (kind === 'leave' ? ' has left the channel' : ' has joined the channel'));
+        if (!ok) playVoice(kind);   // no speech engine — the old chime, not silence
+    }
+
+    // My own arrival and departure, called by app.js on the join/leave
+    // transition: my roster row races my own join, and by the time I leave the
+    // roster is already gone — so both read settings directly. The LEAVER
+    // hearing their own leave announcement is deliberate.
+    function announceSelf(kind, username) {
+        const custom = kind === 'leave' ? settings.farewellText : settings.greetText;
+        announce(kind, String(custom || '').trim() || username);
+    }
+
+    // The settings panel's preview: always audible — the click IS the request,
+    // whatever the sound toggles say.
+    function previewAnnounce(kind, username) {
+        const custom = kind === 'leave' ? settings.farewellText : settings.greetText;
+        announce(kind, String(custom || '').trim() || username, true);
+    }
+
     // ---- join / leave diffing -------------------------------------------
     // Armed only while I'm in the call, so these are never audible to someone
     // who isn't in voice — same guarantee the website makes.
 
     let armed = false;
     let armAt = 0;
-    let prevIds = null;
+    let prevById = null;
 
-    function idSet(list) {
+    // ENTRIES are kept, not reduced to ids: a leave is announced after the
+    // person's row is gone, so their name and Leaving text have to come from
+    // the roster as it stood while they were still in it.
+    function entryMap(list) {
         const o = {};
-        (list || []).forEach((p) => { if (p && p.id) o[p.id] = 1; });
+        (list || []).forEach((p) => {
+            if (p && p.id) {
+                o[p.id] = { name: p.name || 'Someone', greet: p.greet || '', farewell: p.farewell || '' };
+            }
+        });
         return o;
     }
 
     // Call on every voice roster render. `joined` = am I in the call.
     // `silent` (DND) suppresses playback WITHOUT disarming: folding DND into
-    // `joined` made toggling DND off replay your own join chime mid-call.
+    // `joined` made toggling DND off replay announcements mid-call.
     function voiceRoster(list, joined, myId, silent) {
-        if (!joined) { armed = false; prevIds = null; return; }
+        if (!joined) { armed = false; prevById = null; return; }
 
         if (!armed) {                       // the first render after I join
             armed = true;
             armAt = Date.now();
-            prevIds = idSet(list);
-            if (!silent) playVoice('join'); // my own arrival chime
+            // Everyone already here is the baseline, not an arrival — and my
+            // own announcement is app.js's announceSelf, on the transition.
+            prevById = entryMap(list);
             return;
         }
 
-        const ids = idSet(list);
-        if (Date.now() - armAt < SETTLE_MS) { prevIds = ids; return; }
+        const byId = entryMap(list);
+        if (Date.now() - armAt < SETTLE_MS) { prevById = byId; return; }
 
-        let joinHit = false, leaveHit = false;
-        if (prevIds) {
-            for (const a in ids) { if (a !== myId && !prevIds[a]) joinHit = true; }
-            for (const b in prevIds) { if (b !== myId && !ids[b]) leaveHit = true; }
+        if (prevById && !silent) {
+            for (const a in byId) {
+                if (a === myId || prevById[a]) continue;
+                announce('join', byId[a].greet || byId[a].name);
+            }
+            for (const b in prevById) {
+                if (b === myId || byId[b]) continue;
+                announce('leave', prevById[b].farewell || prevById[b].name);
+            }
         }
-        prevIds = ids;
-        if (joinHit && !silent) playVoice('join');
-        if (leaveHit && !silent) playVoice('leave');
+        prevById = byId;
     }
 
-    function reset() { armed = false; prevIds = null; }
+    function reset() { armed = false; prevById = null; }
 
-    window.loungeSounds = { init, setSettings, playMessage, playVoice, playUi, voiceRoster, reset };
+    window.loungeSounds = {
+        init, setSettings, playMessage, playVoice, playUi, voiceRoster, reset,
+        announceSelf, previewAnnounce
+    };
 })();

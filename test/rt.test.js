@@ -405,9 +405,11 @@ describe('messages', () => {
         rt.sendTyping('random', false);
         expect(socket().lastSent()).toEqual({ t: 'typing', channel: 'random', name: 'Scarm', stop: false });
 
+        // greet/farewell ride the voice frame — the peers' clients SPEAK them
+        // when this person joins or leaves. Empty when unset, never absent.
         rt.sendVoice(true, false, true);
         expect(socket().lastSent())
-            .toEqual({ t: 'voice', inVoice: true, muted: false, deafened: true, name: 'Scarm' });
+            .toEqual({ t: 'voice', inVoice: true, muted: false, deafened: true, name: 'Scarm', greet: '', farewell: '' });
 
         rt.sendPresence('away');
         expect(socket().lastSent()).toEqual({ t: 'presence', name: 'Scarm', status: 'away' });

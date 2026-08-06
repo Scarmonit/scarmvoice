@@ -6633,6 +6633,14 @@
                 L.rt.sendVoice(st.joined, st.muted, st.deafened);
 
                 if (st.joined) startPresence(); else stopPresence();
+                // My own arrival and departure, spoken from the TRANSITION:
+                // my roster row races my own join, and by the time I leave the
+                // roster is already gone — so neither can come from the diff
+                // the peers' announcements use. The leaver hearing their own
+                // leave announcement is part of the feature, not an accident.
+                const myAnnounceName = (account && account.username) || settings.displayName || 'Someone';
+                if (!wasJoined && st.joined) window.loungeSounds.announceSelf('join', myAnnounceName);
+                else if (wasJoined && !st.joined) window.loungeSounds.announceSelf('leave', myAnnounceName);
                 // Leaving is the moment to mint the NEXT token. The pointer is
                 // usually already inside the voice area when somebody hangs up,
                 // so no fresh hover arrives to trigger it — which is how every
@@ -7391,7 +7399,13 @@
             const pres = p.isMe ? null : presFor(p, uid);
             byId.set(p.id, Object.assign({}, p, {
                 uid,
-                deafened: p.isMe ? p.deafened : !!(pres && pres.deafened)
+                deafened: p.isMe ? p.deafened : !!(pres && pres.deafened),
+                // The announcement texts travel on the presence layer (like
+                // deafened) and the announcer diffs THIS list — an SFU row
+                // that dropped them would announce a custom greeting person
+                // by username.
+                greet: (pres && pres.greet) || '',
+                farewell: (pres && pres.farewell) || ''
             }));
         });
         presence.forEach((p) => {
@@ -7412,6 +7426,8 @@
                     // mic-off badge if they were also muted and never a
                     // headset-off badge at all.
                     deafened: !!p.deafened,
+                    greet: p.greet || '',
+                    farewell: p.farewell || '',
                     remoteOnly: true
                 });
             }
@@ -8804,10 +8820,14 @@
             case 'voice':
                 if (Array.isArray(m.list)) {
                     // user_id is what lets the roster treat one person's
-                    // devices as one entry — keep it.
+                    // devices as one entry — keep it. greet/farewell are the
+                    // spoken-announcement stand-ins each person publishes with
+                    // their voice state; they ride to the announcer with the
+                    // row, like muted and deafened do.
                     voicePresence = m.list.map((v) => ({
                         client_id: v.cid || v.client_id, user_id: v.user_id || null,
-                        name: v.name, muted: v.muted, deafened: v.deafened
+                        name: v.name, muted: v.muted, deafened: v.deafened,
+                        greet: v.greet || '', farewell: v.farewell || ''
                     }));
                     renderVoiceRoster();
                 }
@@ -8857,7 +8877,8 @@
                 if (m.voice) {
                     voicePresence = (m.voice || []).map((v) => ({
                         client_id: v.cid || v.client_id, user_id: v.user_id || null,
-                        name: v.name, muted: v.muted, deafened: v.deafened
+                        name: v.name, muted: v.muted, deafened: v.deafened,
+                        greet: v.greet || '', farewell: v.farewell || ''
                     }));
                     renderVoiceRoster();
                 }
@@ -12723,6 +12744,9 @@
         $('set-share-quality').value = settings.shareQuality || '1080p';
         $('set-share-motion').value = settings.shareMotion || 'sharp';
         $('set-share-audio').checked = settings.shareAudio !== false;
+        $('set-greet').value = settings.greetText || '';
+        $('set-farewell').value = settings.farewellText || '';
+        $('set-announce-voice').value = settings.announceVoice === 'male' ? 'male' : 'female';
         $('set-ptt').textContent = (await L.ptt.describe(settings.pttBinding)) || 'Click to set';
         $('set-mute-key').textContent = (await L.ptt.describe(settings.muteBinding)) || 'Click to set';
         $('set-deafen-key').textContent = (await L.ptt.describe(settings.deafenBinding)) || 'Click to set';
@@ -14939,6 +14963,34 @@
     });
     $('set-share-audio').addEventListener('change', (e) => saveSettings({ shareAudio: e.target.checked }));
 
+    // Greeting & Leaving. Sanitized AS TYPED — letters and spaces, 20 chars —
+    // so the field can never hold something the announcement contract refuses,
+    // and republished at once when in a call: the texts travel on the voice
+    // roster, and a peer announcing you speaks whatever you last published.
+    const cleanAnnounce = (v) => String(v || '')
+        .replace(/[^A-Za-z ]/g, '').replace(/ {2,}/g, ' ').slice(0, 20);
+    function wireAnnounceText(id, key) {
+        $(id).addEventListener('input', () => {
+            const clean = cleanAnnounce($(id).value);
+            if ($(id).value !== clean) $(id).value = clean;
+        });
+        $(id).addEventListener('change', async () => {
+            const v = cleanAnnounce($(id).value).trim();
+            $(id).value = v;
+            await saveSettings({ [key]: v });
+            if (voice && voice.isJoined()) L.rt.sendVoice(true, voice.isMuted(), voice.isDeafened());
+        });
+    }
+    wireAnnounceText('set-greet', 'greetText');
+    wireAnnounceText('set-farewell', 'farewellText');
+    $('set-announce-voice').addEventListener('change', (e) =>
+        saveSettings({ announceVoice: e.target.value === 'male' ? 'male' : 'female' }));
+    // Hear it before anyone else does — exactly what a joiner's arrival will
+    // say, in the currently chosen voice.
+    $('set-announce-preview').addEventListener('click', () =>
+        window.loungeSounds.previewAnnounce('join',
+            (account && account.username) || settings.displayName || 'Someone'));
+
     // The OS login item is the source of truth for both of these, so they are
     // read back from it after every write rather than assumed — Windows can
     // refuse, and a switch that flipped anyway would be lying.
@@ -15055,11 +15107,19 @@
 
     // Preview Sound, under each sound's name.
     document.querySelectorAll('.set-preview').forEach((b) => {
+        // The Greeting & Leaving preview has its own handler above — wiring it
+        // here too would play the message chime over the announcement.
+        if (b.id === 'set-announce-preview') return;
         b.addEventListener('click', () => {
             // Deliberately ignores the toggles: this is "what does this sound
             // like", not "would I hear it right now".
-            if (b.dataset.preview === 'join') window.loungeSounds.playVoice('join');
-            else window.loungeSounds.playMessage();
+            // The join/leave preview speaks the ANNOUNCEMENT now — that is
+            // what the toggle beside it actually gates since the static
+            // chimes were replaced.
+            if (b.dataset.preview === 'join') {
+                window.loungeSounds.previewAnnounce('join',
+                    (account && account.username) || settings.displayName || 'Someone');
+            } else window.loungeSounds.playMessage();
         });
     });
 

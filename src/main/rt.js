@@ -322,10 +322,23 @@ module.exports = {
         t: 'typing', channel: channel || 'general',
         name: store.get().displayName || 'Anonymous', stop: !!stop_
     }),
-    sendVoice: (inVoice, muted, deafened) => send({
-        t: 'voice', inVoice: !!inVoice, muted: !!muted, deafened: !!deafened,
-        name: store.get().displayName || 'Anonymous'
-    }),
+    // greet/farewell ride the voice state so every peer's client can SPEAK who
+    // arrived — the announcement text has to reach the people who hear it, and
+    // the roster is the one channel that already fans out to exactly them.
+    // Read from the store here rather than passed over IPC: the renderer saves
+    // the setting and this picks it up on the next send, so the two can never
+    // disagree. Sanitized to match what the settings field enforces — letters
+    // and spaces, 20 characters — because this is the last hop we control.
+    sendVoice: (inVoice, muted, deafened) => {
+        const clean = (v) => String(v || '')
+            .replace(/[^A-Za-z ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
+        return send({
+            t: 'voice', inVoice: !!inVoice, muted: !!muted, deafened: !!deafened,
+            name: store.get().displayName || 'Anonymous',
+            greet: clean(store.get().greetText),
+            farewell: clean(store.get().farewellText)
+        });
+    },
     sendPresence: (status) => send({
         t: 'presence', name: store.get().displayName || 'Anonymous', status: status || 'online'
     })

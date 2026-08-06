@@ -1187,6 +1187,31 @@
           <span class="hint" id="ptt-hint"></span>
         </label>
 
+        <div class="set-rule"></div>
+        <h4 class="set-sub">Greeting &amp; Leaving</h4>
+        <p class="set-help">When someone joins or leaves the call, everyone in it hears a spoken
+          announcement — "<b>name</b> has joined the channel". Leave a box empty to be announced
+          by your username; fill it in and the channel hears your words in place of your name.
+          Letters and spaces only, up to 20 characters.</p>
+        <label class="row">
+          <span>Greeting</span>
+          <input type="text" id="set-greet" maxlength="20" spellcheck="false"
+                 autocomplete="off" placeholder="Your username">
+        </label>
+        <label class="row">
+          <span>Leaving</span>
+          <input type="text" id="set-farewell" maxlength="20" spellcheck="false"
+                 autocomplete="off" placeholder="Your username">
+        </label>
+        <label class="row">
+          <span>Announcement voice</span>
+          <select id="set-announce-voice">
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+          <button type="button" class="set-preview" id="set-announce-preview">Preview</button>
+        </label>
+
         <!-- Everything below is either rarely changed or only meaningful once
              the profile is Custom, so it starts folded. -->
         <button type="button" class="set-more" id="set-voice-more" aria-expanded="false">
@@ -1302,7 +1327,8 @@
         <div class="set-toggle">
           <span class="set-toggle-text">
             <span class="set-toggle-label">Voice Join &amp; Leave</span>
-            <span class="set-toggle-sub">Only audible while you are in the call.</span>
+            <span class="set-toggle-sub">The spoken join and leave announcements. Only audible while
+              you are in the call — set your words in Voice &amp; Audio → Greeting &amp; Leaving.</span>
             <button type="button" class="set-preview" data-preview="join">Preview Sound</button>
           </span>
           <button type="button" class="switch" id="set-voice-sounds" role="switch" aria-checked="false">

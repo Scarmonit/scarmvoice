@@ -100,12 +100,14 @@ describe('message chime', () => {
 });
 
 describe('joining a call', () => {
-    it('chimes once for you and not for everyone already there', async () => {
+    it('is silent for you and for everyone already there', async () => {
         const sounds = await boot();
         sounds.voiceRoster([{ id: 'me' }, { id: 'a' }, { id: 'b' }], true, 'me');
 
-        // The pre-existing roster arrives in one render — one chime, not three.
-        expect(played).toEqual([JOIN]);
+        // The pre-existing roster is a baseline, not a round of arrivals — and
+        // YOUR arrival is announceSelf's, spoken by app.js on the join
+        // transition, not the diff's. The first render says nothing at all.
+        expect(played).toEqual([]);
     });
 
     it('swallows arrivals inside the settle window', async () => {
@@ -184,14 +186,20 @@ describe('arming', () => {
         expect(played).toEqual([]);
     });
 
-    it('disarms on leaving, then chimes again on the next join', async () => {
+    it('disarms on leaving, and the next join starts from a fresh baseline', async () => {
         const sounds = await boot();
         joinCall(sounds, [{ id: 'me' }, { id: 'a' }]);
 
         sounds.voiceRoster([], false, 'me');       // I left the call
         expect(played).toEqual([]);
 
+        // The rejoin's first render is a baseline again — 'a' being there is
+        // not an arrival, and my own announcement is app.js's, not the diff's.
         sounds.voiceRoster([{ id: 'me' }, { id: 'a' }], true, 'me');
+        expect(played).toEqual([]);
+        // …but a genuine arrival after the settle window still lands.
+        jump(SETTLE_MS + 1);
+        sounds.voiceRoster([{ id: 'me' }, { id: 'a' }, { id: 'b' }], true, 'me');
         expect(played).toEqual([JOIN]);
     });
 
@@ -202,7 +210,10 @@ describe('arming', () => {
         sounds.reset();
         sounds.voiceRoster([{ id: 'me' }, { id: 'a' }], true, 'me');
 
-        // Back to a first render: my own chime, nothing for 'a'.
+        // Back to a first render: a fresh baseline — 'a' is not an arrival.
+        expect(played).toEqual([]);
+        jump(SETTLE_MS + 1);
+        sounds.voiceRoster([{ id: 'me' }, { id: 'a' }, { id: 'b' }], true, 'me');
         expect(played).toEqual([JOIN]);
     });
 
