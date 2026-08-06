@@ -2873,9 +2873,25 @@
 
     // ---------- scroll position --------------------------------------------
 
-    // Show the jump button only well clear of the bottom, so a stray wheel
-    // notch can't make it flicker in and out.
-    const JUMP_SHOW_PX = 400;
+    // How far from the live edge you have to be before the banner appears.
+    //
+    // It was a flat 400px, which is less than one screenful on any ordinary
+    // window — so a couple of wheel notches, a glance back at the message just
+    // above the one you were reading, was enough to be told you were "viewing
+    // older messages". You were not: you were still looking at the present.
+    //
+    // Measured in SCREENFULS instead, because that is what "a meaningful amount
+    // back" actually means and a pixel count cannot express it — 400px is a
+    // third of a maximised window and most of a narrow one. You now have to put
+    // more than a full screen of conversation between yourself and the newest
+    // message, whatever size the window is. The floor covers a very short
+    // window (a half-height one, the panel with a thread open beside it), where
+    // a pure multiple would put the banner back within a notch or two.
+    const JUMP_SHOW_SCREENS = 1.25;
+    const JUMP_SHOW_MIN_PX = 800;
+    function jumpShowPx() {
+        return Math.max(JUMP_SHOW_MIN_PX, ($('messages').clientHeight || 0) * JUMP_SHOW_SCREENS);
+    }
     // Past this, smooth-scrolling means watching thousands of messages blur by.
     const JUMP_INSTANT_PX = 4000;
 
@@ -2919,7 +2935,7 @@
         const box = $('messages');
         const banner = $('jump-latest');
         if (nearBottom()) seenTopId = newestId();       // caught up
-        const away = box.scrollHeight - box.scrollTop - box.clientHeight > JUMP_SHOW_PX;
+        const away = box.scrollHeight - box.scrollTop - box.clientHeight > jumpShowPx();
 
         // Counted over what is actually DRAWN: counting raw `posts` included
         // blocked authors and anything the active filter hides, so the badge
@@ -5975,7 +5991,37 @@
     // navigates the window to the dropped file (see will-navigate in main.js).
     let dragDepth = 0;
 
+    // Marks a drag that STARTED inside this window — a picture somebody already
+    // posted, a link in a message, a run of selected text.
+    //
+    // Such a drag is indistinguishable BY TYPE from an image dragged in out of
+    // a browser: both arrive as text/html + text/uri-list and no 'Files' at
+    // all, which is why picking a photo up off the message list to look at it
+    // put "Drop to upload" across the whole app, offering to upload the file
+    // you were already looking at.
+    //
+    // Recorded on the DataTransfer rather than in a variable of our own,
+    // because a variable has to be cleared and 'dragend' is not guaranteed to
+    // arrive: the message list re-renders on every poll, and a re-render that
+    // takes the dragged image out of the document with it would leave the flag
+    // stuck true — every genuine upload afterwards silently refusing to show
+    // the drop zone. A type on the drag itself lives and dies with the one
+    // gesture that carries it, so there is nothing to get stuck.
+    //
+    // Adding a format leaves the ones Chromium already put there alone, so
+    // dragging a picture OUT of the app — onto the desktop, into another
+    // window — still works exactly as it did.
+    const INTERNAL_DRAG = 'application/x-scarmvoice-internal';
+    window.addEventListener('dragstart', (e) => {
+        try { e.dataTransfer.setData(INTERNAL_DRAG, '1'); } catch (err) { /* nothing to mark */ }
+    }, true);
+    function isInternalDrag(dt) {
+        return Array.from((dt && dt.types) || []).includes(INTERNAL_DRAG);
+    }
+
     function isFileDrag(dt) {
+        // Something already in the app is not an upload, whatever it looks like.
+        if (isInternalDrag(dt)) return false;
         const types = Array.from((dt && dt.types) || []);
         return types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html');
     }
@@ -6024,6 +6070,12 @@
         dragDepth = 0;
         showDrop(false);
         if ($('app').hidden) return;
+        // Dropped something that came from inside the app. The overlay never
+        // appeared for it (see isFileDrag), and it must not be uploaded either
+        // — re-posting the picture you just picked up off the message list is
+        // the same mistake one step later. preventDefault above still stands,
+        // so Chromium does not navigate the window to it.
+        if (isInternalDrag(e.dataTransfer)) return;
 
         const snap = snapshotDataTransfer(e.dataTransfer);
         console.info('[drop] types=' + JSON.stringify(snap.types) +

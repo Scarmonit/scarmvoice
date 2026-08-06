@@ -35,10 +35,14 @@ const state = { posts: makePosts(30) };
 
 // Pretend the list is taller than its viewport by `away` pixels, then let the
 // app react the way it does for a real scroll.
-async function scrollAway(away) {
+//
+// `viewport` is the visible height of the message column. It is a parameter
+// because the threshold is a multiple of it — a test that could only ever ask
+// about one window size could not tell a scaling rule from a flat pixel count.
+async function scrollAway(away, viewport = 600) {
     const box = $('messages');
-    Object.defineProperty(box, 'clientHeight', { value: 600, configurable: true });
-    Object.defineProperty(box, 'scrollHeight', { value: 600 + away, configurable: true });
+    Object.defineProperty(box, 'clientHeight', { value: viewport, configurable: true });
+    Object.defineProperty(box, 'scrollHeight', { value: viewport + away, configurable: true });
     Object.defineProperty(box, 'scrollTop', { value: 0, writable: true, configurable: true });
     box.dispatchEvent(new window.Event('scroll'));
     await settle(4);
@@ -84,6 +88,33 @@ describe('the older-messages banner', () => {
         await scrollAway(1200);
         expect(shown()).toBe(true);
         expect(banner().getAttribute('aria-hidden')).toBe('false');
+    });
+
+    // The threshold used to be a flat 400px — less than one screenful, so a
+    // couple of wheel notches announced that you were "viewing older messages"
+    // while you were still looking at the present. It is a multiple of the
+    // VIEWPORT now (with a floor), which is the only way to say "a meaningful
+    // amount back" on both a maximised window and a short one.
+    it('ignores a small scroll — a glance back is not viewing older messages', async () => {
+        // clientHeight is 600 throughout, so these are well inside one screen.
+        await scrollAway(200);
+        expect(shown(), '200px back is nothing').toBe(false);
+        await scrollAway(500);
+        expect(shown(), '500px back used to trigger it, and must not').toBe(false);
+        // …and it still comes back once you are genuinely away.
+        await scrollAway(1200);
+        expect(shown()).toBe(true);
+    });
+
+    // A pixel count cannot mean the same thing on a maximised window and a
+    // half-height one, which is the whole reason this scales.
+    it('asks for more scrolling on a taller window', async () => {
+        // 1200px is a full screenful short of the 2000px this window wants,
+        // and the very same 1200px shows the banner on the 600px one above.
+        await scrollAway(1200, 1600);
+        expect(shown(), '1200px is under a screenful here').toBe(false);
+        await scrollAway(2400, 1600);
+        expect(shown()).toBe(true);
     });
 
     it('is not itself clickable — only the button is', async () => {

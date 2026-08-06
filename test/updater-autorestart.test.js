@@ -228,3 +228,68 @@ describe('a call in progress', () => {
         expect(updater.getState().status).not.toBe('error');
     });
 });
+
+// Coming back the way you left it.
+//
+// "Start minimized to the tray" is about a launch NOBODY asked for — at
+// sign-in, in the background. Clicking "Restart Now" is the opposite: somebody
+// is at the window watching the app they are using go away. It used to come
+// back into the tray on that profile, so the button read as having closed the
+// app. main.js answers "is the window on screen?" — this module's job is only
+// to ask, at the last moment anything can still see it, and on every path that
+// replaces the process.
+describe('the state the app is replaced from', () => {
+    it('is recorded before the installer is handed the app', async () => {
+        const order = [];
+        updater.onBeforeInstall(() => order.push('asked'));
+        fireDownloaded('9.9.9');
+        await flush();
+
+        updater.installNow();
+        await flush();
+        order.push('installed');
+
+        // Asked FIRST: the answer is written into settings, and settings are
+        // flushed by installNow on its way out. Asking afterwards would write
+        // into a process that is already being killed.
+        expect(order).toEqual(['asked', 'installed']);
+        expect(stub().installs.length).toBe(1);
+    });
+
+    it('is recorded on a click that beat the download, too', async () => {
+        // This click installs from update-downloaded rather than from the call
+        // the user made, so a hook wired only into the direct path would miss
+        // exactly the case where the user waited longest at the window.
+        const asked = vi.fn();
+        updater.onBeforeInstall(asked);
+
+        updater.installNow();               // still downloading
+        expect(asked).not.toHaveBeenCalled();
+
+        fireDownloaded('9.9.9');
+        await flush();
+        expect(asked).toHaveBeenCalledTimes(1);
+        expect(stub().installs.length).toBe(1);
+    });
+
+    it('is not asked for when nothing is being installed', async () => {
+        const asked = vi.fn();
+        updater.onBeforeInstall(asked);
+        fireDownloaded('9.9.9');
+        await vi.advanceTimersByTimeAsync(60_000);
+        // A ready update that is sitting there waiting to be clicked has not
+        // replaced anything, so there is no state to freeze.
+        expect(asked).not.toHaveBeenCalled();
+    });
+
+    it('cannot stop the install by throwing', async () => {
+        // It writes a setting for the sake of the NEXT launch. Losing that is a
+        // window in the tray; losing the install is an app that will not update.
+        updater.onBeforeInstall(() => { throw new Error('store is on fire'); });
+        fireDownloaded('9.9.9');
+        await flush();
+        updater.installNow();
+        await flush();
+        expect(stub().installs.length).toBe(1);
+    });
+});

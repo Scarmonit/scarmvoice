@@ -208,6 +208,9 @@ let installCommitted = false;
 // Set by main.js — start the app after all. See installFailed().
 let onInstallFailed = null;
 let installGaveUp = false;
+// Also set by main.js — "note down what the app looks like, it is about to be
+// replaced". Fired by installNow(); see onBeforeInstall.
+let beforeInstall = null;
 // Set only when the feed actually ANSWERED, so checkOnLaunch doesn't ask twice
 // for something we already know — but does ask when the gate gave up on a
 // timeout or an error, rather than leaving the app three hours from its next
@@ -659,6 +662,12 @@ function installNow() {
         emit({ waitingFor: 'download' });
         return { ok: true, pending: true };
     }
+    // The app is about to be replaced by a new process, and this is the last
+    // moment anything can observe the state it is being replaced FROM. main.js
+    // records whether the window is on screen so the relaunch can match it —
+    // see createWindow. Before the flush below, deliberately: what it writes has
+    // to be part of what gets flushed, or the force-kill takes it.
+    try { if (beforeInstall) beforeInstall(); } catch (e) { /* never block the install */ }
     // Settings are written on a 250ms debounce, and the NSIS updater gives the
     // running app about a second before `taskkill`, then force-kills it — and a
     // force-kill runs no 'will-quit', so the pending write is simply lost. That
@@ -789,8 +798,15 @@ async function history(force) {
 // main.js hands this the "start the app anyway" it cannot do itself.
 function onInstallGaveUp(cb) { onInstallFailed = cb; fireInstallFailed(); }
 
+// …and the "note down what the app looks like right now", for the same reason:
+// this module decides WHEN the process is replaced, and only main.js knows
+// anything about windows. Fired from installNow(), which every install path —
+// the pill, a click that beat the download, an update held for the end of a
+// call — goes through, so there is one place to register and one place to fire.
+function onBeforeInstall(cb) { beforeInstall = cb; }
+
 module.exports = {
     init, checkOnLaunch, checkNow, startDownload, installNow, setAuto,
     postpone, setBusy, getState, available, parseNotes, history,
-    startupGate, gateOpen, onInstallGaveUp
+    startupGate, gateOpen, onInstallGaveUp, onBeforeInstall
 };

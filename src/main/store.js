@@ -56,6 +56,11 @@ const DEFAULTS = {
     voiceSounds: true,           // join / leave chimes while in a call
     windowBounds: null,          // restored geometry (never the maximised rect)
     windowMaximized: false,
+    // One-shot, written by the process an update is replacing and consumed by
+    // the one that comes back: "the window was on screen when they clicked
+    // Restart Now, so put it back on screen" — even on a start-minimized
+    // profile. See createWindow in main.js.
+    updateResumeVisible: false,
     chatFontSize: 'medium',      // small | medium | large | xlarge
 
     // Shell layout

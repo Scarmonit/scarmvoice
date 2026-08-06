@@ -226,8 +226,25 @@ function createWindow(forceShow) {
     win.once('ready-to-show', () => {
         // Stay hidden in the tray if the user asked to start minimized, or if
         // Windows auto-launched us as a hidden login item (--openAsHidden).
-        const startHidden = !forceShow &&
+        //
+        // …unless this launch is the far side of an update the user asked for
+        // while looking at the app. "Start minimized to the tray" is about how
+        // the app comes up when nobody asked for it — at sign-in, in the
+        // background. Clicking "Restart Now" is the opposite of that: somebody
+        // is at the window, watching, and the app they were using has to come
+        // back. It used to vanish into the tray instead, so the button read as
+        // having closed the app.
+        const startHidden = !forceShow && !resumeVisible &&
             (store.get().startMinimized || process.argv.includes('--openAsHidden'));
+        // One shot, consumed the moment it decides something — it must never
+        // outlive the launch it was written for and pull a later ordinary one
+        // out of the tray. Deliberately not consumed on the 'installing' path
+        // in the ready handler: that process is replaced before it builds a
+        // window, so the intent has to carry into the one that finally does.
+        if (resumeVisible) {
+            resumeVisible = false;
+            store.set({ updateResumeVisible: false });
+        }
         if (!startHidden) revealWindow();
         // The four events wired below are TRANSITIONS, and a window that starts
         // in the tray is never shown — so none of them ever fires and the
@@ -449,6 +466,14 @@ function saveWindowState() {
 // Applied once, on the first reveal. After that the window's own state is the
 // truth and re-maximising a window the user has since restored would be wrong.
 let pendingMaximize = false;
+
+// "The window was on screen when the user asked for the update to install."
+//
+// Written by the OUTGOING process (see the updater.onBeforeInstall hook in the
+// ready handler) and read by the one the installer starts in its place, which
+// is the only way the two can agree: they are different processes, and the only
+// thing that survives between them is the settings file.
+let resumeVisible = false;
 
 // Whether the window has been shown at least once this session. Two jobs:
 // saveWindowState() refuses to persist geometry the user never saw (see the
@@ -1885,11 +1910,21 @@ app.whenReady().then(async () => {
     configurePermissions();
     registerIpc();
 
+    // Did the process we are replacing go down with its window on screen? Read
+    // before anything else asks about visibility, because both answers below
+    // depend on it. Cleared in createWindow, not here — see the note there.
+    resumeVisible = !!store.get().updateResumeVisible;
+
     // A login-item launch is meant to be invisible. Popping a window at the
     // user because Windows started us at sign-in would be worse than the update
     // it is reporting — so the gate still runs and still updates first, it just
     // does it without drawing anything.
-    splashWanted = !(store.get().startMinimized || process.argv.includes('--openAsHidden'));
+    //
+    // A restart the user CLICKED is not that launch, even on a start-minimized
+    // profile: they are watching, and an update that takes a few seconds with
+    // nothing on screen looks like an app that failed to come back.
+    splashWanted = resumeVisible ||
+        !(store.get().startMinimized || process.argv.includes('--openAsHidden'));
 
     // update:gate drives the startup screen; update:state is the in-app banner,
     // which has nowhere to render until the app window exists.
@@ -1903,6 +1938,16 @@ app.whenReady().then(async () => {
             return;
         }
         if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+    });
+
+    // The last thing this process can say about itself before the installer
+    // replaces it: was the app on screen? A window hidden in the tray answers
+    // false and stays in the tray on the other side; anything the user could
+    // see — including one merely minimised to the taskbar — comes back.
+    updater.onBeforeInstall(() => {
+        let visible = false;
+        try { visible = !!(win && !win.isDestroyed() && win.isVisible()); } catch (e) {}
+        store.set({ updateResumeVisible: visible });
     });
 
     // Nothing starts until the feed has been asked. The app must ALWAYS start
