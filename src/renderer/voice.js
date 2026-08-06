@@ -1055,7 +1055,21 @@
             pushState();
         }
 
-        function setSharer(id, name, isLocal, tracks) {
+        // One call into sounds.js, guarded — a missing or failed sound must
+        // never touch call state.
+        function uiSound(kind) {
+            try {
+                if (window.loungeSounds && window.loungeSounds.playUi) window.loungeSounds.playUi(kind);
+            } catch (e) {}
+        }
+
+        // `quiet` marks a share DISCOVERED rather than STARTED — one already
+        // running when we arrived. The start sound announces the moment someone
+        // begins sharing, and every client in the call plays its own copy off
+        // this event, which is what scopes it to the call: nobody outside it
+        // receives the event at all. The SDK re-fires screenShareUpdate for
+        // unrelated reasons, so `prev` is what keeps one share to one sound.
+        function setSharer(id, name, isLocal, tracks, quiet) {
             if (!id) return;
             const prev = sharers.get(id);
             const sig = trackSig(tracks);
@@ -1063,12 +1077,18 @@
             sharers.set(id, { id, name, isLocal, stream, sig });
             // Your own share's audio is already coming out of your speakers.
             if (!isLocal) attachShareAudio(id, tracks);
+            if (!prev && !quiet) uiSound('share-start');
             pushShares();
         }
 
         function clearSharer(id) {
             if (!id || !sharers.delete(id)) return;
             detachShareAudio(id);
+            // The delete above already answered "was there a share to end?", so
+            // a re-fired disable event can never sound twice — and a sharer who
+            // leaves the call mid-share ends their share as audibly as stopping
+            // it would have.
+            uiSound('share-stop');
             pushShares();
         }
 
@@ -1157,16 +1177,18 @@
                 }
             });
             bind(pj, 'participantLeft', (p) => clearSharer(cidOf(p)));
-            // Someone already sharing when they (or we) arrive.
+            // Someone already sharing when they (or we) arrive. `quiet` — these
+            // are shares being discovered, not started, and the start sound
+            // marks the moment of starting.
             bind(pj, 'participantJoined', (p) => {
                 if (p.screenShareEnabled) {
-                    setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks);
+                    setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks, true);
                 }
             });
             try {
                 (pj.toArray ? pj.toArray() : []).forEach((p) => {
                     if (p.screenShareEnabled) {
-                        setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks);
+                        setSharer(cidOf(p), p.name || 'Someone', false, p.screenShareTracks, true);
                     }
                 });
             } catch (e) {}
@@ -1818,6 +1840,7 @@
             },
 
             setMuted(v) {
+                const was = muted;
                 muted = !!v;
                 // Unmuting while deafened also undeafens (what every voice
                 // client does) — the old behaviour let you transmit while
@@ -1828,6 +1851,11 @@
                     mutedBeforeDeafen = false;
                     applyAllLocalAudio();
                 }
+                // Local by nature: the sound plays here and is never
+                // transmitted, so only the person muting hears it. One sound
+                // per actual change — and the unmute-that-undeafens above says
+                // 'unmute', because that is the button that was pressed.
+                if (muted !== was) uiSound(muted ? 'mute' : 'unmute');
                 applyTransmit();
                 render();
                 pushState();
@@ -1842,6 +1870,10 @@
                 if (next) { mutedBeforeDeafen = muted; muted = true; }
                 else muted = mutedBeforeDeafen;
                 deafened = next;
+                // Local, like the mute pair — and the only sound for this
+                // action: the mute state changed inline above rather than
+                // through setMuted, so deafening never plays two.
+                uiSound(next ? 'deafen' : 'undeafen');
                 applyTransmit();
                 applyAllLocalAudio();
                 render();

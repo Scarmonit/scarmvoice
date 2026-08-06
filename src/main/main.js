@@ -1637,6 +1637,16 @@ function registerIpc() {
         return true;
     });
 
+    // The one caller that WANTS app.exit(): the ban lockout. The renderer has
+    // shown its full-screen notice and the account's sessions are already gone
+    // server-side, so there is nothing worth flushing that outranks the
+    // guarantee that the process is actually dead — a graceful quit can be
+    // held open by before-quit work, and this exit must not be interruptible.
+    handle('app:hardExit', () => {
+        quitting = true;
+        app.exit(0);
+    });
+
     handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
 
     handle('app:setTheme', (_e, theme) => {

@@ -169,6 +169,9 @@ contextBridge.exposeInMainWorld('lounge', {
         // Restart in place — the hardware acceleration switch is the only setting
         // Chromium cannot be told about after start-up.
         relaunch: () => ipcRenderer.invoke('app:relaunch'),
+        // Terminate the process outright (app.exit, not app.quit) — the ban
+        // lockout's final step, and nothing else's.
+        hardExit: () => ipcRenderer.invoke('app:hardExit'),
         onThemeChange: (cb) => sub('app:themeChange', cb),
         // Tray / menu actions that need to drive the UI.
         onCommand: (cb) => sub('app:command', cb),

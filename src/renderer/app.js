@@ -8701,6 +8701,14 @@
                     toast(m.by ? m.by + ' removed you from the call' : 'An admin removed you from the call', true);
                 }
                 break;
+            // We have been BANNED. The server has already revoked every session,
+            // so nothing this client asks for will answer again — this event is
+            // the one thing it is still told. Out of voice at once, a
+            // full-screen notice naming who did it, every input swallowed while
+            // it shows, and after five seconds the process hard-exits.
+            case 'banned':
+                applyBanned(m);
+                break;
             // The owner changed our role. Unicast by account, so every device this
             // person has open picks it up at once.
             //
@@ -12947,6 +12955,89 @@
         member: 'You can edit and delete your own messages. Creating channels and '
             + 'moderating other people\'s messages are no longer available to you.'
     };
+
+    // ---- banned -------------------------------------------------------------
+
+    // The end of the session, delivered over the one channel the server can
+    // still reach us on. In order, and none of it optional:
+    //
+    //   1. Leave voice NOW. The SFU connection is between this client and
+    //      Cloudflare — the board's server cannot sever it, only ask us to.
+    //   2. A full-screen overlay naming who did it, above everything, swallowing
+    //      every input in the capture phase so nothing underneath is reachable.
+    //   3. The ban sound.
+    //   4. After five full seconds, app.exit(0) via the one IPC that hard-kills
+    //      the process rather than asking it nicely.
+    //
+    // Guarded against replay — two devices' events, or a reconnect redelivering,
+    // must not stack overlays or arm a second exit timer.
+    let banApplied = false;
+    function applyBanned(m) {
+        if (banApplied) return;
+        banApplied = true;
+
+        // (1) Out of the call, unconditionally — leave() self-guards, and
+        // catching here means a voice-engine hiccup cannot stall the lockout.
+        try { if (voice && (voice.isJoined() || voice.isJoining())) voice.leave(); } catch (e) {}
+        // The socket has said the only thing it will ever say to us again.
+        // Stopping it kills the reconnect loop that would otherwise churn
+        // against a server that no longer knows us.
+        try { L.rt.stop(); } catch (e) {}
+
+        // (2) The overlay. Built by hand rather than through openDialog so it
+        // shares no code path with anything dismissable.
+        const by = m && m.by ? m.by : 'an administrator';
+        const ov = document.createElement('div');
+        ov.id = 'ban-overlay';
+        ov.setAttribute('role', 'alertdialog');
+        ov.setAttribute('aria-modal', 'true');
+        ov.setAttribute('aria-label', 'You have been banned');
+        ov.innerHTML =
+            '<div class="ban-card">' +
+                '<div class="ban-icon">' + I('ban') + '</div>' +
+                '<h1>You have been banned</h1>' +
+                '<p>You have been banned by <strong>' + esc(by) + '</strong>.</p>' +
+                '<p class="ban-count">ScarmVoice will close in <span id="ban-secs">5</span> seconds.</p>' +
+            '</div>';
+        document.body.appendChild(ov);
+
+        // Nothing under the overlay is interactive any more: every input event
+        // is swallowed at the window, in the capture phase, before any app
+        // handler — including the global keyboard shortcuts — can see it.
+        const swallow = (e) => { e.stopImmediatePropagation(); e.preventDefault(); };
+        ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick',
+         'contextmenu', 'wheel', 'keydown', 'keyup', 'keypress', 'touchstart',
+         'dragstart', 'drop', 'paste'].forEach((t) =>
+            window.addEventListener(t, swallow, { capture: true }));
+        try { document.activeElement && document.activeElement.blur(); } catch (e) {}
+
+        // (3) The sound. A plain element — the desktop app runs with autoplay
+        // ungated (see main.js), so no unlock dance is needed — routed to the
+        // same speaker everything else plays out of. Deliberately NOT behind
+        // the sound toggles: this is a moderation notice, not a chime.
+        try {
+            const a = new Audio('sounds/banned.mp3');
+            a.volume = 1;
+            const sink = settings.speakerDeviceId || '';
+            if (typeof a.setSinkId === 'function') { try { Promise.resolve(a.setSinkId(sink)).catch(() => {}); } catch (e) {} }
+            const p = a.play(); if (p && p.catch) p.catch(() => {});
+        } catch (e) { /* the lockout does not depend on the sound */ }
+
+        // (4) Five FULL seconds on screen, then dead. The countdown is display
+        // only — the exit is armed once, here, and nothing can disarm it.
+        let secs = 5;
+        const tick = setInterval(() => {
+            secs -= 1;
+            const el = $('ban-secs');
+            if (el && secs > 0) el.textContent = String(secs);
+        }, 1000);
+        setTimeout(() => {
+            clearInterval(tick);
+            try { L.app.hardExit(); } catch (e) {}
+            // If the IPC somehow failed, the least-bad fallback is a dead window.
+            setTimeout(() => { try { window.close(); } catch (e) {} }, 1000);
+        }, 5000);
+    }
 
     function acctError(msg) {
         const el = $('acct-error');

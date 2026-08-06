@@ -14,6 +14,19 @@
     const JOIN_URL = 'sounds/voice-join.ogg';
     const LEAVE_URL = 'sounds/voice-leave.ogg';
     const MESSAGE_URLS = ['sounds/itell-message.ogg', 'sounds/itell-message.mp3'];
+    // Voice ACTION sounds. mute/unmute/deafen/undeafen are local — only the
+    // person doing it hears them. share-start/share-stop reach everyone in the
+    // call, but not by being transmitted: every client plays its own copy when
+    // it sees the share appear or vanish (voice.js setSharer/clearSharer), so
+    // the scope falls out of who receives the event — only call members do.
+    const UI_URLS = {
+        mute: 'sounds/mute.mp3',
+        unmute: 'sounds/unmute.mp3',
+        deafen: 'sounds/deafen.mp3',
+        undeafen: 'sounds/undeafen.mp3',
+        'share-start': 'sounds/share-start.mp3',
+        'share-stop': 'sounds/share-stop.mp3'
+    };
     const VOLUME = 0.6;
 
     // After I join, don't chime for the people who were already in the call —
@@ -27,6 +40,7 @@
     let messageEl = null;          // fallback if Web Audio is unavailable
     let joinEl = null;
     let leaveEl = null;
+    let uiEls = {};                // action sounds, keyed by UI_URLS kind
 
     function log(msg) { try { console.info('[sound] ' + msg); } catch (e) {} }
 
@@ -84,6 +98,14 @@
             joinEl = new Audio(JOIN_URL); joinEl.preload = 'auto'; joinEl.volume = VOLUME;
             leaveEl = new Audio(LEAVE_URL); leaveEl.preload = 'auto'; leaveEl.volume = VOLUME;
         } catch (e) {}
+        // The action sounds, same treatment as the chimes above.
+        try {
+            Object.keys(UI_URLS).forEach((kind) => {
+                const el = new Audio(UI_URLS[kind]);
+                el.preload = 'auto'; el.volume = VOLUME;
+                uiEls[kind] = el;
+            });
+        } catch (e) {}
         applySink();
 
         // Fallback unlock, in case the autoplay policy still gates us.
@@ -116,7 +138,7 @@
     // default speaker a silent no-op once a specific device had been picked.
     function applySink() {
         const id = settings.speakerDeviceId || '';
-        [joinEl, leaveEl, messageEl].forEach((el) => {
+        [joinEl, leaveEl, messageEl].concat(Object.values(uiEls)).forEach((el) => {
             if (!el || typeof el.setSinkId !== 'function') return;
             try { Promise.resolve(el.setSinkId(id)).catch(() => {}); } catch (e) {}
         });
@@ -148,6 +170,17 @@
     function playVoice(kind) {
         if (!voiceEnabled()) return;
         const el = (kind === 'leave') ? leaveEl : joinEl;
+        if (!el) return;
+        try { el.currentTime = 0; const p = el.play(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }
+
+    // A voice ACTION — mute, unmute, deafen, undeafen, a share starting or
+    // stopping. Behind the same toggle as the join/leave chimes: they are the
+    // same kind of sound, and someone who silenced those has answered this
+    // question too.
+    function playUi(kind) {
+        if (!voiceEnabled()) return;
+        const el = uiEls[kind];
         if (!el) return;
         try { el.currentTime = 0; const p = el.play(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
     }
@@ -195,5 +228,5 @@
 
     function reset() { armed = false; prevIds = null; }
 
-    window.loungeSounds = { init, setSettings, playMessage, playVoice, voiceRoster, reset };
+    window.loungeSounds = { init, setSettings, playMessage, playVoice, playUi, voiceRoster, reset };
 })();

@@ -6766,3 +6766,33 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 }
 #picker-search:focus { border-color: var(--accent-line); }
 .pf-count { color: var(--dim); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+
+/* ---- ban lockout --------------------------------------------------------
+   Above everything (the highest ordinary layer is 600), opaque enough that
+   nothing underneath reads as reachable — because nothing is: app.js swallows
+   every input in the capture phase while this is on screen, and the process
+   exits five seconds after it appears. */
+#ban-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 8, 10, .96);
+  -webkit-app-region: no-drag;
+  animation: ban-in .18s ease-out;
+}
+@keyframes ban-in { from { opacity: 0; } to { opacity: 1; } }
+.ban-card {
+  max-width: 420px; padding: 36px 40px; text-align: center;
+  background: var(--float); border: 1px solid var(--danger-lo);
+  border-radius: 12px; box-shadow: var(--shadow);
+  animation: ban-card-in .22s ease-out;
+}
+@keyframes ban-card-in {
+  from { transform: scale(.94); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+.ban-icon { color: var(--danger); margin-bottom: 14px; }
+.ban-icon .ico, .ban-icon svg { width: 44px; height: 44px; }
+.ban-card h1 { margin: 0 0 10px; font-size: 20px; color: var(--danger-hi); }
+.ban-card p { margin: 0 0 8px; font-size: 14.5px; color: var(--text); }
+.ban-card p strong { color: var(--danger-hi); }
+.ban-card .ban-count { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
