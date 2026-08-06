@@ -1,0 +1,266 @@
+// @vitest-environment jsdom
+//
+// The two voice-stability fixes, pinned.
+//
+// 1. RECONNECT. When the SFU transport dies for good the SDK emits roomLeft
+//    with state 'disconnected' (or 'failed': "SDK re-initialization is
+//    required") — and then nothing. Nothing here listened, so `joined` stayed
+//    true, presence went on announcing a call this client was no longer in,
+//    and the person sat greyed out in everyone's roster behind the warning
+//    triangle, hearing nothing, until they noticed on their own. The engine
+//    now tears down and rejoins by itself, and puts mute/deafen back.
+//
+// 2. DTX. The SDK's transport switches opus DTX on unconditionally (its
+//    enableDtx defaults true, and its config normalizer drops the flag), and
+//    behind RNNoise the opus voice-activity detector cuts the stream in and
+//    out around quiet speech — the reported "voice randomly goes robotic".
+//    The wrapped RTCPeerConnection strips usedtx=1 from every description.
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const RENDERER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer');
+
+const noop = () => {};
+// Fake-timer friendly: everything the engine defers (join promises, the
+// rejoin backoff) advances through the mocked clock.
+const settle = (n = 8) => vi.advanceTimersByTimeAsync(n);
+
+// A minimal event emitter with the on/off the engine's bind/unwire use.
+function emitter() {
+    const map = {};
+    return {
+        on(ev, fn) { (map[ev] = map[ev] || []).push(fn); },
+        off(ev, fn) { map[ev] = (map[ev] || []).filter((f) => f !== fn); },
+        emit(ev, d) { (map[ev] || []).slice().forEach((f) => f(d)); },
+        listeners(ev) { return (map[ev] || []).length; }
+    };
+}
+
+function fakeMeeting() {
+    const self = emitter();
+    Object.assign(self, {
+        name: 'Me',
+        customParticipantId: 'me',
+        audioTrack: null,
+        videoEnabled: false,
+        enableAudio: () => Promise.resolve(),
+        disableAudio: () => Promise.resolve(),
+        getAudioDevices: () => Promise.resolve([]),
+        setDevice: () => Promise.resolve()
+    });
+    const joinedList = emitter();
+    joinedList.toArray = () => [];
+    return {
+        self,
+        meta: emitter(),
+        participants: { joined: joinedList },
+        join: vi.fn(() => Promise.resolve()),
+        leave: vi.fn()
+    };
+}
+
+let meetings, inits, tokens, errors, notices, states, NativePC, pcs;
+
+beforeEach(() => {
+    vi.useFakeTimers();
+    meetings = [];
+    inits = 0;
+    tokens = 0;
+    errors = [];
+    notices = [];
+    states = [];
+    pcs = [];
+
+    window.MediaStream = function (tracks) {
+        this._t = tracks || [];
+        this.getAudioTracks = () => this._t;
+        this.getVideoTracks = () => [];
+        this.id = 'stream';
+    };
+    window.ScarmAudio = { createMeter: () => null, onTick: () => noop, resume: noop, setSinkId: noop };
+    // Each init hands back a FRESH meeting, the way the real SDK does — the
+    // reconnect is a re-initialization, not a resume.
+    window.ScarmLazy = {
+        realtimekit: () => Promise.resolve({
+            init: () => {
+                inits++;
+                const m = fakeMeeting();
+                meetings.push(m);
+                return Promise.resolve(m);
+            }
+        })
+    };
+    window.lounge = {
+        voiceToken: () => { tokens++; return Promise.resolve({ success: true, token: 'jwt-' + tokens }); },
+        app: { log: noop }
+    };
+
+    // What patchRTC wraps. Records every construction and every description
+    // the "native" side was actually given.
+    NativePC = class {
+        constructor() { this.local = []; this.remote = []; pcs.push(this); }
+        setLocalDescription(d) { this.local.push(d); return Promise.resolve(); }
+        setRemoteDescription(d) { this.remote.push(d); return Promise.resolve(); }
+        getStats() { return Promise.resolve(new Map()); }
+    };
+    window.RTCPeerConnection = NativePC;
+
+    new Function(fs.readFileSync(path.join(RENDERER, 'voice.js'), 'utf8')).call(window);
+});
+
+afterEach(() => { vi.useRealTimers(); });
+
+function makeVoice() {
+    const v = window.createVoice({
+        onState: (s) => states.push(s),
+        onParticipants: noop, onSpeaking: noop, onShares: noop, onCams: noop,
+        onError: (m) => errors.push(m),
+        onNotice: (m) => notices.push(m)
+    });
+    v.setSettings({ clientId: 'me', displayName: 'Me', voiceMode: 'open' });
+    return v;
+}
+
+async function joinUp(v) {
+    v.join();
+    await settle();
+    expect(v.isJoined()).toBe(true);
+}
+
+const current = () => meetings[meetings.length - 1];
+
+describe('a room the SDK gave up on', () => {
+    it('rejoins automatically, rather than sitting greyed out forever', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        expect(inits).toBe(1);
+
+        current().self.emit('roomLeft', { state: 'disconnected' });
+        await settle();
+        // Torn down honestly first: the engine is OUT of the call, so the
+        // presence heartbeat driven off this state stops claiming otherwise.
+        expect(v.isJoined()).toBe(false);
+        expect(notices.some((m) => /reconnecting/i.test(m))).toBe(true);
+
+        // …and back, on its own, without a click.
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(inits).toBe(2);
+        expect(v.isJoined()).toBe(true);
+        expect(notices.some((m) => /reconnected/i.test(m))).toBe(true);
+        expect(errors).toEqual([]);
+    });
+
+    it("puts the person's mute state back after the rejoin", async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        v.setMuted(true);
+        expect(v.isMuted()).toBe(true);
+
+        current().self.emit('roomLeft', { state: 'failed' });
+        await vi.advanceTimersByTimeAsync(2500);
+        expect(v.isJoined()).toBe(true);
+        // A fresh join starts unmuted; the reconnect must not — the person
+        // muted themselves and the drop was not their doing.
+        expect(v.isMuted()).toBe(true);
+    });
+
+    it('gives up after the backoff and says so once', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        // Every re-init fails from here on — the network is really down.
+        window.ScarmLazy.realtimekit = () => Promise.reject(new Error('offline'));
+
+        current().self.emit('roomLeft', { state: 'disconnected' });
+        await vi.advanceTimersByTimeAsync(20000);
+
+        expect(v.isJoined()).toBe(false);
+        // ONE verdict, not one red toast per failed attempt.
+        expect(errors.length).toBe(1);
+        expect(errors[0]).toMatch(/could not reconnect/i);
+    });
+
+    it('stands down when the person rejoined by hand first', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        v.setMuted(true);
+
+        current().self.emit('roomLeft', { state: 'disconnected' });
+        await settle();
+        expect(v.isJoined()).toBe(false);
+
+        // They clicked the channel before the first retry fired.
+        v.join();
+        await settle();
+        expect(v.isJoined()).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(20000);
+        // Their join, their fresh state: the retry must not stack another
+        // init on top of it or drag the old mute back over it.
+        expect(inits).toBe(2);
+        expect(v.isMuted()).toBe(false);
+    });
+
+    it('does not rejoin somebody the SFU removed', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+
+        current().self.emit('roomLeft', { state: 'kicked' });
+        await vi.advanceTimersByTimeAsync(20000);
+
+        // Rejoining would fight the moderator who did it.
+        expect(v.isJoined()).toBe(false);
+        expect(inits).toBe(1);
+        expect(errors.some((m) => /removed from the call/i.test(m))).toBe(true);
+    });
+
+    it('ignores a roomLeft from a deliberate leave', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+
+        v.leave();
+        // leave() unwires before meeting.leave(), so the SDK's own 'left'
+        // echo lands on no live handler at all.
+        expect(current().self.listeners('roomLeft')).toBe(0);
+        current().self.emit('roomLeft', { state: 'left' });
+        await vi.advanceTimersByTimeAsync(20000);
+        expect(v.isJoined()).toBe(false);
+        expect(inits).toBe(1);
+    });
+});
+
+describe('opus DTX', () => {
+    const OFFER = 'v=0\r\na=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=64000\r\n';
+
+    it('is stripped from both descriptions on every peer connection', async () => {
+        const pc = new window.RTCPeerConnection();
+        await pc.setLocalDescription({ type: 'offer', sdp: OFFER });
+        await pc.setRemoteDescription({ type: 'answer', sdp: OFFER });
+
+        const native = pcs[pcs.length - 1];
+        expect(native.local[0].sdp).not.toContain('usedtx');
+        expect(native.remote[0].sdp).not.toContain('usedtx');
+        // Only DTX goes. FEC and the bitrate ceiling are the good parts.
+        expect(native.local[0].sdp).toContain('useinbandfec=1');
+        expect(native.local[0].sdp).toContain('maxaveragebitrate=64000');
+        // …and no dangling semicolon where usedtx was cut out.
+        expect(native.local[0].sdp).not.toMatch(/;;|;\r/);
+    });
+
+    it('leaves a DTX-free description untouched', async () => {
+        const clean = 'v=0\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n';
+        const pc = new window.RTCPeerConnection();
+        const desc = { type: 'offer', sdp: clean };
+        await pc.setLocalDescription(desc);
+        // The very same object, not a copy — nothing was rebuilt.
+        expect(pcs[pcs.length - 1].local[0]).toBe(desc);
+    });
+
+    it('keeps the implicit no-argument setLocalDescription working', async () => {
+        const pc = new window.RTCPeerConnection();
+        await pc.setLocalDescription();
+        expect(pcs[pcs.length - 1].local.length).toBe(1);
+        expect(pcs[pcs.length - 1].local[0]).toBe(undefined);
+    });
+});

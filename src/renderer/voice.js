@@ -113,6 +113,33 @@
             }
         }
     }
+    // Opus DTX is stripped from every session description that passes through.
+    //
+    // The SDK's transport switches DTX on unconditionally: its handler defaults
+    // enableDtx to TRUE, and its own config normalizer forwards only
+    // enableStereo/enableHighBitrate from mediaConfiguration.audio — the flag is
+    // dropped before it can reach the transport, so there is no configuration
+    // that turns it off. The SDP is the one place left to say no.
+    //
+    // Why no: DTX stops sending packets whenever opus's voice-activity detector
+    // decides you are silent. Behind RNNoise that detector is wrong a lot — the
+    // suppressor strips the signal down so far that quiet word-endings, trailing
+    // consonants and low talkers drop below the threshold mid-sentence, and the
+    // stream cuts in and out around the edges of speech. What the other end
+    // hears is the reported "voice randomly goes robotic": chopped tails,
+    // metallic re-entry, comfort-noise glitches — coming and going with how
+    // quietly the person happens to be speaking. The saving DTX buys is a few
+    // kbps during silence; the mic track this app publishes is already mono
+    // 64kbps, so the trade is all cost.
+    function stripDtx(desc) {
+        try {
+            if (!desc || !desc.sdp || desc.sdp.indexOf('usedtx=1') === -1) return desc;
+            // Both positions, so no dangling semicolon is left either way.
+            const sdp = desc.sdp.replace(/;usedtx=1/g, '').replace(/usedtx=1;?/g, '');
+            return { type: desc.type, sdp };
+        } catch (e) { return desc; }
+    }
+
     (function patchRTC() {
         try {
             const Native = window.RTCPeerConnection || window.webkitRTCPeerConnection;
@@ -120,6 +147,18 @@
             const Wrapped = function (cfg, con) {
                 const pc = (arguments.length > 1) ? new Native(cfg, con) : new Native(cfg);
                 try { PCS.push(pc); } catch (e) {}
+                // Munged on BOTH descriptions: the local one governs what we
+                // offer to send, the remote one what the far side believes was
+                // agreed. Missing either lets DTX survive the negotiation.
+                try {
+                    const sld = pc.setLocalDescription.bind(pc);
+                    // setLocalDescription() with no argument is legal (implicit
+                    // rollback/answer) and must stay a no-argument call.
+                    pc.setLocalDescription = (desc) =>
+                        (desc === undefined ? sld() : sld(stripDtx(desc)));
+                    const srd = pc.setRemoteDescription.bind(pc);
+                    pc.setRemoteDescription = (desc) => srd(stripDtx(desc));
+                } catch (e) { /* an SDP left alone still works — with DTX */ }
                 return pc;
             };
             Wrapped.prototype = Native.prototype;               // instanceof + prototype intact
@@ -504,6 +543,11 @@
         function fail(where, err) {
             const msg = (err && err.message) || String(err || 'unknown error');
             console.error('[voice] ' + where + ':', err);
+            // A join that fails INSIDE the automatic reconnect is narrated by
+            // the reconnect itself — "reconnecting…", then one verdict at the
+            // end. Toasting each failed attempt as well put three red errors
+            // in front of somebody the app was actively fixing things for.
+            if (rejoining && where === 'join') return;
             on.onError(where + ': ' + msg);
         }
 
@@ -920,6 +964,39 @@
             });
             bind(m.self, 'roomJoined', (d) => {
                 if (d && d.reconnected) onBack('roomJoined');
+            });
+
+            // THE ROOM DIED AND THE SDK GAVE UP. Everything above handles the
+            // recoveries; this is the failure. When the room socket drops for
+            // good the SDK emits roomLeft with state 'disconnected', and when
+            // its own recovery fails it emits state 'failed' with "SDK
+            // re-initialization is required" in the log — and then nothing.
+            //
+            // Nothing here listened. So `joined` stayed true, the presence
+            // heartbeat went on announcing a call this client was no longer in,
+            // and the person sat in everyone's roster greyed out behind the
+            // warning triangle, hearing nothing, indefinitely — the reported
+            // "random voice disconnect". The SDK told us; we just weren't
+            // listening.
+            //
+            // A deliberate leave never reaches this handler: leave() unwires
+            // every subscription before it calls meeting.leave(), so any
+            // roomLeft that lands on a live handler is the SDK acting alone.
+            bind(m.self, 'roomLeft', (d) => {
+                const why = (d && d.state) || 'unknown';
+                if (!joined) return;
+                // Being removed is an answer, not an outage — rejoining would
+                // fight the moderator who did it. The app's own kick flow
+                // (voicekick over realtime) already tears down before this can
+                // fire; this covers the SFU doing it directly.
+                if (why === 'kicked' || why === 'rejected') {
+                    leave();
+                    fail('call', new Error('removed from the call'));
+                    return;
+                }
+                // 'disconnected' / 'failed': re-initialization is required, so
+                // that is exactly what happens — automatically.
+                scheduleRejoin(why);
             });
         }
 
@@ -1780,6 +1857,75 @@
 
             on.onParticipants([]);
             pushState();
+        }
+
+        // ---- self-healing: rejoin a call the transport dropped -----------
+
+        // The SDK's own recovery handles blips; this handles the give-up (see
+        // the roomLeft binding in wireReconnect). Strategy: tear the dead
+        // meeting down completely — leave() is the one honest teardown, and it
+        // also stops the presence heartbeat lying about a call we are not in —
+        // then rejoin from scratch on a short backoff, exactly as if the user
+        // had clicked the channel again, and put their mute/deafen state back.
+        //
+        // Three attempts. The first at ~1s catches the router hiccup; the last
+        // at ~15s total catches a Wi-Fi reassociation. Past that the network is
+        // genuinely down and retrying forever would mint tokens against a dead
+        // link — the person gets told, and the channel is one click away.
+        let rejoining = false;
+        const REJOIN_DELAYS_MS = [1200, 4000, 10000];
+
+        // A notice is not an error: onError paints the red toast and this is
+        // the app fixing itself. Falls back so an older app.js still hears it.
+        function notify(msg) {
+            try { (on.onNotice || on.onError)(msg); } catch (e) {}
+        }
+
+        function scheduleRejoin(why) {
+            if (rejoining) return;
+            rejoining = true;
+            // What they had chosen, captured before leave() resets all three.
+            const prevMuted = muted;
+            const prevDeafened = deafened;
+            const prevMBD = mutedBeforeDeafen;
+            const line = '[voice] room lost (' + why + ') — reconnecting automatically';
+            try { console.warn(line); window.lounge.app.log(line); } catch (e) {}
+            notify('connection lost — reconnecting…');
+            leave();
+
+            let attempt = 0;
+            const tryJoin = () => {
+                if (!rejoining) return;
+                // The user beat the timer — clicked the channel themselves.
+                // Their join is the fresh state they asked for; stand down.
+                if (joined || joining) { rejoining = false; return; }
+                join().then(() => {
+                    rejoining = false;
+                    // The same call resuming, not a user action: state is put
+                    // back directly, with none of the action sounds.
+                    if (prevMuted || prevDeafened) {
+                        muted = prevMuted;
+                        deafened = prevDeafened;
+                        mutedBeforeDeafen = prevMBD;
+                        applyTransmit();
+                        applyAllLocalAudio();
+                        render();
+                        pushState();
+                    }
+                    try { window.lounge.app.log('[voice] reconnected after room loss'); } catch (e) {}
+                    notify('reconnected');
+                }).catch(() => {
+                    attempt++;
+                    if (attempt < REJOIN_DELAYS_MS.length) {
+                        setTimeout(tryJoin, REJOIN_DELAYS_MS[attempt]);
+                    } else {
+                        rejoining = false;
+                        try { window.lounge.app.log('[voice] could not reconnect after room loss'); } catch (e) {}
+                        fail('reconnect', new Error('could not reconnect — rejoin when your connection is back'));
+                    }
+                });
+            };
+            setTimeout(tryJoin, REJOIN_DELAYS_MS[0]);
         }
 
         // ---- public API --------------------------------------------------

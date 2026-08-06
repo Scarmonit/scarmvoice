@@ -6659,7 +6659,12 @@
                     .forEach((el) => el.classList.toggle('speaking', on));
                 markCamSpeaking(cid, on);
             },
-            onError: (msg) => toast('Voice: ' + msg, true)
+            onError: (msg) => toast('Voice: ' + msg, true),
+            // The engine talking about something it is HANDLING — "connection
+            // lost, reconnecting", "reconnected". Plain toast, not the red one:
+            // red says "you need to act" and the whole point of the self-heal
+            // is that they don't.
+            onNotice: (msg) => toast('Voice: ' + msg)
         });
         voice.setSettings(settings);
     }
