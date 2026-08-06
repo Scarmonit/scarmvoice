@@ -2,13 +2,16 @@
 //
 // The two voice-stability fixes, pinned.
 //
-// 1. RECONNECT. When the SFU transport dies for good the SDK emits roomLeft
-//    with state 'disconnected' (or 'failed': "SDK re-initialization is
-//    required") — and then nothing. Nothing here listened, so `joined` stayed
-//    true, presence went on announcing a call this client was no longer in,
-//    and the person sat greyed out in everyone's roster behind the warning
-//    triangle, hearing nothing, until they noticed on their own. The engine
-//    now tears down and rejoins by itself, and puts mute/deafen back.
+// 1. RECONNECT. The SDK emits roomLeft {state:'disconnected'} on EVERY
+//    signaling-socket close — and starts its own reconnect loop in the same
+//    breath, which on success rejoins the same room from inside and emits
+//    roomJoined {reconnected:true}. Only {state:'failed'} means it gave up
+//    ("SDK re-initialization is required"). So 'disconnected' gets a grace
+//    window for that recovery to land — no teardown, no new meeting, the
+//    common blip costs a second or two — and only 'failed' or an expired
+//    grace triggers the from-scratch teardown + rejoin (which puts
+//    mute/deafen back, and gives up loudly once when the network is truly
+//    gone).
 //
 // 2. DTX. The SDK's transport switches opus DTX on unconditionally (its
 //    enableDtx defaults true, and its config normalizer drops the flag), and
@@ -131,25 +134,70 @@ async function joinUp(v) {
 
 const current = () => meetings[meetings.length - 1];
 
-describe('a room the SDK gave up on', () => {
-    it('rejoins automatically, rather than sitting greyed out forever', async () => {
+describe('a room socket that dropped', () => {
+    it('lets the SDK recover it first — no teardown, no new meeting', async () => {
         const v = makeVoice();
         await joinUp(v);
         expect(inits).toBe(1);
 
         current().self.emit('roomLeft', { state: 'disconnected' });
         await settle();
-        // Torn down honestly first: the engine is OUT of the call, so the
-        // presence heartbeat driven off this state stops claiming otherwise.
-        expect(v.isJoined()).toBe(false);
+        // 'disconnected' means the socket closed AND the SDK's own reconnect
+        // loop is already running. The call is not torn down for that: the
+        // engine stays joined (media may well still be flowing) and waits.
+        expect(v.isJoined()).toBe(true);
         expect(notices.some((m) => /reconnecting/i.test(m))).toBe(true);
 
-        // …and back, on its own, without a click.
+        // The SDK wins the race: same meeting, rejoined from inside.
+        await vi.advanceTimersByTimeAsync(1500);
+        current().self.emit('roomJoined', { reconnected: true });
+        await settle();
+
+        expect(v.isJoined()).toBe(true);
+        expect(inits).toBe(1);                 // no second meeting was built
+        expect(notices.some((m) => /reconnected/i.test(m))).toBe(true);
+        expect(errors).toEqual([]);
+        // …and no from-scratch rejoin fires later off the expired grace.
+        await vi.advanceTimersByTimeAsync(30000);
+        expect(inits).toBe(1);
+    });
+
+    it('rebuilds from scratch when the SDK does not recover in time', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        expect(inits).toBe(1);
+
+        current().self.emit('roomLeft', { state: 'disconnected' });
+        await settle();
+        expect(v.isJoined()).toBe(true);       // grace window open
+
+        // No roomJoined arrives. Grace (6s) expires -> teardown -> rejoin
+        // on the backoff (first attempt at 1.2s).
+        await vi.advanceTimersByTimeAsync(6100);
+        expect(v.isJoined()).toBe(false);      // torn down honestly now
         await vi.advanceTimersByTimeAsync(2000);
         expect(inits).toBe(2);
         expect(v.isJoined()).toBe(true);
         expect(notices.some((m) => /reconnected/i.test(m))).toBe(true);
         expect(errors).toEqual([]);
+    });
+
+    it("re-asserts the microphone after the SDK's own recovery", async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        const self = current().self;
+        const enables = [];
+        self.enableAudio = vi.fn(() => { enables.push(Date.now()); return Promise.resolve(); });
+
+        self.emit('roomLeft', { state: 'disconnected' });
+        await settle();
+        self.emit('roomJoined', { reconnected: true });
+        await settle();
+        // The rejoin rebuilt the producers; the engine must re-state its
+        // intent (open mode, unmuted -> the mic should be on) rather than
+        // assume the SDK restored it.
+        expect(self.enableAudio).toHaveBeenCalled();
+        expect(v.isJoined()).toBe(true);
     });
 
     it("puts the person's mute state back after the rejoin", async () => {
@@ -173,7 +221,9 @@ describe('a room the SDK gave up on', () => {
         window.ScarmLazy.realtimekit = () => Promise.reject(new Error('offline'));
 
         current().self.emit('roomLeft', { state: 'disconnected' });
-        await vi.advanceTimersByTimeAsync(20000);
+        // Grace (6s, no SDK recovery on a dead network) + the full backoff
+        // ladder (1.2s + 4s + 10s) + settling.
+        await vi.advanceTimersByTimeAsync(30000);
 
         expect(v.isJoined()).toBe(false);
         // ONE verdict, not one red toast per failed attempt.
@@ -187,7 +237,8 @@ describe('a room the SDK gave up on', () => {
         v.setMuted(true);
 
         current().self.emit('roomLeft', { state: 'disconnected' });
-        await settle();
+        // Grace expires with no SDK recovery — teardown happens now.
+        await vi.advanceTimersByTimeAsync(6100);
         expect(v.isJoined()).toBe(false);
 
         // They clicked the channel before the first retry fired.

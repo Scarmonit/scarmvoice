@@ -224,7 +224,24 @@ function createWindow(forceShow) {
     // only place that reads it off disk.
     pendingMaximize = !!store.get().windowMaximized;
 
-    win.once('ready-to-show', () => {
+    // The reveal decision must not hang off any SINGLE renderer event.
+    //
+    // Measured on this machine (elevated, hidden window): 'ready-to-show'
+    // sometimes never fires — same launch, same build, fires one run and not
+    // the next. Every reveal this app has ever done waited on exactly that
+    // event, which is the deepest root of the intermittent
+    // starts-in-the-tray: the flag logic could be perfectly right and the
+    // moment that consumes it simply never arrived. The splash teardown has
+    // had a "window that never becomes ready" deadline for ages — the reveal
+    // itself never got one, until now. Three routes, first one wins:
+    // ready-to-show (the pretty path, no flash), did-finish-load plus a beat
+    // (fires reliably once the page is in), and a hard deadline (a
+    // dark-background window that paints late beats an app nobody can find).
+    let revealDecided = false;
+    const decideReveal = (via) => {
+        if (revealDecided) return;
+        revealDecided = true;
+        console.log('[window] reveal path: ' + via);
         winReadyToShow = true;
         // The window is built DURING the startup update check now, so being
         // ready to paint is no longer permission to appear: the verdict is.
@@ -233,24 +250,53 @@ function createWindow(forceShow) {
         // did, and an 'installing' verdict means this window is being torn
         // down — reveal nothing.
         gateSettled.then((verdict) => {
+            console.log('[window] reveal handler: verdict=' + verdict +
+                ' winAlive=' + !!(win && !win.isDestroyed()));
             if (verdict !== 'launch' || !win || win.isDestroyed()) return;
-            // Stay hidden in the tray if the user asked to start minimized, or
-            // if Windows auto-launched us as a hidden login item
-            // (--openAsHidden).
+            // Hidden starts are for launches NOBODY ASKED FOR, and the launch
+            // itself now says which kind it is:
             //
-            // …unless this launch is the far side of an update the user asked
-            // for while looking at the app. "Start minimized to the tray" is
-            // about how the app comes up when nobody asked for it — at
-            // sign-in, in the background. Clicking "Restart Now" is the
-            // opposite of that: somebody is at the window, watching, and the
-            // app they were using has to come back. It used to vanish into the
-            // tray instead, so the button read as having closed the app.
+            //   --openAsHidden   Windows started us at sign-in (the login item
+            //                    is registered with this arg when "start
+            //                    minimized to the tray" is on — see
+            //                    setLoginItem). Stay in the tray.
+            //   --updated        the NSIS installer relaunched us after an
+            //                    update (verified: the relaunched process
+            //                    carries exactly this arg). Come back AS THE
+            //                    APP WAS: visible if updateResumeVisible was
+            //                    recorded, tray if it was hidden when the
+            //                    update applied.
+            //   neither          a human double-clicked the shortcut. Show.
+            //
+            // `store.get().startMinimized` used to sit in this condition too,
+            // which hid every launch the flags didn't rescue — including the
+            // two someone explicitly performed: a manual launch (today's log:
+            // five shortcut launches in three minutes, each landing in the
+            // tray until a second click's second-instance signal revealed it)
+            // and the relaunch after a startup-gate install, whose flag
+            // nothing had written (the 11:00 case: manual launch, gate held
+            // and installed, relaunch went to the tray in front of a watching
+            // user). The setting's real job — how the app comes up at
+            // sign-in — lives in the login-item registration, which carries
+            // --openAsHidden; repeating it here only overruled launches that
+            // were asked for.
+            //
             // showOnStart as well as the param: a second launch that arrived
             // while the gate was still deciding records itself in that flag
             // (see the second-instance handler), and the window it wanted
             // already exists now — this reveal is where the request lands.
             const startHidden = !forceShow && !showOnStart && !resumeVisible &&
-                (store.get().startMinimized || process.argv.includes('--openAsHidden'));
+                (process.argv.includes('--openAsHidden') || process.argv.includes('--updated'));
+            // One line, once per launch: every "it started in the tray and I
+            // don't know why" report is answerable from this decision and its
+            // inputs. This bug class has been mis-fixed before precisely
+            // because the moment of decision left no trace.
+            console.log('[window] reveal decision: ' + (startHidden ? 'stay hidden' : 'show') +
+                ' (openAsHidden=' + process.argv.includes('--openAsHidden') +
+                ' updated=' + process.argv.includes('--updated') +
+                ' resumeVisible=' + resumeVisible +
+                ' forceShow=' + !!forceShow +
+                ' showOnStart=' + !!showOnStart + ')');
             // One shot, consumed the moment it decides something — it must never
             // outlive the launch it was written for and pull a later ordinary one
             // out of the tray. Deliberately not consumed on the 'installing' path
@@ -271,7 +317,11 @@ function createWindow(forceShow) {
             // where the page exists to hear it and the answer is finally known.
             else sendVisibility();
         });
-    });
+    };
+    win.once('ready-to-show', () => decideReveal('ready-to-show'));
+    win.webContents.once('did-finish-load', () =>
+        setTimeout(() => decideReveal('did-finish-load'), 150));
+    setTimeout(() => decideReveal('deadline'), 6000);
 
     if (DEV) win.webContents.openDevTools({ mode: 'detach' });
 
@@ -2083,6 +2133,30 @@ app.whenReady().then(async () => {
     // doing it either, for a second launch that arrives in that gap.
     if (verdict === 'installing') {
         installing = true;
+        // Carry THIS launch's intent into the relaunch. The user who
+        // double-clicked the shortcut is watching; the installer will relaunch
+        // with only `--updated`, and the reveal over there follows
+        // updateResumeVisible — which, for a gate install, nothing else ever
+        // writes (beforeInstall stays silent for a window nobody saw). That
+        // was the reported bug: launch by hand on an update day, watch the
+        // splash, and the app comes back in the tray.
+        //
+        //   manual launch            -> true   (somebody asked; come back)
+        //   --openAsHidden login item-> false  (nobody asked; stay in tray)
+        //   --updated (a chain: the  -> carry resumeVisible, the intent the
+        //     relaunch found ANOTHER    original session recorded)
+        //     update)
+        //
+        // Written and flushed here, at the verdict — before installNow()'s own
+        // flush, and immune to beforeInstall (its everShown guard keeps it
+        // silent for this never-shown window).
+        try {
+            store.set({
+                updateResumeVisible: resumeVisible ||
+                    !(process.argv.includes('--openAsHidden') || process.argv.includes('--updated'))
+            });
+            store.flush();
+        } catch (e) { /* worst case: the old behaviour */ }
         // The hidden window built alongside the check never showed and never
         // answered auth:status (held on gateSettled), so there is no session
         // to unwind — but the window itself must go, or 'window-all-closed'

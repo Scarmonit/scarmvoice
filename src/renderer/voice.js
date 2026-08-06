@@ -969,18 +969,32 @@
                 if (d && d.reconnected) onBack('roomJoined');
             });
 
-            // THE ROOM DIED AND THE SDK GAVE UP. Everything above handles the
-            // recoveries; this is the failure. When the room socket drops for
-            // good the SDK emits roomLeft with state 'disconnected', and when
-            // its own recovery fails it emits state 'failed' with "SDK
-            // re-initialization is required" in the log — and then nothing.
+            // THE ROOM SOCKET DROPPED. What the states actually mean (read
+            // out of the vendored SDK, not guessed):
             //
-            // Nothing here listened. So `joined` stayed true, the presence
-            // heartbeat went on announcing a call this client was no longer in,
-            // and the person sat in everyone's roster greyed out behind the
-            // warning triangle, hearing nothing, indefinitely — the reported
-            // "random voice disconnect". The SDK told us; we just weren't
-            // listening.
+            //   'disconnected'  the signaling socket closed. The SDK emits
+            //                   this on EVERY close — and in the same breath
+            //                   starts its own reconnect loop (backoff from
+            //                   ~1s, up to 50 attempts), which on success does
+            //                   a room REJOIN on this same meeting and emits
+            //                   roomJoined {reconnected:true}. It is "the
+            //                   socket blipped", not "the SDK gave up".
+            //   'failed'        the reconnect loop exhausted itself. THIS is
+            //                   the give-up ("SDK re-initialization is
+            //                   required").
+            //
+            // Treating 'disconnected' as the give-up — which this handler used
+            // to do — tore the whole call down (new token, new meeting, full
+            // join, measured ~3.7s of dead air) for blips the SDK recovers
+            // from in a second or two, and abandoned recoveries already in
+            // flight. Worse: the SDK holds the disconnect event back for 3s
+            // when the media transports are still up, so some of the "drops"
+            // this nuked still had audio flowing.
+            //
+            // So 'disconnected' now gets a grace window: let the SDK's own
+            // recovery run; only when it reports failure or the window closes
+            // does the from-scratch rejoin take over. 'failed' goes straight
+            // there, as before.
             //
             // A deliberate leave never reaches this handler: leave() unwires
             // every subscription before it calls meeting.leave(), so any
@@ -997,9 +1011,17 @@
                     fail('call', new Error('removed from the call'));
                     return;
                 }
-                // 'disconnected' / 'failed': re-initialization is required, so
-                // that is exactly what happens — automatically.
+                if (why === 'disconnected') { graceThenRejoin(); return; }
+                // 'failed' (and anything unrecognised): re-initialization is
+                // required, so that is exactly what happens — automatically.
                 scheduleRejoin(why);
+            });
+
+            // The SDK recovered the room by itself — the grace window's
+            // success signal. wireReconnect's roomJoined binding (above)
+            // already re-applies the tuning; this one settles the wait.
+            bind(m.self, 'roomJoined', (d) => {
+                if (d && d.reconnected) graceRecovered();
             });
         }
 
@@ -1955,6 +1977,8 @@
         function leave() {
             if (!joined && !joining) return;
             joinGen++;   // invalidate any join() still in flight
+            // A pending SDK-recovery grace belongs to the call being left.
+            if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
             // A trace belongs to the join it armed for; leaving ends it.
             try { if (window.JoinTrace) window.JoinTrace.disarm(); } catch (e) {}
             // A deferred mic selection belongs to the call that deferred it; left
@@ -2034,6 +2058,62 @@
         let rejoining = false;
         const REJOIN_DELAYS_MS = [1200, 4000, 10000];
 
+        // How long the SDK's own reconnect gets before the from-scratch rejoin
+        // takes over. Its backoff makes attempts at roughly 1s/2s/4s — six
+        // seconds covers the first three, which is where transient blips
+        // recover. A genuinely dead network pays these seconds on top of the
+        // full rejoin it was always going to need; a blip — the common case,
+        // measured: the board's own socket usually survives the same moments —
+        // recovers in one or two seconds with the same meeting, same
+        // participant, no minting.
+        const SDK_RECOVERY_GRACE_MS = 6000;
+        let graceTimer = null;
+        let graceStartedAt = 0;
+
+        function graceThenRejoin() {
+            if (graceTimer || rejoining) return;
+            graceStartedAt = now();
+            const gen = joinGen;
+            const line = '[voice] room socket dropped — giving the SDK ' +
+                (SDK_RECOVERY_GRACE_MS / 1000) + 's to recover it';
+            try { console.warn(line); window.lounge.app.log(line); } catch (e) {}
+            notify('connection lost — reconnecting…');
+            graceTimer = setTimeout(() => {
+                graceTimer = null;
+                if (gen !== joinGen || !joined) return;   // left in the meantime
+                try {
+                    window.lounge.app.log('[voice] SDK did not recover within grace — rebuilding from scratch');
+                } catch (e) {}
+                scheduleRejoin('disconnected');
+            }, SDK_RECOVERY_GRACE_MS);
+        }
+
+        function graceRecovered() {
+            if (!graceTimer) return;
+            clearTimeout(graceTimer);
+            graceTimer = null;
+            const ms = Math.round(now() - graceStartedAt);
+            try {
+                const line = '[voice] SDK recovered the room itself in ' + ms + 'ms';
+                console.info(line);
+                window.lounge.app.log(line);
+            } catch (e) {}
+            // The rejoin rebuilt the producers server-side; make the engine's
+            // idea of the microphone true again rather than assumed. BOTH
+            // trackers cleared, exactly as a fresh join does: lastTransmit so
+            // applyTransmit's no-change guard cannot swallow the re-assert,
+            // txSent so the chain actually re-issues it — a no-op when the SDK
+            // already restored the right state, the fix when it didn't.
+            lastTransmit = null;
+            txSent = null;
+            applyTransmit();
+            applyAllLocalAudio();
+            watchLocal();
+            render();
+            pushState();
+            notify('reconnected');
+        }
+
         // A notice is not an error: onError paints the red toast and this is
         // the app fixing itself. Falls back so an older app.js still hears it.
         function notify(msg) {
@@ -2042,6 +2122,9 @@
 
         function scheduleRejoin(why) {
             if (rejoining) return;
+            // Arriving here through 'failed' while a grace window is open:
+            // the SDK has answered the question the grace was asking.
+            if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
             rejoining = true;
             // What they had chosen, captured before leave() resets all three.
             const prevMuted = muted;

@@ -517,6 +517,17 @@ let recheck = null;              // periodic check timer
 // not down yet, so one click means one click: the install runs by itself the
 // moment the download finishes rather than needing a second press.
 let installWhenReady = false;
+// The visibility snapshot for a REMEMBERED click was taken at the click.
+//
+// The user's contract is "come back the way it was when I clicked Restart" —
+// but a click made while the download was still running (or during a call) is
+// acted on minutes later, and the snapshot used to be taken THEN. Anyone who
+// clicked and then minimised to the tray while the bytes finished had their
+// restart honestly-but-wrongly recorded as hidden, and the app came back in
+// the tray. Intermittent by nature: it needed a click early enough and a
+// hide in the gap. So the snapshot now happens at the click, this flag says
+// it already exists, and the install-time path leaves it alone.
+let clickSnapshotTaken = false;
 
 // Kept as a no-op shape so the two callers below read the same as before.
 function clearCountdown() { /* there is no countdown any more */ }
@@ -654,6 +665,11 @@ function installNow() {
     if (!u) return { ok: false };
     if (state.status !== 'ready') {
         installWhenReady = true;
+        // The click is NOW; the install is later. Record what the app looks
+        // like at the moment the user expressed the intent (see
+        // clickSnapshotTaken), and flush so even a force-kill keeps it.
+        try { if (beforeInstall) { beforeInstall(); clickSnapshotTaken = true; } } catch (e) {}
+        try { store.flush(); } catch (e) {}
         // autoDownload usually has this running already; this covers a download
         // that errored back to 'available' and is sitting there stalled.
         startDownload();
@@ -667,7 +683,15 @@ function installNow() {
     // records whether the window is on screen so the relaunch can match it —
     // see createWindow. Before the flush below, deliberately: what it writes has
     // to be part of what gets flushed, or the force-kill takes it.
-    try { if (beforeInstall) beforeInstall(); } catch (e) { /* never block the install */ }
+    //
+    // …unless the click already recorded it (a remembered click, serviced now
+    // that the download landed or the call ended): the state that binds is the
+    // one the user saw when they clicked, not whatever the window drifted to
+    // while they waited.
+    try {
+        if (beforeInstall && !clickSnapshotTaken) beforeInstall();
+    } catch (e) { /* never block the install */ }
+    clickSnapshotTaken = false;
     // Settings are written on a 250ms debounce, and the NSIS updater gives the
     // running app about a second before `taskkill`, then force-kills it — and a
     // force-kill runs no 'will-quit', so the pending write is simply lost. That

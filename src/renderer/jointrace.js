@@ -36,9 +36,24 @@
 
     function line(msg) {
         if (t0 === null) return;
-        // console.info is forwarded to the main-process log file, so a trace
-        // from an installed build survives to be read the next day.
-        try { console.info('[jointrace] +' + Math.round(now() - t0) + 'ms ' + msg); } catch (e) {}
+        const s = '[jointrace] +' + Math.round(now() - t0) + 'ms ' + msg;
+        try { console.info(s); } catch (e) {}
+        // Into the log FILE too: renderer console lines never reach it on
+        // their own — the app.log IPC is the only road (see log.js) — and an
+        // installed build's join trace is worthless if it only ever existed
+        // in devtools nobody had open.
+        try { window.lounge.app.log(s); } catch (e) {}
+    }
+
+    // For the events that must be captured even with no trace armed: socket
+    // deaths and transport state flips DURING a call. These are the moment of
+    // a mid-call disconnect, they are rare (a handful per hour at worst), and
+    // they are precisely what "why did voice drop at 11:36" needs from the
+    // log after the fact.
+    function alwaysLine(msg) {
+        const s = '[calltrace] ' + msg;
+        try { console.info(s); } catch (e) {}
+        try { window.lounge.app.log(s); } catch (e) {}
     }
 
     function arm() {
@@ -78,7 +93,21 @@
         pollTimers.push(setTimeout(() => { if (g === gen) disarm(); }, 20000));
     }
 
-    window.JoinTrace = { arm, disarm, done: armDone };
+    window.JoinTrace = {
+        arm,
+        disarm,
+        done: armDone,
+        // Test/diagnostic hook: kill the live SFU signaling socket the way a
+        // network blip would (close code ≠1000 → the SDK sees an abnormal
+        // close and runs its reconnect machinery). The browser only permits
+        // 3000-4999 from script; 4999 is unmistakably "a test did this" in
+        // the calltrace log. Returns false when no SFU socket is up.
+        killSfu(code) {
+            const s = sockets.find((x) => x.url.includes('socket-edge') || x.url.includes('realtime.cloudflare'));
+            if (!s) return false;
+            try { s.ws.close(code || 4999, 'calltrace simulated drop'); return true; } catch (e) { return false; }
+        }
+    };
 
     // When did media actually start moving? "connected" is a transport state;
     // audio is only real when RTP packets are counted. Poll fast and briefly —
@@ -160,8 +189,18 @@
             const id = ++n;
             let short = String(url);
             try { const u = new URL(url); short = u.host + u.pathname; } catch (e) {}
+            // The SFU signaling socket is the one whose death IS a voice
+            // disconnect; its lifecycle is recorded whether or not a join
+            // trace is armed.
+            const isSfu = short.includes('socket-edge') || short.includes('realtime.cloudflare');
             sockets.push({ ws, id, url: short });
             const t = now();
+            const opened = Date.now();
+            // Frame clocks, kept unconditionally (two assignments per frame):
+            // when a close arrives, "how long had this socket been silent"
+            // is the difference between an idle timeout and an abrupt kill.
+            let lastRecv = 0;
+            let lastSend = 0;
             line('ws#' + id + ' connecting ' + short);
             // The first few frames each way, with sizes. This is what splits
             // "the client sat on the request" from "the server sat on the
@@ -172,17 +211,36 @@
                 ws.addEventListener('open', () => line('ws#' + id + ' open (' + Math.round(now() - t) + 'ms)'));
                 ws.addEventListener('message', (ev) => {
                     msgs++;
+                    lastRecv = Date.now();
                     if (msgs <= 12) line('ws#' + id + ' recv #' + msgs + ' (' + byteSize(ev.data) + 'B)');
                 });
                 ws.addEventListener('close', (ev) => {
                     line('ws#' + id + ' closed code=' + ev.code);
+                    // The moment a mid-call disconnect happens, this is the
+                    // evidence: who closed it (a code the server sent vs 1006
+                    // for a dead TCP path), whether the close was clean, and
+                    // how long the socket had been quiet in each direction.
+                    if (isSfu) {
+                        const nowMs = Date.now();
+                        alwaysLine('SFU socket closed code=' + ev.code +
+                            ' clean=' + !!ev.wasClean +
+                            (ev.reason ? ' reason="' + String(ev.reason).slice(0, 80) + '"' : '') +
+                            ' ageS=' + Math.round((nowMs - opened) / 1000) +
+                            ' sinceRecvS=' + (lastRecv ? Math.round((nowMs - lastRecv) / 1000) : -1) +
+                            ' sinceSendS=' + (lastSend ? Math.round((nowMs - lastSend) / 1000) : -1) +
+                            ' online=' + navigator.onLine);
+                    }
                     const i = sockets.findIndex((s) => s.ws === ws);
                     if (i >= 0) sockets.splice(i, 1);
                 });
-                ws.addEventListener('error', () => line('ws#' + id + ' error'));
+                ws.addEventListener('error', () => {
+                    line('ws#' + id + ' error');
+                    if (isSfu) alwaysLine('SFU socket error event (online=' + navigator.onLine + ')');
+                });
                 const origSend = ws.send.bind(ws);
                 ws.send = function (data) {
                     sends++;
+                    lastSend = Date.now();
                     if (sends <= 12) line('ws#' + id + ' send #' + sends + ' (' + byteSize(data) + 'B)');
                     return origSend(data);
                 };
@@ -295,13 +353,24 @@
                         line('pc#' + id + ' end-of-candidates (' + candCount + ' total)');
                     }
                 });
-                pc.addEventListener('iceconnectionstatechange', () =>
-                    line('pc#' + id + ' ice -> ' + pc.iceConnectionState));
+                pc.addEventListener('iceconnectionstatechange', () => {
+                    line('pc#' + id + ' ice -> ' + pc.iceConnectionState);
+                    // 'disconnected'/'failed' mid-call are the media half of a
+                    // voice drop; rare transitions, recorded unconditionally.
+                    const st = pc.iceConnectionState;
+                    if (st === 'disconnected' || st === 'failed') {
+                        alwaysLine('pc#' + id + ' ICE -> ' + st + ' (online=' + navigator.onLine + ')');
+                    }
+                });
                 pc.addEventListener('connectionstatechange', () => {
                     line('pc#' + id + ' connection -> ' + pc.connectionState +
                         ' (t+' + Math.round(now() - t) + 'ms since pc created)');
-                    if (pc.connectionState === 'connected') firstPacketWatch(pc, id);
-                    if (pc.connectionState === 'closed') {
+                    const st = pc.connectionState;
+                    if (st === 'disconnected' || st === 'failed') {
+                        alwaysLine('pc#' + id + ' connection -> ' + st);
+                    }
+                    if (st === 'connected') firstPacketWatch(pc, id);
+                    if (st === 'closed') {
                         const i = pcs.findIndex((p) => p.pc === pc);
                         if (i >= 0) pcs.splice(i, 1);
                     }

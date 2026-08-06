@@ -256,20 +256,45 @@ describe('the state the app is replaced from', () => {
         expect(stub().installs.length).toBe(1);
     });
 
-    it('is recorded on a click that beat the download, too', async () => {
+    it('is recorded AT the click that beat the download — not later', async () => {
+        // The contract is "come back the way it was when I clicked Restart".
         // This click installs from update-downloaded rather than from the call
-        // the user made, so a hook wired only into the direct path would miss
-        // exactly the case where the user waited longest at the window.
+        // the user made — and the state that binds is the one they saw when
+        // they clicked. Asking again at install time (which this used to do)
+        // answered with wherever the window had drifted to while the bytes
+        // finished: anyone who clicked and then minimised to the tray had
+        // their restart honestly-but-wrongly recorded as hidden. That was the
+        // intermittent restart-into-the-tray.
         const asked = vi.fn();
         updater.onBeforeInstall(asked);
 
         updater.installNow();               // still downloading
-        expect(asked).not.toHaveBeenCalled();
+        expect(asked).toHaveBeenCalledTimes(1);   // the click IS the moment
 
         fireDownloaded('9.9.9');
         await flush();
+        // The remembered click installs — without re-asking. The window may
+        // have hidden in between; the click's answer stands.
         expect(asked).toHaveBeenCalledTimes(1);
         expect(stub().installs.length).toBe(1);
+    });
+
+    it('asks fresh on the NEXT install after a deferred one ran', async () => {
+        // The click-time snapshot is spent by the install it belonged to; a
+        // later update's direct click must be asked about its own moment.
+        const asked = vi.fn();
+        updater.onBeforeInstall(asked);
+
+        updater.installNow();               // still downloading — snapshot 1
+        fireDownloaded('9.9.9');
+        await flush();
+        expect(asked).toHaveBeenCalledTimes(1);
+
+        fireDownloaded('9.9.10');
+        await flush();
+        updater.installNow();               // direct path — snapshot 2
+        await flush();
+        expect(asked).toHaveBeenCalledTimes(2);
     });
 
     it('is not asked for when nothing is being installed', async () => {
