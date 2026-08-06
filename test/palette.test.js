@@ -1221,7 +1221,9 @@ describe('the composer and the member list', () => {
 
     it('gives the composer an edge and some height', () => {
         expect(css).toMatch(/\.composer-row \{[^}]*min-height:\s*58px/);
-        expect(css).toMatch(/#composer \{ flex: 0 0 auto; padding: 0 8px 8px; \}/);
+        // 10px in from the column edges, 7px of the column's surface below —
+        // the bar floats in the field rather than sitting flush to it.
+        expect(css).toMatch(/#composer \{ flex: 0 0 auto; padding: 0 10px 7px; \}/);
         // One fill, not two: the sheen put a visible band across the top third.
         expect(/\.composer-row \{[^}]*background: var\(--input\);/.test(css)).toBe(true);
     });

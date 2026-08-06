@@ -311,13 +311,22 @@
      measured architecture, black on a dark base and (see the light block)
      white at the same opacities on a light one. The chat slab's 22% and
      the sidebar's 12% live in theme.js (they ride the --chat/--side
-     tokens); these are the surfaces the tokens cannot address one-to-one:
-     the channel header's darker plate, and the me-bar + composer strip's
-     near-nothing — the deliberately brightest band, where the gradient
-     glows. The pill plate is the one control fill drawn on that strip. */
+     tokens); these are the pieces the tokens cannot say:
+
+     The dark field runs to the WINDOW BOTTOM, and the full-brightness
+     gradient shows only through two floating rounded cut-outs sitting in
+     it — the composer bar and the voice/me card. Their bright-on-dark
+     contrast is the entire design, so the card pieces are constants too:
+     the hairline that edges a cut-out, the cool elevated veil the voice
+     zone wears INSIDE the card, the pill fill drawn on the bright card,
+     and the toggled-on state's light fill with dark ink (the reference's
+     treatment — not an accent colour). */
   --theme-ov-head: rgba(0, 0, 0, .34);
-  --theme-strip: rgba(0, 0, 0, .03);
   --theme-plate: rgba(0, 0, 0, .25);
+  --theme-card-line: rgba(255, 255, 255, .11);
+  --theme-veil: rgba(45, 20, 86, .15);
+  --theme-on-fill: rgba(255, 255, 255, .9);
+  --theme-on-ink: #2b2d31;
 
   --radius: 10px;
   --tb: 31px;
@@ -2012,7 +2021,10 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
 
 /* ---------- composer ---------------------------------------------------- */
 
-#composer { flex: 0 0 auto; padding: 0 8px 8px; }
+/* 10px in from the column edges and 7px of the column's own surface below
+   the bar, measured off the reference — the bar floats in the field, it is
+   not flush to it. */
+#composer { flex: 0 0 auto; padding: 0 10px 7px; }
 
 #reply-chip {
   display: flex; align-items: center; gap: 8px;
@@ -4108,8 +4120,11 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   /* The same fixed overlay opacities, flipped to white — the layering is
      identical on a light base; only the overlay colour inverts. */
   --theme-ov-head: rgba(255, 255, 255, .34);
-  --theme-strip: rgba(255, 255, 255, .03);
   --theme-plate: rgba(255, 255, 255, .4);
+  --theme-card-line: rgba(0, 0, 0, .1);
+  --theme-veil: rgba(255, 255, 255, .3);
+  --theme-on-fill: rgba(0, 0, 0, .7);
+  --theme-on-ink: #f8f9fb;
 }
 
 /* The rail pill and the unread pill are white-on-dark by nature; invert them. */
@@ -6870,13 +6885,16 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 
    THE CHANNEL HEADER wears --chat but takes the darkest plate (34%).
 
-   THE ME-BAR + COMPOSER STRIP is the other near-zero band (3%): the
-   bottom of the gradient deliberately GLOWS through it. The chat slab's
-   22% therefore moves off #main and onto the message scroller, so the
-   strip under it punches through to the sheet instead of stacking on the
-   slab. The dock drops its card look and runs flush, one seamless
-   section; the composer's brightness against the 22% slab above it is
-   what reads as the gap between the two.
+   THE BOTTOM OF THE WINDOW stays DARK. The chat and sidebar overlays run
+   all the way to the window's bottom edge — there is no full-width bright
+   strip. The full-brightness gradient shows through exactly TWO floating
+   rounded cut-outs sitting in that dark field: the composer bar, and the
+   voice/me card in the bottom-left. Each cut-out paints the underlay
+   itself with background-attachment: fixed, so its fill IS the slice of
+   the window gradient at its own position — a true zero-overlay window
+   onto the sheet — while the field's dark margins around it are what make
+   it read as a floating card. The bright-on-dark contrast between the
+   cut-outs and the field is the entire design.
 
    THE SETTINGS SHEET was see-through: --sheet aliases --chat-2, a nested
    token, so the whole modal went transparent and the scrimmed app showed
@@ -6884,22 +6902,52 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 html.tm-underlay #rail { background: transparent; }
 html.tm-underlay #titlebar { background: transparent; box-shadow: none; }
 html.tm-underlay #chan-head { background: var(--theme-ov-head); }
-html.tm-underlay #main { background: transparent; }
-html.tm-underlay #messages-wrap { background: var(--chat); }
+/* The voice/me card. The dock cell fills its corner with the SIDEBAR
+   field (12%) to the window edges; the padding is the dark margin, and
+   the ::before is the card itself — the cut-out — behind the voice panel
+   and the me bar, edged in the card hairline. isolation makes z-index:-1
+   resolve inside the dock, so the card sits over the field and under the
+   controls. */
 html.tm-underlay #user-dock {
   margin: 0; border: 0; border-radius: 0; box-shadow: none;
-  background: var(--theme-strip);
+  background: var(--side);
+  padding: 8px 8px 7px;
+  isolation: isolate;
 }
-html.tm-underlay .composer-row { background: var(--theme-strip); }
-/* One family of pills: half the tray sat on --float-2 (opaque, hue-tinted)
-   and half on --sunk (transparent) — visibly mismatched blocks inside the
-   dock. All four share one translucent plate; the .on states keep their
-   lifted opaque fill, which is the state indicator. */
+html.tm-underlay #user-dock::before {
+  content: ""; position: absolute; inset: 8px 8px 7px; z-index: -1;
+  border-radius: 12px;
+  border: 1px solid var(--theme-card-line);
+  background: var(--theme-underlay);
+  background-attachment: fixed;
+}
+/* Inside the card the me-bar row is the pure gradient, but the voice
+   header + button zone wears a cool elevated veil — the reference's
+   distinct sub-surface within the card. Rounded only at the top: the
+   card's own corners. */
+html.tm-underlay #voice-panel:has(#voice-live:not([hidden])) {
+  background: var(--theme-veil);
+  border-radius: 12px 12px 0 0;
+}
+/* The composer cut-out: the same fixed-attachment window onto the sheet,
+   floating in the chat slab that now runs beneath and beside it. */
+html.tm-underlay .composer-row {
+  background: var(--theme-underlay);
+  background-attachment: fixed;
+  border-color: var(--theme-card-line);
+}
+/* One family of pills on the bright card: dark constant plates, exactly
+   the reference's. */
 html.tm-underlay #user-dock .btn-share,
 html.tm-underlay #btn-nsai, html.tm-underlay #btn-ptt {
   background: var(--theme-plate);
 }
-html.tm-underlay #btn-nsai.on, html.tm-underlay #btn-ptt.on { background: var(--float-2); }
+/* Toggled ON is the reference's light fill with dark ink — a state, not
+   an accent: the tinted --float-2 it wore read as a saturated colour. */
+html.tm-underlay #btn-nsai.on, html.tm-underlay #btn-ptt.on {
+  background: var(--theme-on-fill);
+  color: var(--theme-on-ink);
+}
 
 /* ---- custom theme picker ------------------------------------------------
    A panel DOCKED to the right edge — deliberately not a modal. Every change
