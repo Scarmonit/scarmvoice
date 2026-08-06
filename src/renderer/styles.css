@@ -6796,3 +6796,81 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .ban-card p { margin: 0 0 8px; font-size: 14.5px; color: var(--text); }
 .ban-card p strong { color: var(--danger-hi); }
 .ban-card .ban-count { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
+
+/* ---- custom theme picker ------------------------------------------------
+   The saturation/value square is three stacked layers: the pure hue below, a
+   left-to-right white fade, a bottom-up black fade — the classic picker,
+   with no canvas involved. The hue strip is one rainbow gradient. Both
+   thumbs are positioned by app.js from the current colour. */
+.tm-modal { width: 340px; }
+.tm-body { display: flex; flex-direction: column; gap: 10px; padding-bottom: 18px; }
+.tm-label {
+  margin: 8px 0 2px; font-size: 11.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--dim);
+}
+.tm-seg {
+  display: flex; gap: 4px; padding: 4px;
+  background: var(--ctl-sunk); border: 1px solid var(--ctl-sunk-line);
+  border-radius: 10px;
+}
+.tm-seg-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 8px 0; border: none; border-radius: 7px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.tm-seg-btn .ico { width: 17px; height: 17px; }
+.tm-seg-btn:hover { color: var(--text); }
+.tm-seg-btn.on { background: var(--ctl); color: var(--text-strong); }
+#tm-sv {
+  position: relative; height: 150px; border-radius: 10px;
+  border: 1px solid var(--float-rule);
+  /* app.js sets --tm-hue; the square is that hue at full chroma. */
+  background: hsl(var(--tm-hue, 235), 100%, 50%);
+  overflow: hidden; cursor: crosshair; touch-action: none;
+}
+#tm-sv-white { position: absolute; inset: 0; background: linear-gradient(to right, #fff, rgba(255, 255, 255, 0)); }
+#tm-sv-black { position: absolute; inset: 0; background: linear-gradient(to top, #000, rgba(0, 0, 0, 0)); }
+#tm-sv-thumb, #tm-hue-thumb {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  border: 2.5px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .45);
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+#tm-hue {
+  position: relative; height: 14px; border-radius: 7px;
+  background: linear-gradient(to right,
+    #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%);
+  cursor: pointer; touch-action: none;
+}
+#tm-hue-thumb { top: 50%; }
+.tm-hex-row { display: flex; align-items: center; gap: 8px; }
+#tm-swatch-current {
+  width: 30px; height: 30px; border-radius: 8px; flex: none;
+  border: 1px solid var(--float-rule);
+}
+#tm-hex { flex: 1; font-family: var(--mono); }
+.tm-hex-row .icon-btn { flex: none; }
+#tm-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+#tm-swatches:empty { display: none; }
+.tm-sw {
+  position: relative; width: 30px; height: 30px; border-radius: 8px;
+  border: 1px solid var(--float-rule); cursor: pointer; padding: 0;
+}
+.tm-sw.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tm-sw-x {
+  position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
+  border-radius: 50%; border: none; cursor: pointer;
+  background: var(--danger-solid); color: #fff;
+  font-size: 11px; line-height: 16px; padding: 0; display: none;
+}
+.tm-sw:hover .tm-sw-x { display: block; }
+.tm-row { display: flex; justify-content: space-between; align-items: center; font-size: 13.5px; }
+.tm-row span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+#tm-intensity { width: 100%; }
+.tm-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+/* A keycap stretched full-width; the icon (Add Color's +) rides inline. */
+.tm-wide {
+  width: 100%; display: inline-flex; align-items: center;
+  justify-content: center; gap: 6px; font-size: 12.5px;
+}
+.tm-wide .ico { width: 15px; height: 15px; }
+#btn-theme-custom { margin-top: 8px; }

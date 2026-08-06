@@ -122,6 +122,7 @@ beforeAll(async () => {
     run('audio.js');
     run('noise.js');    // defines window.ScarmNoise; its getUserMedia patch no-ops in jsdom
     run('sounds.js');
+    run('theme.js');
     run('icons.js');
     window.createVoice = fakeVoice;      // stands in for voice.js
     run('app.js');

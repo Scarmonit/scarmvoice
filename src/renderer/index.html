@@ -1372,6 +1372,20 @@
             </span>
           </label>
           <label class="set-radio">
+            <input type="radio" name="set-theme" value="ash">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Ash</span>
+              <span class="set-radio-sub">A softer, ashy grey — the dark theme with the lights up</span>
+            </span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="set-theme" value="onyx">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Onyx</span>
+              <span class="set-radio-sub">Near-pure black, made for OLED and dim rooms</span>
+            </span>
+          </label>
+          <label class="set-radio">
             <input type="radio" name="set-theme" value="light">
             <span class="set-radio-body">
               <span class="set-radio-title">Light</span>
@@ -1387,13 +1401,24 @@
               <span class="set-radio-sub">Follows the Windows light/dark setting</span>
             </span>
           </label>
+          <label class="set-radio">
+            <input type="radio" name="set-theme" value="custom">
+            <span class="set-radio-body">
+              <span class="set-radio-title">Custom</span>
+              <span class="set-radio-sub">Your own colours, over a dark or light base</span>
+            </span>
+          </label>
         </div>
+        <button type="button" class="keycap" id="btn-theme-custom">Customize your theme…</button>
         <!-- Kept so nothing that reads it breaks; the radios above write through
              to the same setting. -->
         <select id="set-theme" hidden aria-hidden="true">
           <option value="dark">Dark</option>
+          <option value="ash">Ash</option>
+          <option value="onyx">Onyx</option>
           <option value="light">Light</option>
           <option value="system">Match Windows</option>
+          <option value="custom">Custom</option>
         </select>
         <div class="row note">
           <span class="hint">Text size, message spacing, zoom, saturation and contrast are in
@@ -2419,6 +2444,63 @@
      sheet can produce. Without it a screen-reader user gets silence for all of
      them: the text is inserted into a node that is never focused and never read.
      aria-atomic so the whole sentence is announced rather than the diff. -->
+<!-- Customize your theme — the custom-theme picker. An overlay like the
+     filters modal, driven entirely by app.js's theme section: the saturation/
+     value square and hue strip are plain divs painted with gradients, so the
+     picker needs no canvas and inherits the app's own look. -->
+<div id="theme-modal" class="overlay" hidden>
+  <div class="modal tm-modal" role="dialog" aria-modal="true" aria-label="Customize your theme">
+    <header class="modal-head">
+      <h2>Customize your theme</h2>
+      <button class="icon-btn" id="tm-close" title="Close"><span class="ico" data-icon="x"></span></button>
+    </header>
+    <div class="modal-body tm-body">
+      <h4 class="tm-label">Appearance</h4>
+      <div class="tm-seg" role="radiogroup" aria-label="Base appearance">
+        <button type="button" class="tm-seg-btn" id="tm-base-dark" role="radio" title="Dark base">
+          <span class="ico" data-icon="moon"></span>
+        </button>
+        <button type="button" class="tm-seg-btn" id="tm-base-light" role="radio" title="Light base">
+          <span class="ico" data-icon="sun"></span>
+        </button>
+      </div>
+
+      <h4 class="tm-label">Colors</h4>
+      <div id="tm-sv" aria-label="Saturation and brightness" tabindex="0">
+        <div id="tm-sv-white"></div>
+        <div id="tm-sv-black"></div>
+        <div id="tm-sv-thumb"></div>
+      </div>
+      <div id="tm-hue" aria-label="Hue" tabindex="0">
+        <div id="tm-hue-thumb"></div>
+      </div>
+      <div class="tm-hex-row">
+        <span id="tm-swatch-current" aria-hidden="true"></span>
+        <input id="tm-hex" class="fm-input" spellcheck="false" maxlength="7" aria-label="Hex color">
+        <button type="button" class="icon-btn" id="tm-eyedrop" title="Pick a color from the screen">
+          <span class="ico" data-icon="eyedropper"></span>
+        </button>
+      </div>
+      <div id="tm-swatches"></div>
+      <button type="button" class="keycap tm-wide" id="tm-add">
+        <span class="ico" data-icon="plus"></span><span>Add Color</span>
+      </button>
+
+      <h4 class="tm-label">Controls</h4>
+      <div class="tm-row">
+        <span>Color Intensity</span>
+        <span id="tm-intensity-val">70%</span>
+      </div>
+      <input type="range" id="tm-intensity" min="0" max="100" step="1" aria-label="Color intensity">
+
+      <div class="tm-actions">
+        <button type="button" class="keycap tm-wide" id="tm-surprise">🎲 Surprise Me!</button>
+        <button type="button" class="keycap tm-wide" id="tm-reset">Reset</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
 <!-- voice.js MUST load before the SDK: it patches RTCPeerConnection and
@@ -2455,6 +2537,9 @@
 <script src="soundboard.js"></script>
 <script src="voice.js"></script>
 <script src="sounds.js"></script>
+<!-- The theme engine (Ash, Onyx, the custom tint). Before app.js, which calls
+     ScarmTheme.apply from applyTheme() during boot. -->
+<script src="theme.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 </body>

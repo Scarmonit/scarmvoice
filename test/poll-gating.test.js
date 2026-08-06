@@ -161,6 +161,7 @@ beforeAll(async () => {
     run('audio.js');
     run('voice.js');
     run('sounds.js');
+    run('theme.js');
     run('icons.js');
     run('app.js');
 

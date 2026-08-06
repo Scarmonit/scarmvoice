@@ -236,6 +236,10 @@
         'bell-off': '<path d="M18 8.8a6 6 0 0 0-12 0c0 6-2.4 7.6-2.4 7.6h16.8S18 14.8 18 8.8"/>' +
             '<path d="M13.7 20.2a2 2 0 0 1-3.4 0"/><path d="M3.6 3.4l16.8 17.2"/>',
         moon: '<path d="M20.4 13.6A8.6 8.6 0 0 1 10.4 3.6a8.6 8.6 0 1 0 10 10z"/>',
+        // Pipette, tip to the lower-left — the custom theme picker's
+        // pick-a-colour-from-the-screen control.
+        eyedropper: '<path d="M13.2 6.8l4 4M15.2 4.8l1.6-1.6a2.1 2.1 0 0 1 3 3l-1.6 1.6a1.4 1.4 0 0 1-2 0l-1-1a1.4 1.4 0 0 1 0-2z"/>' +
+            '<path d="M13.7 8.3l-7.5 7.5c-.5.5-.8 1.1-.9 1.8l-.3 2c-.1.7.5 1.3 1.2 1.2l2-.3c.7-.1 1.3-.4 1.8-.9l7.5-7.5"/>',
         sun: '<circle cx="12" cy="12" r="4.2"/>' +
             '<path d="M12 2.6v2.2M12 19.2v2.2M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.4 19.6L6 18M18 6l1.6-1.6"/>',
         sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/>' +

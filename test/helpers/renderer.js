@@ -236,6 +236,9 @@ export async function bootRenderer(opts = {}) {
     // pushes the saved input gain into.
     run('soundboard.js');
     run('sounds.js');
+    // The theme engine — app.js calls ScarmTheme.apply from applyTheme()
+    // during boot, exactly as index.html loads it.
+    run('theme.js');
     run('icons.js');
     // jsdom has no script loader, so an injected <script src="vendor/…"> never
     // resolves either way and lazy.js's promise would hang forever — which in

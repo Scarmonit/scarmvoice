@@ -1675,11 +1675,29 @@ function registerIpc() {
     handle('app:systemTheme', () => ({ dark: nativeTheme.shouldUseDarkColors }));
 
     handle('app:setTheme', (_e, theme) => {
-        const o = OVERLAY[theme === 'light' ? 'light' : 'dark'];
+        // Two callers: an old renderer passes the theme NAME ('dark'/'light');
+        // the theme engine passes the computed chrome — the exact titlebar,
+        // symbol and background colours of whatever it just applied, which is
+        // how Ash, Onyx and a custom tint keep the native caption buttons off
+        // a patch of the wrong theme. Colours are validated because they cross
+        // IPC: a malformed string here reaches two Electron native calls.
+        const hex = (v) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : null);
+        let o, bg;
+        if (theme && typeof theme === 'object') {
+            const base = theme.base === 'light' ? 'light' : 'dark';
+            o = {
+                color: hex(theme.color) || OVERLAY[base].color,
+                symbolColor: hex(theme.symbolColor) || OVERLAY[base].symbolColor
+            };
+            bg = hex(theme.bg) || (base === 'light' ? '#f4f5f7' : '#101218');
+        } else {
+            o = OVERLAY[theme === 'light' ? 'light' : 'dark'];
+            bg = theme === 'light' ? '#f4f5f7' : '#101218';
+        }
         if (!win || win.isDestroyed()) return false;
         try {
             win.setTitleBarOverlay(Object.assign({ height: 31 }, o));
-            win.setBackgroundColor(theme === 'light' ? '#f4f5f7' : '#101218');
+            win.setBackgroundColor(bg);
         } catch (e) { /* not supported on this platform */ }
         return true;
     });

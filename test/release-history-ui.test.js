@@ -177,6 +177,7 @@ beforeAll(async () => {
     run('audio.js');
     run('noise.js');
     run('sounds.js');
+    run('theme.js');
     run('icons.js');
 
     // A voice engine that is IN the call, with the other person peered under

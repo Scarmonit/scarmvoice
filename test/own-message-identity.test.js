@@ -210,6 +210,7 @@ beforeAll(async () => {
     run('noise.js');
     run('voice.js');
     run('sounds.js');
+    run('theme.js');
     run('icons.js');
     run('app.js');
 

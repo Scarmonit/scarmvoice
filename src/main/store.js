@@ -56,6 +56,10 @@ const DEFAULTS = {
     voiceSounds: true,           // join / leave chimes while in a call
     windowBounds: null,          // restored geometry (never the maximised rect)
     windowMaximized: false,
+    // The custom theme: { base: 'dark'|'light', colors: ['#rrggbb', …], intensity: 0-100 }.
+    // Null until somebody opens the customizer; theme.js normalizes whatever
+    // is read back, so a hand-edited file cannot break the renderer.
+    customTheme: null,
     // One-shot, written by the process an update is replacing and consumed by
     // the one that comes back: "the window was on screen when they clicked
     // Restart Now, so put it back on screen" — even on a start-minimized
@@ -77,7 +81,7 @@ const DEFAULTS = {
     catVoiceOpen: true,          // "Voice Channels" category expanded
 
     // Appearance
-    theme: 'dark',               // 'dark' | 'light' | 'system'
+    theme: 'dark',               // 'dark' | 'ash' | 'onyx' | 'light' | 'system' | 'custom'
     density: 'cozy',             // 'cozy' | 'compact'
 
     // Presence you CHOOSE, as opposed to the one computed from window focus and

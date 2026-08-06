@@ -336,7 +336,11 @@ describe('every colour goes through a token', () => {
     // …and the controls that sit ON one: a ✕ over somebody's banner needs a dark
     // plate whatever the theme, because what is behind it is a colour, not a
     // surface.
-    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox|\.pc-x/;
+    // …and the custom theme picker's spectrum (#tm-sv*/#tm-hue): the
+    // saturation square's white/black fades and the hue strip's rainbow ARE
+    // the colour space being picked from — they would be wrong in any theme's
+    // tokens, because they must look identical in every theme.
+    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox|\.pc-x|#tm-sv|#tm-hue/;
 
     const relLum = (hexStr) => {
         const h = hexStr.length === 4

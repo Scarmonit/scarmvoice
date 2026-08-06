@@ -11958,22 +11958,33 @@
     }
 
     // ---------- theme ------------------------------------------------------
-    // Three states: force dark, force light, or follow Windows. The main process
-    // owns the system answer and pushes changes, and it also restyles the native
-    // caption buttons so they don't sit on a patch of the old theme.
+    // Six states now: dark, ash, onyx, light, follow-Windows, and custom. The
+    // stylesheet knows only dark and light; ash, onyx and custom are computed
+    // by theme.js and written over the base as inline variables, so data-theme
+    // still only ever says 'dark' or 'light' — which is also what every
+    // base-conditional rule in styles.css keys on. The main process is handed
+    // the computed titlebar/background colours so the native caption buttons
+    // never sit on a patch of a theme the engine just left.
 
     let systemDark = true;
 
+    const THEMES = ['dark', 'ash', 'onyx', 'light', 'system', 'custom'];
+
     function effectiveTheme() {
-        const t = settings.theme || 'dark';
+        const t = THEMES.includes(settings.theme) ? settings.theme : 'dark';
         if (t === 'system') return systemDark ? 'dark' : 'light';
-        return t === 'light' ? 'light' : 'dark';
+        return t;
+    }
+
+    function customCfg() {
+        return window.ScarmTheme.normalizeCustom(settings.customTheme);
     }
 
     function applyTheme() {
         const t = effectiveTheme();
-        document.documentElement.dataset.theme = t;
-        L.app.setTheme(t);
+        const chrome = window.ScarmTheme.apply(t, t === 'custom' ? customCfg() : null);
+        document.documentElement.dataset.theme = chrome.base;
+        L.app.setTheme(chrome);
     }
 
     L.app.systemTheme().then((s) => {
@@ -11983,6 +11994,224 @@
         if (!s || typeof s.dark !== 'boolean') return;
         systemDark = s.dark;
         if ((settings.theme || 'dark') === 'system') applyTheme();
+    });
+
+    // ---------- custom theme picker ----------------------------------------
+    // The "Customize your theme" modal. Everything edits a working copy and
+    // applies LIVE — the app behind the modal is the preview — with the save
+    // debounced behind the edits so dragging the intensity slider is not a
+    // hundred writes to disk.
+    //
+    // The working hue/sat/value triple is kept in memory rather than re-read
+    // from the hex on every drag: a hex at saturation 0 has no hue to read
+    // back, so a picker that round-trips through it snaps the hue marker to
+    // red the moment someone slides to grey. The triple is only rebuilt from
+    // the hex when the hex is the thing that changed.
+
+    const tmModal = $('theme-modal');
+    let tmCfg = null;       // working copy of settings.customTheme
+    let tmSel = 0;          // which swatch is being edited
+    let tmHsv = [235, 0.7, 0.95];
+    let tmSaveTimer = null;
+
+    function tmFlushSave() {
+        clearTimeout(tmSaveTimer);
+        tmSaveTimer = null;
+        saveSettings({ customTheme: tmCfg });
+    }
+
+    function tmApply() {
+        settings.customTheme = tmCfg;
+        applyTheme();
+        clearTimeout(tmSaveTimer);
+        tmSaveTimer = setTimeout(tmFlushSave, 400);
+    }
+
+    // The colour under edit changed by h/s/v — write it back and repaint.
+    function tmFromHsv() {
+        tmCfg.colors[tmSel] = window.ScarmTheme.hsvToHex(tmHsv[0], tmHsv[1], tmHsv[2]);
+        tmPaint();
+        tmApply();
+    }
+
+    // The colour under edit was REPLACED (hex typed, eyedropper, swatch pick):
+    // the triple follows the colour, not the other way round.
+    function tmSetColor(hex) {
+        tmCfg.colors[tmSel] = hex;
+        const [h, s, v] = window.ScarmTheme.hexToHsv(hex);
+        // s===0 carries no hue — keep the marker where the person left it.
+        tmHsv = [s ? h : tmHsv[0], s, v];
+        tmPaint();
+        tmApply();
+    }
+
+    function tmPaint() {
+        const cur = tmCfg.colors[tmSel] || tmCfg.colors[0];
+        $('tm-base-dark').classList.toggle('on', tmCfg.base !== 'light');
+        $('tm-base-dark').setAttribute('aria-checked', String(tmCfg.base !== 'light'));
+        $('tm-base-light').classList.toggle('on', tmCfg.base === 'light');
+        $('tm-base-light').setAttribute('aria-checked', String(tmCfg.base === 'light'));
+
+        $('tm-sv').style.setProperty('--tm-hue', String(Math.round(tmHsv[0])));
+        $('tm-sv-thumb').style.left = (tmHsv[1] * 100) + '%';
+        $('tm-sv-thumb').style.top = ((1 - tmHsv[2]) * 100) + '%';
+        $('tm-hue-thumb').style.left = (tmHsv[0] / 360 * 100) + '%';
+
+        // Not while someone is mid-edit in the field — repainting under a
+        // half-typed hex would eat their keystrokes.
+        if (document.activeElement !== $('tm-hex')) $('tm-hex').value = cur.toUpperCase();
+        $('tm-swatch-current').style.background = cur;
+
+        const box = $('tm-swatches');
+        box.innerHTML = '';
+        tmCfg.colors.forEach((c, i) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'tm-sw' + (i === tmSel ? ' on' : '');
+            b.style.background = c;
+            b.title = c.toUpperCase();
+            b.setAttribute('aria-label', 'Color ' + (i + 1) + ', ' + c);
+            b.addEventListener('click', () => { tmSel = i; tmSetColor(tmCfg.colors[i]); });
+            if (tmCfg.colors.length > 1) {
+                const x = document.createElement('button');
+                x.type = 'button';
+                x.className = 'tm-sw-x';
+                x.textContent = '×';
+                x.title = 'Remove this color';
+                x.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    tmCfg.colors.splice(i, 1);
+                    tmSel = Math.min(tmSel, tmCfg.colors.length - 1);
+                    tmSetColor(tmCfg.colors[tmSel]);
+                });
+                b.appendChild(x);
+            }
+            box.appendChild(b);
+        });
+        $('tm-add').hidden = tmCfg.colors.length >= 4;
+
+        $('tm-intensity').value = String(tmCfg.intensity);
+        $('tm-intensity-val').textContent = tmCfg.intensity + '%';
+    }
+
+    async function openThemeModal() {
+        tmCfg = customCfg();
+        tmSel = 0;
+        const [h, s, v] = window.ScarmTheme.hexToHsv(tmCfg.colors[0]);
+        tmHsv = [s ? h : 235, s, v];
+        // Opening the customizer IS choosing the custom theme — the app behind
+        // the modal is the preview, and previewing a theme that is not active
+        // shows nothing at all.
+        if (settings.theme !== 'custom') {
+            await saveSettings({ theme: 'custom' });
+            $('set-theme').value = 'custom';
+            radioPainters.forEach((p) => p());
+        }
+        tmPaint();
+        applyTheme();
+        tmModal.hidden = false;
+    }
+
+    function closeThemeModal() {
+        if (tmModal.hidden) return;
+        tmModal.hidden = true;
+        if (tmSaveTimer) tmFlushSave();
+    }
+
+    $('btn-theme-custom').addEventListener('click', openThemeModal);
+    $('tm-close').addEventListener('click', closeThemeModal);
+    tmModal.addEventListener('mousedown', (e) => { if (e.target === tmModal) closeThemeModal(); });
+    // Capture, and stopped: the document-level Escape handler would otherwise
+    // also close the settings sheet underneath in the same keystroke.
+    tmModal.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeThemeModal();
+    }, true);
+
+    $('tm-base-dark').addEventListener('click', () => { tmCfg.base = 'dark'; tmPaint(); tmApply(); });
+    $('tm-base-light').addEventListener('click', () => { tmCfg.base = 'light'; tmPaint(); tmApply(); });
+
+    // The saturation/value square and the hue strip: pointer-captured drags,
+    // so a drag that leaves the box keeps tracking until release.
+    function tmDrag(el, move) {
+        el.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            try { el.setPointerCapture(e.pointerId); } catch (err) {}
+            const track = (ev) => {
+                const r = el.getBoundingClientRect();
+                move(
+                    Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)),
+                    Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height))
+                );
+            };
+            track(e);
+            const up = () => {
+                el.removeEventListener('pointermove', track);
+                el.removeEventListener('pointerup', up);
+                el.removeEventListener('pointercancel', up);
+            };
+            el.addEventListener('pointermove', track);
+            el.addEventListener('pointerup', up);
+            el.addEventListener('pointercancel', up);
+        });
+    }
+    tmDrag($('tm-sv'), (x, y) => { tmHsv[1] = x; tmHsv[2] = 1 - y; tmFromHsv(); });
+    tmDrag($('tm-hue'), (x) => { tmHsv[0] = x * 360; tmFromHsv(); });
+
+    $('tm-hex').addEventListener('input', () => {
+        const hex = window.ScarmTheme.normHex($('tm-hex').value);
+        if (hex) tmSetColor(hex);
+    });
+    $('tm-hex').addEventListener('blur', tmPaint);   // normalise a half-typed value
+
+    // The eyedropper is a Chromium API; hidden rather than broken elsewhere.
+    if (!window.EyeDropper) $('tm-eyedrop').hidden = true;
+    $('tm-eyedrop').addEventListener('click', async () => {
+        try {
+            const r = await new window.EyeDropper().open();
+            const hex = window.ScarmTheme.normHex(r && r.sRGBHex);
+            if (hex) tmSetColor(hex);
+        } catch (e) { /* picking was cancelled */ }
+    });
+
+    $('tm-add').addEventListener('click', () => {
+        if (tmCfg.colors.length >= 4) return;
+        // Seeded a hue-turn away from the colour under edit, so the new swatch
+        // is visibly a second colour rather than a copy to hunt for.
+        const next = window.ScarmTheme.hsvToHex(tmHsv[0] + 90, Math.max(0.4, tmHsv[1]), tmHsv[2]);
+        tmCfg.colors.push(next);
+        tmSel = tmCfg.colors.length - 1;
+        tmSetColor(next);
+    });
+
+    $('tm-intensity').addEventListener('input', () => {
+        tmCfg.intensity = Math.max(0, Math.min(100, Math.round(Number($('tm-intensity').value) || 0)));
+        $('tm-intensity-val').textContent = tmCfg.intensity + '%';
+        tmApply();
+    });
+
+    $('tm-surprise').addEventListener('click', () => {
+        // The base is kept: surprise should recolour the world, not flip day
+        // to night under somebody reading.
+        tmCfg = window.ScarmTheme.randomCustom(tmCfg.base);
+        tmSel = 0;
+        const [h, s, v] = window.ScarmTheme.hexToHsv(tmCfg.colors[0]);
+        tmHsv = [s ? h : tmHsv[0], s, v];
+        tmPaint();
+        tmApply();
+    });
+
+    $('tm-reset').addEventListener('click', () => {
+        const base = tmCfg.base;
+        tmCfg = window.ScarmTheme.defaultCustom();
+        tmCfg.base = base;
+        tmSel = 0;
+        const [h, s, v] = window.ScarmTheme.hexToHsv(tmCfg.colors[0]);
+        tmHsv = [h, s, v];
+        tmPaint();
+        tmApply();
     });
 
     // ---------- message density -------------------------------------------
@@ -14665,7 +14894,7 @@
         });
 
     wireRadios('set-theme',
-        () => (['dark', 'light', 'system'].includes(settings.theme) ? settings.theme : 'dark'),
+        () => (THEMES.includes(settings.theme) ? settings.theme : 'dark'),
         async (v) => {
             await saveSettings({ theme: v });
             $('set-theme').value = v;

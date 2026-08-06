@@ -228,6 +228,7 @@ beforeAll(async () => {
     run('audio.js');
     run('noise.js');
     run('sounds.js');
+    run('theme.js');
     run('icons.js');
     // Voice is not what this file is about; stand in for it.
     window.createVoice = () => ({
