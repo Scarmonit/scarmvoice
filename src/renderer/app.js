@@ -12062,6 +12062,11 @@
         const t = effectiveTheme();
         const chrome = window.ScarmTheme.apply(t, t === 'custom' ? customCfg() : null);
         document.documentElement.dataset.theme = chrome.base;
+        // The #app backdrop paints the same --rail behind every column, which
+        // under a custom theme was a SECOND sheet of glass the gradient had
+        // to cross — attenuation compounds per layer. One field, one sheet:
+        // the backdrop steps out of the way while an underlay is active.
+        document.documentElement.classList.toggle('tm-underlay', !!chrome.underlay);
         L.app.setTheme(chrome);
     }
 

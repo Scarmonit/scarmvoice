@@ -71,17 +71,32 @@
         '--elev':             ['#343439', '#e6e9ed', 0.85]
     };
 
-    // The STRUCTURAL surfaces — the panes that tile the window itself: the
-    // rail, the sidebars, the chat column, the top bars, the user dock, the
-    // composer. Under a custom theme these go TRANSLUCENT over the gradient
-    // underlay, which is what makes the gradient read as one continuous sweep
-    // across the whole app. Floating surfaces (menus, modals, popovers, the
-    // raised controls) stay opaque — they are drawn OVER the window and a
-    // see-through menu is unreadable — and take the hue tint instead.
-    const STRUCTURAL = new Set([
-        '--rail', '--side', '--members', '--chat', '--sunk',
-        '--chat-2', '--panel', '--input', '--mark'
-    ]);
+    // The STRUCTURAL surfaces — the panes that tile the window itself. Under
+    // a custom theme the gradient must pass through them as ONE field, which
+    // means it may only cross ONE sheet of glass: attenuation compounds per
+    // layer, and the app stacks its surfaces (the #app backdrop behind every
+    // column, the column, then a panel on the column — the composer sat
+    // behind three sheets and measured a 4.7× chroma cut). So the tokens
+    // split by depth:
+    //
+    //   COLUMN  the first-layer panes (rail backdrop, sidebars, chat,
+    //           members) — these are the one glass sheet.
+    //   NESTED  surfaces that always sit ON a column (composer, user dock,
+    //           panels, wells). These express their elevation the way the
+    //           reference does — a faint white lift or black dip — which
+    //           raises or sinks them WITHOUT desaturating what is beneath.
+    //
+    // Floating surfaces (menus, modals, popovers) stay opaque — they are
+    // drawn OVER the window and a see-through menu is unreadable — and take
+    // the hue tint instead.
+    const COLUMN = new Set(['--rail', '--side', '--members', '--chat']);
+    const NESTED = {
+        '--input':  'rgba(255, 255, 255, 0.05)',   // composer: raised
+        '--panel':  'rgba(255, 255, 255, 0.05)',   // user dock: raised
+        '--chat-2': 'rgba(255, 255, 255, 0.04)',   // panels on the column
+        '--mark':   'rgba(255, 255, 255, 0.05)',
+        '--sunk':   'rgba(0, 0, 0, 0.14)'          // wells: recessed
+    };
 
     // Not surfaces the stylesheet names, but chrome the OS draws: the native
     // caption-button strip and the window's own background. Transformed with
@@ -264,18 +279,40 @@
         const f = scale === undefined ? 1 : scale;
         return 'rgba(' + Math.round(r * f) + ', ' + Math.round(g * f) + ', ' + Math.round(b * f) + ', ' + a + ')';
     }
-    function mixHex(a, b, t) {
-        const A = hexToRgb(a), B = hexToRgb(b);
-        return rgbToHex(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t);
+    // The gradient's colour AT A POINT of the window (x,y in 0..1, y down).
+    // The native titlebar overlay cannot wear a gradient, so it wears the
+    // gradient's own colour at its corner — averaging the stops instead
+    // cancelled complementary hues into neutral mud (measured chroma 4 on an
+    // orange/purple/green theme).
+    function gradientAt(cfg, x, y) {
+        const list = cfg.colors.map(hexToRgb);
+        if (list.length === 1) return list[0];
+        // CSS angle: 0deg points up, so the axis direction in screen space
+        // (y down) is (sin a, -cos a); t runs 0..1 from the axis's entry
+        // corner to its exit corner.
+        const rad = cfg.angle * Math.PI / 180;
+        const ux = Math.sin(rad), uy = -Math.cos(rad);
+        const dots = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([cx, cy]) => cx * ux + cy * uy);
+        const min = Math.min.apply(null, dots), max = Math.max.apply(null, dots);
+        const t = max === min ? 0.5 : Math.max(0, Math.min(1, ((x * ux + y * uy) - min) / (max - min)));
+        const span = list.length - 1;
+        const i = Math.min(span - 1, Math.floor(t * span));
+        const f = t * span - i;
+        const a = list[i], b = list[i + 1];
+        return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
     }
-    // One colour that stands for the whole set — the native titlebar cannot
-    // wear a gradient, so it wears the blend.
-    function avgColor(colors) {
-        const sum = colors.reduce((acc, c) => {
-            const [r, g, b] = hexToRgb(c);
-            return [acc[0] + r, acc[1] + g, acc[2] + b];
-        }, [0, 0, 0]);
-        return rgbToHex(sum[0] / colors.length, sum[1] / colors.length, sum[2] / colors.length);
+
+    // What a glass pane over the gradient actually shows at a point — the
+    // exact compositing arithmetic, so the native chrome matches the page
+    // beside it instead of approximating it.
+    function paneOver(paneHex, scale, alpha, cfg, x, y) {
+        const p = hexToRgb(paneHex);
+        const g = gradientAt(cfg, x, y);
+        return rgbToHex(
+            p[0] * scale * alpha + g[0] * (1 - alpha),
+            p[1] * scale * alpha + g[1] * (1 - alpha),
+            p[2] * scale * alpha + g[2] * (1 - alpha)
+        );
     }
 
     // Apply `name` ('dark' | 'light' | 'ash' | 'onyx' | 'custom') and answer
@@ -319,37 +356,43 @@
                 root.style.setProperty('--theme-underlay', underlayOf(cfg));
                 applied.push('--theme-underlay');
             }
-            // Measured against the reference: its panes at 50% intensity pass
-            // ~2.7× the chroma these did at 60% — the glass was three times too
-            // thick. Dark panes now run to alpha .08 at full intensity (the
-            // reference's 100% is likewise nearly bare gradient); light panes
-            // keep more paper because dark text sits on them.
-            const alpha = +(1 - (cfg.base === 'light' ? 0.62 : 0.92) * k).toFixed(3);
-            // …and a dark pane's own colour SHRINKS TOWARD BLACK as intensity
-            // rises. Compositing is out = pane·α + gradient·(1−α): the pane·α
-            // half is a flat grey ADDED to every channel, and a stock-grey
-            // pane lifts the gradient's near-zero channels to a measured floor
-            // of ~24 where the reference reaches ~10 — the wash. Scaling the
-            // pane toward black shrinks that additive term (multiply-like
-            // compositing) while the ladder survives, because every pane
-            // scales by the same factor and their differences scale with
-            // them. Light panes are excluded: their job is to stay paper.
+            // The one sheet of glass. Calibrated against the reference's
+            // measured panes, WITH the single-layer model in place: at 50%
+            // intensity its me-bar passes ~95% of the raw gradient's chroma,
+            // which means the sheet is nearly clear by mid-slider — so the
+            // alpha runs down steeply (1−1.6k) to a floor of .08. The pane's
+            // own colour also shrinks toward black as intensity rises: the
+            // pane·α term is a flat ADDITION to every channel, and stock grey
+            // there lifts the gradient's near-zero channels into a wash
+            // (measured floor ~24 vs the reference's ~10). Light panes keep
+            // more paper and never darken — dark text sits on them.
+            const alpha = +Math.max(cfg.base === 'light' ? 0.2 : 0.08,
+                1 - (cfg.base === 'light' ? 1.1 : 1.6) * k).toFixed(3);
             const paneScale = cfg.base === 'light' ? 1 : +(1 - 0.85 * k).toFixed(3);
             Object.keys(TOKENS).forEach((tok) => {
                 const t = TOKENS[tok];
                 if (!t[col]) return;
-                const v = (k > 0 && STRUCTURAL.has(tok))
-                    ? rgbaOf(t[col], alpha, paneScale)
-                    : tintOf(t[col], cfg.base, cfg.colors, cfg.intensity, t[2]);
+                let v;
+                if (k > 0 && COLUMN.has(tok)) v = rgbaOf(t[col], alpha, paneScale);
+                else if (k > 0 && cfg.base !== 'light' && NESTED[tok]) v = NESTED[tok];
+                else if (k > 0 && NESTED[tok]) v = rgbaOf(t[col], alpha);
+                else v = tintOf(t[col], cfg.base, cfg.colors, cfg.intensity, t[2]);
                 root.style.setProperty(tok, v);
                 applied.push(tok);
             });
-            const accent = avgColor(cfg.colors);
+            // The native chrome wears exactly what the page beside it shows:
+            // the caption strip composites the glass over the gradient AT ITS
+            // OWN CORNER, and the window background takes the centre.
             return {
                 base: cfg.base,
-                color: mixHex(TB_SEED[cfg.base], accent, k * 0.5),
+                underlay: k > 0,
+                color: k > 0
+                    ? paneOver(TB_SEED[cfg.base], paneScale, alpha, cfg, 0.95, 0.02)
+                    : TB_SEED[cfg.base],
                 symbolColor: SYMBOL[cfg.base],
-                bg: mixHex(BG_SEED[cfg.base], accent, k * 0.5)
+                bg: k > 0
+                    ? paneOver(BG_SEED[cfg.base], paneScale, alpha, cfg, 0.5, 0.5)
+                    : BG_SEED[cfg.base]
             };
         }
 

@@ -142,6 +142,38 @@ describe('the custom tint', () => {
         expect(rootVar('--float')).toMatch(/^#/);
     });
 
+    it('nested surfaces are lightness washes — elevation without desaturation', () => {
+        // The composer sat behind THREE stacked panes and measured a 4.7×
+        // chroma cut: attenuation compounds per glass layer. Surfaces that
+        // always sit ON a column now express elevation as a faint white lift
+        // or black dip — the reference's own trick — so the gradient crosses
+        // exactly one sheet everywhere.
+        T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 50, angle: 0 });
+        expect(rootVar('--input')).toBe('rgba(255, 255, 255, 0.05)');   // composer: raised
+        expect(rootVar('--panel')).toBe('rgba(255, 255, 255, 0.05)');   // user dock: raised
+        expect(rootVar('--sunk')).toBe('rgba(0, 0, 0, 0.14)');          // wells: recessed
+        // …and the flag that lifts the #app backdrop (the second sheet the
+        // gradient used to cross under every column) is raised with it.
+        expect(T.apply('custom', { base: 'dark', colors: ['#ff0000'], intensity: 50 }).underlay).toBe(true);
+        expect(T.apply('custom', { base: 'dark', colors: ['#ff0000'], intensity: 0 }).underlay).toBe(false);
+    });
+
+    it('the native caption strip wears the gradient at its own corner', () => {
+        // Averaging the stops cancelled complementary hues into neutral mud —
+        // measured chroma 4 behind the window controls on a vivid theme. The
+        // strip now composites the glass over the gradient AT the top-right,
+        // so it continues the page beside it.
+        const chrome = T.apply('custom', {
+            base: 'dark', colors: ['#ff8800', '#00ff00'], intensity: 50, angle: 180
+        });
+        const n = parseInt(chrome.color.slice(1), 16);
+        const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+        // 180° runs the first colour from the top, so the caption strip sits
+        // in orange territory: strongly chromatic, red-dominant.
+        expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeGreaterThan(50);
+        expect(r).toBeGreaterThan(b);
+    });
+
     it('honours the gradient direction', () => {
         T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 60, angle: 90 });
         expect(rootVar('--theme-underlay')).toBe('linear-gradient(90deg, #ff0000, #0000ff)');

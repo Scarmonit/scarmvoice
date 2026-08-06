@@ -341,6 +341,13 @@ html, body {
   user-select: none;
 }
 
+/* While an underlay is active the #app backdrop steps aside: it paints the
+   same --rail behind EVERY grid cell, which was a second sheet of glass the
+   gradient crossed under every column — attenuation compounds per layer, and
+   the measured chroma more than doubled the moment the gradient exited the
+   panelled area. One field, one sheet. */
+html.tm-underlay #app { background: transparent; }
+
 /* Column layout, so the update banner steals height from the app instead of
    pushing its bottom edge off-screen. */
 body { display: flex; flex-direction: column; }
