@@ -498,6 +498,52 @@ describe('the settings card', () => {
     });
 });
 
+// Settings › About. The pane answers two questions — which version is this,
+// and is it the current one — and both answers are carried by colour as well
+// as by words, which is the part a stylesheet can get wrong silently.
+describe('the About pane', () => {
+    it('states the version on the same raised card every other card uses', () => {
+        expect(css).toMatch(/\.about-card \{[\s\S]{0,120}background: var\(--card\)/);
+        expect(css).toMatch(/\.about-card \{[\s\S]{0,120}border: 1px solid var\(--card-line\)/);
+        // The diagnostics row is separated by a rule, not by a second card.
+        expect(css).toMatch(/\.about-foot \{[\s\S]{0,220}border-top: 1px solid var\(--card-line\)/);
+    });
+
+    it('says "up to date" in the presence green and "update" in the accent', () => {
+        // The two states have to be told apart at a glance, which means two
+        // different hues rather than two shades of one. Green is the app's
+        // "nothing wrong" colour everywhere else (presence, the level meter);
+        // the accent is what it uses to ask for a click.
+        expect(css).toMatch(/\.about-state\[data-state="ok"\] \{[\s\S]{0,160}color: var\(--online\)/);
+        expect(css).toMatch(/\.about-state\[data-state="ok"\] \{[\s\S]{0,160}rgba\(var\(--online-rgb\)/);
+        expect(css).toMatch(/\.about-state\[data-state="new"\] \{[\s\S]{0,160}color: var\(--accent\)/);
+        expect(css).toMatch(/\.about-state\[data-state="new"\] \{[\s\S]{0,160}rgba\(var\(--accent-rgb\)/);
+        // A failed check must not be able to read as either of them.
+        expect(css).toMatch(/\.about-state\[data-state="error"\] \{[\s\S]{0,160}color: var\(--danger\)/);
+    });
+
+    it('marks the releases that are new to this reader with a rail, not a wash', () => {
+        // A tinted background would fight the notes' own text; a rail down the
+        // card's edge groups them without touching what is inside.
+        expect(css).toMatch(/\.rn-item\.rn-fresh::before \{[\s\S]{0,200}background: var\(--accent\)/);
+        expect(css).toMatch(/\.rn-item\.rn-fresh \{[\s\S]{0,120}border-color: rgba\(var\(--accent-rgb\)/);
+    });
+
+    it('fills the NEW badge and outlines the INSTALLED one', () => {
+        // Both are accent, and the fill is what separates "you have not read
+        // this" from "this is where you are" without a second hue.
+        expect(css).toMatch(/\.rn-badge \{[\s\S]{0,320}border: 1px solid rgba\(var\(--accent-rgb\)/);
+        expect(css).toMatch(/\.rn-badge\.rn-new \{[\s\S]{0,140}background: var\(--accent\); color: var\(--on-accent\)/);
+    });
+
+    it('gives each release its own card instead of a run of hairlines', () => {
+        expect(css).toMatch(/\.rn-item \{[\s\S]{0,200}background: var\(--card\)/);
+        // .row centres its children; a stretched column is what keeps every
+        // card the full width of the reading column.
+        expect(css).toMatch(/#release-history \{[\s\S]{0,140}align-items: stretch/);
+    });
+});
+
 describe('the user panel', () => {
     it('is an inset card, not a full-bleed strip', () => {
         // The card is the DOCK: it holds the voice section and the user panel

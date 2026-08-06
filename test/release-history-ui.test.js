@@ -42,6 +42,11 @@ const RELEASES = [
     { version: '0.3.0', title: '0.3.0', date: '2026-07-23T18:49:00Z', prerelease: false, blocks: [] }
 ];
 let historyCalls = 0;
+// Every subscriber the app registers for update state, so a test can push one
+// through the same path a real event takes. Two things listen: the banner and
+// the About pane's status pill.
+const updateSubs = [];
+const emitUpdate = (s) => updateSubs.forEach((cb) => cb(s));
 
 let listPosts = [];
 let typingRows = [];
@@ -121,7 +126,10 @@ beforeAll(async () => {
                 chatFontSize: 'medium', showMembers: true, catTextOpen: true,
                 catDmsOpen: true, catVoiceOpen: true,
                 localVolumes: {}, localMuted: {}, blocked: {}, mutedChannels: [],
-                voiceMode: 'open', pttBinding: { type: 'key', code: 'Backquote' }
+                voiceMode: 'open', pttBinding: { type: 'key', code: 'Backquote' },
+                // The version this profile ran before the current one — what
+                // "new to this reader" is measured against. See store.js.
+                previousVersion: '0.32.0'
             })),
             set: vi.fn(async (p) => p)
         },
@@ -150,7 +158,8 @@ beforeAll(async () => {
         update: {
             getState: vi.fn(async () => ({ status: 'idle', noteBlocks: [] })),
             check: noop, download: noop, install: noop, setAuto: noop,
-            postpone: noop, onState: unsub,
+            postpone: noop,
+            onState: (cb) => { updateSubs.push(cb); return noop; },
             history: vi.fn(async () => { historyCalls++; return { ok: true, releases: RELEASES }; })
         },
         fileUrl: (k) => 'lounge://file/' + encodeURIComponent(k)
@@ -270,9 +279,89 @@ describe('the release history', () => {
     });
 
     it('marks the version actually installed', () => {
-        // $('set-version') reads "ScarmVoice v0.0.0-test" from the stub, so
-        // nothing here matches — the badge must simply not appear.
+        // $('set-version') reads "v0.0.0-test" from the stub, so nothing here
+        // matches — the badge must simply not appear.
         const badges = $('release-history').querySelectorAll('.rn-badge');
         expect(Array.from(badges).every((b) => b.textContent !== 'installed')).toBe(true);
+    });
+});
+
+// What is new TO THIS READER, as opposed to what is new.
+//
+// The feed knows which releases exist; only the profile knows which of them
+// this person has already been through. main.js records the version they were
+// on before the last update, and everything published after it — the one they
+// are running now included — is marked. Without it the list is ten identical
+// rows and "what changed when I updated" is answered by reading dates.
+describe('the releases that are new since the last version', () => {
+    it('marks the ones published after the version this profile came from', () => {
+        // previousVersion is 0.32.0, so 0.33.0 is new and the other two are
+        // releases this reader has already had.
+        const [newest, seen, old] = entries();
+        expect(newest.classList.contains('rn-fresh')).toBe(true);
+        expect(seen.classList.contains('rn-fresh')).toBe(false);
+        expect(old.classList.contains('rn-fresh')).toBe(false);
+    });
+
+    it('badges them, and says what the mark means', () => {
+        const badge = entries()[0].querySelector('.rn-badge.rn-new');
+        expect(badge).toBeTruthy();
+        expect(badge.textContent).toBe('new');
+        // The one place the rule is written down where a user can read it.
+        expect(badge.title).toContain('0.32.0');
+        expect($('rn-sub').textContent).toContain('1 new since v0.32.0');
+    });
+
+    it('compares versions as numbers, not as strings', () => {
+        // The bug this closes: '0.9.0' > '0.10.0' is true for a string
+        // compare, which would call every 0.9.x release new forever.
+        expect(entries().length).toBe(3);
+        // 0.3.0 sorts BELOW 0.32.0 numerically; a string compare puts it above.
+        expect(entries()[2].querySelector('.rn-ver').textContent).toBe('v0.3.0');
+        expect(entries()[2].classList.contains('rn-fresh')).toBe(false);
+    });
+});
+
+// "Am I up to date?" is the question About is opened to answer, and it used to
+// be answered by a line of prose in the third row down.
+describe('the update state beside the version', () => {
+    const pill = () => $('update-pill');
+
+    it('says so in words and in a colour state', () => {
+        expect(pill().dataset.state).toBe('ok');
+        expect($('update-pill-text').textContent).toBe('Up to date');
+        // Nothing to add underneath: a second line repeating the pill is a
+        // sentence that says nothing and a card that is taller for it.
+        expect($('update-status').hidden).toBe(true);
+    });
+
+    it('switches to the attention state when there is an update', () => {
+        emitUpdate({ status: 'available', version: '0.34.0', noteBlocks: [] });
+        expect(pill().dataset.state).toBe('new');
+        expect($('update-pill-text').textContent).toBe('Update available');
+        // …and the line under it carries what the pill has no room for.
+        expect($('update-status').hidden).toBe(false);
+        expect($('update-status').textContent).toContain('0.34.0');
+    });
+
+    it('carries the download through, then back to up-to-date', () => {
+        emitUpdate({ status: 'downloading', version: '0.34.0', progress: 42, noteBlocks: [] });
+        expect(pill().dataset.state).toBe('new');
+        expect($('update-status').textContent).toContain('42%');
+
+        emitUpdate({ status: 'ready', version: '0.34.0', noteBlocks: [] });
+        expect($('update-pill-text').textContent).toBe('Update ready');
+        expect($('update-status').textContent).toMatch(/restart/i);
+
+        emitUpdate({ status: 'none' });
+        expect(pill().dataset.state).toBe('ok');
+        expect($('update-status').hidden).toBe(true);
+    });
+
+    it('does not report a failed check as being up to date', () => {
+        emitUpdate({ status: 'error', error: 'offline' });
+        expect(pill().dataset.state).toBe('error');
+        expect($('update-pill-text').textContent).toBe('Check failed');
+        expect($('update-status').hidden).toBe(false);
     });
 });

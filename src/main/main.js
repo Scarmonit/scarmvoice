@@ -1953,6 +1953,39 @@ function setLoginItem(openAtLogin, openAsHidden) {
 
 // ---- boot ----------------------------------------------------------------
 
+// The version this profile ran before the current one, recovered from the log
+// when nothing recorded it — which is true exactly once, on the first launch
+// of the build that started keeping the record.
+//
+// Without this the "new since your last version" marks in About would sit
+// dormant until the update AFTER next: the build being replaced knows nothing
+// about the bookkeeping and cannot write it, and the build arriving has
+// nothing to compare against. log.js stamps every session with the version
+// that opened it, so the answer is already on disk, written by the very
+// process this one replaced.
+//
+// Runs once per profile ever (`lastRunVersion` answers for every launch after
+// it), which is what makes a synchronous read of a ≤2 MB file acceptable here.
+function previousVersionFromLog(running) {
+    try {
+        const dir = log.logDir && log.logDir();
+        if (!dir) return '';
+        const text = fs.readFileSync(path.join(dir, 'main.log'), 'utf8');
+        // Every session header, oldest first. The last one that is not THIS
+        // version is the version that was running before it — this session's
+        // own header is already in the file (log.install runs at module load).
+        const re = /=== ScarmVoice ([0-9][0-9.]*) —/g;
+        let m;
+        let found = '';
+        while ((m = re.exec(text)) !== null) {
+            if (m[1] !== running) found = m[1];
+        }
+        return found;
+    } catch (e) {
+        return '';   // rotated away, unreadable, first run ever — mark nothing
+    }
+}
+
 // How long a check may run before the silence needs explaining. Under this and
 // nobody ever sees the update screen; over it and they see "Checking for
 // updates…" instead of a shortcut that appeared to do nothing.
@@ -2032,6 +2065,28 @@ app.whenReady().then(async () => {
     }
 
     detectElevation();
+    // Which version this profile was on BEFORE this one, recorded once per
+    // upgrade so Settings › About can mark the releases that are new to this
+    // reader.
+    //
+    // Guarded on the version actually having MOVED: relaunching the same build
+    // must not roll `previousVersion` forward to the current one, or the marks
+    // would vanish the second time somebody opened the app after an update.
+    // First run of all leaves it empty, which the renderer reads as "no idea
+    // what they have seen" and marks nothing — better than declaring a fresh
+    // install's whole history unread.
+    //
+    // Before createWindow, so the renderer's opening settings:get already has
+    // the answer.
+    try {
+        const running = app.getVersion();
+        const last = store.get().lastRunVersion || '';
+        if (last !== running) {
+            store.set({ previousVersion: last || previousVersionFromLog(running), lastRunVersion: running });
+        }
+    } catch (e) {
+        console.warn('[app] could not record the version history:', e && e.message);
+    }
     // store.init() has already run, at module scope — the hardware-acceleration
     // read up there needs it and cannot wait for this.
     net.init();

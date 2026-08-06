@@ -1816,14 +1816,48 @@
         <!-- Signing out used to sit here, beside the version string, which put
              the most consequential button in the sheet in the one section that
              is otherwise pure information. It is in Account now. -->
-        <div class="row">
-          <span class="hint" id="set-version"></span>
-        </div>
-        <!-- Everything the app logs goes to a rotating file (see main/log.js);
-             this is how it gets attached to a bug report. -->
-        <div class="row between">
-          <span class="hint">Diagnostic log for this and the previous session</span>
-          <button type="button" id="btn-open-logs" class="keycap">Open logs folder</button>
+        <!-- THE IDENTITY BLOCK. What this is, which version it is, and whether
+             that version is the current one — answered together, in that
+             order, because that is the order they are asked in.
+             They used to be three loose rows of equal weight: a version
+             string that read like a hint, a prose line saying "You're on the
+             latest version.", and two buttons at the far right of a third
+             row. Every control from those rows is still here; what changed is
+             that the version now leads, the state is said in colour as well
+             as in words (see #update-pill), and the detail line under it
+             carries only what the pill has no room for. -->
+        <div class="about-card">
+          <div class="about-head">
+            <div class="about-id">
+              <div class="about-name">ScarmVoice</div>
+              <div class="about-verline">
+                <span class="about-ver" id="set-version"></span>
+                <!-- Green for "nothing to do", accent for "there is an
+                     update", so the answer survives being glanced at.
+                     updateStatusText() owns both this and the line below. -->
+                <span class="about-state" id="update-pill" data-state="ok">
+                  <i class="about-state-dot" aria-hidden="true"></i>
+                  <span id="update-pill-text">Up to date</span>
+                </span>
+              </div>
+            </div>
+            <span class="row-actions">
+              <!-- Stays reachable after the update card has been dismissed. -->
+              <button type="button" id="btn-release-notes" class="keycap" hidden>Release notes</button>
+              <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
+            </span>
+          </div>
+          <!-- The version number and the download percentage the pill cannot
+               fit. Empty — and hidden — when the pill has already said it all. -->
+          <div class="hint about-detail" id="update-status" hidden></div>
+          <!-- Everything the app logs goes to a rotating file (see main/log.js);
+               this is how it gets attached to a bug report. Inside the same
+               card because it describes THIS install, like everything else in
+               it; below the rule because it is not about the version. -->
+          <div class="about-foot">
+            <span class="hint">Diagnostic log for this and the previous session</span>
+            <button type="button" id="btn-open-logs" class="keycap">Open logs folder</button>
+          </div>
         </div>
 
         <!-- Every release, newest first. Until now the app could only ever show
@@ -1832,14 +1866,7 @@
              it, was not answerable without going and finding the repository.
              Fetched on demand: nothing loads this until the About pane is
              actually opened. -->
-        <div class="row between" id="update-row">
-          <span class="hint" id="update-status">You're on the latest version.</span>
-          <span class="row-actions">
-            <!-- Stays reachable after the update card has been dismissed. -->
-            <button type="button" id="btn-release-notes" class="keycap" hidden>Release notes</button>
-            <button type="button" id="btn-check-update" class="keycap">Check for updates</button>
-          </span>
-        </div>
+
         <div class="row stack rn-head">
           <div class="rn-head-row">
             <div class="acct-removal-text">

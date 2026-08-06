@@ -1699,7 +1699,11 @@
         // tray never fires one at all — see the note on `windowFocused`.
         try { windowFocused = !!(await L.win.isFocused()); } catch (e) { /* keep false */ }
         settings = await L.settings.get();
-        $('set-version').textContent = 'ScarmVoice v' + (await L.app.version());
+        // The version alone: the product name is beside it in the markup now,
+        // one line up and at heading weight. Everything that reads this back
+        // — the installed-release marker, the connection report — takes the
+        // number off the front of it either way.
+        $('set-version').textContent = 'v' + (await L.app.version());
 
         // The card is hidden in markup so a launch that is already signed in
         // never paints a sign-in screen it is about to discard. It must not be
@@ -8631,6 +8635,14 @@
         } catch (e) { return ''; }
     }
 
+    // Sortable, so 0.9.0 cannot outrank 0.10.0 the way a string compare does.
+    // The same shape updater.js sorts the feed with, kept here rather than
+    // shared because the two never see each other's values.
+    function versionKey(v) {
+        const p = String(v || '').split('.').map((n) => parseInt(n, 10) || 0);
+        return (p[0] || 0) * 1e6 + (p[1] || 0) * 1e3 + (p[2] || 0);
+    }
+
     function renderReleaseHistory(res) {
         const box = $('release-history');
         const sub = $('rn-sub');
@@ -8659,18 +8671,38 @@
         // settings pane into a directory of eighty collapsed rows — and the
         // rest are one click away, already published, under the link below.
         const list = all.slice(0, HISTORY_SHOWN);
-        sub.textContent = all.length > list.length
-            ? 'The ' + list.length + ' most recent, newest first.'
-            : list.length + ' release' + (list.length === 1 ? '' : 's') + ', newest first.';
         $('rn-more-row').hidden = false;
 
         // The version this build IS, so the entry for it can say so — the single
         // most useful thing this list can tell you.
         const mine = String($('set-version').textContent || '').replace(/^\D+/, '').trim();
 
+        // …and the version this profile ran BEFORE the current one, recorded
+        // once per upgrade by main.js. Everything published after it is new to
+        // whoever is reading — the release this build IS, and anything ahead of
+        // it — and everything at or below it has already been through here.
+        //
+        // Empty on a first run (nothing has been superseded yet), and empty is
+        // deliberately "mark nothing": declaring a fresh install's entire
+        // history unread would highlight all ten rows and mean nothing.
+        const prev = String(settings.previousVersion || '').trim();
+        const prevKey = prev ? versionKey(prev) : null;
+        const isFresh = (v) => prevKey !== null && versionKey(v) > prevKey;
+        const freshCount = list.filter((r) => isFresh(r.version)).length;
+
+        const base = all.length > list.length
+            ? 'The ' + list.length + ' most recent, newest first.'
+            : list.length + ' release' + (list.length === 1 ? '' : 's') + ', newest first.';
+        // Says WHY some of them are marked, and only when some of them are.
+        sub.textContent = freshCount
+            ? base + ' ' + freshCount + ' new since v' + prev + '.'
+            : base;
+
         list.forEach((r, i) => {
             const item = document.createElement('details');
             item.className = 'rn-item';
+            const fresh = isFresh(r.version);
+            if (fresh) item.classList.add('rn-fresh');
             if (i === 0) item.open = true;
 
             const head = document.createElement('summary');
@@ -8692,10 +8724,20 @@
                 head.appendChild(t);
             }
 
+            // One marker per row. "Installed" is the more specific fact and
+            // wins where both apply: the version you are running is obviously
+            // one you have not read the notes for yet, and the accent rail
+            // already puts it in the new group.
             if (mine && r.version === mine) {
                 const badge = document.createElement('span');
                 badge.className = 'rn-badge';
                 badge.textContent = 'installed';
+                head.appendChild(badge);
+            } else if (fresh) {
+                const badge = document.createElement('span');
+                badge.className = 'rn-badge rn-new';
+                badge.textContent = 'new';
+                badge.title = 'Published after v' + prev + ', the version you had before this one';
                 head.appendChild(badge);
             }
             if (r.prerelease) {
@@ -9715,7 +9757,7 @@
         const c = (voice && voice.connection) ? voice.connection() : {};
         const lines = [
             'ScarmVoice connection',
-            'version: ' + ($('set-version').textContent || 'unknown'),
+            'version: ScarmVoice ' + ($('set-version').textContent || 'unknown'),
             'route: ' + $('cp-route').textContent,
             'codec: ' + (c.codec || 'unknown'),
             'peer connections: ' + (c.pcs || 0),
@@ -15266,17 +15308,49 @@
         (v) => applyStartup(settings.launchOnStartup, v));
 
     // ---- auto-update settings ----
+    //
+    // Two things say the same state at two levels of detail. The PILL beside
+    // the version answers "am I current?" in a colour, which is the question
+    // somebody opens About to ask; the LINE under it carries the version
+    // number and the download percentage the pill has no room for, and stays
+    // out of the way when the pill has already said everything.
+    const UPDATE_PILL = {
+        idle:        { state: 'ok',    label: 'Up to date' },
+        none:        { state: 'ok',    label: 'Up to date' },
+        checking:    { state: 'busy',  label: 'Checking…' },
+        available:   { state: 'new',   label: 'Update available' },
+        downloading: { state: 'new',   label: 'Downloading' },
+        ready:       { state: 'new',   label: 'Update ready' },
+        error:       { state: 'error', label: 'Check failed' }
+    };
+
+    function setUpdatePill(state, label) {
+        const pill = $('update-pill');
+        if (!pill) return;
+        pill.dataset.state = state;
+        $('update-pill-text').textContent = label;
+    }
+
+    // Empty means hidden: a detail line repeating the pill is a second
+    // sentence saying nothing, and it pushes the card taller for no reason.
+    function setUpdateDetail(text) {
+        const el = $('update-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.hidden = !text;
+    }
+
     function updateStatusText(s) {
-        const map = {
-            idle: "You're on the latest version.",
-            checking: 'Checking for updates…',
-            none: "You're on the latest version.",
-            available: `Update ${s.version} available.`,
-            downloading: `Downloading ${s.version}… ${s.progress || 0}%`,
-            ready: `${s.version} ready — restart to install.`,
-            error: 'Update check failed — try again.'
+        const st = (s && s.status) || 'idle';
+        const pill = UPDATE_PILL[st] || UPDATE_PILL.idle;
+        setUpdatePill(pill.state, pill.label);
+        const detail = {
+            available: `Version ${s.version} is ready to download.`,
+            downloading: `Downloading version ${s.version}… ${s.progress || 0}%`,
+            ready: `Version ${s.version} is downloaded — restart to install it.`,
+            error: 'Could not reach the update feed. Try again in a moment.'
         };
-        $('update-status').textContent = map[s.status] || map.idle;
+        setUpdateDetail(detail[st] || '');
     }
     async function refreshUpdateStatus() {
         try {
@@ -15293,9 +15367,13 @@
     L.update.onState((s) => { if (!$('settings').hidden) updateStatusText(s); });
 
     $('btn-check-update').addEventListener('click', async () => {
-        $('update-status').textContent = 'Checking for updates…';
+        setUpdatePill('busy', 'Checking…');
+        setUpdateDetail('');
         const r = await L.update.check();
-        if (r && r.reason === 'dev') $('update-status').textContent = 'Updates are only available in the installed app.';
+        if (r && r.reason === 'dev') {
+            setUpdatePill('busy', 'Unavailable');
+            setUpdateDetail('Updates are only available in the installed app.');
+        }
     });
 
     // ---- System + Notifications switches ---------------------------------

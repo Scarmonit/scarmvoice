@@ -76,6 +76,16 @@ const DEFAULTS = {
     // Restart Now, so put it back on screen" — even on a start-minimized
     // profile. See createWindow in main.js.
     updateResumeVisible: false,
+    // Which version this profile is RUNNING, and the one it ran before that.
+    //
+    // Settings › About marks every release published after `previousVersion`
+    // as new to this reader, which is only answerable if something remembers
+    // where they were before the update — the feed knows what exists, not what
+    // this person has already read. Written by main.js on the first launch of
+    // a new version and left alone otherwise, so relaunching the same build
+    // never erases the marker (see the note there).
+    lastRunVersion: '',
+    previousVersion: '',
     chatFontSize: 'medium',      // small | medium | large | xlarge
 
     // Shell layout
