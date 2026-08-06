@@ -12802,6 +12802,7 @@
         $('set-greet').value = settings.greetText || '';
         $('set-farewell').value = settings.farewellText || '';
         $('set-announce-voice').value = settings.announceVoice === 'male' ? 'male' : 'female';
+        paintAnnounceSpeakers();
         $('set-ptt').textContent = (await L.ptt.describe(settings.pttBinding)) || 'Click to set';
         $('set-mute-key').textContent = (await L.ptt.describe(settings.muteBinding)) || 'Click to set';
         $('set-deafen-key').textContent = (await L.ptt.describe(settings.deafenBinding)) || 'Click to set';
@@ -15038,10 +15039,72 @@
     }
     wireAnnounceText('set-greet', 'greetText');
     wireAnnounceText('set-farewell', 'farewellText');
-    $('set-announce-voice').addEventListener('change', (e) =>
-        saveSettings({ announceVoice: e.target.value === 'male' ? 'male' : 'female' }));
+
+    // The aura-2 speaker catalog, VERIFIED against this account's Workers AI:
+    // the ids are @cf/deepgram/aura-2-en's own schema enum, the split and the
+    // characters are Deepgram's published voice descriptions. The server
+    // validates against the same list, so an id here can never 502 there.
+    // Each gender's DEFAULT (the one an untouched profile gets) leads its list.
+    const ANNOUNCE_VOICES = {
+        female: [
+            ['asteria', 'clear, confident'], ['luna', 'friendly, conversational'],
+            ['athena', 'calm, professional'], ['amalthea', 'cheerful, engaging'],
+            ['andromeda', 'casual, expressive'], ['aurora', 'cheerful, energetic'],
+            ['callista', 'bright, professional'], ['cora', 'smooth, caring'],
+            ['cordelia', 'warm, polite'], ['delia', 'casual, breathy'],
+            ['electra', 'engaging, professional'], ['harmonia', 'calm, empathetic'],
+            ['helena', 'friendly, raspy'], ['hera', 'smooth, professional'],
+            ['iris', 'cheerful, youthful'], ['janus', 'smooth Southern drawl'],
+            ['juno', 'melodic, breathy'], ['minerva', 'positive, natural'],
+            ['ophelia', 'enthusiastic, expressive'], ['pandora', 'calm British'],
+            ['phoebe', 'energetic, casual'], ['thalia', 'confident, energetic'],
+            ['theia', 'expressive Australian'], ['vesta', 'patient, empathetic']
+        ],
+        male: [
+            ['orion', 'deep, approachable'], ['apollo', 'confident, casual'],
+            ['arcas', 'smooth, natural'], ['aries', 'warm, energetic'],
+            ['atlas', 'enthusiastic, friendly'], ['draco', 'warm British'],
+            ['hermes', 'expressive, engaging'], ['hyperion', 'caring Australian'],
+            ['jupiter', 'expressive baritone'], ['mars', 'smooth, patient'],
+            ['neptune', 'professional, polite'], ['odysseus', 'calm, professional'],
+            ['orpheus', 'clear, confident'], ['pluto', 'calm baritone'],
+            ['saturn', 'deep, knowledgeable'], ['zeus', 'deep, authoritative']
+        ]
+    };
+
+    // Fill the Voice list with the chosen type's voices, keeping the saved
+    // speaker selected when it belongs to this gender; otherwise the gender's
+    // default (first in its list) takes over.
+    function paintAnnounceSpeakers() {
+        const gender = $('set-announce-voice').value === 'male' ? 'male' : 'female';
+        const sel = $('set-announce-speaker');
+        sel.innerHTML = '';
+        ANNOUNCE_VOICES[gender].forEach(([id, character]) => {
+            const o = document.createElement('option');
+            o.value = id;
+            o.textContent = id.charAt(0).toUpperCase() + id.slice(1) + ' – ' + character;
+            sel.appendChild(o);
+        });
+        if (ANNOUNCE_VOICES[gender].some(([id]) => id === settings.announceSpeaker)) {
+            sel.value = settings.announceSpeaker;
+        }
+        return sel.value;
+    }
+
+    $('set-announce-voice').addEventListener('change', async (e) => {
+        const gender = e.target.value === 'male' ? 'male' : 'female';
+        // Repaint FIRST: the speaker list is the other half of this choice,
+        // and what lands selected there is what gets saved with it.
+        const el = $('set-announce-voice');
+        el.value = gender;
+        await saveSettings({ announceVoice: gender });
+        const speaker = paintAnnounceSpeakers();
+        await saveSettings({ announceSpeaker: speaker });
+    });
+    $('set-announce-speaker').addEventListener('change', (e) =>
+        saveSettings({ announceSpeaker: String(e.target.value || '') }));
     // Hear it before anyone else does — exactly what a joiner's arrival will
-    // say, in the currently chosen voice.
+    // say, in the voice currently selected in the two dropdowns.
     $('set-announce-preview').addEventListener('click', () =>
         window.loungeSounds.previewAnnounce('join',
             (account && account.username) || settings.displayName || 'Someone'));

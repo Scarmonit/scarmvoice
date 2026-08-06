@@ -60,7 +60,11 @@ const DEFAULTS = {
     // installed speech voice reads them out, for this listener's own ears.
     greetText: '',               // spoken instead of the username on join
     farewellText: '',            // spoken instead of the username on leave
-    announceVoice: 'female',     // 'female' | 'male'
+    announceVoice: 'female',     // 'female' | 'male' — the Voice Type filter
+    // The specific aura speaker for MY announcements-as-heard-by-me. Empty
+    // means "the gender's default" (asteria/orion), which the server picks —
+    // so an old profile behaves exactly as before the catalog existed.
+    announceSpeaker: '',
     windowBounds: null,          // restored geometry (never the maximised rect)
     windowMaximized: false,
     // The custom theme: { base: 'dark'|'light', colors: ['#rrggbb', …], intensity: 0-100 }.

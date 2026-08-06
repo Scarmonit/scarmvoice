@@ -839,11 +839,13 @@ async function fileStream(key, range) {
 // Workers AI and answers with a small mp3. Reached through the lounge://tts
 // protocol route, so the renderer plays it like any other audio element (and
 // can route it to the chosen speaker, which speechSynthesis never could).
-async function ttsStream(text, voice) {
-    return request('/api/board/tts', {
-        query: { text: String(text || ''), voice: voice === 'male' ? 'male' : 'female' },
-        streamBody: true
-    });
+async function ttsStream(text, voice, speaker) {
+    const query = { text: String(text || ''), voice: voice === 'male' ? 'male' : 'female' };
+    // The specific aura speaker, when one is chosen. The server validates it
+    // against its own allowlist and falls back to the gender default, so this
+    // hop passes it through rather than second-guessing.
+    if (speaker) query.speaker = String(speaker);
+    return request('/api/board/tts', { query, streamBody: true });
 }
 
 // Store an attachment in R2. Deliberately identical to what the website's

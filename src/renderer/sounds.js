@@ -257,7 +257,10 @@
             let el;
             try {
                 el = new Audio('lounge://tts/?text=' + encodeURIComponent(text) +
-                    '&voice=' + (settings.announceVoice === 'male' ? 'male' : 'female'));
+                    '&voice=' + (settings.announceVoice === 'male' ? 'male' : 'female') +
+                    // The chosen aura speaker; empty means the gender default,
+                    // which the server resolves.
+                    (settings.announceSpeaker ? '&speaker=' + encodeURIComponent(settings.announceSpeaker) : ''));
             } catch (e) { done(false, 'no audio'); return; }
             el.volume = 0.9;
             const sink = settings.speakerDeviceId || '';

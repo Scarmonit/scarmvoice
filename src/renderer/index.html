@@ -1204,11 +1204,17 @@
                  autocomplete="off" placeholder="Your username">
         </label>
         <label class="row">
-          <span>Announcement voice</span>
+          <span>Voice Type</span>
           <select id="set-announce-voice">
             <option value="female">Female</option>
             <option value="male">Male</option>
           </select>
+        </label>
+        <label class="row">
+          <span>Voice</span>
+          <!-- Populated by app.js from the aura-2 catalog, filtered to the
+               Voice Type above — each option is "Name – character". -->
+          <select id="set-announce-speaker"></select>
           <button type="button" class="set-preview" id="set-announce-preview">Preview</button>
         </label>
 

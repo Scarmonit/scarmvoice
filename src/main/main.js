@@ -711,8 +711,9 @@ function registerProtocol() {
             if (url.hostname === 'tts') {
                 const text = String(url.searchParams.get('text') || '').slice(0, 80);
                 const voice = url.searchParams.get('voice') === 'male' ? 'male' : 'female';
+                const speaker = String(url.searchParams.get('speaker') || '').slice(0, 20);
                 if (!text.trim()) return new Response('Missing text', { status: 400 });
-                const upstream = await net.ttsStream(text, voice);
+                const upstream = await net.ttsStream(text, voice, speaker);
                 if (!upstream || !upstream.ok) {
                     return new Response('TTS unavailable', { status: upstream ? upstream.status : 502 });
                 }
