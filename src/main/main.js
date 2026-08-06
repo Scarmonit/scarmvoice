@@ -702,6 +702,25 @@ function registerProtocol() {
         // allows lounge: in img-src, so message content can reach this.
         try {
             const url = new URL(request.url);
+            // lounge://tts/?text=…&voice=… — a spoken announcement, rendered
+            // by the board's Workers AI endpoint and streamed back as mp3. Via
+            // this protocol rather than a renderer fetch so the session cookie
+            // never leaves main, and so the renderer can play it through an
+            // <audio> element — which follows the chosen output device, where
+            // speechSynthesis always played on the system default.
+            if (url.hostname === 'tts') {
+                const text = String(url.searchParams.get('text') || '').slice(0, 80);
+                const voice = url.searchParams.get('voice') === 'male' ? 'male' : 'female';
+                if (!text.trim()) return new Response('Missing text', { status: 400 });
+                const upstream = await net.ttsStream(text, voice);
+                if (!upstream || !upstream.ok) {
+                    return new Response('TTS unavailable', { status: upstream ? upstream.status : 502 });
+                }
+                return new Response(upstream.body, {
+                    status: 200,
+                    headers: { 'Content-Type': upstream.headers.get('content-type') || 'audio/mpeg' }
+                });
+            }
             if (url.hostname !== 'file') return new Response('Not found', { status: 404 });
             let key;
             try {

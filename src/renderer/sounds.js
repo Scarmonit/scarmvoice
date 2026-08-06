@@ -214,7 +214,7 @@
         return pool.find((v) => want.test(v.name || '')) || pool[0] || null;
     }
 
-    function speak(text) {
+    function speakLocal(text) {
         try {
             if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
             const u = new window.SpeechSynthesisUtterance(text);
@@ -227,14 +227,72 @@
         } catch (e) { return false; }
     }
 
+    // The NATURAL voice: the board renders the sentence with a neural model
+    // (Workers AI) and streams back a small mp3, reached through lounge://tts
+    // so the session never leaves the main process. Windows' own speech API
+    // only exposes its 1990s SAPI voices to apps, which is the robotic sound
+    // this replaces — speakLocal survives as the offline fallback.
+    //
+    // Playing an <audio> element instead of speechSynthesis also fixes output
+    // routing: announcements follow the speaker chosen in Settings now, where
+    // speechSynthesis could only ever use the system default.
+    //
+    // One failure arms a short cooldown so an offline session degrades to the
+    // local voice at once instead of paying a network timeout per arrival.
+    let naturalDownUntil = 0;
+
+    function speakNatural(text) {
+        return new Promise((resolve, reject) => {
+            // The lounge:// scheme only exists inside the app shell.
+            if (!window.lounge || !window.lounge.fileUrl) { reject(new Error('no shell')); return; }
+            if (Date.now() < naturalDownUntil) { reject(new Error('cooling down')); return; }
+            let settled = false;
+            const done = (ok, why) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (ok) resolve();
+                else { naturalDownUntil = Date.now() + 60000; reject(new Error(why)); }
+            };
+            let el;
+            try {
+                el = new Audio('lounge://tts/?text=' + encodeURIComponent(text) +
+                    '&voice=' + (settings.announceVoice === 'male' ? 'male' : 'female'));
+            } catch (e) { done(false, 'no audio'); return; }
+            el.volume = 0.9;
+            const sink = settings.speakerDeviceId || '';
+            if (typeof el.setSinkId === 'function') {
+                try { Promise.resolve(el.setSinkId(sink)).catch(() => {}); } catch (e) {}
+            }
+            el.addEventListener('playing', () => done(true), { once: true });
+            el.addEventListener('error', () => done(false, 'stream error'), { once: true });
+            // A render is a few hundred ms; four seconds means it is not coming.
+            const timer = setTimeout(() => done(false, 'timeout'), 4000);
+            const p = el.play();
+            if (p && p.catch) p.catch(() => done(false, 'play refused'));
+        });
+    }
+
     // One announcement. `who` is the person's custom text when they set one,
     // else the name the roster carries — which the server resolved from their
-    // account, not from anything a client typed.
+    // account, not from anything a client typed. Natural voice first, the
+    // local engine when the network fails, the old chime when even that is
+    // missing — an arrival that makes no sound at all is the one regression
+    // this feature must never cause.
     function announce(kind, who, force) {
         if (!force && (!voiceEnabled() || settings.dnd)) return;
         const said = String(who || 'Someone');
-        const ok = speak(said + (kind === 'leave' ? ' has left the channel' : ' has joined the channel'));
-        if (!ok) playVoice(kind);   // no speech engine — the old chime, not silence
+        const text = said + (kind === 'leave' ? ' has left the channel' : ' has joined the channel');
+        // The fallback is taken SYNCHRONOUSLY when the natural path cannot
+        // even be attempted — outside the app shell, or inside the failure
+        // cooldown — rather than round-tripping through a rejection.
+        if (!window.lounge || !window.lounge.fileUrl || Date.now() < naturalDownUntil) {
+            if (!speakLocal(text)) playVoice(kind);
+            return;
+        }
+        speakNatural(text).catch(() => {
+            if (!speakLocal(text)) playVoice(kind);
+        });
     }
 
     // My own arrival and departure, called by app.js on the join/leave
@@ -274,38 +332,71 @@
         return o;
     }
 
+    // An arrival is announced on a short DELAY, and the words are resolved
+    // when the announcement actually fires, from the freshest entry we hold.
+    //
+    // The race this closes: a joiner shows up in the SFU peer list a beat
+    // before their roster row — the one carrying their custom Greeting text —
+    // arrives over the socket. Announcing at first sight spoke the username
+    // every time and made the custom text look like it only worked for its
+    // owner. Waiting one beat lets the row land; the entry is re-read at fire
+    // time, so whatever arrived in the meantime is what gets spoken.
+    //
+    // A join that evaporates inside the window (a connection blip) cancels
+    // silently — no join, and no leave for a join nobody heard.
+    const JOIN_SAY_DELAY_MS = 800;
+    let latestById = {};
+    const pendingJoins = new Map();   // id -> timer
+
+    function clearPendingJoins() {
+        pendingJoins.forEach((t) => clearTimeout(t));
+        pendingJoins.clear();
+    }
+
     // Call on every voice roster render. `joined` = am I in the call.
     // `silent` (DND) suppresses playback WITHOUT disarming: folding DND into
     // `joined` made toggling DND off replay announcements mid-call.
     function voiceRoster(list, joined, myId, silent) {
-        if (!joined) { armed = false; prevById = null; return; }
+        if (!joined) { armed = false; prevById = null; latestById = {}; clearPendingJoins(); return; }
+
+        latestById = entryMap(list);
 
         if (!armed) {                       // the first render after I join
             armed = true;
             armAt = Date.now();
             // Everyone already here is the baseline, not an arrival — and my
             // own announcement is app.js's announceSelf, on the transition.
-            prevById = entryMap(list);
+            prevById = latestById;
             return;
         }
 
-        const byId = entryMap(list);
+        const byId = latestById;
         if (Date.now() - armAt < SETTLE_MS) { prevById = byId; return; }
 
         if (prevById && !silent) {
             for (const a in byId) {
-                if (a === myId || prevById[a]) continue;
-                announce('join', byId[a].greet || byId[a].name);
+                if (a === myId || prevById[a] || pendingJoins.has(a)) continue;
+                pendingJoins.set(a, setTimeout(() => {
+                    pendingJoins.delete(a);
+                    const e = latestById[a];
+                    if (e) announce('join', e.greet || e.name);
+                }, JOIN_SAY_DELAY_MS));
             }
             for (const b in prevById) {
                 if (b === myId || byId[b]) continue;
+                if (pendingJoins.has(b)) {
+                    // Came and went before anyone was told — say nothing at all.
+                    clearTimeout(pendingJoins.get(b));
+                    pendingJoins.delete(b);
+                    continue;
+                }
                 announce('leave', prevById[b].farewell || prevById[b].name);
             }
         }
         prevById = byId;
     }
 
-    function reset() { armed = false; prevById = null; }
+    function reset() { armed = false; prevById = null; latestById = {}; clearPendingJoins(); }
 
     window.loungeSounds = {
         init, setSettings, playMessage, playVoice, playUi, voiceRoster, reset,

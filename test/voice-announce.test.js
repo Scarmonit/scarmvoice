@@ -53,10 +53,16 @@ function arm(others) {
     vi.advanceTimersByTime(2000);   // SETTLE_MS is 1500
 }
 
+// Arrivals are spoken on a short delay (JOIN_SAY_DELAY_MS = 800ms) so the
+// joiner's custom text — which rides the roster and can land a beat after the
+// SFU first shows them — is there before anything is said.
+const sayJoins = () => vi.advanceTimersByTime(900);
+
 describe('announcing the others', () => {
     it('speaks a username arrival and departure', () => {
         arm([]);
         S.voiceRoster([row('me', 'Me'), row('a', 'alice')], true, 'me', false);
+        sayJoins();
         expect(spoken.map((u) => u.text)).toEqual(['alice has joined the channel']);
 
         S.voiceRoster([row('me', 'Me')], true, 'me', false);
@@ -69,12 +75,36 @@ describe('announcing the others', () => {
     it('speaks the custom texts in place of the name — and only the name', () => {
         arm([]);
         S.voiceRoster([row('me', 'Me'), row('b', 'bob', 'Big Bob', 'The Legend')], true, 'me', false);
+        sayJoins();
         expect(spoken[0].text).toBe('Big Bob has joined the channel');
 
         // The leave text comes from the roster AS IT STOOD — bob's row is
         // already gone when the leave is noticed.
         S.voiceRoster([row('me', 'Me')], true, 'me', false);
         expect(spoken[1].text).toBe('The Legend has left the channel');
+    });
+
+    it('speaks a custom text that arrives a beat AFTER the person does', () => {
+        // The reported bug, end to end: the SFU shows the joiner before their
+        // roster row (with the Greeting text) lands over the socket. The
+        // announcement resolves its words at FIRE time, so the text that
+        // arrived in the meantime is the text everyone hears.
+        arm([]);
+        S.voiceRoster([row('me', 'Me'), row('b', 'bob')], true, 'me', false);
+        expect(spoken).toEqual([]);          // nothing said yet — waiting
+        S.voiceRoster([row('me', 'Me'), row('b', 'bob', 'Big Bob')], true, 'me', false);
+        sayJoins();
+        expect(spoken.map((u) => u.text)).toEqual(['Big Bob has joined the channel']);
+    });
+
+    it('says nothing at all for a join that evaporates inside the window', () => {
+        arm([]);
+        S.voiceRoster([row('me', 'Me'), row('a', 'alice')], true, 'me', false);
+        S.voiceRoster([row('me', 'Me')], true, 'me', false);   // gone again
+        sayJoins();
+        // No join for someone who is not here, and no leave for a join
+        // nobody was told about.
+        expect(spoken).toEqual([]);
     });
 
     it('treats everyone already in the call as a baseline, not arrivals', () => {
@@ -87,15 +117,18 @@ describe('announcing the others', () => {
         // the roster copy of me racing in or out must not double-speak them.
         arm([row('a', 'alice')]);
         S.voiceRoster([row('a', 'alice')], true, 'me', false);
+        sayJoins();
         expect(spoken).toEqual([]);
     });
 
     it('stays quiet under do-not-disturb without losing its place', () => {
         arm([]);
         S.voiceRoster([row('me', 'Me'), row('a', 'alice')], true, 'me', true);
+        sayJoins();
         expect(spoken).toEqual([]);
         // …and alice does not get re-announced once DND lifts: the diff moved on.
         S.voiceRoster([row('me', 'Me'), row('a', 'alice')], true, 'me', false);
+        sayJoins();
         expect(spoken).toEqual([]);
     });
 });

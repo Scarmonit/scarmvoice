@@ -49,6 +49,31 @@
     let hasMore = false;
     let reads = {};                 // channel -> last read post id
     let voicePresence = [];         // server-side "who is in voice", incl. web users
+    // The last Greeting/Leaving texts each person published, keyed by install
+    // AND by account. The texts arrive only on the realtime roster — the HTTP
+    // presence poll knows nothing about them and OVERWRITES voicePresence
+    // every few seconds, which is how a custom greeting used to reach everyone
+    // and then vanish before the announcer read it: whichever source wrote
+    // last won, and the poll almost always wrote last. The cache remembers
+    // what the socket said so the poll can no longer erase it.
+    const annTexts = new Map();     // 'c'+cid / 'u'+uid -> { greet, farewell }
+    function noteAnnounceTexts(list) {
+        (list || []).forEach((p) => {
+            const t = { greet: p.greet || '', farewell: p.farewell || '' };
+            if (p.client_id) annTexts.set('c' + p.client_id, t);
+            if (p.user_id) annTexts.set('u' + p.user_id, t);
+        });
+    }
+    // The texts for a roster row: the row's own when it carries them (a
+    // realtime row always does, even when they are empty), else the cache.
+    // An HTTP presence row carries NOTHING — undefined, not '' — which is how
+    // the two are told apart.
+    function annFor(cid, uid, row) {
+        if (row && row.greet !== undefined) {
+            return { greet: row.greet || '', farewell: row.farewell || '' };
+        }
+        return annTexts.get('c' + cid) || (uid && annTexts.get('u' + uid)) || { greet: '', farewell: '' };
+    }
     let typingUsers = [];
     let rtConnected = false;
     let voice = null;
@@ -7397,6 +7422,7 @@
         live.forEach((p) => {
             const uid = uidFor(p);
             const pres = p.isMe ? null : presFor(p, uid);
+            const ann = annFor(p.id, uid, pres);
             byId.set(p.id, Object.assign({}, p, {
                 uid,
                 deafened: p.isMe ? p.deafened : !!(pres && pres.deafened),
@@ -7404,8 +7430,8 @@
                 // deafened) and the announcer diffs THIS list — an SFU row
                 // that dropped them would announce a custom greeting person
                 // by username.
-                greet: (pres && pres.greet) || '',
-                farewell: (pres && pres.farewell) || ''
+                greet: ann.greet,
+                farewell: ann.farewell
             }));
         });
         presence.forEach((p) => {
@@ -7426,8 +7452,8 @@
                     // mic-off badge if they were also muted and never a
                     // headset-off badge at all.
                     deafened: !!p.deafened,
-                    greet: p.greet || '',
-                    farewell: p.farewell || '',
+                    greet: annFor(p.client_id, p.user_id, p).greet,
+                    farewell: annFor(p.client_id, p.user_id, p).farewell,
                     remoteOnly: true
                 });
             }
@@ -7435,10 +7461,10 @@
 
         const list = Array.from(byId.values());
 
-        // Join / leave chimes. Gated on actually being in the call, so they are
-        // never audible to someone who is only watching the roster. Fed the
-        // per-INSTALL list: a chime tracks a connection arriving or going, not
-        // a person.
+        // Join / leave announcements. Gated on actually being in the call, so
+        // they are never audible to someone who is only watching the roster.
+        // Fed the per-INSTALL list: an announcement tracks a connection
+        // arriving or going, not a person.
         window.loungeSounds.voiceRoster(list, inCall, settings.clientId, !!settings.dnd);
 
         list.forEach((p) => addRosterName(p.name));
@@ -8829,6 +8855,7 @@
                         name: v.name, muted: v.muted, deafened: v.deafened,
                         greet: v.greet || '', farewell: v.farewell || ''
                     }));
+                    noteAnnounceTexts(voicePresence);
                     renderVoiceRoster();
                 }
                 break;
@@ -8880,6 +8907,7 @@
                         name: v.name, muted: v.muted, deafened: v.deafened,
                         greet: v.greet || '', farewell: v.farewell || ''
                     }));
+                    noteAnnounceTexts(voicePresence);
                     renderVoiceRoster();
                 }
                 break;

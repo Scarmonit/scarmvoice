@@ -835,6 +835,17 @@ async function fileStream(key, range) {
     });
 }
 
+// Neural speech for a join/leave announcement — the board renders it with
+// Workers AI and answers with a small mp3. Reached through the lounge://tts
+// protocol route, so the renderer plays it like any other audio element (and
+// can route it to the chosen speaker, which speechSynthesis never could).
+async function ttsStream(text, voice) {
+    return request('/api/board/tts', {
+        query: { text: String(text || ''), voice: voice === 'male' ? 'male' : 'female' },
+        streamBody: true
+    });
+}
+
 // Store an attachment in R2. Deliberately identical to what the website's
 // board.js does, so a file uploaded from the desktop app is indistinguishable
 // from a browser upload and renders the same for everyone: a presigned PUT
@@ -1122,7 +1133,7 @@ async function uploadAttachment(item, onProgress) {
 }
 
 module.exports = {
-    init, login, logout, status, board, request, fileStream, upload, uploadAttachment,
+    init, login, logout, status, board, request, fileStream, ttsStream, upload, uploadAttachment,
     accountRegister, accountLogin, accountLogout, accountMe, accountRemoval, hasAccount,
     accountVerify, accountResend, prefetchSession, takePreflight,
     hasSession, cookieHeader, socketHeaders, baseUrl, MAX_UPLOAD

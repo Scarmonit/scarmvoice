@@ -32,6 +32,10 @@ class FakeAudioContext {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+// A join is announced on a short real-timer delay (JOIN_SAY_DELAY_MS, 800ms)
+// so the joiner's custom text can arrive before anything is said. Only Date is
+// faked here, so the wait is genuine.
+const waitJoinSay = () => new Promise((resolve) => setTimeout(resolve, 900));
 const jump = (ms) => vi.setSystemTime(new Date(Date.now() + ms));
 
 async function boot(settings = {}) {
@@ -128,6 +132,7 @@ describe('roster changes after the settle window', () => {
         joinCall(sounds, [{ id: 'me' }, { id: 'a' }]);
 
         sounds.voiceRoster([{ id: 'me' }, { id: 'a' }, { id: 'b' }], true, 'me');
+        await waitJoinSay();
 
         expect(played).toEqual([JOIN]);
     });
@@ -146,8 +151,11 @@ describe('roster changes after the settle window', () => {
         joinCall(sounds, [{ id: 'me' }, { id: 'a' }]);
 
         sounds.voiceRoster([{ id: 'me' }, { id: 'b' }], true, 'me');
+        await waitJoinSay();
 
-        expect(played).toEqual([JOIN, LEAVE]);
+        // The LEAVE first: departures are said at once, arrivals wait a beat
+        // for the newcomer's custom text to land.
+        expect(played).toEqual([LEAVE, JOIN]);
     });
 
     it('stays silent when nothing changed', async () => {
@@ -200,6 +208,7 @@ describe('arming', () => {
         // …but a genuine arrival after the settle window still lands.
         jump(SETTLE_MS + 1);
         sounds.voiceRoster([{ id: 'me' }, { id: 'a' }, { id: 'b' }], true, 'me');
+        await waitJoinSay();
         expect(played).toEqual([JOIN]);
     });
 
@@ -214,6 +223,7 @@ describe('arming', () => {
         expect(played).toEqual([]);
         jump(SETTLE_MS + 1);
         sounds.voiceRoster([{ id: 'me' }, { id: 'a' }, { id: 'b' }], true, 'me');
+        await waitJoinSay();
         expect(played).toEqual([JOIN]);
     });
 
