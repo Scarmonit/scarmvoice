@@ -12177,7 +12177,8 @@
             b.addEventListener('click', () => { tmSel = i; tmSetColor(tmCfg.colors[i]); });
             box.appendChild(b);
         });
-        $('tm-add').hidden = n >= 4;
+        // Five swatches, one per stop of the reference gradient.
+        $('tm-add').hidden = n >= 5;
         // Removal lives beside the hex field and acts on the SELECTED colour;
         // with one colour there is nothing to remove.
         $('tm-remove').hidden = n < 2;
@@ -12294,7 +12295,7 @@
     });
 
     $('tm-add').addEventListener('click', () => {
-        if (tmCfg.colors.length >= 4) return;
+        if (tmCfg.colors.length >= 5) return;
         // Seeded a hue-turn away from the colour under edit, so the new swatch
         // is visibly a second colour rather than a copy to hunt for.
         const next = window.ScarmTheme.hsvToHex(tmHsv[0] + 90, Math.max(0.4, tmHsv[1]), tmHsv[2]);

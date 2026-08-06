@@ -307,11 +307,17 @@
   --tm-ctl-line: #35353b; --tm-ctl-line-hover: #45454d;
   --tm-ctl-sunk: #202024; --tm-ctl-sunk-line: #37373d; --tm-ctl-sunk-line-hi: #43434a;
   --tm-track: #474851;
-  /* Translucent plates the custom theme's underlay reads through — the user
-     dock's pills and the composer's fill. Smoke on a dark base; the light
-     block lifts paper instead. */
+  /* The custom theme's FIXED per-panel overlay constants — the reference's
+     measured architecture, black on a dark base and (see the light block)
+     white at the same opacities on a light one. The chat slab's 22% and
+     the sidebar's 12% live in theme.js (they ride the --chat/--side
+     tokens); these are the surfaces the tokens cannot address one-to-one:
+     the channel header's darker plate, and the me-bar + composer strip's
+     near-nothing — the deliberately brightest band, where the gradient
+     glows. The pill plate is the one control fill drawn on that strip. */
+  --theme-ov-head: rgba(0, 0, 0, .34);
+  --theme-strip: rgba(0, 0, 0, .03);
   --theme-plate: rgba(0, 0, 0, .25);
-  --theme-plate-2: rgba(0, 0, 0, .28);
 
   --radius: 10px;
   --tb: 31px;
@@ -365,43 +371,6 @@ html, body {
    the measured chroma more than doubled the moment the gradient exited the
    panelled area. One field, one sheet. */
 html.tm-underlay #app { background: transparent; }
-
-/* ---- what the themed window keeps its shape with ------------------------
-   Under a custom theme the nested surfaces go fully transparent (see
-   theme.js NESTED), which dissolved three structures the reference keeps
-   visible on every theme:
-
-   THE USER DOCK read as a brighter loose block: its card margins let the raw
-   gradient frame it while the dock itself was clear glass-less gradient, so
-   the voice panel, the action pills and the me bar broke into separate
-   shaded chunks. The reference runs its bottom-left section as one seamless
-   extension of the sidebar column, flush to the window edges — so the dock
-   drops the card look and wears the SAME glass the sidebar wears, making
-   the whole corner one continuous surface with only the existing hairline
-   between voice and me bar.
-
-   THE COMPOSER had no fill at all, so the message field sat flush against
-   the me bar with nothing saying where one ended and the other began. The
-   reference gives its themed composer a translucent dark plate; that plate
-   is also what makes the 8px inset read as an actual gap.
-
-   THE SETTINGS SHEET was see-through: --sheet aliases --chat-2, a nested
-   token, so the whole modal went transparent and the scrimmed app showed
-   through it. Its opaque backdrop rule lives with the settings section. */
-html.tm-underlay #user-dock {
-  margin: 0; border: 0; border-radius: 0; box-shadow: none;
-  background: var(--side);
-}
-/* One family of pills: half the tray sat on --float-2 (opaque, hue-tinted)
-   and half on --sunk (transparent) — visibly mismatched blocks inside the
-   dock. All four share one translucent plate; the .on states keep their
-   lifted opaque fill, which is the state indicator. */
-html.tm-underlay #user-dock .btn-share,
-html.tm-underlay #btn-nsai, html.tm-underlay #btn-ptt {
-  background: var(--theme-plate);
-}
-html.tm-underlay #btn-nsai.on, html.tm-underlay #btn-ptt.on { background: var(--float-2); }
-html.tm-underlay .composer-row { background: var(--theme-plate-2); }
 
 /* Column layout, so the update banner steals height from the app instead of
    pushing its bottom edge off-screen. */
@@ -4136,8 +4105,11 @@ label.pop-row:hover { background: var(--hover); color: var(--text); }
   --tm-ctl-line: #dadee4; --tm-ctl-line-hover: #c8cdd5;
   --tm-ctl-sunk: #f1f3f6; --tm-ctl-sunk-line: #dde0e6; --tm-ctl-sunk-line-hi: #c6cbd3;
   --tm-track: #d7dae0;
+  /* The same fixed overlay opacities, flipped to white — the layering is
+     identical on a light base; only the overlay colour inverts. */
+  --theme-ov-head: rgba(255, 255, 255, .34);
+  --theme-strip: rgba(255, 255, 255, .03);
   --theme-plate: rgba(255, 255, 255, .4);
-  --theme-plate-2: rgba(255, 255, 255, .45);
 }
 
 /* The rail pill and the unread pill are white-on-dark by nature; invert them. */
@@ -6883,6 +6855,51 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .ban-card p { margin: 0 0 8px; font-size: 14.5px; color: var(--text); }
 .ban-card p strong { color: var(--danger-hi); }
 .ban-card .ban-count { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
+
+/* ---- the per-panel overlays the tokens cannot say ------------------------
+   Under a custom theme the window is one dimmed SHEET (the underlay) with
+   fixed black overlays per panel — theme.js paints the ones that map onto
+   a token one-to-one (sidebar 12%, chat and members 22%). These rules
+   carry the rest, because several elements share a token whose overlay
+   they must not share. They live BELOW every rule they override, so a
+   first-match reading of any selector still finds the stock rule first.
+
+   THE RAIL AND THE TITLE BAR wear --side but are the reference's ZERO
+   overlay — the bare sheet, the brightest surfaces on screen. The title
+   bar also drops its bottom hairline so the two read as one glowing band.
+
+   THE CHANNEL HEADER wears --chat but takes the darkest plate (34%).
+
+   THE ME-BAR + COMPOSER STRIP is the other near-zero band (3%): the
+   bottom of the gradient deliberately GLOWS through it. The chat slab's
+   22% therefore moves off #main and onto the message scroller, so the
+   strip under it punches through to the sheet instead of stacking on the
+   slab. The dock drops its card look and runs flush, one seamless
+   section; the composer's brightness against the 22% slab above it is
+   what reads as the gap between the two.
+
+   THE SETTINGS SHEET was see-through: --sheet aliases --chat-2, a nested
+   token, so the whole modal went transparent and the scrimmed app showed
+   through it. Its opaque backdrop rule lives with the settings section. */
+html.tm-underlay #rail { background: transparent; }
+html.tm-underlay #titlebar { background: transparent; box-shadow: none; }
+html.tm-underlay #chan-head { background: var(--theme-ov-head); }
+html.tm-underlay #main { background: transparent; }
+html.tm-underlay #messages-wrap { background: var(--chat); }
+html.tm-underlay #user-dock {
+  margin: 0; border: 0; border-radius: 0; box-shadow: none;
+  background: var(--theme-strip);
+}
+html.tm-underlay .composer-row { background: var(--theme-strip); }
+/* One family of pills: half the tray sat on --float-2 (opaque, hue-tinted)
+   and half on --sunk (transparent) — visibly mismatched blocks inside the
+   dock. All four share one translucent plate; the .on states keep their
+   lifted opaque fill, which is the state indicator. */
+html.tm-underlay #user-dock .btn-share,
+html.tm-underlay #btn-nsai, html.tm-underlay #btn-ptt {
+  background: var(--theme-plate);
+}
+html.tm-underlay #btn-nsai.on, html.tm-underlay #btn-ptt.on { background: var(--float-2); }
 
 /* ---- custom theme picker ------------------------------------------------
    A panel DOCKED to the right edge — deliberately not a modal. Every change

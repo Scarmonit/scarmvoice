@@ -72,33 +72,43 @@
     };
 
     // The STRUCTURAL surfaces — the panes that tile the window itself. Under
-    // a custom theme the gradient must pass through them as ONE field, which
-    // means it may only cross ONE sheet of glass: attenuation compounds per
-    // layer, and the app stacks its surfaces (the #app backdrop behind every
-    // column, the column, then a panel on the column — the composer sat
-    // behind three sheets and measured a 4.7× chroma cut). So the tokens
-    // split by depth:
+    // a custom theme the window is THREE stacked layers, which is the
+    // reference's own pipeline, measured:
     //
-    //   COLUMN  the first-layer panes (rail backdrop, sidebars, chat,
-    //           members) — these are the one glass sheet.
-    //   NESTED  surfaces that always sit ON a column (composer, user dock,
-    //           panels, wells). These express their elevation the way the
-    //           reference does — a faint white lift or black dip — which
-    //           raises or sinks them WITHOUT desaturating what is beneath.
+    //   1  the SHEET — the user's vivid picks with one global dim applied
+    //      (sheetColor below), laid under the whole window as
+    //      --theme-underlay. This is the only place user-colour variation
+    //      lives.
+    //   2  per-panel BLACK OVERLAYS at FIXED opacities (white on a light
+    //      base), painted by the COLUMN tokens and a handful of per-element
+    //      rules in styles.css. Multiplicative black darkens any sheet
+    //      proportionally — hue and saturation survive, and the
+    //      panel-to-panel contrast is identical whatever palette is picked,
+    //      which is exactly why the constants must never follow the theme.
+    //      The chat pane's 22% doubles as the readability guarantee under
+    //      white text.
+    //   3  NESTED surfaces (composer, user dock, panels, wells) carry no
+    //      fill of their own — the bottom strip's near-zero overlay is what
+    //      makes the gradient GLOW there, deliberately the brightest part
+    //      of the window along with the rail.
     //
     // Floating surfaces (menus, modals, popovers) stay opaque — they are
     // drawn OVER the window and a see-through menu is unreadable — and take
     // the hue tint instead.
     const COLUMN = new Set(['--rail', '--side', '--members', '--chat']);
-    // FLAT, not lifted: the white washes these carried made the me-bar
-    // measure 32% hotter than the chat beside it, where the reference's two
-    // are pixel-identical — under a theme it takes elevation OUT of the fill
-    // entirely and lets each panel's border and shadow carry the separation.
-    // The tokens still exist as a set because the split (one glass sheet for
-    // columns, nothing extra for panels on them) is the whole model.
+    // The fixed overlay each column token paints, measured off the
+    // reference: the rail is the bare sheet (the brightest surface), the
+    // channel sidebar a 12% dip, chat and members an identical 22% slab.
+    // The surfaces the tokens cannot address one-to-one — the title bar
+    // (0, matches the rail), the channel header (34%) and the me-bar +
+    // composer strip (3%) — carry the same architecture in styles.css'
+    // tm-underlay rules.
+    const OVERLAY = { '--rail': 0, '--side': 0.12, '--members': 0.22, '--chat': 0.22 };
+    // FLAT, not lifted: under a theme elevation comes from borders and
+    // shadows, never from a wash that would brighten the sheet unevenly.
     const NESTED = {
-        '--input':  'transparent',   // composer
-        '--panel':  'transparent',   // user dock
+        '--input':  'transparent',   // composer (its strip plate is styles.css')
+        '--panel':  'transparent',   // user dock (same)
         '--chat-2': 'transparent',   // panels on the column
         '--mark':   'transparent',
         '--sunk':   'transparent'    // wells: their hairline carries them
@@ -111,7 +121,20 @@
     const BG_SEED = { dark: '#101218', light: '#f4f5f7' };
     const SYMBOL = { dark: '#e9ebf0', light: '#3a3d43' };
 
-    const DEFAULT_CUSTOM = { base: 'dark', colors: ['#5865f2'], intensity: 70, angle: 0 };
+    // The default/reference theme. The five PICKS are chosen so that after
+    // the global dim at the default 50% intensity (×0.40 — see sheetColor)
+    // the rail shows the reference's measured sheet exactly:
+    //   #5a2519 0%, #38193b 25%, #1e0f60 50%, #26353b 75%, #2f5f06 100%
+    // at 180° — pick × 0.40 = sheet stop, verified stop by stop.
+    const DEFAULT_CUSTOM = {
+        base: 'dark',
+        colors: ['#e15d3f', '#8c3f94', '#4b26f0', '#5f8594', '#76ee0f'],
+        intensity: 50,
+        angle: 180
+    };
+    // The picker offers one swatch per stop, so its cap is the reference
+    // gradient's own five.
+    const MAX_COLORS = 5;
 
     // ---- colour math ------------------------------------------------------
 
@@ -258,60 +281,72 @@
     function normalizeCustom(cfg) {
         const c = cfg || {};
         const colors = (Array.isArray(c.colors) ? c.colors : [])
-            .map(normHex).filter(Boolean).slice(0, 4);
+            .map(normHex).filter(Boolean).slice(0, MAX_COLORS);
         return {
             base: c.base === 'light' ? 'light' : 'dark',
             colors: colors.length ? colors : DEFAULT_CUSTOM.colors.slice(),
             intensity: Math.max(0, Math.min(100,
                 Math.round(Number(c.intensity ?? DEFAULT_CUSTOM.intensity) || 0))),
-            // The gradient's direction, 0-360. 0° puts the first colour at the
-            // top; the wheel wraps, so 360 IS 0.
-            angle: ((Math.round(Number(c.angle ?? 0) || 0) % 360) + 360) % 360
+            // The gradient's direction, 0-360; the wheel wraps, so 360 IS 0.
+            // Unset falls back to the default's 180° — the reference runs its
+            // gradient top-to-bottom.
+            angle: ((Math.round(Number(c.angle ?? DEFAULT_CUSTOM.angle) || 0) % 360) + 360) % 360
         };
     }
 
-    // How the FIELD darkens the picked colours on a dark base. The
-    // reference's themed surfaces are high chroma at LOW lightness — its
-    // whole field is a deep version of the hue (#336511, lum ~56, IS its
-    // green at 50%), where the raw picker colours run lum 100-130. Letting
-    // those through nearly-clear glass produced mid-tone vivid surfaces and
-    // 1.05:1 timestamps. The gradient itself carries the darkness now; the
-    // glass only has to be glass.
+    // The SHEET: the user's vivid picks with the one global dim applied —
+    // the reference's dark base and the intensity slider combined into a
+    // single multiplier. Measured at the slider's midpoint the combination
+    // is a ~60% black overlay, so the gain runs 0.8·k: 50% intensity keeps
+    // ×0.40 of each pick, 100% keeps ×0.80. Multiplicative, so hue and
+    // saturation survive; the per-panel overlays above this never vary, so
+    // intensity is expressed HERE and nowhere else.
     //
-    // A LUMINANCE CEILING, not a flat multiplier: green carries most of
-    // perceived brightness, so one factor that lands red at the reference's
-    // register leaves green nearly twice as bright. Each stop is scaled to
-    // the ceiling instead — greens darken hard, deep blues barely at all —
-    // which is also how the reference's own greens come out darker-scaled
-    // than its oranges.
-    const FIELD_LUM_CAP = 58;
-    const FIELD_SCALE_MAX = 0.55;
+    // The FLOOR is the upstream safeguard: a very dark pick, dimmed and
+    // then slabbed under the chat pane's fixed 22%, would crush to
+    // unreadable black — so every sheet stop is lifted (proportionally,
+    // keeping its hue) to a minimum luminance at generation time, and the
+    // overlays stay untouched. A light base runs the same pipeline
+    // mirrored: the dim becomes a lift toward white, and the floor becomes
+    // a ceiling so near-white picks cannot crush to paper.
+    const SHEET_GAIN = 0.8;
+    const FLOOR_LUM = 16;
 
-    function fieldColor(hex, base) {
-        if (base === 'light') return hex;
-        const [r, g, b] = hexToRgb(hex);
-        const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
-        const f = Math.min(FIELD_SCALE_MAX, FIELD_LUM_CAP / Math.max(1, lum));
-        return rgbToHex(r * f, g * f, b * f);
+    function sheetColor(hex, cfg) {
+        const k = Math.max(0, Math.min(100, cfg.intensity)) / 100;
+        let [r, g, b] = hexToRgb(hex);
+        if (cfg.base === 'light') {
+            const t = 1 - SHEET_GAIN * k;
+            r += (255 - r) * t; g += (255 - g) * t; b += (255 - b) * t;
+            const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
+            const cap = 255 - FLOOR_LUM;
+            if (lum > cap) { const f = cap / lum; r *= f; g *= f; b *= f; }
+        } else {
+            const s = SHEET_GAIN * k;
+            r *= s; g *= s; b *= s;
+            const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
+            if (lum < FLOOR_LUM) {
+                if (!lum) { r = g = b = FLOOR_LUM; }
+                else {
+                    const f = FLOOR_LUM / lum;
+                    r = Math.min(255, r * f); g = Math.min(255, g * f); b = Math.min(255, b * f);
+                }
+            }
+        }
+        return rgbToHex(r, g, b);
     }
 
-    // The gradient underlay itself: the user's colours — darkened into a
-    // FIELD on a dark base — as one smooth linear fade at the chosen angle,
-    // or the colour alone. The angle is CSS's, untranslated: 180° runs the
-    // first colour top→bottom, 0° bottom→top — the reference reads its slider
-    // the same way, so a theme carried between the two apps keeps its
-    // direction instead of flipping. (The picker's swatch strip deliberately
-    // shows the RAW colours — it is the editor; this is the window.)
+    // The gradient underlay itself: the sheet stops as one smooth linear
+    // fade at the chosen angle, or the colour alone. The angle is CSS's,
+    // untranslated: 180° runs the first colour top→bottom, 0° bottom→top —
+    // the reference reads its slider the same way, so a theme carried
+    // between the two apps keeps its direction instead of flipping. (The
+    // picker's swatch strip deliberately shows the RAW picks — it is the
+    // editor; this is the window.)
     function underlayOf(cfg) {
-        const cs = cfg.colors.map((c) => fieldColor(c, cfg.base));
+        const cs = cfg.colors.map((c) => sheetColor(c, cfg));
         if (cs.length < 2) return cs[0];
         return 'linear-gradient(' + cfg.angle + 'deg, ' + cs.join(', ') + ')';
-    }
-
-    function rgbaOf(hex, a, scale) {
-        const [r, g, b] = hexToRgb(hex);
-        const f = scale === undefined ? 1 : scale;
-        return 'rgba(' + Math.round(r * f) + ', ' + Math.round(g * f) + ', ' + Math.round(b * f) + ', ' + a + ')';
     }
     // The gradient's colour AT A POINT of the window (x,y in 0..1, y down).
     // The native titlebar overlay cannot wear a gradient, so it wears the
@@ -319,9 +354,9 @@
     // cancelled complementary hues into neutral mud (measured chroma 4 on an
     // orange/purple/green theme).
     function gradientAt(cfg, x, y) {
-        // The FIELD colours — the same darkened values the underlay renders —
+        // The SHEET colours — the same dimmed values the underlay renders —
         // so the native chrome continues the page, not the raw picker.
-        const list = cfg.colors.map((c) => hexToRgb(fieldColor(c, cfg.base)));
+        const list = cfg.colors.map((c) => hexToRgb(sheetColor(c, cfg)));
         if (list.length === 1) return list[0];
         // CSS angle: 0deg points up, so the axis direction in screen space
         // (y down) is (sin a, -cos a); t runs 0..1 from the axis's entry
@@ -338,16 +373,15 @@
         return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
     }
 
-    // What a glass pane over the gradient actually shows at a point — the
-    // exact compositing arithmetic, so the native chrome matches the page
-    // beside it instead of approximating it.
-    function paneOver(paneHex, scale, alpha, cfg, x, y) {
-        const p = hexToRgb(paneHex);
-        const g = gradientAt(cfg, x, y);
+    // What a fixed overlay over the sheet shows at a point — the exact
+    // compositing arithmetic, so the native chrome matches the page beside
+    // it instead of approximating it.
+    function overlayOver(g, a, base) {
+        const o = base === 'light' ? 255 : 0;
         return rgbToHex(
-            p[0] * scale * alpha + g[0] * (1 - alpha),
-            p[1] * scale * alpha + g[1] * (1 - alpha),
-            p[2] * scale * alpha + g[2] * (1 - alpha)
+            g[0] * (1 - a) + o * a,
+            g[1] * (1 - a) + o * a,
+            g[2] * (1 - a) + o * a
         );
     }
 
@@ -376,58 +410,43 @@
             const cfg = normalizeCustom(customCfg);
             const col = cfg.base === 'light' ? 1 : 0;
             const k = cfg.intensity / 100;
-            // The reference's model, not an imitation of it: ONE gradient laid
-            // under the whole window (html/body carry --theme-underlay), with
-            // the structural panes above it going translucent so the same
-            // sweep reads through the rail, the sidebars, the chat column and
-            // the panels continuously. Per-pane tinting — the old approach —
-            // can never blend across a pane boundary, which is exactly the
-            // "uneven, not a smooth gradient" complaint.
-            //
-            // Intensity is the panes' TRANSPARENCY: at 0 they are the stock
-            // opaque ramp and no gradient exists; at 100 they are thin glass
-            // over it. A light base keeps more of its paper so text stays on
-            // something readable.
+            // The reference's pipeline, measured: ONE dimmed sheet laid under
+            // the whole window (html/body carry --theme-underlay), and FIXED
+            // per-panel overlays above it — see OVERLAY at the top of this
+            // file. Intensity lives entirely in the sheet's dim; the overlay
+            // constants never move, which is what keeps the panel-to-panel
+            // contrast identical across every palette anyone picks.
             if (k > 0) {
                 root.style.setProperty('--theme-underlay', underlayOf(cfg));
                 applied.push('--theme-underlay');
             }
-            // The one sheet of glass. Calibrated against the reference's
-            // measured panes, WITH the single-layer model in place: at 50%
-            // intensity its me-bar passes ~95% of the raw gradient's chroma,
-            // which means the sheet is nearly clear by mid-slider — so the
-            // alpha runs down steeply (1−1.6k) to a floor of .08. The pane's
-            // own colour also shrinks toward black as intensity rises: the
-            // pane·α term is a flat ADDITION to every channel, and stock grey
-            // there lifts the gradient's near-zero channels into a wash
-            // (measured floor ~24 vs the reference's ~10). Light panes keep
-            // more paper and never darken — dark text sits on them.
-            const alpha = +Math.max(cfg.base === 'light' ? 0.2 : 0.08,
-                1 - (cfg.base === 'light' ? 1.1 : 1.6) * k).toFixed(3);
-            const paneScale = cfg.base === 'light' ? 1 : +(1 - 0.85 * k).toFixed(3);
+            // Black smoke on a dark base, white paper-lift on a light one —
+            // same opacities, the layering identical (the reference does
+            // exactly this flip).
+            const ov = cfg.base === 'light' ? '255, 255, 255' : '0, 0, 0';
             Object.keys(TOKENS).forEach((tok) => {
                 const t = TOKENS[tok];
                 if (!t[col]) return;
                 let v;
-                if (k > 0 && COLUMN.has(tok)) v = rgbaOf(t[col], alpha, paneScale);
-                else if (k > 0 && cfg.base !== 'light' && NESTED[tok]) v = NESTED[tok];
-                else if (k > 0 && NESTED[tok]) v = rgbaOf(t[col], alpha);
+                if (k > 0 && COLUMN.has(tok)) v = 'rgba(' + ov + ', ' + OVERLAY[tok] + ')';
+                else if (k > 0 && NESTED[tok]) v = 'transparent';
                 else v = tintOf(t[col], cfg.base, cfg.colors, cfg.intensity, t[2]);
                 root.style.setProperty(tok, v);
                 applied.push(tok);
             });
             // The native chrome wears exactly what the page beside it shows:
-            // the caption strip composites the glass over the gradient AT ITS
-            // OWN CORNER, and the window background takes the centre.
+            // the caption strip sits over the title bar, whose overlay is 0 —
+            // the bare sheet at its own corner — and the window background
+            // takes the chat slab's composite at the centre.
             return {
                 base: cfg.base,
                 underlay: k > 0,
                 color: k > 0
-                    ? paneOver(TB_SEED[cfg.base], paneScale, alpha, cfg, 0.95, 0.02)
+                    ? overlayOver(gradientAt(cfg, 0.95, 0.02), 0, cfg.base)
                     : TB_SEED[cfg.base],
                 symbolColor: SYMBOL[cfg.base],
                 bg: k > 0
-                    ? paneOver(BG_SEED[cfg.base], paneScale, alpha, cfg, 0.5, 0.5)
+                    ? overlayOver(gradientAt(cfg, 0.5, 0.5), OVERLAY['--chat'], cfg.base)
                     : BG_SEED[cfg.base]
             };
         }

@@ -105,25 +105,27 @@ describe('the customizer', () => {
         hex.value = '#ff0000';
         hex.dispatchEvent(new window.Event('input', { bubbles: true }));
         await settle(4);
-        // One colour = a uniform wash under the whole window, and the panes
-        // above it are glass — translucent, not re-tinted per pane.
-        // The window field is the pick DARKENED to the reference's surface
-        // register; the strip above the picker keeps showing the raw colour.
-        expect(rootVar('--theme-underlay')).toBe('#8c0000');
-        expect(rootVar('--chat')).toMatch(/^rgba\(/);
+        // The edit lands on the SELECTED swatch — the first of the default
+        // five — and the underlay's first stop follows it, dimmed by the
+        // global ×0.40 at the default 50% intensity (#ff0000 → #660000).
+        // The panes above are the fixed overlays; the strip above the picker
+        // keeps showing the raw colour.
+        expect(rootVar('--theme-underlay')).toMatch(/^linear-gradient\(180deg, #660000,/);
+        expect(rootVar('--chat')).toBe('rgba(0, 0, 0, 0.22)');
         expect($('tm-swatch-current').style.background).toBeTruthy();
     });
 
-    it('two colours become one smooth gradient, steered by Gradient Direction', async () => {
-        $('tm-add').click();
-        await settle(4);
+    it('the default five stops blend into one gradient, steered by Gradient Direction', async () => {
         expect(rootVar('--theme-underlay')).toMatch(/^linear-gradient\(/);
         // The strip is an EDITOR: its blend always runs along the long axis
         // (90deg), whatever the window's Direction says, and each chip sits
-        // at its stop position across it.
+        // at its stop position across it — five chips for the reference
+        // gradient's five stops.
         expect($('tm-gradstrip').style.background).toContain('linear-gradient(90deg');
         const chips = [...document.querySelectorAll('#tm-swatches .tm-sw')];
-        expect(chips.map((c) => c.style.left)).toEqual(['8%', '92%']);
+        expect(chips.map((c) => c.style.left)).toEqual(['8%', '29%', '50%', '71%', '92%']);
+        // …and the cap IS five: the add button retires.
+        expect($('tm-add').hidden).toBe(true);
 
         const angle = $('tm-angle');
         angle.value = '90';
@@ -137,10 +139,13 @@ describe('the customizer', () => {
         // …and the strip does NOT turn with it: it is an editor, not a window.
         expect($('tm-gradstrip').style.background).toContain('linear-gradient(90deg');
 
-        // Back to one colour for the tests that follow — via the "−" beside
+        // Down to one colour for the tests that follow — via the "−" beside
         // the eyedropper, which acts on the selected colour.
-        document.querySelector('#tm-remove').click();
-        await settle(4);
+        while (document.querySelectorAll('#tm-swatches .tm-sw').length > 1) {
+            document.querySelector('#tm-remove').click();
+            await settle(2);
+        }
+        expect(rootVar('--theme-underlay')).not.toMatch(/^linear-gradient\(/);
     });
 
     it('intensity 0 hands the ramp back untouched', async () => {
@@ -191,8 +196,10 @@ describe('the customizer', () => {
 
         $('tm-reset').click();
         await settle(4);
-        expect(app.settings.customTheme.colors).toEqual(['#5865f2']);
-        expect(app.settings.customTheme.intensity).toBe(70);
+        // The default is the reference gradient's five picks at 50%.
+        expect(app.settings.customTheme.colors)
+            .toEqual(['#e15d3f', '#8c3f94', '#4b26f0', '#5f8594', '#76ee0f']);
+        expect(app.settings.customTheme.intensity).toBe(50);
     });
 
     it('closes on Escape without dropping the edits', async () => {
