@@ -90,12 +90,18 @@
     // drawn OVER the window and a see-through menu is unreadable — and take
     // the hue tint instead.
     const COLUMN = new Set(['--rail', '--side', '--members', '--chat']);
+    // FLAT, not lifted: the white washes these carried made the me-bar
+    // measure 32% hotter than the chat beside it, where the reference's two
+    // are pixel-identical — under a theme it takes elevation OUT of the fill
+    // entirely and lets each panel's border and shadow carry the separation.
+    // The tokens still exist as a set because the split (one glass sheet for
+    // columns, nothing extra for panels on them) is the whole model.
     const NESTED = {
-        '--input':  'rgba(255, 255, 255, 0.05)',   // composer: raised
-        '--panel':  'rgba(255, 255, 255, 0.05)',   // user dock: raised
-        '--chat-2': 'rgba(255, 255, 255, 0.04)',   // panels on the column
-        '--mark':   'rgba(255, 255, 255, 0.05)',
-        '--sunk':   'rgba(0, 0, 0, 0.14)'          // wells: recessed
+        '--input':  'transparent',   // composer
+        '--panel':  'transparent',   // user dock
+        '--chat-2': 'transparent',   // panels on the column
+        '--mark':   'transparent',
+        '--sunk':   'transparent'    // wells: their hairline carries them
     };
 
     // Not surfaces the stylesheet names, but chrome the OS draws: the native
@@ -264,14 +270,42 @@
         };
     }
 
-    // The gradient underlay itself: the user's colours as one smooth linear
-    // fade at the chosen angle — or the colour, alone. The angle is CSS's,
-    // untranslated: 180° runs the first colour top→bottom, 0° bottom→top —
-    // the reference reads its slider the same way, so a theme carried between
-    // the two apps keeps its direction instead of flipping.
+    // How the FIELD darkens the picked colours on a dark base. The
+    // reference's themed surfaces are high chroma at LOW lightness — its
+    // whole field is a deep version of the hue (#336511, lum ~56, IS its
+    // green at 50%), where the raw picker colours run lum 100-130. Letting
+    // those through nearly-clear glass produced mid-tone vivid surfaces and
+    // 1.05:1 timestamps. The gradient itself carries the darkness now; the
+    // glass only has to be glass.
+    //
+    // A LUMINANCE CEILING, not a flat multiplier: green carries most of
+    // perceived brightness, so one factor that lands red at the reference's
+    // register leaves green nearly twice as bright. Each stop is scaled to
+    // the ceiling instead — greens darken hard, deep blues barely at all —
+    // which is also how the reference's own greens come out darker-scaled
+    // than its oranges.
+    const FIELD_LUM_CAP = 58;
+    const FIELD_SCALE_MAX = 0.55;
+
+    function fieldColor(hex, base) {
+        if (base === 'light') return hex;
+        const [r, g, b] = hexToRgb(hex);
+        const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
+        const f = Math.min(FIELD_SCALE_MAX, FIELD_LUM_CAP / Math.max(1, lum));
+        return rgbToHex(r * f, g * f, b * f);
+    }
+
+    // The gradient underlay itself: the user's colours — darkened into a
+    // FIELD on a dark base — as one smooth linear fade at the chosen angle,
+    // or the colour alone. The angle is CSS's, untranslated: 180° runs the
+    // first colour top→bottom, 0° bottom→top — the reference reads its slider
+    // the same way, so a theme carried between the two apps keeps its
+    // direction instead of flipping. (The picker's swatch strip deliberately
+    // shows the RAW colours — it is the editor; this is the window.)
     function underlayOf(cfg) {
-        if (cfg.colors.length < 2) return cfg.colors[0];
-        return 'linear-gradient(' + cfg.angle + 'deg, ' + cfg.colors.join(', ') + ')';
+        const cs = cfg.colors.map((c) => fieldColor(c, cfg.base));
+        if (cs.length < 2) return cs[0];
+        return 'linear-gradient(' + cfg.angle + 'deg, ' + cs.join(', ') + ')';
     }
 
     function rgbaOf(hex, a, scale) {
@@ -285,7 +319,9 @@
     // cancelled complementary hues into neutral mud (measured chroma 4 on an
     // orange/purple/green theme).
     function gradientAt(cfg, x, y) {
-        const list = cfg.colors.map(hexToRgb);
+        // The FIELD colours — the same darkened values the underlay renders —
+        // so the native chrome continues the page, not the raw picker.
+        const list = cfg.colors.map((c) => hexToRgb(fieldColor(c, cfg.base)));
         if (list.length === 1) return list[0];
         // CSS angle: 0deg points up, so the axis direction in screen space
         // (y down) is (sin a, -cos a); t runs 0..1 from the axis's entry

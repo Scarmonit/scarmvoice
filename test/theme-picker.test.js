@@ -107,7 +107,9 @@ describe('the customizer', () => {
         await settle(4);
         // One colour = a uniform wash under the whole window, and the panes
         // above it are glass — translucent, not re-tinted per pane.
-        expect(rootVar('--theme-underlay')).toBe('#ff0000');
+        // The window field is the pick DARKENED to the reference's surface
+        // register; the strip above the picker keeps showing the raw colour.
+        expect(rootVar('--theme-underlay')).toBe('#8c0000');
         expect(rootVar('--chat')).toMatch(/^rgba\(/);
         expect($('tm-swatch-current').style.background).toBeTruthy();
     });

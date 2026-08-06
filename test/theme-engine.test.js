@@ -120,7 +120,10 @@ describe('the custom tint', () => {
         // The angle is CSS's own, untranslated — 180° runs the first colour
         // top-to-bottom — matching how the reference reads its slider, so a
         // theme carried between the two apps keeps its direction.
-        expect(rootVar('--theme-underlay')).toBe('linear-gradient(0deg, #ff0000, #0000ff)');
+        // …and the stops are the FIELD colours — the picks darkened to the
+        // reference's surface register (high chroma, LOW lightness), because
+        // the gradient itself carries the darkness now, not the glass.
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(0deg, #8c0000, #00008c)');
         // The structural panes are translucent NEUTRAL, scaled toward black —
         // the gradient supplies the colour, and compositing adds pane·alpha to
         // EVERY channel, so a stock-grey pane would lift the gradient's dark
@@ -149,9 +152,12 @@ describe('the custom tint', () => {
         // or black dip — the reference's own trick — so the gradient crosses
         // exactly one sheet everywhere.
         T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 50, angle: 0 });
-        expect(rootVar('--input')).toBe('rgba(255, 255, 255, 0.05)');   // composer: raised
-        expect(rootVar('--panel')).toBe('rgba(255, 255, 255, 0.05)');   // user dock: raised
-        expect(rootVar('--sunk')).toBe('rgba(0, 0, 0, 0.14)');          // wells: recessed
+        // FLAT, not lifted: the white washes made the me-bar 32% hotter than
+        // the chat beside it, where the reference's two are pixel-identical.
+        // Borders and shadows carry the elevation under a theme.
+        expect(rootVar('--input')).toBe('transparent');
+        expect(rootVar('--panel')).toBe('transparent');
+        expect(rootVar('--sunk')).toBe('transparent');
         // …and the flag that lifts the #app backdrop (the second sheet the
         // gradient used to cross under every column) is raised with it.
         expect(T.apply('custom', { base: 'dark', colors: ['#ff0000'], intensity: 50 }).underlay).toBe(true);
@@ -172,16 +178,21 @@ describe('the custom tint', () => {
         // in orange territory: strongly chromatic, red-dominant.
         expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeGreaterThan(50);
         expect(r).toBeGreaterThan(b);
+        // And DARK: the reference's themed surfaces sit at lum 36-56; letting
+        // the raw picks through put ours at 95-130 and took the timestamps to
+        // 1.05:1 contrast. The window background is the centre composite, so
+        // it is the canary for the whole field.
+        expect(lum(chrome.bg)).toBeLessThan(60);
     });
 
     it('honours the gradient direction', () => {
         T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 60, angle: 90 });
-        expect(rootVar('--theme-underlay')).toBe('linear-gradient(90deg, #ff0000, #0000ff)');
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(90deg, #8c0000, #00008c)');
     });
 
     it('a single colour is a uniform wash, not a gradient', () => {
         T.apply('custom', { base: 'dark', colors: ['#5865f2'], intensity: 80 });
-        expect(rootVar('--theme-underlay')).toBe('#5865f2');
+        expect(rootVar('--theme-underlay')).toBe('#2f3681');
         expect(rgba(rootVar('--chat')).a).toBeLessThan(1);
     });
 
