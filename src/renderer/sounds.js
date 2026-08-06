@@ -199,7 +199,7 @@
     // chime plays instead: an arrival that makes no sound at all is the
     // regression this feature must never cause.
 
-    function pickTtsVoice() {
+    function pickTtsVoice(gender) {
         let voices = [];
         try { voices = window.speechSynthesis.getVoices() || []; } catch (e) { return null; }
         if (!voices.length) return null;
@@ -208,17 +208,34 @@
         // Windows names its stock voices after people; these cover every en-*
         // install back to Windows 10. Falls back to the first English voice
         // rather than to silence when the wanted gender is not installed.
-        const want = settings.announceVoice === 'male'
+        const want = gender === 'male'
             ? /david|mark|guy|james|george|ryan|liam|\bmale\b/i
             : /zira|jenny|aria|eva|hazel|susan|libby|sonia|michelle|\bfemale\b/i;
         return pool.find((v) => want.test(v.name || '')) || pool[0] || null;
     }
 
-    function speakLocal(text) {
+    // Whose voice an announcement plays in: the voice of the person it is
+    // ABOUT. A peer's speaker/gender arrive on the roster with their texts;
+    // my own come from my settings. The old behaviour — every announcement in
+    // the LISTENER'S voice — made the picker look broken to everyone else.
+    function myVoice() {
+        return {
+            speaker: String(settings.announceSpeaker || ''),
+            gender: settings.announceVoice === 'male' ? 'male' : 'female'
+        };
+    }
+    function voiceOfEntry(e) {
+        return {
+            speaker: String((e && e.speaker) || ''),
+            gender: (e && e.vgender) === 'male' ? 'male' : 'female'
+        };
+    }
+
+    function speakLocal(text, gender) {
         try {
             if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
             const u = new window.SpeechSynthesisUtterance(text);
-            const v = pickTtsVoice();
+            const v = pickTtsVoice(gender || (settings.announceVoice === 'male' ? 'male' : 'female'));
             if (v) u.voice = v;
             u.volume = 0.9;
             u.rate = 1;
@@ -241,7 +258,47 @@
     // local voice at once instead of paying a network timeout per arrival.
     let naturalDownUntil = 0;
 
-    function speakNatural(text) {
+    function ttsUrl(text, voiceOf) {
+        const v = voiceOf || myVoice();
+        return 'lounge://tts/?text=' + encodeURIComponent(text) +
+            '&voice=' + (v.gender === 'male' ? 'male' : 'female') +
+            // The chosen aura speaker; empty means the gender default, which
+            // the server resolves.
+            (v.speaker ? '&speaker=' + encodeURIComponent(v.speaker) : '');
+    }
+
+    // PREPARED announcements — the answer to "why is there a second of dead
+    // air". The first render of a sentence is a network round trip (and, for
+    // a sentence nobody has said before, a model run behind it); an <audio>
+    // built AT ANNOUNCE TIME pays all of it while everyone waits. So the
+    // audio is built ahead: my own two sentences when I join or retune them,
+    // a peer's leave line the moment they appear, a joiner's line while the
+    // announce delay is already ticking. By the time anything is spoken the
+    // bytes are usually here.
+    const prepared = new Map();   // url -> Audio, insertion-ordered for eviction
+    const PREPARED_MAX = 16;
+
+    function prepare(text, voiceOf) {
+        try {
+            if (!window.lounge || !window.lounge.fileUrl) return null;
+            if (Date.now() < naturalDownUntil) return null;
+            const url = ttsUrl(text, voiceOf);
+            let el = prepared.get(url);
+            if (el) return el;
+            el = new Audio(url);
+            el.preload = 'auto';
+            el.volume = 0.9;
+            const sink = settings.speakerDeviceId || '';
+            if (typeof el.setSinkId === 'function') {
+                try { Promise.resolve(el.setSinkId(sink)).catch(() => {}); } catch (e) {}
+            }
+            prepared.set(url, el);
+            while (prepared.size > PREPARED_MAX) prepared.delete(prepared.keys().next().value);
+            return el;
+        } catch (e) { return null; }
+    }
+
+    function speakNatural(text, voiceOf) {
         return new Promise((resolve, reject) => {
             // The lounge:// scheme only exists inside the app shell.
             if (!window.lounge || !window.lounge.fileUrl) { reject(new Error('no shell')); return; }
@@ -254,23 +311,15 @@
                 if (ok) resolve();
                 else { naturalDownUntil = Date.now() + 60000; reject(new Error(why)); }
             };
-            let el;
-            try {
-                el = new Audio('lounge://tts/?text=' + encodeURIComponent(text) +
-                    '&voice=' + (settings.announceVoice === 'male' ? 'male' : 'female') +
-                    // The chosen aura speaker; empty means the gender default,
-                    // which the server resolves.
-                    (settings.announceSpeaker ? '&speaker=' + encodeURIComponent(settings.announceSpeaker) : ''));
-            } catch (e) { done(false, 'no audio'); return; }
-            el.volume = 0.9;
-            const sink = settings.speakerDeviceId || '';
-            if (typeof el.setSinkId === 'function') {
-                try { Promise.resolve(el.setSinkId(sink)).catch(() => {}); } catch (e) {}
-            }
+            // The prepared element when there is one — usually already
+            // buffered — else a fresh one that pays the fetch now.
+            const el = prepare(text, voiceOf);
+            if (!el) { done(false, 'no audio'); return; }
             el.addEventListener('playing', () => done(true), { once: true });
             el.addEventListener('error', () => done(false, 'stream error'), { once: true });
             // A render is a few hundred ms; four seconds means it is not coming.
             const timer = setTimeout(() => done(false, 'timeout'), 4000);
+            try { el.currentTime = 0; } catch (e) {}
             const p = el.play();
             if (p && p.catch) p.catch(() => done(false, 'play refused'));
         });
@@ -282,19 +331,25 @@
     // local engine when the network fails, the old chime when even that is
     // missing — an arrival that makes no sound at all is the one regression
     // this feature must never cause.
-    function announce(kind, who, force) {
+    function announceText(kind, who) {
+        return String(who || 'Someone') +
+            (kind === 'leave' ? ' has left the channel' : ' has joined the channel');
+    }
+
+    // `voiceOf` is the voice of the person the announcement is ABOUT.
+    function announce(kind, who, force, voiceOf) {
         if (!force && (!voiceEnabled() || settings.dnd)) return;
-        const said = String(who || 'Someone');
-        const text = said + (kind === 'leave' ? ' has left the channel' : ' has joined the channel');
+        const text = announceText(kind, who);
+        const v = voiceOf || myVoice();
         // The fallback is taken SYNCHRONOUSLY when the natural path cannot
         // even be attempted — outside the app shell, or inside the failure
         // cooldown — rather than round-tripping through a rejection.
         if (!window.lounge || !window.lounge.fileUrl || Date.now() < naturalDownUntil) {
-            if (!speakLocal(text)) playVoice(kind);
+            if (!speakLocal(text, v.gender)) playVoice(kind);
             return;
         }
-        speakNatural(text).catch(() => {
-            if (!speakLocal(text)) playVoice(kind);
+        speakNatural(text, v).catch(() => {
+            if (!speakLocal(text, v.gender)) playVoice(kind);
         });
     }
 
@@ -304,14 +359,25 @@
     // hearing their own leave announcement is deliberate.
     function announceSelf(kind, username) {
         const custom = kind === 'leave' ? settings.farewellText : settings.greetText;
-        announce(kind, String(custom || '').trim() || username);
+        announce(kind, String(custom || '').trim() || username, false, myVoice());
     }
 
     // The settings panel's preview: always audible — the click IS the request,
     // whatever the sound toggles say.
     function previewAnnounce(kind, username) {
         const custom = kind === 'leave' ? settings.farewellText : settings.greetText;
-        announce(kind, String(custom || '').trim() || username, true);
+        announce(kind, String(custom || '').trim() || username, true, myVoice());
+    }
+
+    // Build my own two sentences ahead of need. Called when I join a call (my
+    // leave line is then instant however I leave), and when the Greeting &
+    // Leaving settings change (the preview and the next real announcement are
+    // already rendered by the time they are asked for).
+    function warmAnnouncements(username) {
+        const greet = String(settings.greetText || '').trim() || username;
+        const farewell = String(settings.farewellText || '').trim() || username;
+        prepare(announceText('join', greet), myVoice());
+        prepare(announceText('leave', farewell), myVoice());
     }
 
     // ---- join / leave diffing -------------------------------------------
@@ -329,10 +395,27 @@
         const o = {};
         (list || []).forEach((p) => {
             if (p && p.id) {
-                o[p.id] = { name: p.name || 'Someone', greet: p.greet || '', farewell: p.farewell || '' };
+                o[p.id] = {
+                    name: p.name || 'Someone',
+                    greet: p.greet || '', farewell: p.farewell || '',
+                    speaker: p.speaker || '', vgender: p.vgender || ''
+                };
             }
         });
         return o;
+    }
+
+    // Everyone in the call will eventually LEAVE, and their leave line's
+    // words and voice are known from the moment they are seen — so it is
+    // rendered then, once per person per call, and a departure plays with no
+    // network in front of it.
+    function warmLeaveLines(byId, myId) {
+        for (const id in byId) {
+            if (id === myId || warmedIds.has(id)) continue;
+            warmedIds.add(id);
+            const e = byId[id];
+            prepare(announceText('leave', e.farewell || e.name), voiceOfEntry(e));
+        }
     }
 
     // An arrival is announced on a short DELAY, and the words are resolved
@@ -347,9 +430,14 @@
     //
     // A join that evaporates inside the window (a connection blip) cancels
     // silently — no join, and no leave for a join nobody heard.
-    const JOIN_SAY_DELAY_MS = 800;
+    // Shorter than it was: the render no longer happens AFTER the wait — the
+    // audio starts fetching the moment the join is noticed (see the prepare
+    // call at scheduling), so the delay only has to cover the roster row
+    // arriving, not the network.
+    const JOIN_SAY_DELAY_MS = 600;
     let latestById = {};
     const pendingJoins = new Map();   // id -> timer
+    const warmedIds = new Set();      // entries whose leave line is already built
 
     function clearPendingJoins() {
         pendingJoins.forEach((t) => clearTimeout(t));
@@ -360,7 +448,11 @@
     // `silent` (DND) suppresses playback WITHOUT disarming: folding DND into
     // `joined` made toggling DND off replay announcements mid-call.
     function voiceRoster(list, joined, myId, silent) {
-        if (!joined) { armed = false; prevById = null; latestById = {}; clearPendingJoins(); return; }
+        if (!joined) {
+            armed = false; prevById = null; latestById = {};
+            clearPendingJoins(); warmedIds.clear();
+            return;
+        }
 
         latestById = entryMap(list);
 
@@ -369,20 +461,30 @@
             armAt = Date.now();
             // Everyone already here is the baseline, not an arrival — and my
             // own announcement is app.js's announceSelf, on the transition.
+            // Their DEPARTURES are all in the future, though: render every
+            // leave line now, while nobody is waiting on anything.
             prevById = latestById;
+            warmLeaveLines(latestById, myId);
             return;
         }
 
         const byId = latestById;
-        if (Date.now() - armAt < SETTLE_MS) { prevById = byId; return; }
+        if (Date.now() - armAt < SETTLE_MS) { prevById = byId; warmLeaveLines(byId, myId); return; }
 
         if (prevById && !silent) {
             for (const a in byId) {
                 if (a === myId || prevById[a] || pendingJoins.has(a)) continue;
+                // Start the render NOW, so it downloads while the announce
+                // delay ticks — the wait and the network overlap instead of
+                // stacking. If the text changes when the roster row lands,
+                // fire-time resolution below still speaks the right words
+                // (and pays the one fetch that genuinely could not be helped).
+                const seen = byId[a];
+                prepare(announceText('join', seen.greet || seen.name), voiceOfEntry(seen));
                 pendingJoins.set(a, setTimeout(() => {
                     pendingJoins.delete(a);
                     const e = latestById[a];
-                    if (e) announce('join', e.greet || e.name);
+                    if (e) announce('join', e.greet || e.name, false, voiceOfEntry(e));
                 }, JOIN_SAY_DELAY_MS));
             }
             for (const b in prevById) {
@@ -393,16 +495,21 @@
                     pendingJoins.delete(b);
                     continue;
                 }
-                announce('leave', prevById[b].farewell || prevById[b].name);
+                const e = prevById[b];
+                announce('leave', e.farewell || e.name, false, voiceOfEntry(e));
             }
         }
         prevById = byId;
+        warmLeaveLines(byId, myId);
     }
 
-    function reset() { armed = false; prevById = null; latestById = {}; clearPendingJoins(); }
+    function reset() {
+        armed = false; prevById = null; latestById = {};
+        clearPendingJoins(); warmedIds.clear();
+    }
 
     window.loungeSounds = {
         init, setSettings, playMessage, playVoice, playUi, voiceRoster, reset,
-        announceSelf, previewAnnounce
+        announceSelf, previewAnnounce, warmAnnouncements
     };
 })();

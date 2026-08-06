@@ -336,7 +336,14 @@ module.exports = {
             t: 'voice', inVoice: !!inVoice, muted: !!muted, deafened: !!deafened,
             name: store.get().displayName || 'Anonymous',
             greet: clean(store.get().greetText),
-            farewell: clean(store.get().farewellText)
+            farewell: clean(store.get().farewellText),
+            // The VOICE the announcement about me should be spoken in — my
+            // choice, carried to the people who will actually hear it. An
+            // announcement about a person plays in that person's voice, so the
+            // speaker travels with the texts rather than being whatever the
+            // listener picked for themselves.
+            speaker: String(store.get().announceSpeaker || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 20),
+            vgender: store.get().announceVoice === 'male' ? 'male' : 'female'
         });
     },
     sendPresence: (status) => send({

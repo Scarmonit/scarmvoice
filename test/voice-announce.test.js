@@ -172,4 +172,19 @@ describe('the voice choice', () => {
         S.announceSelf('join', 'a');
         expect(spoken[1].voice.name).toMatch(/David/);
     });
+
+    it("announces a peer in THEIR voice, not the listener's", () => {
+        // I am set to female. Bob published male — his announcement plays
+        // male for everyone who hears it: the voice belongs to the person the
+        // announcement is about.
+        S.setSettings({ voiceSounds: true, announceVoice: 'female' });
+        arm([]);
+        S.voiceRoster([row('me', 'Me'),
+            Object.assign(row('b', 'bob'), { vgender: 'male' })], true, 'me', false);
+        sayJoins();
+        expect(spoken[0].voice.name).toMatch(/David/);
+        // …while my own announcements keep my own choice.
+        S.announceSelf('join', 'me');
+        expect(spoken[1].voice.name).toMatch(/Zira/);
+    });
 });

@@ -1982,9 +1982,21 @@ app.whenReady().then(async () => {
     // replaces it: was the app on screen? A window hidden in the tray answers
     // false and stays in the tray on the other side; anything the user could
     // see — including one merely minimised to the taskbar — comes back.
+    //
+    // ONLY a process that actually owns a window may answer. The startup gate
+    // installs updates before any window exists, and when several releases
+    // are pending the chain goes: session A (user clicks Restart Now, window
+    // visible, flag written TRUE) → installer → session B's gate finds the
+    // NEXT update and installs it with no window ever built. Session B's
+    // beforeInstall used to answer "not visible" and overwrite the flag —
+    // erasing, mid-chain, the intent the user's click had recorded. That is
+    // exactly the case the consume side always documented ("the intent has to
+    // carry into the process that finally builds a window"); the write side
+    // now honours it by staying silent when it has no window to describe.
     updater.onBeforeInstall(() => {
+        if (!win || win.isDestroyed()) return;
         let visible = false;
-        try { visible = !!(win && !win.isDestroyed() && win.isVisible()); } catch (e) {}
+        try { visible = win.isVisible(); } catch (e) {}
         store.set({ updateResumeVisible: visible });
     });
 

@@ -69,9 +69,56 @@ describe('the announcement URL', () => {
     });
 });
 
+describe('a peer is spoken in their own voice', () => {
+    it('uses THEIR speaker, rendered while the announce delay ticks', () => {
+        vi.useFakeTimers();
+        // I am thalia/female. Bob published zeus/male — his announcement is
+        // his, in his voice, whatever I picked for myself.
+        S.setSettings({ voiceSounds: true, announceVoice: 'female', announceSpeaker: 'thalia' });
+        S.reset();
+        S.voiceRoster([{ id: 'me', name: 'Me' }], true, 'me', false);
+        vi.advanceTimersByTime(2000);           // past the settle window
+        made.length = 0;
+
+        S.voiceRoster([
+            { id: 'me', name: 'Me' },
+            { id: 'b', name: 'bob', greet: 'Big Bob', farewell: '', speaker: 'zeus', vgender: 'male' }
+        ], true, 'me', false);
+        // NOTHING has been spoken yet — but the audio already exists: the
+        // join line started rendering the moment the join was noticed, and
+        // his future leave line was warmed alongside it.
+        expect(made.length).toBe(2);
+        expect(made.some((el) =>
+            el.src.includes('speaker=zeus') && el.src.includes('voice=male') &&
+            el.src.includes(encodeURIComponent('Big Bob has joined the channel')))).toBe(true);
+        expect(made.some((el) =>
+            el.src.includes(encodeURIComponent('bob has left the channel')))).toBe(true);
+
+        // Fire time REUSES the prepared element — the wait and the network
+        // overlapped instead of stacking.
+        vi.advanceTimersByTime(700);
+        expect(made.length).toBe(2);
+        vi.useRealTimers();
+    });
+
+    it('warming my own sentences is deduped by URL', () => {
+        S.setSettings({ voiceSounds: true, announceVoice: 'female', announceSpeaker: 'luna' });
+        made.length = 0;
+        S.warmAnnouncements('scarmonit');
+        expect(made.length).toBe(2);            // my join + my leave
+        S.warmAnnouncements('scarmonit');       // nothing changed — no refetch
+        expect(made.length).toBe(2);
+        // …and the real announcement plays the element the warm built.
+        S.announceSelf('join', 'scarmonit');
+        expect(made.length).toBe(2);
+    });
+});
+
 describe('when the stream fails', () => {
     it('falls back to the local engine rather than silence', async () => {
-        S.setSettings({ voiceSounds: true, announceVoice: 'female', announceSpeaker: 'luna' });
+        // A speaker no earlier test prepared, so this announcement builds a
+        // FRESH element — the one whose failure is under test.
+        S.setSettings({ voiceSounds: true, announceVoice: 'female', announceSpeaker: 'cora' });
         S.announceSelf('join', 'scarmonit');
         made[0].fire('error');
         await Promise.resolve();

@@ -59,7 +59,13 @@
     const annTexts = new Map();     // 'c'+cid / 'u'+uid -> { greet, farewell }
     function noteAnnounceTexts(list) {
         (list || []).forEach((p) => {
-            const t = { greet: p.greet || '', farewell: p.farewell || '' };
+            const t = {
+                greet: p.greet || '', farewell: p.farewell || '',
+                // The voice announcements ABOUT this person play in — theirs,
+                // not the listener's. Cached with the texts for the same
+                // reason the texts are.
+                speaker: p.speaker || '', vgender: p.vgender || ''
+            };
             if (p.client_id) annTexts.set('c' + p.client_id, t);
             if (p.user_id) annTexts.set('u' + p.user_id, t);
         });
@@ -70,9 +76,13 @@
     // the two are told apart.
     function annFor(cid, uid, row) {
         if (row && row.greet !== undefined) {
-            return { greet: row.greet || '', farewell: row.farewell || '' };
+            return {
+                greet: row.greet || '', farewell: row.farewell || '',
+                speaker: row.speaker || '', vgender: row.vgender || ''
+            };
         }
-        return annTexts.get('c' + cid) || (uid && annTexts.get('u' + uid)) || { greet: '', farewell: '' };
+        return annTexts.get('c' + cid) || (uid && annTexts.get('u' + uid))
+            || { greet: '', farewell: '', speaker: '', vgender: '' };
     }
     let typingUsers = [];
     let rtConnected = false;
@@ -6664,8 +6674,14 @@
                 // the peers' announcements use. The leaver hearing their own
                 // leave announcement is part of the feature, not an accident.
                 const myAnnounceName = (account && account.username) || settings.displayName || 'Someone';
-                if (!wasJoined && st.joined) window.loungeSounds.announceSelf('join', myAnnounceName);
-                else if (wasJoined && !st.joined) window.loungeSounds.announceSelf('leave', myAnnounceName);
+                if (!wasJoined && st.joined) {
+                    window.loungeSounds.announceSelf('join', myAnnounceName);
+                    // My LEAVE line is rendered now, while nobody needs it —
+                    // however this call ends, the send-off plays instantly.
+                    window.loungeSounds.warmAnnouncements(myAnnounceName);
+                } else if (wasJoined && !st.joined) {
+                    window.loungeSounds.announceSelf('leave', myAnnounceName);
+                }
                 // Leaving is the moment to mint the NEXT token. The pointer is
                 // usually already inside the voice area when somebody hangs up,
                 // so no fresh hover arrives to trigger it — which is how every
@@ -6773,6 +6789,13 @@
     function warmVoice() {
         try {
             if (voice && voice.warm) voice.warm();
+            // My own join/leave announcements, rendered while the pointer is
+            // still hovering — by the time the call is joined, my arrival
+            // line is already audio. Ahead of the voiceWarmed gate: the
+            // sentences change with settings, and prepare() dedupes by URL,
+            // so re-warming is free when nothing moved.
+            window.loungeSounds.warmAnnouncements(
+                (account && account.username) || settings.displayName || 'Someone');
             if (voiceWarmed) return;
             voiceWarmed = true;
             if (window.ScarmLazy) window.ScarmLazy.realtimekit().catch(() => { voiceWarmed = false; });
@@ -7431,7 +7454,9 @@
                 // that dropped them would announce a custom greeting person
                 // by username.
                 greet: ann.greet,
-                farewell: ann.farewell
+                farewell: ann.farewell,
+                speaker: ann.speaker,
+                vgender: ann.vgender
             }));
         });
         presence.forEach((p) => {
@@ -7454,6 +7479,8 @@
                     deafened: !!p.deafened,
                     greet: annFor(p.client_id, p.user_id, p).greet,
                     farewell: annFor(p.client_id, p.user_id, p).farewell,
+                    speaker: annFor(p.client_id, p.user_id, p).speaker,
+                    vgender: annFor(p.client_id, p.user_id, p).vgender,
                     remoteOnly: true
                 });
             }
@@ -8853,7 +8880,8 @@
                     voicePresence = m.list.map((v) => ({
                         client_id: v.cid || v.client_id, user_id: v.user_id || null,
                         name: v.name, muted: v.muted, deafened: v.deafened,
-                        greet: v.greet || '', farewell: v.farewell || ''
+                        greet: v.greet || '', farewell: v.farewell || '',
+                        speaker: v.speaker || '', vgender: v.vgender || ''
                     }));
                     noteAnnounceTexts(voicePresence);
                     renderVoiceRoster();
@@ -8905,7 +8933,8 @@
                     voicePresence = (m.voice || []).map((v) => ({
                         client_id: v.cid || v.client_id, user_id: v.user_id || null,
                         name: v.name, muted: v.muted, deafened: v.deafened,
-                        greet: v.greet || '', farewell: v.farewell || ''
+                        greet: v.greet || '', farewell: v.farewell || '',
+                        speaker: v.speaker || '', vgender: v.vgender || ''
                     }));
                     noteAnnounceTexts(voicePresence);
                     renderVoiceRoster();
@@ -15096,6 +15125,15 @@
         return sel.value;
     }
 
+    // A changed voice re-renders my own sentences (the old audio is for a
+    // voice I no longer use) and, mid-call, republishes my voice state so
+    // PEERS speak me in the new voice — announcements about a person play in
+    // that person's voice, and this is where the person changes theirs.
+    function announceVoiceChanged() {
+        window.loungeSounds.warmAnnouncements(
+            (account && account.username) || settings.displayName || 'Someone');
+        if (voice && voice.isJoined()) L.rt.sendVoice(true, voice.isMuted(), voice.isDeafened());
+    }
     $('set-announce-voice').addEventListener('change', async (e) => {
         const gender = e.target.value === 'male' ? 'male' : 'female';
         // Repaint FIRST: the speaker list is the other half of this choice,
@@ -15105,9 +15143,12 @@
         await saveSettings({ announceVoice: gender });
         const speaker = paintAnnounceSpeakers();
         await saveSettings({ announceSpeaker: speaker });
+        announceVoiceChanged();
     });
-    $('set-announce-speaker').addEventListener('change', (e) =>
-        saveSettings({ announceSpeaker: String(e.target.value || '') }));
+    $('set-announce-speaker').addEventListener('change', async (e) => {
+        await saveSettings({ announceSpeaker: String(e.target.value || '') });
+        announceVoiceChanged();
+    });
     // Hear it before anyone else does — exactly what a joiner's arrival will
     // say, in the voice currently selected in the two dropdowns.
     $('set-announce-preview').addEventListener('click', () =>

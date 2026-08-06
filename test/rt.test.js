@@ -406,10 +406,15 @@ describe('messages', () => {
         expect(socket().lastSent()).toEqual({ t: 'typing', channel: 'random', name: 'Scarm', stop: false });
 
         // greet/farewell ride the voice frame — the peers' clients SPEAK them
-        // when this person joins or leaves. Empty when unset, never absent.
+        // when this person joins or leaves — and speaker/vgender say WHOSE
+        // voice to speak them in: this person's own choice, not whatever the
+        // listener picked. Empty/default when unset, never absent.
         rt.sendVoice(true, false, true);
         expect(socket().lastSent())
-            .toEqual({ t: 'voice', inVoice: true, muted: false, deafened: true, name: 'Scarm', greet: '', farewell: '' });
+            .toEqual({
+                t: 'voice', inVoice: true, muted: false, deafened: true, name: 'Scarm',
+                greet: '', farewell: '', speaker: '', vgender: 'female'
+            });
 
         rt.sendPresence('away');
         expect(socket().lastSent()).toEqual({ t: 'presence', name: 'Scarm', status: 'away' });
