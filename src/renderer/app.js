@@ -12099,14 +12099,17 @@
         tmSel = 0;
         const [h, s, v] = window.ScarmTheme.hexToHsv(tmCfg.colors[0]);
         tmHsv = [s ? h : 235, s, v];
-        // Opening the customizer IS choosing the custom theme — the app behind
-        // the modal is the preview, and previewing a theme that is not active
-        // shows nothing at all.
+        // Opening the customizer IS choosing the custom theme — the app is the
+        // live preview, and previewing a theme that is not active shows
+        // nothing at all.
         if (settings.theme !== 'custom') {
             await saveSettings({ theme: 'custom' });
             $('set-theme').value = 'custom';
             radioPainters.forEach((p) => p());
         }
+        // The settings sheet covers the whole window — which is the very thing
+        // being previewed. Close it; the panel's footer offers the way back.
+        closeSettings();
         tmPaint();
         applyTheme();
         tmModal.hidden = false;
@@ -12120,11 +12123,14 @@
 
     $('btn-theme-custom').addEventListener('click', openThemeModal);
     $('tm-close').addEventListener('click', closeThemeModal);
-    tmModal.addEventListener('mousedown', (e) => { if (e.target === tmModal) closeThemeModal(); });
-    // Capture, and stopped: the document-level Escape handler would otherwise
-    // also close the settings sheet underneath in the same keystroke.
-    tmModal.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') return;
+    // The road back to where the panel was opened from — the sheet was closed
+    // on the way in so the app could be seen.
+    $('tm-back').addEventListener('click', () => { closeThemeModal(); openSettings(); });
+    // Document-level and CAPTURE: the panel is docked, not focus-trapped, so
+    // the keystroke can land anywhere in the app — and it must not fall
+    // through to the global Escape chain and close something else as well.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || tmModal.hidden) return;
         e.preventDefault();
         e.stopPropagation();
         closeThemeModal();

@@ -6032,6 +6032,7 @@ html.desat #lightbox,
 html.desat #edit-mode,
 html.desat #lang-pop,
 html.desat #fmt-menu,
+html.desat #theme-modal,
 html.desat .toast {
   filter: saturate(var(--sat, 1));
 }
@@ -6798,15 +6799,49 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .ban-card .ban-count { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
 
 /* ---- custom theme picker ------------------------------------------------
+   A panel DOCKED to the right edge — deliberately not a modal. Every change
+   applies to the app live, so the app is the preview and must stay visible
+   and UNDIMMED while the picking happens: a centered modal over a scrim sat
+   on top of the very thing being previewed and crushed the tint under 72%
+   black, which is how "live preview" shipped invisible.
+
    The saturation/value square is three stacked layers: the pure hue below, a
    left-to-right white fade, a bottom-up black fade — the classic picker,
    with no canvas involved. The hue strip is one rainbow gradient. Both
    thumbs are positioned by app.js from the current colour. */
-.tm-modal { width: 340px; }
-.tm-body { display: flex; flex-direction: column; gap: 10px; padding-bottom: 18px; }
+.tm-panel {
+  position: fixed; top: var(--tb); right: 0; bottom: 0; width: 300px;
+  z-index: 350;   /* over the drawers, under the lightbox/dialog tier (400+) */
+  display: flex; flex-direction: column;
+  background: var(--float); border-left: 1px solid var(--float-edge);
+  box-shadow: var(--shadow-drawer);
+}
+.tm-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px 6px;
+}
+/* Title UNDER the section-label size gap it used to tower over: 16px near-
+   white, with the palette glyph riding after the text. */
+.tm-head h2 {
+  flex: 1; margin: 0; display: flex; align-items: center; gap: 7px;
+  font-size: 16px; font-weight: 700; color: var(--text-strong);
+}
+.tm-title-ico { width: 17px; height: 17px; color: var(--muted); }
+.tm-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  /* The thumbs are absolutely positioned and overhang their tracks at the
+     extremes by half their own width — without this that overhang is a
+     horizontal scrollbar across the whole panel. */
+  overflow-x: hidden;
+  display: flex; flex-direction: column; gap: 10px; padding: 0 16px 16px;
+}
+.tm-foot { flex: none; padding: 12px 16px; border-top: 1px solid var(--float-rule); }
+/* Section headings, not field labels: Title Case (the content is already
+   cased — no transform), and BRIGHTER than the field text under them. These
+   were uppercase at --dim, i.e. dimmer than the labels they head. */
 .tm-label {
-  margin: 8px 0 2px; font-size: 11.5px; font-weight: 700;
-  letter-spacing: .04em; text-transform: uppercase; color: var(--dim);
+  margin: 8px 0 2px; font-size: 12.5px; font-weight: 700;
+  color: var(--panel-name);
 }
 .tm-seg {
   display: flex; gap: 4px; padding: 4px;
@@ -6842,13 +6877,31 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
   cursor: pointer; touch-action: none;
 }
 #tm-hue-thumb { top: 50%; }
-.tm-hex-row { display: flex; align-items: center; gap: 8px; }
+/* ONE field: the swatch and the eyedropper live INSIDE the input's border,
+   so the row reads as a single control rather than three loose ones. */
+.tm-hex-wrap {
+  display: flex; align-items: center; gap: 8px;
+  height: 41px; padding: 0 6px 0 8px;
+  background: var(--ctl-sunk); border: 1px solid var(--ctl-sunk-line);
+  border-radius: 8px;
+}
+.tm-hex-wrap:focus-within { border-color: var(--ctl-sunk-line-hi); }
 #tm-swatch-current {
-  width: 30px; height: 30px; border-radius: 8px; flex: none;
+  width: 25px; height: 25px; border-radius: 6px; flex: none;
   border: 1px solid var(--float-rule);
 }
-#tm-hex { flex: 1; font-family: var(--mono); }
-.tm-hex-row .icon-btn { flex: none; }
+#tm-hex {
+  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+  color: var(--text); font-family: var(--mono); font-size: 13px;
+}
+.tm-eyebtn {
+  flex: none; width: 29px; height: 29px; display: flex;
+  align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: 6px;
+  color: var(--muted); cursor: pointer;
+}
+.tm-eyebtn:hover { background: var(--hover); color: var(--text); }
+.tm-eyebtn .ico { width: 15px; height: 15px; }
 #tm-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
 #tm-swatches:empty { display: none; }
 .tm-sw {
@@ -6867,10 +6920,16 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 .tm-row span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
 #tm-intensity { width: 100%; }
 .tm-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
-/* A keycap stretched full-width; the icon (Add Color's +) rides inline. */
+/* Actual BUTTONS: a raised fill and an edge, not bare labels on the panel.
+   --ctl is "a button raised on a floating surface", which is exactly where
+   these sit — the fill follows every theme the panel previews. */
 .tm-wide {
-  width: 100%; display: inline-flex; align-items: center;
-  justify-content: center; gap: 6px; font-size: 12.5px;
+  width: 100%; height: 38px; display: inline-flex; align-items: center;
+  justify-content: center; gap: 6px;
+  background: var(--ctl); border: 1px solid var(--ctl-line);
+  border-radius: 8px; cursor: pointer;
+  color: var(--text); font-size: 13px; font-weight: 600;
 }
+.tm-wide:hover { background: var(--ctl-hover); border-color: var(--ctl-line-hover); }
 .tm-wide .ico { width: 15px; height: 15px; }
 #btn-theme-custom { margin-top: 8px; }

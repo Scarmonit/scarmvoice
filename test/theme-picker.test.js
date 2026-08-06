@@ -139,4 +139,24 @@ describe('the customizer', () => {
         expect(app.settings.theme).toBe('custom');
         expect(rootVar('--chat')).not.toBe('');
     });
+
+    it('docks beside the app instead of covering it', async () => {
+        // The whole feature is the LIVE preview, and a centered modal over a
+        // scrim sat on top of the very thing being previewed — the tint was
+        // applying the entire time, invisibly, under 72% black. The picker is
+        // a docked panel now, and nothing about opening it may dim the app.
+        $('btn-theme-custom').click();
+        await settle(8);
+        expect($('theme-modal').hidden).toBe(false);
+        expect($('theme-modal').classList.contains('tm-panel')).toBe(true);
+        expect($('theme-modal').classList.contains('overlay'), 'no scrim wrapper').toBe(false);
+        // The settings sheet covers the window, which is the preview — it is
+        // closed on the way in…
+        expect($('settings').hidden).toBe(true);
+        // …and the footer's Back to Settings is the road back.
+        $('tm-back').click();
+        await settle(8);
+        expect($('theme-modal').hidden).toBe(true);
+        expect($('settings').hidden).toBe(false);
+    });
 });

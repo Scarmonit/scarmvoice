@@ -2444,62 +2444,68 @@
      sheet can produce. Without it a screen-reader user gets silence for all of
      them: the text is inserted into a node that is never focused and never read.
      aria-atomic so the whole sentence is announced rather than the diff. -->
-<!-- Customize your theme — the custom-theme picker. An overlay like the
-     filters modal, driven entirely by app.js's theme section: the saturation/
-     value square and hue strip are plain divs painted with gradients, so the
-     picker needs no canvas and inherits the app's own look. -->
-<div id="theme-modal" class="overlay" hidden>
-  <div class="modal tm-modal" role="dialog" aria-modal="true" aria-label="Customize your theme">
-    <header class="modal-head">
-      <h2>Customize your theme</h2>
-      <button class="icon-btn" id="tm-close" title="Close"><span class="ico" data-icon="x"></span></button>
-    </header>
-    <div class="modal-body tm-body">
-      <h4 class="tm-label">Appearance</h4>
-      <div class="tm-seg" role="radiogroup" aria-label="Base appearance">
-        <button type="button" class="tm-seg-btn" id="tm-base-dark" role="radio" title="Dark base">
-          <span class="ico" data-icon="moon"></span>
-        </button>
-        <button type="button" class="tm-seg-btn" id="tm-base-light" role="radio" title="Light base">
-          <span class="ico" data-icon="sun"></span>
-        </button>
-      </div>
-
-      <h4 class="tm-label">Colors</h4>
-      <div id="tm-sv" aria-label="Saturation and brightness" tabindex="0">
-        <div id="tm-sv-white"></div>
-        <div id="tm-sv-black"></div>
-        <div id="tm-sv-thumb"></div>
-      </div>
-      <div id="tm-hue" aria-label="Hue" tabindex="0">
-        <div id="tm-hue-thumb"></div>
-      </div>
-      <div class="tm-hex-row">
-        <span id="tm-swatch-current" aria-hidden="true"></span>
-        <input id="tm-hex" class="fm-input" spellcheck="false" maxlength="7" aria-label="Hex color">
-        <button type="button" class="icon-btn" id="tm-eyedrop" title="Pick a color from the screen">
-          <span class="ico" data-icon="eyedropper"></span>
-        </button>
-      </div>
-      <div id="tm-swatches"></div>
-      <button type="button" class="keycap tm-wide" id="tm-add">
-        <span class="ico" data-icon="plus"></span><span>Add Color</span>
+<!-- Customize your theme — the custom-theme picker. A panel DOCKED to the
+     right edge, not a modal: the whole point is that every adjustment applies
+     to the app live, so the app has to stay visible and undimmed while you
+     work. The settings sheet is closed on the way in (it would cover the very
+     thing being previewed) and the footer offers the way back. The saturation/
+     value square and hue strip are plain divs painted with gradients — no
+     canvas. -->
+<aside id="theme-modal" class="tm-panel" role="dialog" aria-label="Customize your theme" hidden>
+  <header class="tm-head">
+    <h2>Customize your theme <span class="ico tm-title-ico" data-icon="palette"></span></h2>
+    <button class="icon-btn" id="tm-close" title="Close"><span class="ico" data-icon="x"></span></button>
+  </header>
+  <div class="tm-body">
+    <h4 class="tm-label">Appearance</h4>
+    <div class="tm-seg" role="radiogroup" aria-label="Base appearance">
+      <button type="button" class="tm-seg-btn" id="tm-base-dark" role="radio" title="Dark base">
+        <span class="ico" data-icon="moon"></span>
       </button>
+      <button type="button" class="tm-seg-btn" id="tm-base-light" role="radio" title="Light base">
+        <span class="ico" data-icon="sun"></span>
+      </button>
+    </div>
 
-      <h4 class="tm-label">Controls</h4>
-      <div class="tm-row">
-        <span>Color Intensity</span>
-        <span id="tm-intensity-val">70%</span>
-      </div>
-      <input type="range" id="tm-intensity" min="0" max="100" step="1" aria-label="Color intensity">
+    <h4 class="tm-label">Colors</h4>
+    <div id="tm-sv" aria-label="Saturation and brightness" tabindex="0">
+      <div id="tm-sv-white"></div>
+      <div id="tm-sv-black"></div>
+      <div id="tm-sv-thumb"></div>
+    </div>
+    <div id="tm-hue" aria-label="Hue" tabindex="0">
+      <div id="tm-hue-thumb"></div>
+    </div>
+    <!-- One field, with the swatch and the eyedropper INSET inside its
+         border — three separate controls in a row read as three things. -->
+    <div class="tm-hex-wrap">
+      <span id="tm-swatch-current" aria-hidden="true"></span>
+      <input id="tm-hex" spellcheck="false" maxlength="7" aria-label="Hex color">
+      <button type="button" class="tm-eyebtn" id="tm-eyedrop" title="Pick a color from the screen">
+        <span class="ico" data-icon="eyedropper"></span>
+      </button>
+    </div>
+    <div id="tm-swatches"></div>
+    <button type="button" class="tm-wide" id="tm-add">
+      <span class="ico" data-icon="plus"></span><span>Add Color</span>
+    </button>
 
-      <div class="tm-actions">
-        <button type="button" class="keycap tm-wide" id="tm-surprise">🎲 Surprise Me!</button>
-        <button type="button" class="keycap tm-wide" id="tm-reset">Reset</button>
-      </div>
+    <h4 class="tm-label">Controls</h4>
+    <div class="tm-row">
+      <span>Color Intensity</span>
+      <span id="tm-intensity-val">70%</span>
+    </div>
+    <input type="range" id="tm-intensity" min="0" max="100" step="1" aria-label="Color intensity">
+
+    <div class="tm-actions">
+      <button type="button" class="tm-wide" id="tm-surprise">🎲 Surprise Me!</button>
+      <button type="button" class="tm-wide" id="tm-reset">Reset</button>
     </div>
   </div>
-</div>
+  <footer class="tm-foot">
+    <button type="button" class="tm-wide" id="tm-back">Back to Settings</button>
+  </footer>
+</aside>
 
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
