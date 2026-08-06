@@ -146,7 +146,10 @@
             if (!Native || Native.__loungeWrapped) return;
             const Wrapped = function (cfg, con) {
                 const pc = (arguments.length > 1) ? new Native(cfg, con) : new Native(cfg);
-                try { PCS.push(pc); } catch (e) {}
+                // Prune on create as well as on use: warm meetings build and
+                // discard transports while nobody is in a call, which is
+                // exactly when none of the other prunePCS callers run.
+                try { prunePCS(); PCS.push(pc); } catch (e) {}
                 // Munged on BOTH descriptions: the local one governs what we
                 // offer to send, the remote one what the far side believes was
                 // agreed. Missing either lets DTX survive the negotiation.
@@ -1492,6 +1495,158 @@
             return { res: await mintToken(), ahead: false };
         }
 
+        // Everything SDK.init needs, in one place so the hover warm-up and the
+        // click build identical meetings.
+        //
+        // defaults.audio is FALSE for every mode now, not just push-to-talk.
+        // Two reasons, one of them the whole point of the warm meeting:
+        //   • A meeting initialised at hover time must never open the
+        //     microphone — hovering a button is not consent to a live mic.
+        //   • Measured, the mic acquisition and its publish renegotiation sat
+        //     INSIDE the join's critical path. The PTT flow has always proved
+        //     the other order works: join first, then enableAudio through
+        //     applyTransmit's chain. Open mode now takes the same path — you
+        //     are in the room hearing people immediately, and your own mic
+        //     goes live a beat later, which is also what Discord does.
+        function buildInitOpts(authToken) {
+            const audioCfg = {
+                echoCancellation: settings.echoCancellation !== false,
+                autoGainControl: !!settings.autoGainControl,
+                // The SDK reads the MISSPELLED getUserMedia key (one 's').
+                // Pass both so today's build and any future fix both work.
+                //
+                // Chromium's own suppressor is turned OFF when RNNoise is
+                // doing the job: cascading two of them is the classic cause
+                // of pumping and chewed-up consonants, and the browser's runs
+                // upstream so the model only ever sees an already-mangled
+                // signal. Every ML-suppression product does the same.
+                noiseSupression: browserNoiseSuppression(),
+                noiseSuppression: browserNoiseSuppression(),
+                enableHighBitrate: true
+            };
+            // 'ideal', not 'exact': a saved mic that has since been unplugged
+            // made the WHOLE join fail with OverconstrainedError instead of
+            // quietly falling back to the default device.
+            if (settings.micDeviceId) audioCfg.deviceId = { ideal: settings.micDeviceId };
+            return {
+                authToken: authToken,
+                // Every module here constructs sequentially inside the awaited
+                // half of SDK.init, and this app uses none of them: chat and
+                // polls live on the board, recording/livestream/plugins/pip
+                // don't exist in this UI. The plugin store in particular is a
+                // socket RPC with a 3-second timeout sitting on the join path.
+                // tracing:false also stops the SDK's per-call OTel wrapping.
+                modules: {
+                    plugin: false,
+                    poll: false,
+                    chat: false,
+                    pip: false,
+                    recording: false,
+                    livestream: false,
+                    connectedMeetings: false,
+                    tracing: false
+                },
+                defaults: {
+                    audio: false,
+                    video: false,
+                    mediaConfiguration: {
+                        audio: audioCfg,
+                        // Permissive upper bound only. The active tier+motion is
+                        // re-applied per share by tuneLocalShare(), so 1440p/60
+                        // must not be pre-capped here.
+                        screenshare: {
+                            width: { max: 2560 },
+                            height: { max: 1440 },
+                            frameRate: { ideal: 30, max: 60 }
+                        }
+                    }
+                }
+            };
+        }
+
+        // A meeting initialised BEFORE the click.
+        //
+        // Measured (jointrace, 2026-08-06): of a ~2.2s median join, ~1.2–2.1s
+        // was SDK.init — a strictly serial network chain of participant-config
+        // fetch (190–700ms), the wss:// connect to the SFU edge (790–1220ms
+        // every time, it is never reused across joins) and the server hello
+        // (~150–470ms). None of it depends on the click, exactly like the
+        // token round trip the hover warm-up already prepays. So the hover now
+        // prepays the whole thing: token, API config, signaling socket, ICE
+        // server list. The click is left with joinRoom + ICE + DTLS, which
+        // measure ~1s together.
+        //
+        // Wall-clock freshness, NOT performance.now(): performance.now() can
+        // pause across a sleep on Windows, and a meeting "warmed" before the
+        // lid closed must read as stale after it opens, or the join would try
+        // to ride a socket the network tore down hours ago. (The joinRoom
+        // fallback below would still save that join — this just avoids
+        // spending its retry on a certainty.)
+        const MEETING_FRESH_MS = 90000;   // inside the token's own lifetime
+        let meetingAhead = null;          // { at, promise } — at is Date.now()
+
+        function discardWarmMeeting(entry) {
+            // Whenever the init lands, close its socket and release the SFU
+            // participant. Harmless if it already failed.
+            entry.promise.then((m) => {
+                try { if (m && m.leave) m.leave(); else if (m && m.leaveRoom) m.leaveRoom(); } catch (e) {}
+            }).catch(() => {});
+        }
+
+        function prefetchMeeting() {
+            if (joined || joining) return;
+            if (meetingAhead && (Date.now() - meetingAhead.at) < MEETING_FRESH_MS) return;
+            const prev = meetingAhead;
+            meetingAhead = null;
+            if (prev) discardWarmMeeting(prev);
+            const t = now();
+            const entry = {
+                at: Date.now(),
+                promise: (async () => {
+                    const [SDK, tok] = await Promise.all([
+                        window.ScarmLazy.realtimekit(),
+                        takeToken()
+                    ]);
+                    if (!SDK || !tok.res || !tok.res.success || !tok.res.token) return null;
+                    return SDK.init(buildInitOpts(tok.res.token));
+                })()
+            };
+            meetingAhead = entry;
+            entry.promise.then(
+                (m) => {
+                    if (m) mark('warm meeting ready', t);
+                    else if (meetingAhead === entry) meetingAhead = null;
+                },
+                () => { if (meetingAhead === entry) meetingAhead = null; }
+            );
+            // An unused warm meeting is a live socket and a participant slot on
+            // the SFU; both get released rather than left to time out server-side.
+            setTimeout(() => {
+                if (meetingAhead === entry) {
+                    meetingAhead = null;
+                    discardWarmMeeting(entry);
+                }
+            }, MEETING_FRESH_MS + 5000);
+        }
+
+        // The warm meeting if there is one worth having. A click that lands
+        // while the init is still in flight WAITS for it rather than starting
+        // over — the shared promise is strictly ahead of a fresh init.
+        async function takeMeeting() {
+            const held = meetingAhead;
+            meetingAhead = null;
+            if (!held) return null;
+            if ((Date.now() - held.at) >= MEETING_FRESH_MS) {
+                discardWarmMeeting(held);
+                return null;
+            }
+            try {
+                return await held.promise;   // may be null — caller falls back
+            } catch (e) {
+                return null;
+            }
+        }
+
         // Join timings, so "it feels slow" can be answered with numbers rather
         // than guesses. Visible in devtools (npm run dev).
         const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -1514,107 +1669,106 @@
             pushState();
 
             try {
-                // TOGETHER, not one after the other. The SDK is 647 KB read off
-                // disk and parsed; the token is a round trip to the board and,
-                // behind that, to Cloudflare's API. Neither needs anything from
-                // the other, and running them in series simply added the two
-                // waits together.
-                //
-                // (The SDK is fetched on first use rather than at startup —
-                // 647 KB parsed before the window can appear, for a feature
-                // plenty of sessions never touch. By the time this runs,
-                // voice.js and noise.js have long since installed their
-                // RTCPeerConnection / getDisplayMedia / getUserMedia patches.
-                // ScarmLazy caches, so a warmed SDK resolves instantly here —
-                // see the hover warm-up in app.js.)
+                // The hover warm-up may have a fully initialised meeting in
+                // hand — token spent, API config fetched, signaling socket
+                // open, ICE servers listed. That is the majority of what a
+                // join used to wait for (measured: 1.2–2.1s of a ~2.2s median
+                // join), and the click skips all of it.
                 const tSdk = now();
-                const [SDK, tok] = await Promise.all([
-                    window.ScarmLazy.realtimekit(),
-                    takeToken()
-                ]);
-                mark('sdk+token', tSdk);
-                if (gen !== joinGen) return;   // left while we awaited
-                if (!SDK) throw new Error('RealtimeKit SDK failed to load');
-                if (!tok.res || !tok.res.success || !tok.res.token) {
-                    throw new Error((tok.res && tok.res.error) || 'could not get a voice token');
-                }
-
-                const audioCfg = {
-                    echoCancellation: settings.echoCancellation !== false,
-                    autoGainControl: !!settings.autoGainControl,
-                    // The SDK reads the MISSPELLED getUserMedia key (one 's').
-                    // Pass both so today's build and any future fix both work.
-                    //
-                    // Chromium's own suppressor is turned OFF when RNNoise is
-                    // doing the job: cascading two of them is the classic cause
-                    // of pumping and chewed-up consonants, and the browser's runs
-                    // upstream so the model only ever sees an already-mangled
-                    // signal. Every ML-suppression product does the same.
-                    noiseSupression: browserNoiseSuppression(),
-                    noiseSuppression: browserNoiseSuppression(),
-                    enableHighBitrate: true
-                };
-                // 'ideal', not 'exact': a saved mic that has since been unplugged
-                // made the WHOLE join fail with OverconstrainedError instead of
-                // quietly falling back to the default device.
-                if (settings.micDeviceId) audioCfg.deviceId = { ideal: settings.micDeviceId };
-
-                const tInit = now();
-                // Built per attempt, because the retry below needs a fresh
-                // token in the same shape.
-                const initOpts = (authToken) => ({
-                    authToken: authToken,
-                    defaults: {
-                        // In push-to-talk, start with the mic off so joining never
-                        // leaks a moment of audio before the gate is applied.
-                        audio: settings.voiceMode !== 'ptt',
-                        video: false,
-                        mediaConfiguration: {
-                            audio: audioCfg,
-                            // Permissive upper bound only. The active tier+motion is
-                            // re-applied per share by tuneLocalShare(), so 1440p/60
-                            // must not be pre-capped here.
-                            screenshare: {
-                                width: { max: 2560 },
-                                height: { max: 1440 },
-                                frameRate: { ideal: 30, max: 60 }
-                            }
-                        }
-                    }
-                });
-
-                let m;
-                try {
-                    m = await SDK.init(initOpts(tok.res.token));
-                } catch (e) {
-                    // A token minted ahead of the click is the one thing here
-                    // that can have gone stale between minting and use. Anything
-                    // else is a real failure and is rethrown untouched — but this
-                    // is worth exactly one more try with a fresh token, because
-                    // the alternative is an optimisation that can stop people
-                    // joining at all.
-                    if (!tok.ahead || gen !== joinGen) throw e;
-                    console.warn('[voice] prefetched token rejected — minting a fresh one');
-                    const fresh = await mintToken();
-                    if (gen !== joinGen) return;
-                    if (!fresh || !fresh.success || !fresh.token) throw e;
-                    m = await SDK.init(initOpts(fresh.token));
-                }
-
-                mark('sdk.init', tInit);
+                let m = await takeMeeting();
+                const warmed = !!m;
                 if (gen !== joinGen) {
-                    // Left while init was pending — discard the fresh meeting.
-                    try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
+                    // Left while the warm init resolved — release it.
+                    if (m) { try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {} }
                     return;
                 }
-                meeting = m;
+                if (warmed) {
+                    mark('warm meeting hit (init prepaid)', tSdk);
+                } else {
+                    // Cold path — nobody hovered, or the warm meeting expired.
+                    //
+                    // TOGETHER, not one after the other. The SDK is 647 KB read
+                    // off disk and parsed; the token is a round trip to the
+                    // board and, behind that, to Cloudflare's API. Neither
+                    // needs anything from the other, and running them in series
+                    // simply added the two waits together.
+                    //
+                    // (The SDK is fetched on first use rather than at startup —
+                    // 647 KB parsed before the window can appear, for a feature
+                    // plenty of sessions never touch. By the time this runs,
+                    // voice.js and noise.js have long since installed their
+                    // RTCPeerConnection / getDisplayMedia / getUserMedia
+                    // patches. ScarmLazy caches, so a warmed SDK resolves
+                    // instantly here — see the hover warm-up in app.js.)
+                    const [SDK, tok] = await Promise.all([
+                        window.ScarmLazy.realtimekit(),
+                        takeToken()
+                    ]);
+                    mark('sdk+token', tSdk);
+                    if (gen !== joinGen) return;   // left while we awaited
+                    if (!SDK) throw new Error('RealtimeKit SDK failed to load');
+                    if (!tok.res || !tok.res.success || !tok.res.token) {
+                        throw new Error((tok.res && tok.res.error) || 'could not get a voice token');
+                    }
 
+                    const tInit = now();
+                    try {
+                        m = await SDK.init(buildInitOpts(tok.res.token));
+                    } catch (e) {
+                        // A token minted ahead of the click is the one thing here
+                        // that can have gone stale between minting and use. Anything
+                        // else is a real failure and is rethrown untouched — but this
+                        // is worth exactly one more try with a fresh token, because
+                        // the alternative is an optimisation that can stop people
+                        // joining at all.
+                        if (!tok.ahead || gen !== joinGen) throw e;
+                        console.warn('[voice] prefetched token rejected — minting a fresh one');
+                        const fresh = await mintToken();
+                        if (gen !== joinGen) return;
+                        if (!fresh || !fresh.success || !fresh.token) throw e;
+                        m = await SDK.init(buildInitOpts(fresh.token));
+                    }
+                    mark('sdk.init', tInit);
+                    if (gen !== joinGen) {
+                        // Left while init was pending — discard the fresh meeting.
+                        try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
+                        return;
+                    }
+                }
+
+                meeting = m;
                 meetingRef = m;
 
                 wire(meeting);
-                const joinFn = meeting.join || meeting.joinRoom;
                 const tJoin = now();
-                await joinFn.call(meeting);
+                try {
+                    await (meeting.join || meeting.joinRoom).call(meeting);
+                } catch (e) {
+                    // A warm meeting is the one thing here that can have died
+                    // between warming and use — its socket idled out, or its
+                    // token expired at the SFU. Worth exactly one rebuild from
+                    // scratch, for the same reason the stale-token retry above
+                    // exists: an optimisation must never stop somebody joining.
+                    if (!warmed || gen !== joinGen) throw e;
+                    console.warn('[voice] warm meeting rejected — rebuilding from scratch:', e && e.message);
+                    unwire();
+                    try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
+                    meeting = null;
+                    meetingRef = null;
+                    const SDK = await window.ScarmLazy.realtimekit();
+                    const fresh = await mintToken();
+                    if (gen !== joinGen) return;
+                    if (!SDK || !fresh || !fresh.success || !fresh.token) throw e;
+                    m = await SDK.init(buildInitOpts(fresh.token));
+                    if (gen !== joinGen) {
+                        try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
+                        return;
+                    }
+                    meeting = m;
+                    meetingRef = m;
+                    wire(meeting);
+                    await (meeting.join || meeting.joinRoom).call(meeting);
+                }
                 mark('room join', tJoin);
                 if (gen !== joinGen) {
                     try { if (m.leave) m.leave(); else if (m.leaveRoom) m.leaveRoom(); } catch (_) {}
@@ -1685,19 +1839,15 @@
                 //
                 // Deferred to the first time the mic is genuinely opened, in the
                 // txChain below so it cannot race enable/disable.
-                if (modeAllowsTransmit()) {
-                    selectSavedMic(gen).then(() => {
-                        if (gen !== joinGen) return;
-                        // Bandwidth priority: without this, audio and a multi-megabit
-                        // screen share compete as equals on the same bundle, and
-                        // voice is what breaks up when the uplink saturates. After
-                        // the mic swap, because that replaces the sender it applies to.
-                        applyStreamPriorities();
-                    }).catch(() => {});
-                } else {
-                    micPending = true;
-                    applyStreamPriorities();
-                }
+                // The saved microphone is selected through the SDK the first
+                // time the mic is actually opened — inside applyTransmit's
+                // chain, so it can never race the SDK's toggleAudio lock. In
+                // open mode that is right now (the applyTransmit above is
+                // already enabling the mic); in push-to-talk it waits for the
+                // first press. Bandwidth priorities are re-applied after the
+                // mic lands, because enabling it replaces the audio sender.
+                micPending = true;
+                applyStreamPriorities();
 
                 // Remote participants arrive shortly after join; re-render so the
                 // roster reflects who is actually peered rather than just present.
@@ -1945,8 +2095,9 @@
             state,
             roster,
             micTestConstraints,
-            // Mint the participant token ahead of the click. See prefetchToken.
-            warm: prefetchToken,
+            // Prepare the whole join ahead of the click: token, SDK, API
+            // config, signaling socket, ICE servers. See prefetchMeeting.
+            warm: prefetchMeeting,
 
             startShare,
             stopShare,

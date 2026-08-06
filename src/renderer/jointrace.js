@@ -6,18 +6,21 @@
 // handshake and the first produced packet, all under one number. This file
 // splits that number.
 //
-// It wraps fetch, WebSocket, getUserMedia and RTCPeerConnection, and while a
-// trace is armed it timestamps every network operation and every ICE/DTLS
-// state transition relative to the moment the join started. Disarmed (the
-// steady state), the wrappers are pass-throughs; nothing is logged, nothing is
-// buffered, and the only cost is one `if` per call.
+// It wraps fetch, WebSocket, getUserMedia and RTCPeerConnection. The wrappers
+// are installed once and instrument everything they see, but they only SPEAK
+// while a trace is armed (from join() start until shortly after the first
+// audio packets). Disarmed — the steady state — nothing is logged and the
+// cost is one `if` per event. Instrumenting even while silent matters because
+// the hover warm-up now builds the meeting's socket and transports BEFORE any
+// join exists: when a trace arms, arm() snapshots those pre-existing
+// connections so a warmed join shows what was already done on its behalf.
 //
 // Load order matters and is deliberate: this file loads AFTER noise.js,
 // soundboard.js and voice.js, so its wrappers are the OUTERMOST layer.
 // getUserMedia measured here therefore includes the RNNoise worklet and the
 // soundboard mix — the real cost of opening the microphone, not the raw
-// device time. The SDK loads later still (lazily), so every peer connection
-// it creates passes through here.
+// device time. The SDK loads later still (lazily), so every socket and peer
+// connection it creates passes through here.
 (function () {
     'use strict';
 
@@ -26,6 +29,10 @@
     let t0 = null;        // armed at join start; null = disarmed
     let gen = 0;          // bumped per trace, so late async logs from a previous join drop out
     let pollTimers = [];
+
+    // Everything live, so arm() can describe connections that predate it.
+    const pcs = [];       // { pc, id }
+    const sockets = [];   // { ws, id, url }
 
     function line(msg) {
         if (t0 === null) return;
@@ -39,6 +46,22 @@
         gen++;
         t0 = now();
         line('=== join trace armed ===');
+        // What the warm-up already built: sockets and transports that exist
+        // before this join started are work the click no longer pays for.
+        sockets.forEach((s) => {
+            try {
+                if (s.ws.readyState === 1) line('ws#' + s.id + ' already open (warmed) ' + s.url);
+            } catch (e) {}
+        });
+        pcs.forEach((p) => {
+            try {
+                const st = p.pc.connectionState;
+                if (st === 'closed') return;
+                line('pc#' + p.id + ' pre-existing (warmed), connection=' + st +
+                    ' ice=' + p.pc.iceConnectionState);
+                if (st === 'connected') firstPacketWatch(p.pc, p.id);
+            } catch (e) {}
+        });
     }
 
     function disarm() {
@@ -56,6 +79,42 @@
     }
 
     window.JoinTrace = { arm, disarm, done: armDone };
+
+    // When did media actually start moving? "connected" is a transport state;
+    // audio is only real when RTP packets are counted. Poll fast and briefly —
+    // the answer lands within a second of DTLS finishing.
+    function firstPacketWatch(pc, id) {
+        const g = gen;
+        let sawOut = false;
+        let sawIn = false;
+        let sawDtls = false;
+        let tries = 0;
+        const poll = () => {
+            if (g !== gen || t0 === null || (sawOut && sawIn) || ++tries > 100) return;
+            pc.getStats().then((stats) => {
+                if (g !== gen || t0 === null) return;
+                stats.forEach((r) => {
+                    if (!sawOut && r.type === 'outbound-rtp' && r.kind === 'audio' && r.packetsSent > 0) {
+                        sawOut = true;
+                        line('pc#' + id + ' FIRST AUDIO OUT (packetsSent=' + r.packetsSent + ')');
+                    }
+                    if (!sawIn && r.type === 'inbound-rtp' && r.kind === 'audio' && r.packetsReceived > 0) {
+                        sawIn = true;
+                        line('pc#' + id + ' FIRST AUDIO IN (packetsReceived=' + r.packetsReceived + ')');
+                    }
+                    // DTLS is inside connectionState 'connecting'; the stats
+                    // record is the only place its own state is visible.
+                    if (!sawDtls && r.type === 'transport' && r.dtlsState) {
+                        sawDtls = true;
+                        line('pc#' + id + ' dtlsState=' + r.dtlsState +
+                            (r.selectedCandidatePairId ? ' (pair selected)' : ''));
+                    }
+                });
+                if (!(sawOut && sawIn)) pollTimers.push(setTimeout(poll, 100));
+            }).catch(() => {});
+        };
+        poll();
+    }
 
     // ---- fetch ------------------------------------------------------------
     (function patchFetch() {
@@ -83,6 +142,14 @@
         window.fetch = wrapped;
     })();
 
+    function byteSize(data) {
+        try {
+            return typeof data === 'string' ? data.length
+                : (data && data.byteLength !== undefined) ? data.byteLength
+                : (data && data.size !== undefined) ? data.size : '?';
+        } catch (e) { return '?'; }
+    }
+
     // ---- WebSocket --------------------------------------------------------
     (function patchWS() {
         const Native = window.WebSocket;
@@ -90,51 +157,36 @@
         let n = 0;
         const Wrapped = function (url, protocols) {
             const ws = (protocols !== undefined) ? new Native(url, protocols) : new Native(url);
-            if (t0 !== null) {
-                const id = ++n;
-                let short = String(url);
-                try { const u = new URL(url); short = u.host + u.pathname; } catch (e) {}
-                const t = now();
-                line('ws#' + id + ' connecting ' + short);
-                // The first few frames each way, with sizes. This is what
-                // splits "the client sat on the request" from "the server sat
-                // on the reply" when a silent gap shows up mid-join.
-                let msgs = 0;
-                let sends = 0;
-                try {
-                    ws.addEventListener('open', () => line('ws#' + id + ' open (' + Math.round(now() - t) + 'ms)'));
-                    ws.addEventListener('message', (ev) => {
-                        msgs++;
-                        if (msgs > 12) return;
-                        let size = '?';
-                        try {
-                            const d = ev.data;
-                            size = typeof d === 'string' ? d.length
-                                : (d && d.byteLength !== undefined) ? d.byteLength
-                                : (d && d.size !== undefined) ? d.size : '?';
-                        } catch (e) {}
-                        line('ws#' + id + ' recv #' + msgs + ' (' + size + 'B)');
-                    });
-                    ws.addEventListener('close', (ev) => line('ws#' + id + ' closed code=' + ev.code));
-                    ws.addEventListener('error', () => line('ws#' + id + ' error'));
-                    const origSend = ws.send.bind(ws);
-                    ws.send = function (data) {
-                        if (t0 !== null) {
-                            sends++;
-                            if (sends <= 12) {
-                                let size = '?';
-                                try {
-                                    size = typeof data === 'string' ? data.length
-                                        : (data && data.byteLength !== undefined) ? data.byteLength
-                                        : (data && data.size !== undefined) ? data.size : '?';
-                                } catch (e) {}
-                                line('ws#' + id + ' send #' + sends + ' (' + size + 'B)');
-                            }
-                        }
-                        return origSend(data);
-                    };
-                } catch (e) {}
-            }
+            const id = ++n;
+            let short = String(url);
+            try { const u = new URL(url); short = u.host + u.pathname; } catch (e) {}
+            sockets.push({ ws, id, url: short });
+            const t = now();
+            line('ws#' + id + ' connecting ' + short);
+            // The first few frames each way, with sizes. This is what splits
+            // "the client sat on the request" from "the server sat on the
+            // reply" when a silent gap shows up mid-join.
+            let msgs = 0;
+            let sends = 0;
+            try {
+                ws.addEventListener('open', () => line('ws#' + id + ' open (' + Math.round(now() - t) + 'ms)'));
+                ws.addEventListener('message', (ev) => {
+                    msgs++;
+                    if (msgs <= 12) line('ws#' + id + ' recv #' + msgs + ' (' + byteSize(ev.data) + 'B)');
+                });
+                ws.addEventListener('close', (ev) => {
+                    line('ws#' + id + ' closed code=' + ev.code);
+                    const i = sockets.findIndex((s) => s.ws === ws);
+                    if (i >= 0) sockets.splice(i, 1);
+                });
+                ws.addEventListener('error', () => line('ws#' + id + ' error'));
+                const origSend = ws.send.bind(ws);
+                ws.send = function (data) {
+                    sends++;
+                    if (sends <= 12) line('ws#' + id + ' send #' + sends + ' (' + byteSize(data) + 'B)');
+                    return origSend(data);
+                };
+            } catch (e) {}
             return ws;
         };
         Wrapped.prototype = Native.prototype;
@@ -217,10 +269,16 @@
 
         const Wrapped = function (cfg, con) {
             const pc = (arguments.length > 1) ? new Native(cfg, con) : new Native(cfg);
-            if (t0 === null) return pc;
             const id = ++n;
-            const g = gen;
             const t = now();
+            // pc.close() fires NO connectionstatechange, so the close handler
+            // below never sees discarded warm meetings' transports. Prune here,
+            // or an idle session warming meetings all day grows this forever.
+            for (let i = pcs.length - 1; i >= 0; i--) {
+                const st = pcs[i].pc;
+                if (!st || st.signalingState === 'closed' || st.connectionState === 'closed') pcs.splice(i, 1);
+            }
+            pcs.push({ pc, id });
             line('pc#' + id + ' created  iceServers: ' + describeIce(cfg) +
                 (cfg && cfg.iceTransportPolicy ? '  policy=' + cfg.iceTransportPolicy : ''));
 
@@ -242,7 +300,11 @@
                 pc.addEventListener('connectionstatechange', () => {
                     line('pc#' + id + ' connection -> ' + pc.connectionState +
                         ' (t+' + Math.round(now() - t) + 'ms since pc created)');
-                    if (pc.connectionState === 'connected') firstPacketWatch(pc, id, g);
+                    if (pc.connectionState === 'connected') firstPacketWatch(pc, id);
+                    if (pc.connectionState === 'closed') {
+                        const i = pcs.findIndex((p) => p.pc === pc);
+                        if (i >= 0) pcs.splice(i, 1);
+                    }
                 });
                 pc.addEventListener('signalingstatechange', () =>
                     line('pc#' + id + ' signaling -> ' + pc.signalingState));
@@ -253,7 +315,7 @@
                 try {
                     const orig = pc[fn].bind(pc);
                     pc[fn] = function (...args) {
-                        if (t0 === null || g !== gen) return orig(...args);
+                        if (t0 === null) return orig(...args);
                         const tt = now();
                         const p = orig(...args);
                         Promise.resolve(p).then(
@@ -267,40 +329,6 @@
 
             return pc;
         };
-
-        // When did media actually start moving? "connected" is a transport
-        // state; audio is only real when RTP packets are counted. Poll fast
-        // and briefly — the answer lands within a second of DTLS finishing.
-        function firstPacketWatch(pc, id, g) {
-            let sawOut = false;
-            let sawIn = false;
-            let tries = 0;
-            const poll = () => {
-                if (g !== gen || t0 === null || (sawOut && sawIn) || ++tries > 100) return;
-                pc.getStats().then((stats) => {
-                    if (g !== gen || t0 === null) return;
-                    stats.forEach((r) => {
-                        if (!sawOut && r.type === 'outbound-rtp' && r.kind === 'audio' && r.packetsSent > 0) {
-                            sawOut = true;
-                            line('pc#' + id + ' FIRST AUDIO OUT (packetsSent=' + r.packetsSent + ')');
-                        }
-                        if (!sawIn && r.type === 'inbound-rtp' && r.kind === 'audio' && r.packetsReceived > 0) {
-                            sawIn = true;
-                            line('pc#' + id + ' FIRST AUDIO IN (packetsReceived=' + r.packetsReceived + ')');
-                        }
-                        // DTLS is inside connectionState 'connecting'; the stats
-                        // record is the only place its own state is visible.
-                        if (r.type === 'transport' && r.dtlsState && !poll['dtls' + r.id]) {
-                            poll['dtls' + r.id] = true;
-                            line('pc#' + id + ' dtlsState=' + r.dtlsState +
-                                (r.selectedCandidatePairId ? ' (pair selected)' : ''));
-                        }
-                    });
-                    if (!(sawOut && sawIn)) pollTimers.push(setTimeout(poll, 100));
-                }).catch(() => {});
-            };
-            poll();
-        }
 
         Wrapped.prototype = Native.prototype;
         try { Object.setPrototypeOf(Wrapped, Native); } catch (e) {}

@@ -3,17 +3,25 @@
 // What joining a call waits for, and — more to the point — what it no longer
 // waits for.
 //
-// Joining took 2-4 seconds, and two of those were queueing rather than work:
+// Joining took 2-4 seconds, and most of it was queueing rather than work.
+// Measured with the jointrace instrumentation (2026-08-06), the median join
+// spent ~1.2-2.1s inside SDK.init — a strictly serial chain of the
+// participant-config fetch, the wss:// connect to the SFU edge (which is
+// never reused between joins) and the server hello — before the room join
+// proper even started. None of that needs the click, so none of it waits for
+// the click any more:
 //
-//   • the 647 KB SDK was loaded, and THEN a token was fetched from the board
-//     and, behind it, Cloudflare's API. Neither needs anything from the other,
-//     so running them in series simply added the two waits together.
-//   • the UI was told "connected" at the very END of join(), after
-//     selectSavedMic() — which enumerates audio devices and can re-acquire the
-//     microphone. The call was already up; the spinner just outlived it.
+//   • hovering the voice channel warms a whole MEETING now, not just the
+//     token: SDK loaded, token spent, API config fetched, signaling socket
+//     open. The click consumes it and pays only for joining the room.
+//   • the cold path (nobody hovered) still loads the SDK and mints the token
+//     concurrently, then inits — the old behaviour, unchanged.
+//   • the UI is told "connected" as soon as the room join lands; microphone
+//     acquisition and device selection happen behind it, through the same
+//     applyTransmit chain push-to-talk has always used.
 //
-// Both are timing properties, so both are tested by holding the slow things
-// open and asking what has happened without them.
+// All timing properties, so all tested by holding the slow things open and
+// asking what has happened without them.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,11 +35,12 @@ const settle = async (n = 6) => { for (let i = 0; i < n; i++) await tick(); };
 
 function deferred() {
     let resolve;
-    const promise = new Promise((r) => { resolve = r; });
-    return { promise, resolve };
+    let reject;
+    const promise = new Promise((r, j) => { resolve = r; reject = j; });
+    return { promise, resolve, reject };
 }
 
-let sdkCalls, tokenCalls, sdkGate, tokenGate, devicesGate, states, meeting;
+let sdkCalls, tokenCalls, initCalls, sdkGate, tokenGate, devicesGate, states, meeting;
 
 // A meeting the engine can wire itself to, with nothing real behind it.
 function fakeMeeting() {
@@ -51,18 +60,32 @@ function fakeMeeting() {
         },
         meta: { on },
         participants: { joined: { on, toArray: () => [] } },
-        join: vi.fn(() => Promise.resolve())
+        join: vi.fn(() => Promise.resolve()),
+        leave: vi.fn()
+    };
+}
+
+// An SDK whose init hands back a fresh fake meeting and counts.
+function fakeSdk() {
+    return {
+        init: vi.fn((opts) => {
+            initCalls++;
+            meeting = fakeMeeting();
+            meeting.__token = opts.authToken;
+            return Promise.resolve(meeting);
+        })
     };
 }
 
 beforeEach(() => {
     sdkCalls = 0;
     tokenCalls = 0;
+    initCalls = 0;
     sdkGate = deferred();
     tokenGate = deferred();
     devicesGate = deferred();
     states = [];
-    meeting = fakeMeeting();
+    meeting = null;
 
     // jsdom has neither, and the engine builds one per published track.
     window.MediaStream = function (tracks) {
@@ -98,7 +121,7 @@ function makeVoice() {
 
 const joinedYet = () => states.some((s) => s.joined);
 
-describe('the two things join() waits on first', () => {
+describe('the two things a cold join waits on first', () => {
     it('asks for the SDK and the token at the same time', async () => {
         const v = makeVoice();
         v.join();
@@ -113,7 +136,7 @@ describe('the two things join() waits on first', () => {
     it('still fails cleanly when the token is refused', async () => {
         const v = makeVoice();
         const failed = v.join().catch((e) => e);
-        sdkGate.resolve({ init: () => Promise.resolve(meeting) });
+        sdkGate.resolve(fakeSdk());
         tokenGate.resolve({ success: false, error: 'nope' });
         await settle();
         expect(String(await failed)).toMatch(/nope/);
@@ -121,122 +144,141 @@ describe('the two things join() waits on first', () => {
     });
 });
 
-describe('the token minted before the click', () => {
-    // Measured at a flat ~820ms of a ~2.2s join, on EVERY join — the largest
-    // single fixed cost, and nothing about it needs the click.
-    it('is not fetched again when the call is joined', async () => {
+describe('the meeting warmed before the click', () => {
+    it('is initialised once however many times somebody hovers', async () => {
         const v = makeVoice();
-        v.warm();
-        await settle(2);
-        expect(tokenCalls).toBe(1);
-
+        sdkGate.resolve(fakeSdk());
         tokenGate.resolve({ success: true, token: 'jwt' });
+        v.warm();
+        v.warm();
+        v.warm();
         await settle();
+        // Each init opens a socket and takes a participant slot server-side,
+        // so hovering must not multiply them.
+        expect(tokenCalls).toBe(1);
+        expect(initCalls).toBe(1);
+    });
 
-        v.join();
-        await settle(2);
-        // Still one. The join spent the token it already had.
+    it('is consumed by the join — no second init, no second token', async () => {
+        const v = makeVoice();
+        sdkGate.resolve(fakeSdk());
+        tokenGate.resolve({ success: true, token: 'jwt' });
+        v.warm();
+        await settle();
+        expect(initCalls).toBe(1);
+
+        await v.join();
+        expect(v.isJoined()).toBe(true);
+        // The join spent the meeting it already had.
+        expect(initCalls).toBe(1);
         expect(tokenCalls).toBe(1);
     });
 
-    it('is minted once however many times somebody hovers', async () => {
+    it('a click while the warm-up is still in flight waits for it rather than starting over', async () => {
         const v = makeVoice();
         v.warm();
-        v.warm();
-        v.warm();
         await settle(2);
-        // Each mint adds a participant server-side, so hovering must not.
+
+        const joining = v.join();
+        await settle(2);
+        // Still nothing resolved — the join is riding the warm-up's promise,
+        // not spawning its own init.
+        sdkGate.resolve(fakeSdk());
+        tokenGate.resolve({ success: true, token: 'jwt' });
+        await joining;
+        expect(v.isJoined()).toBe(true);
+        expect(initCalls).toBe(1);
         expect(tokenCalls).toBe(1);
     });
 
-    it('is fetched at join time when nobody warmed it', async () => {
+    it('is warmed again for the NEXT join, not just the first', async () => {
+        // The bug the old token warm-up had, pinned at the meeting level now:
+        // consuming the held meeting must not mean exactly one fast join per
+        // session.
         const v = makeVoice();
-        v.join();
-        await settle(2);
-        expect(tokenCalls).toBe(1);
-    });
-
-    it('is minted again for the NEXT join, not just the first', async () => {
-        // The bug this pins: takeToken() CONSUMES the held token, so a warm-up
-        // that only ever ran once meant exactly one fast join per session.
-        // Measured before the fix — join 1 spent 0ms on the token, joins 2-4
-        // spent 848/790/777ms.
-        const v = makeVoice();
-        v.warm();
+        sdkGate.resolve(fakeSdk());
         tokenGate.resolve({ success: true, token: 'first' });
+        v.warm();
         await settle();
-        expect(tokenCalls).toBe(1);
-
-        // Join and leave.
-        v.join();
-        await settle(2);
-        sdkGate.resolve({ init: () => Promise.resolve(meeting) });
-        await settle();
+        await v.join();
         expect(v.isJoined()).toBe(true);
         v.leave();
 
-        // Warming again must actually mint one, because the last is spent.
         tokenGate = deferred();
         tokenGate.resolve({ success: true, token: 'second' });
         v.warm();
         await settle();
         expect(tokenCalls).toBe(2);
+        expect(initCalls).toBe(2);
     });
 
-    it('declines to mint while a call is up', async () => {
+    it('declines to warm while a call is up', async () => {
         const v = makeVoice();
-        v.join();
-        await settle(2);
-        sdkGate.resolve({ init: () => Promise.resolve(meeting) });
+        sdkGate.resolve(fakeSdk());
         tokenGate.resolve({ success: true, token: 'jwt' });
-        await settle();
+        await v.join();
         expect(v.isJoined()).toBe(true);
 
-        const before = tokenCalls;
+        const before = initCalls;
         v.warm();
         await settle(2);
         // Nothing to warm for: there is no next join to prepare while this one
         // is still running.
-        expect(tokenCalls).toBe(before);
+        expect(initCalls).toBe(before);
     });
 
-    it('falls back to a fresh one if the held token is rejected', async () => {
-        // The one risk of minting early: a token can go stale between minting
-        // and use. Left unhandled that turns a speed-up into people not being
-        // able to join at all.
+    it('falls back to a cold join when the warm-up failed', async () => {
+        // A warm-up that could not init (bad token, dead network at hover
+        // time) must leave the click path fully working.
         const v = makeVoice();
-        v.warm();
+        const sdk = fakeSdk();
+        sdk.init.mockImplementationOnce(() => { initCalls++; return Promise.reject(new Error('token expired')); });
+        sdkGate.resolve(sdk);
         tokenGate.resolve({ success: true, token: 'stale' });
+        v.warm();
         await settle();
+        expect(initCalls).toBe(1);
 
-        let seen = [];
-        let first = true;
-        const sdk = {
-            init: (opts) => {
-                seen.push(opts.authToken);
-                if (first) { first = false; return Promise.reject(new Error('token expired')); }
-                return Promise.resolve(meeting);
-            }
-        };
         tokenGate = deferred();
         tokenGate.resolve({ success: true, token: 'fresh' });
-
-        v.join();
-        await settle(2);
-        sdkGate.resolve(sdk);
-        await settle();
-
-        expect(seen).toEqual(['stale', 'fresh']);
+        await v.join();
         expect(v.isJoined()).toBe(true);
+        expect(initCalls).toBe(2);
+        expect(meeting.__token).toBe('fresh');
+    });
+
+    it('rebuilds from scratch when the warm meeting is rejected at the room', async () => {
+        // The one risk of initialising early: the meeting can die between
+        // warming and use — socket idled out, token expired at the SFU. Left
+        // unhandled that turns a speed-up into people not being able to join.
+        const v = makeVoice();
+        const sdk = fakeSdk();
+        sdkGate.resolve(sdk);
+        tokenGate.resolve({ success: true, token: 'warmed' });
+        v.warm();
+        await settle();
+        const warmed = meeting;
+        warmed.join.mockImplementation(() => Promise.reject(new Error('socket is gone')));
+
+        tokenGate = deferred();
+        tokenGate.resolve({ success: true, token: 'fresh' });
+        await v.join();
+        expect(v.isJoined()).toBe(true);
+        // The dead meeting was released, a fresh one was built and joined.
+        expect(warmed.leave).toHaveBeenCalled();
+        expect(initCalls).toBe(2);
+        expect(meeting.__token).toBe('fresh');
+        expect(meeting.join).toHaveBeenCalled();
     });
 });
 
 describe('when the UI is told it is connected', () => {
     async function joinUpTo(v) {
-        v.join();
+        const p = v.join();
         await settle(2);
-        sdkGate.resolve({ init: () => Promise.resolve(meeting) });
+        sdkGate.resolve(fakeSdk());
         tokenGate.resolve({ success: true, token: 'jwt' });
+        await p;
         await settle();
     }
 
@@ -246,15 +288,17 @@ describe('when the UI is told it is connected', () => {
 
         // getAudioDevices() is still hanging — deliberately never resolved.
         expect(meeting.self.getAudioDevices).toHaveBeenCalled();
-        // …and the call is already up, because it IS: join() resolved, audio is
-        // flowing. Everything after this point is tuning.
+        // …and the call is already up, because it IS: join() resolved, the
+        // room join landed. Everything after this point is tuning.
         expect(v.isJoined()).toBe(true);
         expect(joinedYet()).toBe(true);
     });
 
-    it('opens or closes the microphone before it paints, not after', async () => {
+    it('intends to transmit before it paints, not after', async () => {
         // The one piece of post-join work that is NOT tuning: whether the mic
-        // is live. It must be settled by the time anything is on screen.
+        // is meant to be live. The acquisition itself now runs behind the
+        // paint (the same order push-to-talk always used), but the STATE must
+        // be settled by the time anything is on screen.
         const v = makeVoice();
         await joinUpTo(v);
         const first = states.find((s) => s.joined);
