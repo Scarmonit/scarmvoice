@@ -107,47 +107,71 @@ describe('the presets', () => {
     });
 });
 
+// rgba(...) parser for the translucent structural panes.
+const rgba = (v) => {
+    const m = /^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/.exec(v);
+    return m ? { r: +m[1], g: +m[2], b: +m[3], a: +m[4] } : null;
+};
+
 describe('the custom tint', () => {
-    it('keeps each surface at its own lightness, only the hue moves', () => {
-        T.apply('custom', { base: 'dark', colors: ['#5865f2'], intensity: 80 });
-        const chat = rootVar('--chat'), rail = rootVar('--rail'), elev = rootVar('--elev');
-        // The ladder is intact…
-        expect(lum(rail)).toBeLessThan(lum(chat));
-        expect(lum(chat)).toBeLessThan(lum(elev));
-        // …and the hue landed: blurple means blue > red on a neutral ramp.
-        const [r, , b] = [parseInt(chat.slice(1, 3), 16), 0, parseInt(chat.slice(5, 7), 16)];
-        expect(b).toBeGreaterThan(r);
+    it('lays ONE gradient under the window and makes the panes glass over it', () => {
+        T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 80, angle: 0 });
+        // The underlay carries the whole blend, in order, as one smooth fade —
+        // flipped so 0° puts the first colour at the top (CSS 0deg points up).
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(180deg, #ff0000, #0000ff)');
+        // The structural panes are translucent NEUTRAL — the gradient supplies
+        // the colour, so a pane that tinted itself would fight it.
+        const chat = rgba(rootVar('--chat'));
+        const rail = rgba(rootVar('--rail'));
+        expect(chat).toMatchObject({ r: 26, g: 26, b: 30 });
+        expect(chat.a).toBeLessThan(1);
+        expect(rail.a).toBe(chat.a);            // one sheet of glass, not per-pane fog
+        expect(rail.r).toBeLessThan(chat.r);    // the ladder survives in the glass
+        // Floating surfaces stay OPAQUE (a see-through menu is unreadable) and
+        // take the hue tint instead.
+        expect(rootVar('--float')).toMatch(/^#/);
     });
 
-    it('intensity 0 is the stock ramp, untouched', () => {
+    it('honours the gradient direction', () => {
+        T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 60, angle: 90 });
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(270deg, #ff0000, #0000ff)');
+    });
+
+    it('a single colour is a uniform wash, not a gradient', () => {
+        T.apply('custom', { base: 'dark', colors: ['#5865f2'], intensity: 80 });
+        expect(rootVar('--theme-underlay')).toBe('#5865f2');
+        expect(rgba(rootVar('--chat')).a).toBeLessThan(1);
+    });
+
+    it('intensity 0 is the stock ramp, untouched, with no underlay at all', () => {
         T.apply('custom', { base: 'dark', colors: ['#ff0000'], intensity: 0 });
         expect(rootVar('--chat')).toBe('#1a1a1e');
         expect(rootVar('--rail')).toBe('#0c0c0e');
+        expect(rootVar('--theme-underlay')).toBe('');
     });
 
-    it('a light-based custom theme stays light', () => {
+    it('a light-based custom theme keeps more of its paper', () => {
         const chrome = T.apply('custom', { base: 'light', colors: ['#ff2d55'], intensity: 100 });
         expect(chrome.base).toBe('light');
-        // Even at full intensity the paper stays paper — text is dark on it.
-        expect(lum(rootVar('--chat'))).toBeGreaterThan(180);
+        // Text sits on the panes, so a light base stays more opaque than a
+        // dark one at the same intensity.
+        const light = rgba(rootVar('--chat')).a;
+        // Its floats are still paper — opaque and near-white — read BEFORE
+        // the dark apply below replaces them.
         expect(lum(rootVar('--float'))).toBeGreaterThan(180);
-    });
-
-    it('two colours land on different ends of the ladder', () => {
-        T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 90 });
-        const railHex = rootVar('--rail');   // ladder 0 — the red end
-        const elevHex = rootVar('--elev');   // ladder 1 — the blue end
-        const red = (h) => parseInt(h.slice(1, 3), 16) - parseInt(h.slice(5, 7), 16);
-        expect(red(railHex)).toBeGreaterThan(0);
-        expect(red(elevHex)).toBeLessThan(0);
+        T.apply('custom', { base: 'dark', colors: ['#ff2d55'], intensity: 100 });
+        const dark = rgba(rootVar('--chat')).a;
+        expect(light).toBeGreaterThan(dark);
     });
 
     it('normalizeCustom refuses garbage without refusing the user', () => {
-        expect(T.normalizeCustom(null)).toEqual({ base: 'dark', colors: ['#5865f2'], intensity: 70 });
-        expect(T.normalizeCustom({ base: 'mauve', colors: ['xyz', '#ABC'], intensity: 999 }))
-            .toEqual({ base: 'dark', colors: ['#aabbcc'], intensity: 100 });
+        expect(T.normalizeCustom(null)).toEqual({ base: 'dark', colors: ['#5865f2'], intensity: 70, angle: 0 });
+        expect(T.normalizeCustom({ base: 'mauve', colors: ['xyz', '#ABC'], intensity: 999, angle: 999 }))
+            .toEqual({ base: 'dark', colors: ['#aabbcc'], intensity: 100, angle: 279 });
         expect(T.normalizeCustom({ colors: ['#111111', '#222222', '#333333', '#444444', '#555555'] }).colors.length)
             .toBe(4);
+        // 360 IS 0 — the wheel wraps.
+        expect(T.normalizeCustom({ angle: 360 }).angle).toBe(0);
     });
 
     it('surprise produces something the engine itself accepts', () => {

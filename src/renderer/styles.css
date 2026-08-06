@@ -328,7 +328,12 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--chat);
+  /* --theme-underlay is the custom theme's whole-window gradient, set by
+     theme.js. The structural surfaces above it go translucent under a custom
+     theme, so ONE gradient reads through the rail, the sidebars, the chat
+     column and the panels as a single continuous sweep — the way the
+     reference does it — instead of each pane being tinted separately. */
+  background: var(--theme-underlay, var(--chat));
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
@@ -6902,13 +6907,25 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 }
 .tm-eyebtn:hover { background: var(--hover); color: var(--text); }
 .tm-eyebtn .ico { width: 15px; height: 15px; }
-#tm-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
-#tm-swatches:empty { display: none; }
-.tm-sw {
-  position: relative; width: 30px; height: 30px; border-radius: 8px;
-  border: 1px solid var(--float-rule); cursor: pointer; padding: 0;
+/* The strip wearing the theme's own gradient, with one swatch per colour ON
+   it. app.js paints its background from the exact underlay string the window
+   gets. The white swatch edges are drawn on the user's own colours — the one
+   surface in the app that answers to no theme — so they are literal, like the
+   picker spectrum above them. */
+#tm-gradstrip {
+  border-radius: 9px; padding: 7px 8px;
+  border: 1px solid var(--float-rule);
 }
-.tm-sw.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+#tm-swatches { display: flex; gap: 10px; }
+.tm-sw {
+  position: relative; width: 26px; height: 26px; border-radius: 7px;
+  border: 2px solid rgba(255, 255, 255, .55); cursor: pointer; padding: 0;
+}
+.tm-sw:hover { border-color: rgba(255, 255, 255, .8); }
+.tm-sw.on {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+}
 .tm-sw-x {
   position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
   border-radius: 50%; border: none; cursor: pointer;

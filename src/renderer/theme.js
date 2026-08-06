@@ -71,6 +71,18 @@
         '--elev':             ['#343439', '#e6e9ed', 0.85]
     };
 
+    // The STRUCTURAL surfaces — the panes that tile the window itself: the
+    // rail, the sidebars, the chat column, the top bars, the user dock, the
+    // composer. Under a custom theme these go TRANSLUCENT over the gradient
+    // underlay, which is what makes the gradient read as one continuous sweep
+    // across the whole app. Floating surfaces (menus, modals, popovers, the
+    // raised controls) stay opaque — they are drawn OVER the window and a
+    // see-through menu is unreadable — and take the hue tint instead.
+    const STRUCTURAL = new Set([
+        '--rail', '--side', '--members', '--chat', '--sunk',
+        '--chat-2', '--panel', '--input', '--mark'
+    ]);
+
     // Not surfaces the stylesheet names, but chrome the OS draws: the native
     // caption-button strip and the window's own background. Transformed with
     // everything else so the titlebar never sits on a patch of the old theme.
@@ -78,7 +90,7 @@
     const BG_SEED = { dark: '#101218', light: '#f4f5f7' };
     const SYMBOL = { dark: '#e9ebf0', light: '#3a3d43' };
 
-    const DEFAULT_CUSTOM = { base: 'dark', colors: ['#5865f2'], intensity: 70 };
+    const DEFAULT_CUSTOM = { base: 'dark', colors: ['#5865f2'], intensity: 70, angle: 0 };
 
     // ---- colour math ------------------------------------------------------
 
@@ -227,8 +239,38 @@
             base: c.base === 'light' ? 'light' : 'dark',
             colors: colors.length ? colors : DEFAULT_CUSTOM.colors.slice(),
             intensity: Math.max(0, Math.min(100,
-                Math.round(Number(c.intensity ?? DEFAULT_CUSTOM.intensity) || 0)))
+                Math.round(Number(c.intensity ?? DEFAULT_CUSTOM.intensity) || 0))),
+            // The gradient's direction, 0-360. 0° puts the first colour at the
+            // top; the wheel wraps, so 360 IS 0.
+            angle: ((Math.round(Number(c.angle ?? 0) || 0) % 360) + 360) % 360
         };
+    }
+
+    // The gradient underlay itself: the user's colours as one smooth linear
+    // fade at the chosen angle — or the colour, alone. CSS 0deg points UP, so
+    // the angle is flipped to put the FIRST colour at the top at 0°, which is
+    // how the direction slider reads most naturally.
+    function underlayOf(cfg) {
+        if (cfg.colors.length < 2) return cfg.colors[0];
+        return 'linear-gradient(' + ((cfg.angle + 180) % 360) + 'deg, ' + cfg.colors.join(', ') + ')';
+    }
+
+    function rgbaOf(hex, a) {
+        const [r, g, b] = hexToRgb(hex);
+        return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')';
+    }
+    function mixHex(a, b, t) {
+        const A = hexToRgb(a), B = hexToRgb(b);
+        return rgbToHex(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t);
+    }
+    // One colour that stands for the whole set — the native titlebar cannot
+    // wear a gradient, so it wears the blend.
+    function avgColor(colors) {
+        const sum = colors.reduce((acc, c) => {
+            const [r, g, b] = hexToRgb(c);
+            return [acc[0] + r, acc[1] + g, acc[2] + b];
+        }, [0, 0, 0]);
+        return rgbToHex(sum[0] / colors.length, sum[1] / colors.length, sum[2] / colors.length);
     }
 
     // Apply `name` ('dark' | 'light' | 'ash' | 'onyx' | 'custom') and answer
@@ -255,17 +297,39 @@
         if (name === 'custom') {
             const cfg = normalizeCustom(customCfg);
             const col = cfg.base === 'light' ? 1 : 0;
+            const k = cfg.intensity / 100;
+            // The reference's model, not an imitation of it: ONE gradient laid
+            // under the whole window (html/body carry --theme-underlay), with
+            // the structural panes above it going translucent so the same
+            // sweep reads through the rail, the sidebars, the chat column and
+            // the panels continuously. Per-pane tinting — the old approach —
+            // can never blend across a pane boundary, which is exactly the
+            // "uneven, not a smooth gradient" complaint.
+            //
+            // Intensity is the panes' TRANSPARENCY: at 0 they are the stock
+            // opaque ramp and no gradient exists; at 100 they are thin glass
+            // over it. A light base keeps more of its paper so text stays on
+            // something readable.
+            if (k > 0) {
+                root.style.setProperty('--theme-underlay', underlayOf(cfg));
+                applied.push('--theme-underlay');
+            }
+            const alpha = +(1 - (cfg.base === 'light' ? 0.42 : 0.58) * k).toFixed(3);
             Object.keys(TOKENS).forEach((tok) => {
                 const t = TOKENS[tok];
                 if (!t[col]) return;
-                root.style.setProperty(tok, tintOf(t[col], cfg.base, cfg.colors, cfg.intensity, t[2]));
+                const v = (k > 0 && STRUCTURAL.has(tok))
+                    ? rgbaOf(t[col], alpha)
+                    : tintOf(t[col], cfg.base, cfg.colors, cfg.intensity, t[2]);
+                root.style.setProperty(tok, v);
                 applied.push(tok);
             });
+            const accent = avgColor(cfg.colors);
             return {
                 base: cfg.base,
-                color: tintOf(TB_SEED[cfg.base], cfg.base, cfg.colors, cfg.intensity, 0.05),
+                color: mixHex(TB_SEED[cfg.base], accent, k * 0.5),
                 symbolColor: SYMBOL[cfg.base],
-                bg: tintOf(BG_SEED[cfg.base], cfg.base, cfg.colors, cfg.intensity, 0.4)
+                bg: mixHex(BG_SEED[cfg.base], accent, k * 0.5)
             };
         }
 
@@ -286,7 +350,10 @@
         return {
             base: base === 'light' ? 'light' : 'dark',
             colors,
-            intensity: 55 + Math.floor(Math.random() * 35)
+            intensity: 55 + Math.floor(Math.random() * 35),
+            // One of the eight compass directions — every one of them reads as
+            // deliberate, where an arbitrary 137° reads as a mistake.
+            angle: 45 * Math.floor(Math.random() * 8)
         };
     }
 
@@ -294,7 +361,13 @@
         apply,
         normalizeCustom,
         randomCustom,
-        defaultCustom: () => ({ base: DEFAULT_CUSTOM.base, colors: DEFAULT_CUSTOM.colors.slice(), intensity: DEFAULT_CUSTOM.intensity }),
+        defaultCustom: () => ({
+            base: DEFAULT_CUSTOM.base, colors: DEFAULT_CUSTOM.colors.slice(),
+            intensity: DEFAULT_CUSTOM.intensity, angle: DEFAULT_CUSTOM.angle
+        }),
+        // The gradient string for a config — exported so the picker's swatch
+        // strip paints EXACTLY what the window gets, not a re-derivation.
+        underlayOf,
         // Picker + test helpers.
         normHex, hexToHsv, hsvToHex, hexToHsl, hslToHex,
         // The mirror, exposed so the drift test can hold it against styles.css.

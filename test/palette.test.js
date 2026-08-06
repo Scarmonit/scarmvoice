@@ -383,7 +383,10 @@ describe('every colour goes through a token', () => {
         // trough, the dismiss hover, the inverted button) is drawn ON that fill.
         // A token would have to be "white over blurple", which is what these
         // already are.
-        const allowed = /switch-knob|slider-thumb|input:checked|a11y-face|acct-qr|btn-danger-solid|ub-cta/;
+        // .tm-sw is a swatch drawn on the USER'S OWN colours (the picker's
+        // gradient strip) — the one surface that answers to no theme, so its
+        // white edge and dark ring are literal like the spectrum above it.
+        const allowed = /switch-knob|slider-thumb|input:checked|a11y-face|acct-qr|btn-danger-solid|ub-cta|tm-sw/;
         expect(offenders.filter((o) => !allowed.test(o))).toEqual([]);
     });
 

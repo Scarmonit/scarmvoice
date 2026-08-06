@@ -42,6 +42,16 @@ describe('the theme tiles', () => {
         expect(document.querySelector('.set-sub-minor').textContent).toBe('Default Themes');
     });
 
+    it('each names itself on hover, through the app tooltip system', () => {
+        // data-tip, not title: the app draws its own tooltip for data-tip
+        // elements, and a tile carrying both would show two.
+        const tips = [...document.querySelectorAll('#set-theme-tiles .theme-tile')]
+            .map((t) => t.getAttribute('data-tip'));
+        expect(tips).toEqual(['Light', 'Ash', 'Dark', 'Onyx', 'Sync with Computer', 'Custom']);
+        document.querySelectorAll('#set-theme-tiles .theme-tile[title]')
+            .forEach((t) => { throw new Error('tile still carries a native title: ' + t.className); });
+    });
+
     it('shows the hovered description, then falls back to the selected one', async () => {
         await pickRadio('dark');
         const desc = () => $('theme-tile-desc').textContent;
@@ -90,15 +100,40 @@ describe('the customizer', () => {
         expect(rootVar('--chat')).not.toBe('');
     });
 
-    it('typing a hex applies that colour', async () => {
+    it('typing a hex applies that colour to the window underlay', async () => {
         const hex = $('tm-hex');
         hex.value = '#ff0000';
         hex.dispatchEvent(new window.Event('input', { bubbles: true }));
         await settle(4);
-        const chat = rootVar('--chat');
-        const r = parseInt(chat.slice(1, 3), 16), b = parseInt(chat.slice(5, 7), 16);
-        expect(r).toBeGreaterThan(b);
+        // One colour = a uniform wash under the whole window, and the panes
+        // above it are glass — translucent, not re-tinted per pane.
+        expect(rootVar('--theme-underlay')).toBe('#ff0000');
+        expect(rootVar('--chat')).toMatch(/^rgba\(/);
         expect($('tm-swatch-current').style.background).toBeTruthy();
+    });
+
+    it('two colours become one smooth gradient, steered by Gradient Direction', async () => {
+        $('tm-add').click();
+        await settle(4);
+        expect(rootVar('--theme-underlay')).toMatch(/^linear-gradient\(/);
+        // The swatch strip previews the same gradient the window gets. (The
+        // DOM re-serialises inline hex as rgb(), so match shape and angle
+        // rather than the byte-for-byte string.)
+        expect($('tm-gradstrip').style.background).toContain('linear-gradient(180deg');
+
+        const angle = $('tm-angle');
+        angle.value = '90';
+        angle.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle(4);
+        expect($('tm-angle-val').textContent).toBe('90°');
+        expect(app.settings.customTheme.angle).toBe(90);
+        // CSS 0deg points up, so 90° on the slider is 270deg in the string —
+        // the first colour enters from the left.
+        expect(rootVar('--theme-underlay')).toContain('270deg');
+
+        // Back to one colour for the tests that follow.
+        document.querySelector('#tm-swatches .tm-sw .tm-sw-x').click();
+        await settle(4);
     });
 
     it('intensity 0 hands the ramp back untouched', async () => {

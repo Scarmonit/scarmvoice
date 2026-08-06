@@ -12073,6 +12073,11 @@
         $('tm-base-light').classList.toggle('on', tmCfg.base === 'light');
         $('tm-base-light').setAttribute('aria-checked', String(tmCfg.base === 'light'));
 
+        // The strip behind the swatches wears the EXACT underlay the window
+        // gets — same string, same function — so it is the blend, not a
+        // re-derivation that could drift from it.
+        $('tm-gradstrip').style.background = window.ScarmTheme.underlayOf(tmCfg);
+
         $('tm-sv').style.setProperty('--tm-hue', String(Math.round(tmHsv[0])));
         $('tm-sv-thumb').style.left = (tmHsv[1] * 100) + '%';
         $('tm-sv-thumb').style.top = ((1 - tmHsv[2]) * 100) + '%';
@@ -12111,6 +12116,8 @@
         });
         $('tm-add').hidden = tmCfg.colors.length >= 4;
 
+        $('tm-angle').value = String(tmCfg.angle || 0);
+        $('tm-angle-val').textContent = (tmCfg.angle || 0) + '°';
         $('tm-intensity').value = String(tmCfg.intensity);
         $('tm-intensity-val').textContent = tmCfg.intensity + '%';
     }
@@ -12216,6 +12223,16 @@
     $('tm-intensity').addEventListener('input', () => {
         tmCfg.intensity = Math.max(0, Math.min(100, Math.round(Number($('tm-intensity').value) || 0)));
         $('tm-intensity-val').textContent = tmCfg.intensity + '%';
+        tmApply();
+    });
+
+    // The gradient's direction. 360 IS 0 — the slider's top end wraps rather
+    // than being a distinct angle, so the readout never says 360°.
+    $('tm-angle').addEventListener('input', () => {
+        tmCfg.angle = Math.round(Number($('tm-angle').value) || 0) % 360;
+        $('tm-angle-val').textContent = tmCfg.angle + '°';
+        // The strip and the window both follow the angle live.
+        $('tm-gradstrip').style.background = window.ScarmTheme.underlayOf(tmCfg);
         tmApply();
     });
 

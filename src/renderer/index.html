@@ -1398,28 +1398,28 @@
              so keyboard, form semantics and the existing wiring all stand. -->
         <h5 class="set-sub-minor">Default Themes</h5>
         <div class="theme-tiles" id="set-theme-tiles" role="radiogroup" aria-label="Theme">
-          <label class="theme-tile tile-light" title="Light"
+          <label class="theme-tile tile-light" data-tip="Light"
                  data-desc="Light — the same layout in layered off-whites">
             <input type="radio" name="set-theme" value="light" aria-label="Light">
           </label>
-          <label class="theme-tile tile-ash" title="Ash"
+          <label class="theme-tile tile-ash" data-tip="Ash"
                  data-desc="Ash — a softer, ashy grey; the dark theme with the lights up">
             <input type="radio" name="set-theme" value="ash" aria-label="Ash">
           </label>
-          <label class="theme-tile tile-dark" title="Dark"
+          <label class="theme-tile tile-dark" data-tip="Dark"
                  data-desc="Dark — the layered shades this app was designed in">
             <input type="radio" name="set-theme" value="dark" aria-label="Dark">
           </label>
-          <label class="theme-tile tile-onyx" title="Onyx"
+          <label class="theme-tile tile-onyx" data-tip="Onyx"
                  data-desc="Onyx — near-pure black, made for OLED and dim rooms">
             <input type="radio" name="set-theme" value="onyx" aria-label="Onyx">
           </label>
-          <label class="theme-tile tile-system" title="Sync with computer"
+          <label class="theme-tile tile-system" data-tip="Sync with Computer"
                  data-desc="Sync with computer — follows the Windows light/dark setting">
             <input type="radio" name="set-theme" value="system" aria-label="Sync with computer">
             <span class="ico tile-ico" data-icon="sync" aria-hidden="true"></span>
           </label>
-          <label class="theme-tile tile-custom" title="Custom"
+          <label class="theme-tile tile-custom" data-tip="Custom"
                  data-desc="Custom — your own colours, over a dark or light base">
             <input type="radio" name="set-theme" value="custom" aria-label="Custom">
           </label>
@@ -2484,6 +2484,13 @@
     </div>
 
     <h4 class="tm-label">Colors</h4>
+    <!-- The swatch strip: the theme's own gradient as a band, with one
+         rounded-square swatch per colour sitting ON it — the selected one
+         highlighted. It is painted from the exact underlay string the window
+         gets, so the strip IS the preview of the blend. -->
+    <div id="tm-gradstrip">
+      <div id="tm-swatches" role="listbox" aria-label="Theme colors"></div>
+    </div>
     <div id="tm-sv" aria-label="Saturation and brightness" tabindex="0">
       <div id="tm-sv-white"></div>
       <div id="tm-sv-black"></div>
@@ -2501,12 +2508,16 @@
         <span class="ico" data-icon="eyedropper"></span>
       </button>
     </div>
-    <div id="tm-swatches"></div>
     <button type="button" class="tm-wide" id="tm-add">
       <span class="ico" data-icon="plus"></span><span>Add Color</span>
     </button>
 
     <h4 class="tm-label">Controls</h4>
+    <div class="tm-row">
+      <span>Gradient Direction</span>
+      <span id="tm-angle-val">0°</span>
+    </div>
+    <input type="range" id="tm-angle" min="0" max="360" step="1" aria-label="Gradient direction">
     <div class="tm-row">
       <span>Color Intensity</span>
       <span id="tm-intensity-val">70%</span>
