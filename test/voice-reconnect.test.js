@@ -382,3 +382,88 @@ describe('opus DTX', () => {
         expect(pcs[pcs.length - 1].local[0]).toBe(undefined);
     });
 });
+
+// ---------------------------------------------------------------------------
+// THE REJOIN ANNOUNCED A RECONNECTION THAT DID NOT HAPPEN.
+//
+// join() signals "I was cancelled" by returning NORMALLY — every
+// `gen !== joinGen` checkpoint inside it is a bare return — so its promise
+// resolves either way. The rejoin ladder's .then() could not tell the two
+// apart: it declared success, re-applied the pre-drop mute/deafen onto a
+// torn-down engine, and said "reconnected".
+//
+// A teardown landing inside the rejoin window is not exotic — signing out, an
+// expired session, and a voiceTakeover from another device all call leave(),
+// and app.js calls it for a takeover precisely WHILE isJoining() is true.
+describe('a rejoin that was cancelled while it was joining', () => {
+    // Hold the SDK inside join()'s first await, so leave() can land in the
+    // middle of it the way a takeover does.
+    function heldSdk() {
+        let release;
+        const gate = new Promise((r) => { release = r; });
+        window.ScarmLazy.realtimekit = () => gate.then(() => ({
+            init: () => {
+                inits++;
+                const m = fakeMeeting();
+                meetings.push(m);
+                return Promise.resolve(m);
+            }
+        }));
+        return () => release();
+    }
+
+    async function cancelledRejoin() {
+        const v = makeVoice();
+        await joinUp(v);
+        v.setMuted(true);
+
+        const release = heldSdk();
+        current().self.emit('roomLeft', { state: 'failed' });
+        await settle();
+        expect(v.isJoined()).toBe(false);
+
+        // The ladder's first attempt starts and parks on the held SDK.
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(v.isJoining()).toBe(true);
+
+        // Taken over from another device / signed out.
+        v.leave();
+        await settle();
+
+        release();
+        await vi.advanceTimersByTimeAsync(2000);
+        return v;
+    }
+
+    it('does not say it reconnected', async () => {
+        notices.length = 0;
+        const v = await cancelledRejoin();
+        expect(v.isJoined()).toBe(false);
+        expect(notices.filter((m) => /^reconnected$/i.test(m))).toEqual([]);
+    });
+
+    it('does not paint the mute state of a call that is gone', async () => {
+        const v = await cancelledRejoin();
+        expect(v.isJoined()).toBe(false);
+        expect(v.isMuted()).toBe(false);
+        const last = states[states.length - 1];
+        expect(last.joined).toBe(false);
+        expect(last.muted).toBe(false);
+    });
+
+    // The mirror: an uninterrupted rejoin still reports itself and still puts
+    // the person's mute back, which is the whole point of the ladder.
+    it('still announces a rejoin that actually landed', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        v.setMuted(true);
+        notices.length = 0;
+
+        current().self.emit('roomLeft', { state: 'failed' });
+        await vi.advanceTimersByTimeAsync(2000);
+
+        expect(v.isJoined()).toBe(true);
+        expect(v.isMuted()).toBe(true);
+        expect(notices.some((m) => /reconnected/i.test(m))).toBe(true);
+    });
+});

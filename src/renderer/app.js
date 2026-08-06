@@ -610,6 +610,27 @@
     }
     const blankLine = (s) => !String(s).trim();
 
+    // Blocks NEST, and the nesting is recursion — a quote inside a quote, a list
+    // inside a list item — so something other than the message has to bound the
+    // depth.
+    //
+    // `"> "` repeated is depth proportional to LENGTH. The composer has no
+    // maxlength (see index.html) and the server takes 250,000 characters, so one
+    // pasted line of `> > > > …` recursed thousands of frames and threw
+    // RangeError out of renderBody, through renderMessage, past renderMessages
+    // and into the poll — where nothing catches it. The offending row never
+    // appeared, NEITHER DID ANY ROW AFTER IT (the forEach aborts), and every
+    // later repaint threw at the same place: one crafted message wedged the
+    // channel for everyone until it aged off the page. `>>>` does the same three
+    // characters at a time.
+    //
+    // This is the defect renderFormatted() was fixed for — see the long note
+    // above it — reappearing in the block path, which never got the same
+    // ceiling. Past the ceiling the markers are simply left as literal text, so
+    // nothing is hidden and no real message is affected: twelve levels is far
+    // past anything anybody writes on purpose.
+    const MAX_BLOCK_DEPTH = 12;
+
     // Renders the list starting at lines[i] — and, recursively, anything nested
     // inside it — into `container`. Returns the index of the first line it did NOT
     // consume.
@@ -620,7 +641,7 @@
     // ended the <ol> — and the next item opened a brand new <ol>, which starts
     // counting from one again. A 1-through-8 list written with any spacing at all
     // therefore came out as eight lists of one item, every one of them numbered 1.
-    function renderList(lines, i, container, ctx) {
+    function renderList(lines, i, container, ctx, depth) {
         const first = listItem(lines[i]);
         const ordered = first.num !== null;
         const base = first.indent;
@@ -639,7 +660,7 @@
             // rendering that inline keeps the <li> free of a paragraph wrapper —
             // which is exactly how every existing message already draws.
             if (item.length === 1) renderInline(li, item[0], ctx);
-            else renderTextBlock(item.join('\n'), li, ctx);
+            else renderTextBlock(item.join('\n'), li, ctx, depth);
             el.appendChild(li);
             item = null;
         };
@@ -684,8 +705,13 @@
     // Blocks within a non-code segment: headings, subtext, lists, blockquotes,
     // paragraphs. Discord's block set, so a message pasted from there reads the
     // same here.
-    function renderTextBlock(text, container, ctx) {
+    function renderTextBlock(text, container, ctx, depth) {
         const lines = String(text == null ? '' : text).split('\n');
+        // At the ceiling the nesting stops and the markers stay as text — see
+        // MAX_BLOCK_DEPTH. Only the three branches that recurse are affected;
+        // headings, subtext and paragraphs carry on drawing as they always did.
+        const d = depth || 0;
+        const flat = d >= MAX_BLOCK_DEPTH;
         let i = 0, para = null;
         const flush = () => { if (para) { container.appendChild(para); para = null; } };
         const startPara = () => {
@@ -719,25 +745,25 @@
                 continue;
             }
 
-            if (listItem(line)) {
+            if (!flat && listItem(line)) {
                 flush();
-                i = renderList(lines, i, container, ctx);
+                i = renderList(lines, i, container, ctx, d + 1);
                 continue;
             }
 
             // >>> quotes everything that follows it; > quotes only its own line.
             // Checked first, or the single-> rule eats it and leaves ">> " inside
             // the quote.
-            const bqAll = /^[ \t]*>>>[ \t]?([\s\S]*)$/.exec(line);
+            const bqAll = flat ? null : /^[ \t]*>>>[ \t]?([\s\S]*)$/.exec(line);
             if (bqAll) {
                 flush();
                 const q = document.createElement('blockquote');
                 q.className = 'msg-bq';
-                renderTextBlock([bqAll[1]].concat(lines.slice(i + 1)).join('\n'), q, ctx);
+                renderTextBlock([bqAll[1]].concat(lines.slice(i + 1)).join('\n'), q, ctx, d + 1);
                 container.appendChild(q);
                 return;
             }
-            if (/^[ \t]*>[ \t]?/.test(line)) {
+            if (!flat && /^[ \t]*>[ \t]?/.test(line)) {
                 flush();
                 // .msg-bq, not .msg-quote — that class is the reply quote box here.
                 const q = document.createElement('blockquote');
@@ -752,7 +778,7 @@
                 // Through renderTextBlock, not renderInline: a list or a heading
                 // inside a quote is still a list or a heading, and Discord renders
                 // it as one.
-                renderTextBlock(quoted.join('\n'), q, ctx);
+                renderTextBlock(quoted.join('\n'), q, ctx, d + 1);
                 container.appendChild(q);
                 continue;
             }
@@ -2210,6 +2236,21 @@
             // to merge your devices. A socket opened first would carry no identity.
             bootMark('shell');
             await refreshAccount();
+            // The socket is an ACQUISITION, exactly like the timers the tail
+            // below is guarded for, and it sits between the two guards without
+            // one of its own. refreshAccount() is a board call that net.js
+            // retries at 400ms and 1200ms and only abandons after twenty
+            // seconds, and the shell has been on screen since well above here —
+            // so signing out, switching accounts or having the token die during
+            // it is an ordinary thing to do. teardownSession() ends with
+            // rt.stop(), and start() clears manualClose and reconnects whenever
+            // the board cookie survives — which two of the three teardown exits
+            // leave in place deliberately. The result was a fresh authenticated
+            // socket carrying the OUTGOING account's token, opened behind the
+            // sign-in card, keeping that account in everyone's member list for
+            // the rest of the app's life: startPolling() refuses to arm after a
+            // teardown, so nothing downstream ever tore it back down.
+            if (gone()) return;
             await L.rt.start();
             bootMark('rt');
 
@@ -5310,6 +5351,22 @@
         });
     })();
 
+    // Hand a message back to the composer after a send that never went out.
+    //
+    // ASSIGNING it is wrong. The field is cleared at submit, and the failure can
+    // land a very long time later — an attachment upload has no timeout on its
+    // presigned PUT and this app advertises 1 GB attachments — so there is often
+    // something new in the box by then. `input.value = body` destroyed it
+    // outright, with no way back: message recall only remembers what was SENT.
+    // The re-staging of failed files already accounts for exactly this window
+    // and says so in its own comment; the caption never did.
+    function restoreComposerText(body) {
+        if (!body) return;
+        input.value = input.value.trim() ? body + '\n' + input.value : body;
+        autosize();
+        updateSendEnabled();   // the button was disabled at submit — re-enable it
+    }
+
     $('composer').addEventListener('submit', async (e) => {
         e.preventDefault();
         if (mentionPopOpen()) return;        // Enter is the autocomplete's
@@ -5324,6 +5381,20 @@
         // message into the wrong channel.
         const quoteId = replyTarget ? replyTarget.id : null;
         const forChannel = channel;
+        // …and the SESSION is pinned for a harder reason than either.
+        //
+        // An upload can take minutes, and losing the credential during one is an
+        // ordinary way for it to fail: uploadOne() calls authGone(), which tears
+        // the session down — clearing the composer, the staged files and the
+        // reply chip, by design, so that the next person to sign in on this
+        // machine cannot find them — and then returns false like any other
+        // failure. The handler below then put every one of those back: the
+        // failed files re-staged, and `input.value = body` restoring the caption
+        // over the login card. enterApp() resets neither, so the outgoing
+        // account's text and its files were sitting in the composer, with Send
+        // enabled, for whoever signed in next.
+        const gen = sessionGen;
+        const sessionLost = () => !entered || gen !== sessionGen;
         // Pinned for the same reason the channel is: the conversation can be
         // closed or switched while the request is in flight, and reading
         // dmOpen after an await would deliver the message somewhere else.
@@ -5390,6 +5461,12 @@
             // Pushed rather than assigned, because more files can be staged while a
             // long upload is in flight, and prepareStage is re-run because
             // clearStaged already revoked the object URL behind the thumbnail.
+            //
+            // …but NOT into a composer that no longer belongs to the person who
+            // filled it. See `sessionLost` above: giving the files and the
+            // caption back is right for a dropped connection and wrong for a
+            // dropped session, and the two arrive here as the same `false`.
+            if (sessionLost()) return;
             if (failed.length) {
                 failed.forEach((it) => {
                     it.url = '';
@@ -5409,11 +5486,8 @@
                     await loadMessages(true);
                 }
             }
-            if (!bodyPosted && body) {
-                input.value = body;      // the caption never went out — give it back
-                autosize();
-                updateSendEnabled();
-            }
+            // The caption never went out — give it back.
+            if (!bodyPosted) restoreComposerText(body);
             return;
         }
 
@@ -5422,9 +5496,8 @@
         if (forDm) {
             const dres = await sendDm(body, forDm, quoteId);
             if (!dres || !dres.success) {
-                input.value = body;              // give the text back
-                autosize();
-                updateSendEnabled();
+                if (sessionLost()) return;       // not this composer's text any more
+                restoreComposerText(body);       // give the text back
                 toast((dres && dres.error) || 'Could not send the DM', true);
             }
             return;
@@ -5456,9 +5529,7 @@
                 return;
             }
             toast(res.error || 'Could not send', true);
-            input.value = body;   // give the text back rather than losing it
-            autosize();
-            updateSendEnabled();  // the button was disabled at submit — re-enable it
+            restoreComposerText(body);   // give the text back rather than losing it
             return;
         }
         // The echo now carries the id the server handed back, so the page's
@@ -10989,6 +11060,28 @@
 
     function editModeOpen() { return editing; }
 
+    // The node of an element that is actually LAID OUT, which is not always its
+    // primary one. `channels` covers the channel list and the conversation list
+    // — they occupy the same place, so a layout treats them as one element —
+    // and exactly one of the two is on screen at a time.
+    //
+    // Measuring `$(el.elId)` blindly therefore read 0x0 for an element the user
+    // could see, whenever the app was in Direct Messages. materialize() took
+    // that as "nothing to measure", invented its placeholder rectangle
+    // ({x:.35,y:.35,w:.3,h:.25}) and applyLayout — which IS `also`-aware —
+    // stamped it onto the visible #dm-sidebar: the conversation list torn out of
+    // its column into a small floating box over the chat. And because the frame
+    // drawing, the hit test and Reset all measured the same hidden node, the
+    // element was then unselectable and unresettable from inside the editor.
+    function laidOutNode(el) {
+        const nodes = nodesFor(el);
+        for (const n of nodes) {
+            const r = n.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return n;
+        }
+        return nodes[0] || null;
+    }
+
     // Every movable element's rectangle right now, in fractions — which is how
     // an arrangement that has only ever been the CSS grid becomes a layout
     // without anything moving on screen.
@@ -10996,7 +11089,7 @@
         const box = appBox();
         const out = {};
         for (const el of MOVABLE) {
-            const node = $(el.elId);
+            const node = laidOutNode(el);
             if (!node) continue;
             const r = node.getBoundingClientRect();
             out[el.key] = {
@@ -11025,7 +11118,7 @@
     }
 
     const rectOf = (key) => {
-        const node = $(EL_BY_KEY.get(key).elId);
+        const node = laidOutNode(EL_BY_KEY.get(key));
         if (!node) return null;
         const r = node.getBoundingClientRect();
         return { x: r.left, y: r.top, w: r.width, h: r.height };
@@ -12157,7 +12250,19 @@
             const clean = String(name).trim().slice(0, LAYOUT_NAME_MAX);
             if (!clean) return;
             work.name = clean;
-            await writeLayouts(savedLayouts().map((l) => (l.id === work.id ? normalizeLayout(work) : l)));
+            // The STORED layout with its name replaced, not the working copy.
+            //
+            // Writing normalizeLayout(work) committed every drag, resize and
+            // hide made since Edit Mode opened — silently, under a button whose
+            // only job is the name — and it refreshed neither entrySnapshot nor
+            // `dirty`, unlike saveWork() and createLayoutFromWork(). That broke
+            // the revert contract outright: closeEditMode(revert) restores the
+            // snapshot on screen and then ends with a bare applyLayout(), which
+            // re-reads settings.layouts and puts the committed geometry straight
+            // back. Answer "don't save" on the way out and the change was on
+            // screen anyway, and in settings.json across restarts.
+            await writeLayouts(savedLayouts().map(
+                (l) => (l.id === work.id ? Object.assign({}, l, { name: clean }) : l)));
             renderLayoutSelect();
         });
         $('edit-layout-delete').addEventListener('click', () => {
@@ -19312,6 +19417,19 @@
 
     function closeDm() {
         const was = dmOpen;
+        // An inline editor opened on a DM lives in THIS column, and leaving it
+        // there does not merely leak a node: renderMessages() bails whenever a
+        // .msg-edit exists anywhere in the document, so the CHANNEL list stops
+        // repainting — no new messages, no edits, no reactions, no unread bar —
+        // for the rest of the session unless the user happens to switch channel
+        // (the one path that reaches cancelEdit(), via resetChannelView).
+        // renderDmMessages() below cannot clean it up either: it has the same
+        // guard and returns without touching anything.
+        //
+        // Only when the editor is actually in here — resetChannelView() and
+        // closeThread() each cancel their own for the same reason, and none of
+        // the three should reach into another surface's.
+        if (editingId && $('dm-messages').querySelector('.msg-edit')) cancelEdit();
         dmOpen = null;
         loadDmMessages.lastSig = null;
         // Closing a CONVERSATION does not leave the DM view. Staying puts you
@@ -19458,16 +19576,25 @@
             return;
         }
         const sig = JSON.stringify(res.messages || []);
-        // Recorded even when the payload is unchanged: it describes the
-        // conversation, not this page, and the poll must not keep resetting it.
-        dmHasMore = !!res.hasMore;
-        if (!force && sig === loadDmMessages.lastSig) return;
         // The poll fetches the NEWEST page. Anything older that has been paged
         // in stays: assigning the page outright would throw the history away
         // again the moment somebody sent a message, which is the same bug in a
         // slower disguise.
         const page = res.messages || [];
         const oldest = page.length ? page[0].id : 0;
+        // `hasMore` answers "is there anything older than THIS page", and this
+        // call always asks for the newest one — so for any conversation past a
+        // page long the answer is true forever, whatever the client already
+        // holds. Assigned unconditionally (and above the signature return, so
+        // every twelve-second poll ran it), it undid the `false` that a
+        // completed loadOlderDms() walk had established: "Load earlier
+        // messages" came back over a fully loaded conversation and would not go
+        // away — clicking it fetches nothing and repaints nothing — and the
+        // "beginning of your direct message history" block disappeared with it.
+        // So it is only news to a client that holds nothing older than the page
+        // it was just given. Read before dmMsgs is replaced below.
+        if (!dmMsgs.length || !oldest || dmMsgs[0].id >= oldest) dmHasMore = !!res.hasMore;
+        if (!force && sig === loadDmMessages.lastSig) return;
         const kept = oldest ? dmMsgs.filter((m) => m.id < oldest) : [];
         dmMsgs = kept.concat(page);
         // Only claim this payload as rendered if it actually rendered. Stamping
@@ -19496,7 +19623,11 @@
             if (!res || !res.success) return;
             const older = res.messages || [];
             dmHasMore = !!res.hasMore;
-            if (!older.length) return;
+            // Repainted even with nothing to add: this is the walk reaching the
+            // beginning of the conversation, and the button that asked for it
+            // has to go — returning without a render left it on screen having
+            // visibly done nothing.
+            if (!older.length) { renderDmMessages(); return; }
             // Guarded against a double-fetch racing itself into duplicates.
             const have = new Set(dmMsgs.map((m) => m.id));
             const fresh = older.filter((m) => !have.has(m.id));

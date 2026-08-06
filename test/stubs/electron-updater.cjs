@@ -29,9 +29,17 @@ const autoUpdater = {
     },
     checkForUpdates() {
         state.checks++;
-        return state.checkFails
-            ? Promise.reject(new Error(state.checkFails))
-            : Promise.resolve(null);
+        if (!state.checkFails) return Promise.resolve(null);
+        // BOTH, in this order, because that is what the real one does:
+        // doCheckForUpdates()'s catch emits 'error' and then re-throws, so a
+        // failed check reaches the caller twice (AppUpdater.js — `this.emit(
+        // "error", e, …); throw e;`). Rejecting without the event let a
+        // .catch() that overwrote the error listener's considered answer look
+        // harmless here, which is exactly the bug it was hiding: a downloaded
+        // update being reported as an error and disappearing from the pill.
+        const err = new Error(state.checkFails);
+        (state.handlers.error || []).forEach((fn) => fn(err));
+        return Promise.reject(err);
     },
     downloadUpdate() { state.downloads++; return Promise.resolve([]); },
     // Recording this rather than quitting is itself one of the cases under test:

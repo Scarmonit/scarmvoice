@@ -589,7 +589,31 @@ function showWindow() {
     // renderer, socket, microphone permissions, board session — for the ~1s
     // before the NSIS installer force-killed it. `installing` keeps the guard up
     // for as long as the reason for it lasts.
-    if (installing || updater.gateOpen()) { showOnStart = true; focusSplash(); return; }
+    //
+    // …and the deflection has to have somewhere to deflect TO. `splashWanted` is
+    // decided once, at whenReady, from THIS process's argv — and it is false for
+    // exactly the launch the login item performs (--openAsHidden). So on a
+    // start-minimized profile the app window is hidden behind the gate, the tray
+    // does not exist yet (createTray runs in startApp, behind the same await),
+    // and ensureSplash() refuses to build anything: a double-click on the
+    // shortcut set showOnStart and then returned into silence, for as long as
+    // the gate lasted — fifteen seconds on a stalled feed, up to five minutes
+    // with an installer download in flight (GATE_DOWNLOAD_MS). That is the same
+    // three-way blackout splashWanted was corrected for, arriving by the other
+    // route, and clicking again could not help because focusSplash() is a no-op
+    // with no splash to focus.
+    //
+    // A second launch IS somebody asking, whatever this process was started
+    // with, so it gets the update screen regardless. Forced rather than by
+    // raising splashWanted, because that flag is the launch-kind decision and
+    // has exactly one home; once the window exists, every later ensureSplash()
+    // finds it and repaints.
+    if (installing || updater.gateOpen()) {
+        showOnStart = true;
+        ensureSplash(true);
+        focusSplash();
+        return;
+    }
     if (!win || win.isDestroyed()) { createWindow(true); return; }
     if (win.isMinimized()) win.restore();
     // revealWindow, not show(): a launch that started in the tray never applied
@@ -658,8 +682,11 @@ function paintSplash() {
     }
 }
 
-function ensureSplash() {
-    if (!splashWanted) return;
+// `force` is for a launch somebody performed by hand while the gate held the
+// window back — see showWindow(). splashWanted describes the launch THIS
+// process was started with, which cannot answer for a second one.
+function ensureSplash(force) {
+    if (!splashWanted && !force) return;
     if (splash && !splash.isDestroyed()) { paintSplash(); return; }
 
     splash = new BrowserWindow({
@@ -825,6 +852,13 @@ function registerProtocol() {
                 if (!text.trim()) return new Response('Missing text', { status: 400 });
                 const upstream = await net.ttsStream(text, voice, speaker);
                 if (!upstream || !upstream.ok) {
+                    // Drained on the way out, like every other response this
+                    // process walks away from: an unconsumed fetch body pins its
+                    // keep-alive connection until GC. A room announcing arrivals
+                    // and departures makes one of these per event, so a spell of
+                    // the TTS endpoint answering 429 leaks a socket per chime in
+                    // a process that stays up for weeks.
+                    if (upstream) { try { await upstream.body?.cancel(); } catch (e) { /* already gone */ } }
                     return new Response('TTS unavailable', { status: upstream ? upstream.status : 502 });
                 }
                 return new Response(upstream.body, {
@@ -960,6 +994,43 @@ const PRIVATE_V4 = [
     /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./   // CGNAT
 ];
 
+// The IPv4 address embedded in an IPv6 literal, as a dotted quad — or null when
+// there is not one.
+//
+// This exists because the human form never reaches here. isPrivateHost is only
+// ever asked about a `new URL(...).hostname`, and the WHATWG serializer writes
+// IPv6 as hex pieces: `https://[::ffff:127.0.0.1]/` arrives as
+// `[::ffff:7f00:1]`. So the trailing-dotted-quad test below could not fire on
+// anything, and the WHOLE IPv4-mapped range — loopback, RFC1918, link-local,
+// CGNAT — walked past the check that exists to stop a message-supplied image
+// URL reaching this machine's own network. Verified against node's parser.
+//
+// Matched on the hextets rather than on the text, and covering the three
+// prefixes that actually carry an address: `::a.b.c.d` (IPv4-compatible),
+// `::ffff:a.b.c.d` (IPv4-mapped) and `::ffff:0:a.b.c.d` (SIIT).
+function embeddedV4(h) {
+    if (!/^[0-9a-f:]+$/.test(h)) return null;
+    const halves = h.split('::');
+    if (halves.length > 2) return null;
+    const parts = (s) => (s ? s.split(':').filter((x) => x !== '') : []);
+    const head = parts(halves[0]);
+    const tail = halves.length === 2 ? parts(halves[1]) : [];
+    if (head.length + tail.length > 8) return null;
+    const groups = halves.length === 2
+        ? head.concat(new Array(8 - head.length - tail.length).fill('0'), tail)
+        : head;
+    if (groups.length !== 8) return null;
+    const g = groups.map((x) => parseInt(x, 16));
+    if (g.some((n) => !Number.isFinite(n))) return null;
+    // The leading 64 bits must be zero for any of the three forms…
+    if (g[0] || g[1] || g[2] || g[3]) return null;
+    // …and what follows them names which form it is.
+    const embeds = (g[4] === 0 && (g[5] === 0 || g[5] === 0xffff)) ||
+        (g[4] === 0xffff && g[5] === 0);
+    if (!embeds) return null;
+    return [(g[6] >> 8) & 255, g[6] & 255, (g[7] >> 8) & 255, g[7] & 255].join('.');
+}
+
 function isPrivateHost(hostname) {
     const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
     if (!h) return true;
@@ -970,7 +1041,11 @@ function isPrivateHost(hostname) {
         // IPv6: loopback, unique-local (fc00::/7) and link-local (fe80::/10).
         if (h === '::1' || h === '::') return true;
         if (/^f[cd]/.test(h) || /^fe[89ab]/.test(h)) return true;
-        // ::ffff:127.0.0.1 and friends.
+        // ::ffff:127.0.0.1 and friends — as the parser actually writes them.
+        const mapped = embeddedV4(h);
+        if (mapped) return PRIVATE_V4.some((re) => re.test(mapped));
+        // …and as they would be written by hand, for any caller that does not
+        // come through new URL().
         const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(h);
         if (v4) return PRIVATE_V4.some((re) => re.test(v4[1]));
     }
@@ -2281,13 +2356,24 @@ app.whenReady().then(async () => {
         //   --updated (a chain: the  -> carry resumeVisible, the intent the
         //     relaunch found ANOTHER    original session recorded)
         //     update)
+        //   a SECOND launch arriving  -> true   (they asked, mid-gate; see
+        //     while the gate was open           showOnStart in showWindow)
+        //
+        // `showOnStart` belongs in that list and was missing from it, so the two
+        // halves of one decision disagreed: the in-process reveal consults it
+        // (see decideReveal, which reads `!showOnStart`) and this cross-process
+        // handover did not. Start hidden at sign-in, double-click the shortcut
+        // while an update downloads, and the click was recorded, honoured by
+        // nothing, and then discarded outright — the installer relaunched with
+        // --updated, this flag said false, and the app the user had asked for
+        // twice came back into the tray.
         //
         // Written and flushed here, at the verdict — before installNow()'s own
         // flush, and immune to beforeInstall (its everShown guard keeps it
         // silent for this never-shown window).
         try {
             store.set({
-                updateResumeVisible: resumeVisible ||
+                updateResumeVisible: resumeVisible || showOnStart ||
                     !(process.argv.includes('--openAsHidden') || process.argv.includes('--updated'))
             });
             store.flush();

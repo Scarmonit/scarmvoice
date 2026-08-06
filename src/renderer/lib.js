@@ -258,18 +258,27 @@
         return 'file';
     }
 
+    // Prototype-free and hoisted, for the same reason SEARCH_OPS and HAS_KINDS
+    // below are: the key is a FILE EXTENSION chosen by whoever sent the
+    // attachment, and a plain object literal answers for `constructor` and
+    // `__proto__` as well as for its own keys. Both survive .toLowerCase(), so
+    // `notes.constructor` looked up the Object function — truthy, so it was
+    // returned instead of falling through to 'file', and ScarmIcons.markup()
+    // then stringified it, missed, and drew nothing at all. Every other
+    // unrecognised extension gets the generic glyph.
+    const FILE_ICONS = Object.assign(Object.create(null), {
+        pdf: 'doc', doc: 'doc', docx: 'doc', rtf: 'doc', txt: 'doc', md: 'doc',
+        xls: 'sheet', xlsx: 'sheet', csv: 'sheet', tsv: 'sheet',
+        ppt: 'slides', pptx: 'slides', key: 'slides',
+        zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
+        json: 'app', xml: 'app', yml: 'app', yaml: 'app', js: 'app', ts: 'app',
+        exe: 'app', msi: 'app', bat: 'app', ps1: 'app',
+        dmg: 'disc', iso: 'disc', img: 'disc'
+    });
+
     function fileIcon(name) {
         const ext = (String(name || '').split('.').pop() || '').toLowerCase();
-        const map = {
-            pdf: 'doc', doc: 'doc', docx: 'doc', rtf: 'doc', txt: 'doc', md: 'doc',
-            xls: 'sheet', xlsx: 'sheet', csv: 'sheet', tsv: 'sheet',
-            ppt: 'slides', pptx: 'slides', key: 'slides',
-            zip: 'archive', rar: 'archive', '7z': 'archive', gz: 'archive', tar: 'archive',
-            json: 'app', xml: 'app', yml: 'app', yaml: 'app', js: 'app', ts: 'app',
-            exe: 'app', msi: 'app', bat: 'app', ps1: 'app',
-            dmg: 'disc', iso: 'disc', img: 'disc'
-        };
-        return map[ext] || 'file';
+        return FILE_ICONS[ext] || 'file';
     }
 
     // ---- urls --------------------------------------------------------------

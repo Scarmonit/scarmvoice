@@ -2224,8 +2224,22 @@
                 // muted themselves transmitted through a reconnect, and
                 // somebody deafened heard the room.
                 resumeState = { muted: prevMuted, deafened: prevDeafened, mutedBeforeDeafen: prevMBD };
+                const myGen = joinGen;
                 join().then(() => {
                     rejoining = false;
+                    // A join() CANCELLED by a leave() resolves rather than
+                    // rejecting — every `gen !== joinGen` checkpoint inside it
+                    // is a bare return — so a settled promise is not a
+                    // reconnection. Sign out, be taken over by another device,
+                    // or click Disconnect inside the backoff, and this
+                    // announced "reconnected" for a call that no longer exists
+                    // and re-applied the pre-drop mute/deafen onto a torn-down
+                    // engine: the buttons painted as pressed, the status line
+                    // went to `warn`, and the tray menu carried a Mute
+                    // checkmark, until the next successful join cleared it.
+                    // joinGen moves only in leave(), so the pair is exact —
+                    // the same test the mic-selection path already uses.
+                    if (myGen !== joinGen || !joined) return;
                     // Belt and braces: join() consumes resumeState as it sets
                     // its own state, so this is a no-op on the normal path and
                     // the fallback if anything ever bypasses it.

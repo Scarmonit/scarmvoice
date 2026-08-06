@@ -1452,3 +1452,156 @@ describe('the stylesheet behind the shell', () => {
         expect(CSS).toMatch(/#app\[data-layout="custom"\] \.pane-resize \{ display: none; \}/);
     });
 });
+
+// ---------------------------------------------------------------------------
+// THE EDITOR MEASURED A PANEL THAT WAS NOT ON SCREEN.
+//
+// `channels` deliberately covers TWO nodes — the channel list and the
+// conversation list — because they occupy the same place, so a layout treats
+// them as one element (see `also` in EDIT_ELEMENTS). applyLayout is aware of
+// that. measureAll(), rectOf() and everything built on them were not: they read
+// $(el.elId) alone.
+//
+// So opening Edit Mode from inside Direct Messages measured the hidden
+// #sidebar as 0x0 for an element the user could plainly see. materialize()
+// read that as "nothing to measure", invented its placeholder rectangle, and
+// applyLayout stamped it onto the VISIBLE #dm-sidebar — the conversation list
+// torn out of its column into a small box over the chat. The element was then
+// unrecoverable from inside the editor, because the frame drawing, the hit test
+// and Reset all measured the same hidden node.
+describe('Edit Mode opened from inside Direct Messages', () => {
+    // #dm-sidebar takes the channel list's place in the grid; #sidebar is
+    // hidden, and a hidden element measures as nothing.
+    function dmRects() {
+        realRect = window.Element.prototype.getBoundingClientRect;
+        window.Element.prototype.getBoundingClientRect = function () {
+            if (this.id === 'app') return mk(APP.x, APP.y, APP.w, APP.h);
+            const st = this.style;
+            if (st && st.left && st.width) {
+                const f = (v) => parseFloat(v) / 100;
+                return mk(APP.x + f(st.left) * APP.w, APP.y + f(st.top) * APP.h,
+                    f(st.width) * APP.w, f(st.height) * APP.h);
+            }
+            if (this.hidden) return mk(0, 0, 0, 0);
+            if (this.id === 'dm-sidebar') return mk(...GRID.sidebar);
+            if (GRID[this.id]) return mk(...GRID[this.id]);
+            return mk(0, 0, 0, 0);
+        };
+    }
+
+    async function inDms() {
+        await boot({});
+        await settle();
+        $('rail-dms').click();
+        await settle();
+        expect($('sidebar').hidden, 'the channel list is put away').toBe(true);
+        expect($('dm-sidebar').hidden, 'the conversation list is up').toBe(false);
+        dmRects();
+        await openEditor();
+    }
+
+    it('measures the list that is actually on screen', async () => {
+        await inDms();
+        // Move something else, which is what makes the arrangement custom and
+        // measures every element on the way.
+        gesture(centreOf('main'), { x: centreOf('main').x + 60, y: centreOf('main').y });
+        await settle();
+        expect(mode()).toBe('custom');
+        // The conversation list keeps the column it was in, rather than being
+        // dropped into the 35%/35% placeholder a 0x0 measurement invents.
+        expect(boxOf('dm-sidebar')).toEqual({ x: 72, y: 0, w: 300, h: 700 });
+    });
+
+    it('still offers the element to be selected and framed', async () => {
+        await inDms();
+        gesture(centreOf('main'), { x: centreOf('main').x + 60, y: centreOf('main').y });
+        await settle();
+        // The frame is drawn over the list you can SEE. Merely existing is not
+        // enough: with the hidden node measured, applyLayout stamped the
+        // placeholder onto both of them, so #sidebar picked up a box of its own
+        // and an outline appeared — around the wrong rectangle.
+        const frame = [...$('edit-frames').querySelectorAll('.ed-frame')]
+            .find((f) => f.querySelector('.ed-name').textContent === 'Channels list');
+        expect(frame, 'the list is outlined').toBeTruthy();
+        const px = (v) => Math.round(parseFloat(v));
+        expect([px(frame.style.left), px(frame.style.top),
+            px(frame.style.width), px(frame.style.height)])
+            .toEqual([...GRID.sidebar]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// RENAME COMMITTED EVERY UNSAVED DRAG, AND "DON'T SAVE" COULD NOT TAKE IT BACK.
+//
+// The button's only job is the name, but it wrote normalizeLayout(work) — the
+// whole working copy — and refreshed neither entrySnapshot nor `dirty`, unlike
+// the two other write paths. closeEditMode(revert) restores the snapshot on
+// screen and then ends with a bare applyLayout(), which re-reads
+// settings.layouts and puts the committed geometry straight back.
+describe('renaming a layout', () => {
+    let app;
+    async function withSavedLayout() {
+        app = await boot({});
+        await settle();
+        stubRects();
+        await openEditor();
+        // Make it custom and save it under a name, so there is something to
+        // rename that is not the default.
+        gesture(centreOf('main'), { x: centreOf('main').x + 40, y: centreOf('main').y });
+        await settle();
+        $('edit-save').click();
+        await settle();
+        // saveWork() on the default asks for a name.
+        $('dialog-input').value = 'Wide';
+        $('dialog-ok').click();
+        await settle();
+        return boxOf('main');
+    }
+
+    // What is on disk, which is what closeEditMode's trailing applyLayout() and
+    // the next launch both read.
+    const storedEls = () => (app.settings.layouts || [])[0].els;
+
+    it('writes the name without committing the drag that came before it', async () => {
+        await withSavedLayout();
+        const before = JSON.stringify(storedEls().members);
+
+        // An unsaved drag, then Rename.
+        gesture(centreOf('members-panel'), { x: 200, y: 300 });
+        await settle();
+        $('edit-layout-rename').click();
+        await settle();
+        $('dialog-input').value = 'Wide 2';
+        $('dialog-ok').click();
+        await settle();
+
+        expect(app.settings.layouts[0].name).toBe('Wide 2');
+        expect(JSON.stringify(storedEls().members)).toBe(before);
+    });
+
+    it('leaves “don’t save” able to take the drag back', async () => {
+        await withSavedLayout();
+        const saved = boxOf('members-panel');
+
+        gesture(centreOf('members-panel'), { x: 200, y: 300 });
+        await settle();
+        expect(boxOf('members-panel')).not.toEqual(saved);
+
+        $('edit-layout-rename').click();
+        await settle();
+        $('dialog-input').value = 'Wide 2';
+        $('dialog-ok').click();
+        await settle();
+
+        // Leave, and decline to save. closeEditMode(revert) ends with a bare
+        // applyLayout() that re-reads what is stored — so anything the rename
+        // committed comes straight back, whatever the revert put on screen.
+        $('edit-close').click();
+        await settle();
+        const ok = $('dialog-ok');
+        if (!$('dialog').hidden) { $('dialog-cancel').click(); await settle(); }
+        void ok;
+
+        expect(boxOf('members-panel')).toEqual(saved);
+    });
+});

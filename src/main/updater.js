@@ -91,7 +91,18 @@ function load() {
         // version being re-announced does not.
         if (info && info.version && info.version !== state.version) downloaded = false;
         emit({
-            status: 'available', version: info.version, notes: n.text, noteBlocks: n.blocks,
+            // …and if it is the same version, we still HAVE it. electron-updater
+            // compares the feed against the RUNNING version, not against what is
+            // on disk, so an update that has downloaded and is waiting for a
+            // click is re-announced by every periodic recheck. Reporting
+            // 'available' for it walked the pill back from "ready to install" to
+            // a bare version line, defeated startDownload()'s own 'ready' guard
+            // one statement later, and re-opened a download UI at 0% for bytes
+            // that were not moving — every five minutes, for the life of the
+            // session. `downloaded` is kept outside `status` for exactly this:
+            // having the bytes is a fact, not a phase.
+            status: downloaded ? 'ready' : 'available',
+            version: info.version, notes: n.text, noteBlocks: n.blocks,
             // Whatever went wrong last time was about a different attempt.
             stalled: false, error: null
         });
@@ -602,8 +613,16 @@ function checkOnLaunch() {
     if (!available()) { emit({ status: 'idle' }); return; }
     const u = load();
     if (!u) { emit({ status: 'idle' }); return; }
+    // Swallowed, not re-reported. electron-updater signals a failed check
+    // TWICE — doCheckForUpdates()'s catch emits 'error' and then re-throws, so
+    // the returned promise rejects as well — and the 'error' LISTENER is the one
+    // that knows what a failure may do to `state`: it deliberately keeps a
+    // downloaded update at 'ready' rather than un-downloading it. A second
+    // emit from here landed one microtask later and overwrote that with
+    // 'error', which the renderer has no copy for at all (the pill vanishes)
+    // and which makes scheduleAutoRestart() a no-op. See checkNow().
     if (!checkedAtStartup) {
-        u.checkForUpdates().catch((e) => emit({ status: 'error', error: e.message }));
+        u.checkForUpdates().catch(() => {});
     }
     // An app left open for days used to check exactly once, at launch, and
     // then never again — so the longer it ran the more out of date it got.
@@ -629,13 +648,30 @@ function checkNow() {
     if (!available()) { emit({ status: 'none' }); return { ok: false, reason: 'dev' }; }
     const u = load();
     if (!u) return { ok: false, reason: 'unavailable' };
-    u.checkForUpdates().catch((e) => emit({ status: 'error', error: e.message }));
+    // The 'error' listener has already had its say by the time this rejects,
+    // and its answer is the considered one — an offline check must not
+    // un-download an update that is sitting on disk waiting to be installed.
+    //
+    // This used to re-emit `status: 'error'` on top of it. There is no
+    // UPDATE_COPY entry for 'error', so the whole update pill disappeared from
+    // the window; and scheduleAutoRestart() starts `if (state.status !==
+    // 'ready') return`, so a "Restart now" clicked earlier and remembered in
+    // installWhenReady was silently dropped when the call ended. Both for a
+    // failed check that had nothing to do with the update already fetched.
+    // Settings › Check for updates is unguarded, so one click on a dropped
+    // connection was enough.
+    u.checkForUpdates().catch(() => {});
     return { ok: true };
 }
 
 function startDownload() {
     const u = load();
     if (!u) return { ok: false };
+    // The bytes are already here. Checked as well as the status, because status
+    // is a single field that the re-announcement of an already-downloaded
+    // version overwrites a statement before this is called — which is how a
+    // finished download re-opened itself at 0%.
+    if (downloaded) return { ok: true };
     if (state.status === 'downloading' || state.status === 'ready') return { ok: true };
     // ZERO, not whatever the last download left behind.
     //

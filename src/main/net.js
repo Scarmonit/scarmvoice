@@ -538,6 +538,14 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     }
 
     if (res.status === 401) {
+        // The primary read this request SPENT the flag on did not happen, and
+        // every exit below returns straight out of board() — so the restore
+        // further down, whose own comment names "a 401 from the middleware" as
+        // the first case it exists for, could never run for one. Put the debt
+        // back before any of the five returns can take it away: a needsAccount
+        // answer is a routine reply from _middleware.js, and a disbelieved 401
+        // is one this file goes out of its way to treat as transient.
+        if (spentPrimary) forcePrimary = true;
         let msg = 'unauthorized';
         let body = null;
         try {
@@ -619,6 +627,10 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     try {
         data = await res.json();
     } catch (e) {
+        // Same debt, same reason, same early return: "a body that would not
+        // parse" is the third case the restore below names, and this branch
+        // leaves before reaching it.
+        if (spentPrimary) forcePrimary = true;
         // An unreadable body on a retriable status is Cloudflare's edge, not
         // our Worker — an HTML 502/503/504 or a 1101 exception page. Writes are
         // never retried internally (that would post the message twice), so

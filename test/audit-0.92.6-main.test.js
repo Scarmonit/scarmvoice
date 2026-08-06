@@ -67,12 +67,46 @@ describe('whether the startup update screen is wanted', () => {
 
     // The same question is answered one screen below, for updateResumeVisible,
     // and the two must not drift: both are "did anybody ask for this launch".
-    it('matches the test the installing branch already writes', () => {
-        const want = "resumeVisible || !(process.argv.includes('--openAsHidden') || process.argv.includes('--updated'))";
+    //
+    // They are not IDENTICAL, and this used to demand that they were. The
+    // handover write has one input this one cannot have: `showOnStart`, set when
+    // a second launch arrives while the gate still holds the window. splashWanted
+    // is decided at whenReady, before any such launch can be signalled, so it
+    // could never consult it — but the handover is written at the verdict, long
+    // after, and omitting it there threw the ask away at the last moment. The
+    // installer relaunches with --updated, the flag said false, and the app
+    // somebody had asked for twice came back into the tray.
+    //
+    // So the rule is containment, not equality: the handover must ask everything
+    // splashWanted asks, and may ask more.
+    // The write in the INSTALLING branch. createWindow has one of its own —
+    // `updateResumeVisible: false`, consuming the flag on the way in — so the
+    // one under test is picked out by the decision it carries, not by position.
+    const handover = () => {
         const flat = mainCode.replace(/\s+/g, ' ');
-        // Twice: once here, once in the updateResumeVisible write.
-        const hits = flat.split(want.replace(/\s+/g, ' ')).length - 1;
-        expect(hits).toBeGreaterThanOrEqual(2);
+        const found = [];
+        for (let at = flat.indexOf('updateResumeVisible:'); at > -1;
+            at = flat.indexOf('updateResumeVisible:', at + 1)) {
+            found.push(flat.slice(at, flat.indexOf('}', at)));
+        }
+        const write = found.find((w) => w.includes('process.argv'));
+        expect(write, 'the installing branch decides updateResumeVisible from the launch').toBeTruthy();
+        return write;
+    };
+
+    it('is answered the same way by the write that crosses the install', () => {
+        const a = handover();
+        expect(a).toMatch(/resumeVisible/);
+        expect(a).toMatch(/--openAsHidden/);
+        expect(a).toMatch(/--updated/);
+    });
+
+    it('carries a launch that arrived while the gate held the window', () => {
+        // Both halves, or the reveal and the handover disagree about the same
+        // double-click: decideReveal reads it as `!showOnStart`.
+        expect(handover()).toMatch(/showOnStart/);
+        const reveal = mainCode.slice(mainCode.indexOf('const startHidden ='));
+        expect(reveal.slice(0, reveal.indexOf(';'))).toMatch(/showOnStart/);
     });
 
     // The handover protection must NOT come to rest on splashWanted again:
