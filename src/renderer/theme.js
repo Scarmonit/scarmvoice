@@ -217,8 +217,11 @@
         if (!k || !colors.length) return hex;
         const [ch, cs] = colorAt(colors, ladder);
         const [, , l] = hexToHsl(hex);
-        const cap = base === 'light' ? 0.42 : 0.55;
-        const s = Math.min(cap, cs * k * (base === 'light' ? 0.5 : 0.62));
+        // Scaled up with the pane-alpha curve: the opaque floats have to keep
+        // family with panes that now pass three times the chroma, or every
+        // menu reads as a grey card on a vivid page.
+        const cap = base === 'light' ? 0.48 : 0.6;
+        const s = Math.min(cap, cs * k * (base === 'light' ? 0.6 : 0.8));
         return hslToHex(ch, s, l);
     }
 
@@ -247,12 +250,13 @@
     }
 
     // The gradient underlay itself: the user's colours as one smooth linear
-    // fade at the chosen angle — or the colour, alone. CSS 0deg points UP, so
-    // the angle is flipped to put the FIRST colour at the top at 0°, which is
-    // how the direction slider reads most naturally.
+    // fade at the chosen angle — or the colour, alone. The angle is CSS's,
+    // untranslated: 180° runs the first colour top→bottom, 0° bottom→top —
+    // the reference reads its slider the same way, so a theme carried between
+    // the two apps keeps its direction instead of flipping.
     function underlayOf(cfg) {
         if (cfg.colors.length < 2) return cfg.colors[0];
-        return 'linear-gradient(' + ((cfg.angle + 180) % 360) + 'deg, ' + cfg.colors.join(', ') + ')';
+        return 'linear-gradient(' + cfg.angle + 'deg, ' + cfg.colors.join(', ') + ')';
     }
 
     function rgbaOf(hex, a) {
@@ -314,7 +318,12 @@
                 root.style.setProperty('--theme-underlay', underlayOf(cfg));
                 applied.push('--theme-underlay');
             }
-            const alpha = +(1 - (cfg.base === 'light' ? 0.42 : 0.58) * k).toFixed(3);
+            // Measured against the reference: its panes at 50% intensity pass
+            // ~2.7× the chroma these did at 60% — the glass was three times too
+            // thick. Dark panes now run to alpha .08 at full intensity (the
+            // reference's 100% is likewise nearly bare gradient); light panes
+            // keep more paper because dark text sits on them.
+            const alpha = +(1 - (cfg.base === 'light' ? 0.62 : 0.92) * k).toFixed(3);
             Object.keys(TOKENS).forEach((tok) => {
                 const t = TOKENS[tok];
                 if (!t[col]) return;

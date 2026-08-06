@@ -12169,11 +12169,16 @@
         tmPaint();
         applyTheme();
         tmModal.hidden = false;
+        // The app steps aside rather than sliding under the panel — see
+        // html.tm-docked in styles.css. On <html>, because #app is rebuilt
+        // around sign-in and a class there would not survive it.
+        document.documentElement.classList.add('tm-docked');
     }
 
     function closeThemeModal() {
         if (tmModal.hidden) return;
         tmModal.hidden = true;
+        document.documentElement.classList.remove('tm-docked');
         if (tmSaveTimer) tmFlushSave();
     }
 

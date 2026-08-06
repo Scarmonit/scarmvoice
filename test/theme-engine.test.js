@@ -116,9 +116,11 @@ const rgba = (v) => {
 describe('the custom tint', () => {
     it('lays ONE gradient under the window and makes the panes glass over it', () => {
         T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 80, angle: 0 });
-        // The underlay carries the whole blend, in order, as one smooth fade —
-        // flipped so 0° puts the first colour at the top (CSS 0deg points up).
-        expect(rootVar('--theme-underlay')).toBe('linear-gradient(180deg, #ff0000, #0000ff)');
+        // The underlay carries the whole blend, in order, as one smooth fade.
+        // The angle is CSS's own, untranslated — 180° runs the first colour
+        // top-to-bottom — matching how the reference reads its slider, so a
+        // theme carried between the two apps keeps its direction.
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(0deg, #ff0000, #0000ff)');
         // The structural panes are translucent NEUTRAL — the gradient supplies
         // the colour, so a pane that tinted itself would fight it.
         const chat = rgba(rootVar('--chat'));
@@ -134,7 +136,7 @@ describe('the custom tint', () => {
 
     it('honours the gradient direction', () => {
         T.apply('custom', { base: 'dark', colors: ['#ff0000', '#0000ff'], intensity: 60, angle: 90 });
-        expect(rootVar('--theme-underlay')).toBe('linear-gradient(270deg, #ff0000, #0000ff)');
+        expect(rootVar('--theme-underlay')).toBe('linear-gradient(90deg, #ff0000, #0000ff)');
     });
 
     it('a single colour is a uniform wash, not a gradient', () => {

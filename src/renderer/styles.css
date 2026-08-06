@@ -6815,12 +6815,18 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
    with no canvas involved. The hue strip is one rainbow gradient. Both
    thumbs are positioned by app.js from the current colour. */
 .tm-panel {
-  position: fixed; top: var(--tb); right: 0; bottom: 0; width: 300px;
+  position: fixed; top: var(--tb); right: 0; bottom: 0; width: 290px;
   z-index: 350;   /* over the drawers, under the lightbox/dialog tier (400+) */
   display: flex; flex-direction: column;
   background: var(--float); border-left: 1px solid var(--float-edge);
   box-shadow: var(--shadow-drawer);
 }
+/* The app SHIFTS aside for the panel rather than sliding under it. Overlaying
+   swallowed the right edge of the chat header — the search field and the
+   members toggle vanished whenever the picker was open, which is exactly when
+   somebody is looking at the whole window. #app is a flex child, so the
+   margin compresses the grid and the chat column absorbs it via minmax. */
+html.tm-docked #app { margin-right: 290px; }
 .tm-head {
   flex: none; display: flex; align-items: center; gap: 8px;
   padding: 14px 16px 6px;

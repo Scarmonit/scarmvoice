@@ -129,9 +129,9 @@ describe('the customizer', () => {
         await settle(4);
         expect($('tm-angle-val').textContent).toBe('90°');
         expect(app.settings.customTheme.angle).toBe(90);
-        // CSS 0deg points up, so 90° on the slider is 270deg in the string —
-        // the first colour enters from the left.
-        expect(rootVar('--theme-underlay')).toContain('270deg');
+        // The slider IS the CSS angle, untranslated — the reference's
+        // convention, so a shared theme config never flips.
+        expect(rootVar('--theme-underlay')).toContain('90deg,');
         // …and the strip does NOT turn with it: it is an editor, not a window.
         expect($('tm-gradstrip').style.background).toContain('linear-gradient(90deg');
 
