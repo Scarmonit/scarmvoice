@@ -12966,11 +12966,16 @@
     //   2. A full-screen overlay naming who did it, above everything, swallowing
     //      every input in the capture phase so nothing underneath is reachable.
     //   3. The ban sound.
-    //   4. After five full seconds, app.exit(0) via the one IPC that hard-kills
-    //      the process rather than asking it nicely.
+    //   4. After BAN_EXIT_SECS full seconds, app.exit(0) via the one IPC that
+    //      hard-kills the process rather than asking it nicely.
     //
     // Guarded against replay — two devices' events, or a reconnect redelivering,
     // must not stack overlays or arm a second exit timer.
+
+    // How long the notice stays up before the process dies. One constant, read
+    // by both the countdown and the timer, so the two can never disagree about
+    // how long the person has to read it.
+    const BAN_EXIT_SECS = 10;
     let banApplied = false;
     function applyBanned(m) {
         if (banApplied) return;
@@ -12997,7 +13002,8 @@
                 '<div class="ban-icon">' + I('ban') + '</div>' +
                 '<h1>You have been banned</h1>' +
                 '<p>You have been banned by <strong>' + esc(by) + '</strong>.</p>' +
-                '<p class="ban-count">ScarmVoice will close in <span id="ban-secs">5</span> seconds.</p>' +
+                '<p class="ban-count">ScarmVoice will close in <span id="ban-secs">' +
+                    BAN_EXIT_SECS + '</span> seconds.</p>' +
             '</div>';
         document.body.appendChild(ov);
 
@@ -13023,9 +13029,9 @@
             const p = a.play(); if (p && p.catch) p.catch(() => {});
         } catch (e) { /* the lockout does not depend on the sound */ }
 
-        // (4) Five FULL seconds on screen, then dead. The countdown is display
-        // only — the exit is armed once, here, and nothing can disarm it.
-        let secs = 5;
+        // (4) BAN_EXIT_SECS FULL seconds on screen, then dead. The countdown is
+        // display only — the exit is armed once, here, and nothing can disarm it.
+        let secs = BAN_EXIT_SECS;
         const tick = setInterval(() => {
             secs -= 1;
             const el = $('ban-secs');
@@ -13036,7 +13042,7 @@
             try { L.app.hardExit(); } catch (e) {}
             // If the IPC somehow failed, the least-bad fallback is a dead window.
             setTimeout(() => { try { window.close(); } catch (e) {} }, 1000);
-        }, 5000);
+        }, BAN_EXIT_SECS * 1000);
     }
 
     function acctError(msg) {
