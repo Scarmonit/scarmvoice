@@ -236,6 +236,10 @@
         'bell-off': '<path d="M18 8.8a6 6 0 0 0-12 0c0 6-2.4 7.6-2.4 7.6h16.8S18 14.8 18 8.8"/>' +
             '<path d="M13.7 20.2a2 2 0 0 1-3.4 0"/><path d="M3.6 3.4l16.8 17.2"/>',
         moon: '<path d="M20.4 13.6A8.6 8.6 0 0 1 10.4 3.6a8.6 8.6 0 1 0 10 10z"/>',
+        // Two curved arrows chasing each other — the sync-with-Windows theme
+        // tile's glyph.
+        sync: '<path d="M4.6 10a7.6 7.6 0 0 1 12.9-3.4L19.4 8.5M19.4 4.5v4h-4"/>' +
+            '<path d="M19.4 14a7.6 7.6 0 0 1-12.9 3.4L4.6 15.5M4.6 19.5v-4h4"/>',
         // Painter's palette — the customize-your-theme title glyph.
         palette: '<path d="M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 1.5-3.6 2.1 2.1 0 0 1 1.5-3.6H19a2 2 0 0 0 2-2A9 9 0 0 0 12 3z"/>' +
             '<circle cx="7.8" cy="10.4" r=".9"/><circle cx="12" cy="7.6" r=".9"/><circle cx="16.2" cy="10.4" r=".9"/>',

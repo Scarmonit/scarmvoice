@@ -6932,4 +6932,66 @@ body.edit-mode.edit-dragging #edit-shield { cursor: grabbing; }
 }
 .tm-wide:hover { background: var(--ctl-hover); border-color: var(--ctl-line-hover); }
 .tm-wide .ico { width: 15px; height: 15px; }
-#btn-theme-custom { margin-top: 8px; }
+/* A real secondary button, not a +6 whisper over the sheet: --ctl runs about
+   +18 over the settings pane, which is the weight the reference gives its
+   secondary actions. */
+#btn-theme-custom {
+  margin-top: 4px; background: var(--ctl); border: 1px solid var(--ctl-line);
+}
+#btn-theme-custom:hover { background: var(--ctl-hover); border-color: var(--ctl-line-hover); }
+
+/* ---- theme swatch tiles -------------------------------------------------
+   Each tile is FILLED with the actual message-column colour of the theme it
+   stands for — the fills are literal BY DESIGN, because a preview of a fixed
+   palette must look identical under every active theme. The radio input is
+   stretched invisibly across its tile: keyboard focus, semantics and the
+   set-theme wiring all work unchanged. */
+.set-sub-minor {
+  margin: 12px 0 8px; font-size: 12.5px; font-weight: 700;
+  color: var(--panel-name);
+}
+.theme-tiles { display: flex; gap: 9px; margin: 0 0 8px; }
+.theme-tile {
+  position: relative; width: 48px; height: 48px; border-radius: 10px;
+  cursor: pointer; border: 1px solid var(--outline);
+  display: grid; place-items: center;
+}
+.theme-tile input[type="radio"] {
+  -webkit-appearance: none; appearance: none;
+  position: absolute; inset: 0; margin: 0; border-radius: 10px; cursor: pointer;
+}
+.theme-tile:hover { border-color: var(--nav-idle); }
+.tile-light  { background: #fafbfc; }
+.tile-ash    { background: #333336; }
+.tile-dark   { background: #1a1a1e; }
+.tile-onyx   { background: #000000; }
+.tile-system { background: linear-gradient(135deg, #fafbfc 49.5%, #1a1a1e 50.5%); }
+/* The custom tile wears the wheel it opens. */
+.tile-custom {
+  background: conic-gradient(from 210deg,
+    #f23f43, #dfa32c, #23a55a, #26ddd0, #5865f2, #c297d8, #f23f43);
+}
+/* Grey holds against both halves of the split tile. */
+.tile-ico { width: 18px; height: 18px; color: #96979e; pointer-events: none; }
+/* Selected is marked TWICE, like the reference: a ring, and a checkmark badge
+   — a tile has no visible label, so a ring alone reads as hover. */
+.theme-tile:has(input:checked) {
+  border-color: transparent;
+  outline: 3px solid var(--slider); outline-offset: 2px;
+}
+.theme-tile:has(input:checked)::after {
+  content: "✓"; position: absolute; top: -8px; right: -8px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--slider); color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+  border: 2px solid var(--sheet);
+}
+.theme-tile:has(input:focus-visible) {
+  outline: 3px solid var(--accent-line); outline-offset: 2px;
+}
+/* One line under the row, for whichever tile is hovered or selected. min-height
+   so the row below does not jump while the pointer roams. */
+.theme-tile-desc {
+  margin: 0 0 6px; min-height: 18px;
+  font-size: 13px; color: var(--panel-sub); line-height: 1.4;
+}

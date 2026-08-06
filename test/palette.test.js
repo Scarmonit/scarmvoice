@@ -339,8 +339,11 @@ describe('every colour goes through a token', () => {
     // …and the custom theme picker's spectrum (#tm-sv*/#tm-hue): the
     // saturation square's white/black fades and the hue strip's rainbow ARE
     // the colour space being picked from — they would be wrong in any theme's
-    // tokens, because they must look identical in every theme.
-    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox|\.pc-x|#tm-sv|#tm-hue/;
+    // tokens, because they must look identical in every theme. The theme
+    // swatch tiles (.tile-*) are the same case: each is a preview of one
+    // FIXED palette, and a preview that answered to the active theme would
+    // show every theme as itself.
+    const BLACK_ON_PURPOSE = /video|#stage|\.cam-|\.pick|\.yt-|\.msg-att|\.sc-|\.lb-|\.up-bar|#lightbox|\.pc-x|#tm-sv|#tm-hue|\.tile-/;
 
     const relLum = (hexStr) => {
         const h = hexStr.length === 4

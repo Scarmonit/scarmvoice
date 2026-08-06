@@ -14907,6 +14907,28 @@
             applyTheme();
             renderA11yPreview();
         });
+
+    // The one line under the theme tiles: the description of whichever tile
+    // the pointer is over, falling back to the selected one. The tiles carry
+    // their own copy in data-desc, so this never has to know the themes — a
+    // seventh tile is a seventh label, nothing more.
+    function syncThemeTileDesc(hoverTile) {
+        const el = $('theme-tile-desc');
+        if (!el) return;
+        let tile = hoverTile;
+        if (!tile) {
+            const checked = document.querySelector('input[name="set-theme"]:checked');
+            tile = checked && checked.closest('.theme-tile');
+        }
+        el.textContent = (tile && tile.dataset.desc) || '';
+    }
+    // Painted with the radios, so opening Settings starts on the selection.
+    radioPainters.push(() => syncThemeTileDesc());
+    document.querySelectorAll('.theme-tile').forEach((t) => {
+        t.addEventListener('mouseenter', () => syncThemeTileDesc(t));
+        t.addEventListener('mouseleave', () => syncThemeTileDesc());
+        t.addEventListener('change', () => syncThemeTileDesc());
+    });
     $('set-share-quality').addEventListener('change', async (e) => {
         await saveSettings({ shareQuality: e.target.value });
         voice.setShareQuality(e.target.value);

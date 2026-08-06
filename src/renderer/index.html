@@ -1363,52 +1363,42 @@
       <section class="set-group" data-nav-group="App Settings" data-nav-icon="moon">
         <h3>Appearance</h3>
         <h4 class="set-sub">Theme</h4>
-        <div class="set-radios" id="set-theme-radios">
-          <label class="set-radio">
-            <input type="radio" name="set-theme" value="dark">
-            <span class="set-radio-body">
-              <span class="set-radio-title">Dark</span>
-              <span class="set-radio-sub">The layered shades this app was designed in</span>
-            </span>
+        <!-- Swatch TILES, not a radio list: each tile is filled with the actual
+             message-column colour of the theme it names, so the set can be read
+             at a glance instead of from six lines of prose. Light → dark, then
+             sync, then custom — a scannable order. The descriptions survive
+             underneath: one line, for whichever tile is hovered or selected.
+             The radios are real inputs stretched invisibly over their tiles,
+             so keyboard, form semantics and the existing wiring all stand. -->
+        <h5 class="set-sub-minor">Default Themes</h5>
+        <div class="theme-tiles" id="set-theme-tiles" role="radiogroup" aria-label="Theme">
+          <label class="theme-tile tile-light" title="Light"
+                 data-desc="Light — the same layout in layered off-whites">
+            <input type="radio" name="set-theme" value="light" aria-label="Light">
           </label>
-          <label class="set-radio">
-            <input type="radio" name="set-theme" value="ash">
-            <span class="set-radio-body">
-              <span class="set-radio-title">Ash</span>
-              <span class="set-radio-sub">A softer, ashy grey — the dark theme with the lights up</span>
-            </span>
+          <label class="theme-tile tile-ash" title="Ash"
+                 data-desc="Ash — a softer, ashy grey; the dark theme with the lights up">
+            <input type="radio" name="set-theme" value="ash" aria-label="Ash">
           </label>
-          <label class="set-radio">
-            <input type="radio" name="set-theme" value="onyx">
-            <span class="set-radio-body">
-              <span class="set-radio-title">Onyx</span>
-              <span class="set-radio-sub">Near-pure black, made for OLED and dim rooms</span>
-            </span>
+          <label class="theme-tile tile-dark" title="Dark"
+                 data-desc="Dark — the layered shades this app was designed in">
+            <input type="radio" name="set-theme" value="dark" aria-label="Dark">
           </label>
-          <label class="set-radio">
-            <input type="radio" name="set-theme" value="light">
-            <span class="set-radio-body">
-              <span class="set-radio-title">Light</span>
-              <!-- It said "The same layout, inverted", which was true and was the
-                   problem: the light theme has its own palette now. -->
-              <span class="set-radio-sub">The same layout in layered off-whites</span>
-            </span>
+          <label class="theme-tile tile-onyx" title="Onyx"
+                 data-desc="Onyx — near-pure black, made for OLED and dim rooms">
+            <input type="radio" name="set-theme" value="onyx" aria-label="Onyx">
           </label>
-          <label class="set-radio">
-            <input type="radio" name="set-theme" value="system">
-            <span class="set-radio-body">
-              <span class="set-radio-title">Sync with computer</span>
-              <span class="set-radio-sub">Follows the Windows light/dark setting</span>
-            </span>
+          <label class="theme-tile tile-system" title="Sync with computer"
+                 data-desc="Sync with computer — follows the Windows light/dark setting">
+            <input type="radio" name="set-theme" value="system" aria-label="Sync with computer">
+            <span class="ico tile-ico" data-icon="sync" aria-hidden="true"></span>
           </label>
-          <label class="set-radio">
-            <input type="radio" name="set-theme" value="custom">
-            <span class="set-radio-body">
-              <span class="set-radio-title">Custom</span>
-              <span class="set-radio-sub">Your own colours, over a dark or light base</span>
-            </span>
+          <label class="theme-tile tile-custom" title="Custom"
+                 data-desc="Custom — your own colours, over a dark or light base">
+            <input type="radio" name="set-theme" value="custom" aria-label="Custom">
           </label>
         </div>
+        <p class="theme-tile-desc" id="theme-tile-desc" aria-live="polite"></p>
         <button type="button" class="keycap" id="btn-theme-custom">Customize your theme…</button>
         <!-- Kept so nothing that reads it breaks; the radios above write through
              to the same setting. -->

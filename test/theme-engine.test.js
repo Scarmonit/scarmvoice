@@ -79,6 +79,18 @@ describe('the presets', () => {
         expect(lum(ashRail)).toBeLessThan(lum(ashChat));
     });
 
+    it('onyx keeps edges visible while it crushes surfaces', () => {
+        // The unselected radio ring measured ~#242427 under onyx — an
+        // affordance nobody could see. Edges are compressed far more gently
+        // than the surfaces they outline.
+        T.apply('onyx');
+        const ring = rootVar('--well-ring');
+        const well = rootVar('--well');
+        expect(lum(ring)).toBeGreaterThan(45);
+        expect(lum(ring)).toBeGreaterThan(lum(well) * 2.5);
+        expect(lum(rootVar('--outline'))).toBeGreaterThan(lum(rootVar('--chat')) * 2);
+    });
+
     it('both report dark-based chrome for the native caption buttons', () => {
         expect(T.apply('ash').base).toBe('dark');
         expect(T.apply('onyx').base).toBe('dark');

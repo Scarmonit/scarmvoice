@@ -31,6 +31,30 @@ beforeAll(async () => {
     await settle(30);
 });
 
+describe('the theme tiles', () => {
+    it('are a light-to-dark row of swatches, each filled with its own theme', () => {
+        const tiles = [...document.querySelectorAll('#set-theme-tiles .theme-tile input')]
+            .map((i) => i.value);
+        // Light → dark, then sync, then custom: a scannable order, unlike the
+        // dark/lighter/darkest/lightest shuffle the radio list had.
+        expect(tiles).toEqual(['light', 'ash', 'dark', 'onyx', 'system', 'custom']);
+        // …under a group label that leaves room for a second group later.
+        expect(document.querySelector('.set-sub-minor').textContent).toBe('Default Themes');
+    });
+
+    it('shows the hovered description, then falls back to the selected one', async () => {
+        await pickRadio('dark');
+        const desc = () => $('theme-tile-desc').textContent;
+        expect(desc()).toMatch(/^Dark/);
+
+        const onyxTile = document.querySelector('.tile-onyx');
+        onyxTile.dispatchEvent(new window.Event('mouseenter'));
+        expect(desc()).toMatch(/^Onyx/);
+        onyxTile.dispatchEvent(new window.Event('mouseleave'));
+        expect(desc()).toMatch(/^Dark/);
+    });
+});
+
 describe('the preset themes', () => {
     it('dark is the stylesheet alone — nothing written inline', async () => {
         await pickRadio('dark');

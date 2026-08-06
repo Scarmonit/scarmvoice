@@ -180,12 +180,20 @@
         return hslToHex(h, s * 0.45, Math.min(1, l * 0.82 + 0.115));
     }
 
+    // Edges, rings and rules: tokens whose entire job is to hold contrast
+    // AGAINST the surfaces around them. Onyx must not compress these with the
+    // surfaces — doing so took the unselected radio ring from #45454a to
+    // ~#242427, an affordance nobody could see on a near-black pane.
+    const EDGE = /line|ring|edge|rule|outline|track/;
+
     // Onyx: the same ladder compressed toward black. Multiplicative, so the
     // steps between surfaces survive — a flat subtraction crushes them into
-    // one indistinguishable void.
-    function onyxOf(hex) {
+    // one indistinguishable void. Edges are compressed far more gently: the
+    // darker the surfaces get, the MORE the things outlined on them need
+    // their outlines.
+    function onyxOf(hex, isEdge) {
         const [h, s, l] = hexToHsl(hex);
-        return hslToHex(h, s * 0.7, l * 0.52);
+        return hslToHex(h, s * 0.7, l * (isEdge ? 0.85 : 0.52));
     }
 
     // Custom: keep the ramp's lightness ladder — it is what makes the app read
@@ -232,11 +240,13 @@
         clearVars(root);
 
         if (name === 'ash' || name === 'onyx') {
-            const f = name === 'ash' ? ashOf : onyxOf;
+            const f = name === 'ash'
+                ? (hex) => ashOf(hex)
+                : (hex, tok) => onyxOf(hex, EDGE.test(tok || ''));
             Object.keys(TOKENS).forEach((tok) => {
                 const dark = TOKENS[tok][0];
                 if (!dark) return;
-                root.style.setProperty(tok, f(dark));
+                root.style.setProperty(tok, f(dark, tok));
                 applied.push(tok);
             });
             return { base: 'dark', color: f(TB_SEED.dark), symbolColor: SYMBOL.dark, bg: f(BG_SEED.dark) };
