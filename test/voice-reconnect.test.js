@@ -253,6 +253,73 @@ describe('a room socket that dropped', () => {
         expect(v.isMuted()).toBe(false);
     });
 
+    // LEAVING DURING A RECONNECT DID NOTHING AT ALL.
+    //
+    // scheduleRejoin() called leave() itself and then armed a retry ladder whose
+    // timer handles nothing stored. For the whole ~15s that followed, the engine
+    // sat at joined=false / joining=false / rejoining=true — and leave()'s first
+    // line returns early on exactly that state. So every teardown in that window
+    // was a no-op and the ladder rejoined the call regardless: sign out, get
+    // banned, get taken over by another device, or just click Disconnect while
+    // it said "reconnecting…", and you were back in the call seconds later.
+    it('a leave during the backoff cancels the rejoin', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+
+        current().self.emit('roomLeft', { state: 'failed' });
+        await settle();
+        expect(v.isJoined()).toBe(false);      // torn down by scheduleRejoin
+
+        // The person (or a sign-out, or a takeover) leaves while the ladder is
+        // still counting down.
+        v.leave();
+        await vi.advanceTimersByTimeAsync(30000);
+
+        expect(inits).toBe(1);                 // no second meeting was ever built
+        expect(v.isJoined()).toBe(false);
+    });
+
+    // THE RECONNECT OPENED THE MICROPHONE OF SOMEBODY WHO HAD MUTED THEMSELVES.
+    //
+    // The state was put back AFTER join() resolved, so the rejoin ran the
+    // ordinary join path first: muted = false, then applyTransmit() acquiring
+    // the mic, and only then the restoring disable. A muted person transmitted
+    // through their own reconnect.
+    it('never opens the mic unmuted while restoring a muted call', async () => {
+        const v = makeVoice();
+        await joinUp(v);
+        v.setMuted(true);
+
+        // Instrumented AT BIRTH, not after the fact: the whole defect is a
+        // window that opens the moment the rebuilt meeting is joined and closes
+        // again a few statements later, so a spy installed once the join has
+        // landed sees nothing and passes either way.
+        const calls = [];
+        window.ScarmLazy.realtimekit = () => Promise.resolve({
+            init: () => {
+                inits++;
+                const m = fakeMeeting();
+                m.self.enableAudio = vi.fn(() => { calls.push('enable'); return Promise.resolve(); });
+                m.self.disableAudio = vi.fn(() => { calls.push('disable'); return Promise.resolve(); });
+                meetings.push(m);
+                return Promise.resolve(m);
+            }
+        });
+
+        current().self.emit('roomLeft', { state: 'failed' });
+        await vi.advanceTimersByTimeAsync(4000);
+
+        expect(v.isJoined()).toBe(true);
+        expect(inits).toBe(2);
+        expect(v.isMuted()).toBe(true);
+        // The microphone is never asked to open on the way back in. It used to
+        // be: the rejoin ran the ordinary join path (muted = false, then
+        // applyTransmit acquiring the mic) and only put the person's own choice
+        // back once join() had resolved — so somebody who had muted themselves
+        // transmitted through their own reconnect.
+        expect(calls).not.toContain('enable');
+    });
+
     it('does not rejoin somebody the SFU removed', async () => {
         const v = makeVoice();
         await joinUp(v);

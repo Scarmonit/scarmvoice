@@ -179,7 +179,6 @@
         'plus-circle': '<path fill="currentColor" stroke="none" fill-rule="evenodd" clip-rule="evenodd" ' +
             'd="M12 2.6a9.4 9.4 0 1 0 0 18.8a9.4 9.4 0 1 0 0-18.8Z' +
             'M13.1 6.9v4h4v2.2h-4v4h-2.2v-4h-4v-2.2h4v-4Z"/>',
-        'plus-circle': '<circle cx="12" cy="12" r="8.6"/><path d="M12 8.2v7.6M8.2 12h7.6"/>',
         chevron: '<path d="M9.4 5.6L15.8 12l-6.4 6.4"/>',
         // The same mark drawn pointing down, rather than the right-pointing one
         // turned with a CSS rotate. A rotated glyph keeps its UNROTATED box, so

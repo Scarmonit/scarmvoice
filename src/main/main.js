@@ -243,6 +243,7 @@ function createWindow(forceShow) {
         revealDecided = true;
         console.log('[window] reveal path: ' + via);
         winReadyToShow = true;
+        revealWaiters.splice(0).forEach((fn) => { try { fn(); } catch (e) {} });
         // The window is built DURING the startup update check now, so being
         // ready to paint is no longer permission to appear: the verdict is.
         // Usually it has already arrived and this continues immediately; a
@@ -624,10 +625,21 @@ let splashWanted = false;        // false for a hidden login-item launch
 // session. Resolved by default for every window built after launch (tray
 // activate, the install-gave-up fallback), where the gate has long settled.
 let gateSettled = Promise.resolve('launch');
-// Whether ready-to-show has fired, for a startApp() that runs after it —
-// win.once('ready-to-show', closeSplash) on an event already in the past
-// would leave the update screen up until its 15s fallback.
+// Whether the window's reveal decision has been made, for a startApp() that
+// runs after it — win.once('ready-to-show', closeSplash) on an event already in
+// the past would leave the update screen up until its 15s fallback.
 let winReadyToShow = false;
+// …and for one that runs BEFORE it. The reveal itself stopped hanging off
+// ready-to-show alone precisely because that event is unreliable (see
+// decideReveal's three routes), but the splash teardown was left waiting on it
+// — so on the launches where it never fires, the app window appeared underneath
+// an "Updating…" screen that stayed there for the full 15 seconds. Anything
+// that used to wait for ready-to-show waits on the decision instead.
+const revealWaiters = [];
+function onRevealDecided(cb) {
+    if (winReadyToShow) { cb(); return; }
+    revealWaiters.push(cb);
+}
 // The gate answered 'installing': this process is being replaced and must build
 // nothing. See showWindow().
 let installing = false;
@@ -686,7 +698,25 @@ function ensureSplash() {
         splash.show();
         paintSplash();
     });
-    splash.on('closed', () => { splash = null; });
+    splash.on('closed', () => {
+        // closeSplash() disowns the window BEFORE destroying it, so `splash`
+        // still pointing at us means nobody in here asked for this — the user
+        // pressed the update screen's own Quit button.
+        //
+        // That button used to work by simple arithmetic: the splash was the
+        // only window in existence, so closing it emptied the window list and
+        // window-all-closed quit the app. The gate builds the app window
+        // alongside the check now, and that window — hidden, waiting on the
+        // verdict — keeps the process alive. So Quit closed the only thing on
+        // screen and left ScarmVoice running invisibly, with the update it was
+        // asked to abandon still applying behind it.
+        const userClosed = splash !== null;
+        splash = null;
+        if (!userClosed) return;
+        console.log('[update] the update screen was closed — quitting');
+        quitting = true;
+        app.quit();
+    });
 }
 
 function focusSplash() {
@@ -1674,21 +1704,36 @@ function registerIpc() {
     // `flash` is the Notifications → Taskbar Flashing switch, separate from the
     // count: somebody can want the number without the button pulsing at them.
     // Defaults true so an older renderer behaves exactly as it did.
-    handle('app:badge', (_e, count, flash) => {
+    //
+    // `showCount` is the OTHER half of that pair, and it has to be its own
+    // argument because the two answers are genuinely independent. The renderer
+    // used to express "Badges off" by sending a count of ZERO, which is
+    // indistinguishable from "nothing is unread" — and the zero branch below
+    // clears the flash and returns, so turning the badge off silently turned
+    // taskbar flashing off with it, whatever the flashing switch said. The
+    // count now always travels; this says whether to DRAW it. Defaults true,
+    // again so an older renderer is unchanged.
+    handle('app:badge', (_e, count, flash, showCount) => {
         if (!win || win.isDestroyed()) return false;
-        const n = Math.max(0, Math.floor(Number(count) || 0));
+        const total = Math.max(0, Math.floor(Number(count) || 0));
         const mayFlash = flash === undefined ? true : !!flash;
+        const mayShow = showCount === undefined ? true : !!showCount;
+        // What gets DRAWN. The flash below reads `total`, so a hidden badge
+        // still pulses the button for a message that just arrived.
+        const n = mayShow ? total : 0;
 
         if (!n) {
             try {
                 win.setOverlayIcon(null, '');
                 // Clearing the badge has to stop the taskbar flash too, or the
-                // button keeps pulsing for a count that is already gone.
-                win.flashFrame(false);
+                // button keeps pulsing for a count that is already gone —
+                // unless the flash is what is still being asked for.
+                if (mayFlash && total > lastBadge && !win.isFocused()) win.flashFrame(true);
+                else win.flashFrame(false);
             } catch (e) {
                 console.warn('[badge] clearing the overlay failed:', e.message);
             }
-            lastBadge = 0;
+            lastBadge = total;
             return true;
         }
         try {
@@ -1698,10 +1743,11 @@ function registerIpc() {
             console.warn('[badge] overlay failed:', e.message);
         }
         // Flash only when the count actually goes up, so a re-render can't make
-        // the taskbar button strobe — and only if it is still wanted.
-        if (mayFlash && n > lastBadge && !win.isFocused()) win.flashFrame(true);
+        // the taskbar button strobe — and only if it is still wanted. Against
+        // the real total, not the drawn one, so the two settings stay separate.
+        if (mayFlash && total > lastBadge && !win.isFocused()) win.flashFrame(true);
         else if (!mayFlash) { try { win.flashFrame(false); } catch (e) {} }
-        lastBadge = n;
+        lastBadge = total;
         return true;
     });
 
@@ -1765,7 +1811,19 @@ function registerIpc() {
         // quit() runs all of it; app.relaunch() is already armed and survives
         // the deferred second pass before-quit takes to retire presence.
         quitting = true;
-        app.relaunch();
+        // With the launch flags stripped. app.relaunch() inherits THIS
+        // process's argv by default, and two of those args are read by the
+        // next launch's reveal as "nobody asked for this window":
+        // --openAsHidden (Windows started us at sign-in) and --updated (the
+        // installer relaunched us). Somebody who opened the app from the tray
+        // after a login-item start and then used Settings → Restart got the
+        // app back in the tray, having watched it go — and every restart after
+        // that inherited the flag again, so it never came back on screen. A
+        // restart the user CLICKED is the plainest "somebody asked" there is.
+        app.relaunch({
+            args: process.argv.slice(1)
+                .filter((a) => a !== '--openAsHidden' && a !== '--updated')
+        });
         app.quit();
         return true;
     });
@@ -2011,10 +2069,13 @@ function startApp() {
     // AFTER the app window exists, or 'window-all-closed' would fire in the gap
     // between them and quit the app we are in the middle of starting.
     if (splash) {
-        // The window may have become ready while the gate was still deciding —
-        // a once() on an event already in the past never fires.
-        if (winReadyToShow) closeSplash();
-        else win.once('ready-to-show', closeSplash);
+        // On the reveal DECISION, not on ready-to-show: the window may have
+        // become ready while the gate was still deciding (a once() on an event
+        // already in the past never fires), and on some launches that event
+        // never arrives at all — which is why the reveal has three routes.
+        // Waiting on the same decision means the update screen comes down
+        // whichever route won.
+        onRevealDecided(closeSplash);
         // A window that never becomes ready must not leave the update screen up
         // for the rest of the session.
         setTimeout(closeSplash, 15000);
@@ -2227,6 +2288,15 @@ app.whenReady().then(async () => {
         updater.onInstallGaveUp(() => {
             if (!installing) return;
             installing = false;
+            // The verdict has to be taken back as well as the flag. Both
+            // consumers of gateSettled still read 'installing' — the reveal in
+            // createWindow (which returns without showing anything, and
+            // without even sending the visibility the renderer needs) and the
+            // renderer's opening auth:status, which is awaiting it. So the
+            // window startApp() is about to build would come up invisible and
+            // sessionless, reachable only by finding the tray icon. This
+            // process IS the app now; say so.
+            gateSettled = Promise.resolve('launch');
             startApp();
         });
         return;
@@ -2338,4 +2408,20 @@ app.on('before-quit', (e) => {
 // before quitting (window geometry, a slider you just released) is still
 // pending in a timer that quitting would otherwise discard.
 app.on('will-quit', () => { ptt.shutdown(); rt.stop(); store.flush(); log.close(); });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+    // NOT while the startup gate is handing this process to an installer.
+    //
+    // The gate builds its window beside the update check now, and an
+    // 'installing' verdict destroys that window before quitAndInstall runs
+    // (see the verdict branch above). Whether anything is left behind it comes
+    // down to splashWanted — and on a start-minimized profile, which is
+    // exactly the configuration the login item uses, no splash is ever built.
+    // So the destroy took the window count to zero, this fired, and the app
+    // quit inside the 500ms before installNow() could hand over. The update
+    // still applied, via electron-updater's autoInstallOnAppQuit — which
+    // installs SILENTLY AND DOES NOT RELAUNCH. The app simply vanished on
+    // update day for the people who run it hidden, and the install-gave-up
+    // fallback died with the process that was supposed to run it.
+    if (installing) return;
+    if (process.platform !== 'darwin') app.quit();
+});

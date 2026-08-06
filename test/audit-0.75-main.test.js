@@ -75,10 +75,27 @@ describe('the hardware acceleration setting can actually be read', () => {
 describe('restarting in place shuts down rather than terminating', () => {
     it('quits instead of exiting', () => {
         const h = mainCode.slice(mainCode.indexOf("handle('app:relaunch'"));
-        const body = h.slice(0, h.indexOf('});'));
-        expect(body).toContain('app.relaunch();');
+        // To the end of the handler, not to the first '});' — the relaunch call
+        // takes an options object now, so that landed inside its own argument.
+        const body = h.slice(0, h.indexOf('return true;'));
+        expect(body).toMatch(/app\.relaunch\(/);
         expect(body).toContain('app.quit();');
         expect(body).not.toMatch(/app\.exit\(/);
+    });
+
+    // …AND IT CAME BACK IN THE TRAY.
+    //
+    // app.relaunch() inherits this process's argv by default, and the next
+    // launch's reveal reads --openAsHidden and --updated as "nobody asked for
+    // this window". A session that started at sign-in, or one the installer
+    // relaunched, therefore handed the flag to its own replacement: the user
+    // clicked Restart in Settings, watched the app go, and it came back hidden.
+    it('does not hand the hidden-launch flags to the replacement', () => {
+        const h = mainCode.slice(mainCode.indexOf("handle('app:relaunch'"));
+        const body = h.slice(0, h.indexOf('return true;'));
+        expect(body).toMatch(/relaunch\(\s*\{[\s\S]*args:/);
+        expect(body).toContain("'--openAsHidden'");
+        expect(body).toContain("'--updated'");
     });
 
     // before-quit is what flushes and retires; will-quit is what releases the

@@ -136,12 +136,24 @@
     // '' is the valid sinkId for "Windows Default" and must be SET rather than
     // skipped — treating it as "nothing to do" is what once made choosing the
     // default speaker a silent no-op once a specific device had been picked.
+    // The announcement elements are in here too. prepare() stamps the sink onto
+    // each new <audio> ONCE, at creation, and then caches it against a key made
+    // of text+gender+speaker — nothing about the output device. So every
+    // announcement prepared before somebody changed their speaker went on
+    // playing out of the old one, for as long as it stayed in the cache: the
+    // call in the headphones, "Scarmonit joined" out of the desktop speakers.
+    // Exactly the split this function was written to fix, one cache further
+    // back. Re-routed rather than evicted — the point of preparing them is that
+    // they are already fetched and decoded.
     function applySink() {
         const id = settings.speakerDeviceId || '';
-        [joinEl, leaveEl, messageEl].concat(Object.values(uiEls)).forEach((el) => {
-            if (!el || typeof el.setSinkId !== 'function') return;
-            try { Promise.resolve(el.setSinkId(id)).catch(() => {}); } catch (e) {}
-        });
+        [joinEl, leaveEl, messageEl]
+            .concat(Object.values(uiEls))
+            .concat(Array.from(prepared.values()))
+            .forEach((el) => {
+                if (!el || typeof el.setSinkId !== 'function') return;
+                try { Promise.resolve(el.setSinkId(id)).catch(() => {}); } catch (e) {}
+            });
     }
 
     function setSettings(next) {

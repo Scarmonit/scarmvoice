@@ -651,6 +651,18 @@ async function board(pathname, { method = 'GET', body, query, primary } = {}) {
     // "slow down" (dm/send, account/login, register, verify, twofactor all
     // send one) and flagging it transient would auto-repost into a throttle
     // and replace "Too many attempts" with a generic offline message.
+
+    // An answer arrived, but not a usable read — a 401 from the middleware, a
+    // handler that threw its way to a 500, a body that would not parse. The
+    // primary read this request SPENT the flag on never actually happened, so
+    // the debt is still owed: without putting it back, the next attempt is
+    // served by whichever replica answers and the write it was meant to see is
+    // missing from it. Post a message, have the refetch fail, and your own
+    // message is absent until some later poll happens to catch up. The
+    // transport-failure path below already restores it for the case where
+    // nothing replied; this is the same rule for a reply that was no use.
+    if (spentPrimary && (!data || !data.success)) forcePrimary = true;
+
     if (res.status >= 500 && data && !data.success) {
         return Object.assign({}, data, { network: true });
     }
@@ -1010,7 +1022,7 @@ function fileProgressStream(filePath, total, onProgress) {
     const nodeStream = fs.createReadStream(filePath, { highWaterMark: 256 * 1024, ...range });
     const reader = Readable.toWeb(nodeStream).getReader();
     let sent = 0;
-    return new ReadableStream({
+    const web = new ReadableStream({
         async pull(controller) {
             const { done, value } = await reader.read();
             if (done) { controller.close(); return; }
@@ -1020,6 +1032,26 @@ function fileProgressStream(filePath, total, onProgress) {
         },
         cancel(reason) { try { reader.cancel(reason); } catch (e) {} }
     });
+    // Carried on the stream so a failed PUT can shut the descriptor directly —
+    // see closeUploadBody, which cannot go through the web stream because undici
+    // may hold a lock on it by then.
+    web.nodeStream = nodeStream;
+    return web;
+}
+
+// Close the file behind a body that is not going to be sent.
+//
+// createReadStream opens the descriptor EAGERLY, and the web stream's cancel()
+// above only runs if somebody cancels it — which nobody does when fetch()
+// rejects before the body is consumed (a dead socket, a refused connection, a
+// DNS failure). Verified under the shipped runtime: the PUT rejects, the body
+// is still unlocked, cancel() never fires, and the descriptor stays open until
+// GC happens to collect it. On Windows that is also a lock on the user's file,
+// held after an upload they were told had failed — and a flaky link means one
+// per retry.
+function closeUploadBody(body) {
+    if (!body || !body.nodeStream) return;
+    try { body.nodeStream.destroy(); } catch (e) {}
 }
 
 // item: { name, type, size, path? , bytes? }
@@ -1089,8 +1121,10 @@ async function uploadAttachment(item, onProgress) {
         return { success: false, error: 'Refused an upload URL that does not point at storage' };
     }
 
+    // Hoisted so both failure paths below can close the file behind it.
+    let body = null;
     try {
-        const body = item.path
+        body = item.path
             ? fileProgressStream(item.path, size, onProgress)
             : buf;
         const opts = {
@@ -1111,9 +1145,11 @@ async function uploadAttachment(item, onProgress) {
         // genuinely dead socket still rejects.
         const res = await fetch(ticket.url, opts);
         if (!res.ok) {
+            closeUploadBody(body);
             return { success: false, error: `Storage rejected the upload (${res.status})` };
         }
     } catch (e) {
+        closeUploadBody(body);
         // undici's message for a dropped connection is the bare string "fetch
         // failed", and this one goes straight into the upload row in the
         // composer, where it replaces the file's name. Somebody whose Wi-Fi

@@ -551,6 +551,31 @@ describe('Notifications', () => {
         expect(h.settings.taskbarFlash).toBe(false);
         await flip('set-taskbar-flash');
     });
+
+    // TURNING THE BADGE OFF TURNED THE FLASH OFF TOO.
+    //
+    // "Badges off" used to be expressed by sending a COUNT OF ZERO, which main
+    // cannot tell apart from "nothing is unread" — and its zero branch clears
+    // the flash and returns before reaching flashFrame(true). So the Taskbar
+    // Flashing switch quietly stopped working for anyone who preferred the
+    // nudge without the number. The count travels either way now; a third
+    // argument says whether to draw it.
+    it('keeps the count and "draw it" as separate answers', async () => {
+        h.lounge.app.setBadge.mockClear();
+        await flip('set-badge');
+        expect(h.settings.badgeUnread).toBe(false);
+        const off = h.lounge.app.setBadge.mock.calls.at(-1);
+        expect(off).toBeTruthy();
+        // Third argument, and it is what carries "badges off" — NOT a zeroed
+        // count, which main would read as "nothing is unread" and use to
+        // switch the flash off along with the number.
+        expect(off[2]).toBe(false);
+
+        h.lounge.app.setBadge.mockClear();
+        await flip('set-badge');
+        expect(h.settings.badgeUnread).toBe(true);
+        expect(h.lounge.app.setBadge.mock.calls.at(-1)[2]).toBe(true);
+    });
 });
 
 // The two internal inconsistencies the preview had: it drew a GENERATED avatar

@@ -1094,7 +1094,13 @@
                 on.onError('the camera needs an active call — join voice first');
                 return Promise.resolve(false);
             }
-            return Promise.resolve(meeting.self.enableVideo())
+            // Called inside the promise, not outside it. The SDK decorates
+            // enableVideo with a concurrency lock that THROWS SYNCHRONOUSLY
+            // when the lock is already held, and a bare call would let that
+            // throw straight past the .catch() below — no toast, and the
+            // exception surfacing in whichever caller happened to be on the
+            // stack. Two quick clicks on the camera button is enough.
+            return Promise.resolve().then(() => meeting.self.enableVideo())
                 .then(() => { pushCams(); return true; })
                 .catch((e) => {
                     const msg = (e && e.message) || String(e);
@@ -1801,6 +1807,16 @@
                 joined = true;
                 joining = false;
                 muted = false;
+                // An automatic rejoin is the SAME call resuming, and the person
+                // muted or deafened themselves in it. That has to be true
+                // BEFORE applyTransmit() runs a few lines down — it is the call
+                // that opens the microphone — not restored afterwards.
+                if (resumeState) {
+                    muted = resumeState.muted;
+                    deafened = resumeState.deafened;
+                    mutedBeforeDeafen = resumeState.mutedBeforeDeafen;
+                    resumeState = null;
+                }
                 lastTransmit = null;
                 txSent = null;              // a new engine has been told nothing
                 micPending = false;         // decided a few lines below, per join
@@ -1975,6 +1991,20 @@
         }
 
         function leave() {
+            // ABOVE the guard, both of these. A teardown cancels any automatic
+            // rejoin in flight, and the moment that matters most is the one
+            // where the guard below returns early: scheduleRejoin() has already
+            // called leave(), so for the whole ~15s backoff the engine is
+            // joined=false / joining=false / rejoining=true. Every leave() in
+            // that window did nothing at all — and the retry timer, which
+            // nothing stores a handle for, then rejoined the call regardless.
+            // Sign out, get banned, get taken over by another device, or simply
+            // click Disconnect while reconnecting, and the app put you back in
+            // the call seconds later — behind the login gate, in the case of a
+            // sign-out. scheduleRejoin re-arms this immediately after its own
+            // leave(), so the automatic path is unaffected.
+            rejoining = false;
+            resumeState = null;
             if (!joined && !joining) return;
             joinGen++;   // invalidate any join() still in flight
             // A pending SDK-recovery grace belongs to the call being left.
@@ -2057,6 +2087,9 @@
         // link — the person gets told, and the channel is one click away.
         let rejoining = false;
         const REJOIN_DELAYS_MS = [1200, 4000, 10000];
+        // The mute/deafen an automatic rejoin has to put back, handed to join()
+        // rather than applied after it resolves. See where join() consumes it.
+        let resumeState = null;
 
         // How long the SDK's own reconnect gets before the from-scratch rejoin
         // takes over. Its backoff makes attempts at roughly 1s/2s/4s — six
@@ -2125,7 +2158,6 @@
             // Arriving here through 'failed' while a grace window is open:
             // the SDK has answered the question the grace was asking.
             if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
-            rejoining = true;
             // What they had chosen, captured before leave() resets all three.
             const prevMuted = muted;
             const prevDeafened = deafened;
@@ -2134,6 +2166,10 @@
             try { console.warn(line); window.lounge.app.log(line); } catch (e) {}
             notify('connection lost — reconnecting…');
             leave();
+            // AFTER leave(), which now cancels any rejoin in flight — this
+            // teardown is the rejoin's own, so the flag is claimed back here
+            // rather than set before it and wiped.
+            rejoining = true;
 
             let attempt = 0;
             const tryJoin = () => {
@@ -2141,10 +2177,21 @@
                 // The user beat the timer — clicked the channel themselves.
                 // Their join is the fresh state they asked for; stand down.
                 if (joined || joining) { rejoining = false; return; }
+                // Handed to join() rather than restored after it. Putting it
+                // back on the way out meant the rejoin ran the ordinary join
+                // path first — muted = false, then applyTransmit() OPENING THE
+                // MICROPHONE and undeafening — and only re-applied the person's
+                // choice once join() resolved, which is after the whole
+                // post-connect chain. Measured: the mic acquisition completes
+                // in full before the restoring disable is issued. Somebody who
+                // muted themselves transmitted through a reconnect, and
+                // somebody deafened heard the room.
+                resumeState = { muted: prevMuted, deafened: prevDeafened, mutedBeforeDeafen: prevMBD };
                 join().then(() => {
                     rejoining = false;
-                    // The same call resuming, not a user action: state is put
-                    // back directly, with none of the action sounds.
+                    // Belt and braces: join() consumes resumeState as it sets
+                    // its own state, so this is a no-op on the normal path and
+                    // the fallback if anything ever bypasses it.
                     if (prevMuted || prevDeafened) {
                         muted = prevMuted;
                         deafened = prevDeafened;
@@ -2162,6 +2209,9 @@
                         setTimeout(tryJoin, REJOIN_DELAYS_MS[attempt]);
                     } else {
                         rejoining = false;
+                        // Given up: the next join is whatever the person asks
+                        // for, not a resumption of this one.
+                        resumeState = null;
                         try { window.lounge.app.log('[voice] could not reconnect after room loss'); } catch (e) {}
                         fail('reconnect', new Error('could not reconnect — rejoin when your connection is back'));
                     }

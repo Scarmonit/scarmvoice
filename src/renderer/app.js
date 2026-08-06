@@ -127,6 +127,7 @@
     let lastSoundId = 0;            // watermark so one message chimes exactly once
     let filterTimer = null;
     let filterScrollTop = null;      // scroll position to restore when filters clear
+    let filterScrollSurface = null;  // …and which list it was measured in
     // Active message filters. Types combine as OR; every other criterion is AND.
     const filter = {
         text: '',
@@ -1540,6 +1541,13 @@
                 const stale = dialogDone;
                 dialogDone = null;
                 stale(null);
+                // Release the trap as well as the promise. Every dialog reuses
+                // the SAME #dialog element, and trapFocus() early-returns for
+                // an element it is already holding — so the replacing dialog
+                // got no aria-label and no initial focus, and the old record's
+                // returnTo (pointing at whatever was focused two dialogs ago)
+                // is where the caret went when it finally closed.
+                releaseFocus($('dialog'));
             }
             dialogDone = resolve;
             $('dialog-title').textContent = title;
@@ -2373,16 +2381,27 @@
     // channels are excluded — they are muted precisely so they don't nag.
     let lastTaskbarBadge = -1;
     let lastTaskbarFlash = null;
+    let lastTaskbarShow = null;
     function setTaskbarBadge(total) {
         // Two settings, two answers — deliberately not folded together. Somebody
         // can want the count without the button pulsing at them, and Badges off
         // must not stop the flash the other switch is still asking for.
-        const n = (isDnd() || settings.badgeUnread === false) ? 0 : Math.max(0, total | 0);
+        //
+        // Which is why the count and "draw it" travel SEPARATELY. Sending 0 for
+        // Badges-off was the whole bug: main cannot tell that apart from "no
+        // unread messages", so it cleared the flash and returned, and the
+        // Taskbar Flashing switch quietly stopped working for anybody who had
+        // turned the number off. The real count always goes; this says whether
+        // it is drawn.
+        const n = isDnd() ? 0 : Math.max(0, total | 0);
         const flash = !isDnd() && settings.taskbarFlash !== false;
-        if (n === lastTaskbarBadge && flash === lastTaskbarFlash) return;   // don't re-flash on every render
+        const show = settings.badgeUnread !== false;
+        // don't re-flash on every render
+        if (n === lastTaskbarBadge && flash === lastTaskbarFlash && show === lastTaskbarShow) return;
         lastTaskbarBadge = n;
         lastTaskbarFlash = flash;
-        L.app.setBadge(n, flash);
+        lastTaskbarShow = show;
+        L.app.setBadge(n, flash, show);
     }
 
     // Channel name only — the '#' is a separate glyph in the header.
@@ -2447,6 +2466,7 @@
         // scroll to a position that means nothing in the conversation it lands
         // in.
         filterScrollTop = null;
+        filterScrollSurface = null;
         clearReply();            // the quoted message lives in the old channel
         cancelEdit();            // an editor left open would freeze renderMessages()
         if (threadOpen()) closeThread();
@@ -2708,9 +2728,19 @@
         // reintroduce exactly the interleaving this guard exists to stop, for a
         // switch made during the startup burst.
         const forChannel = pre ? pre.channel : channel;
+        // …and the SESSION it is for. teardownSession() empties `reads` on the
+        // way out precisely so the next person to sign in does not inherit the
+        // last one's unread watermarks — but a list request already on the wire
+        // resumes afterwards and writes `reads[channel] = res.maxId` into the
+        // freshly emptied map, then saveReads() persists that one-channel map
+        // over the whole account's stored one. Sign out with a poll in flight
+        // and every other channel came back unread. The channel guard below
+        // cannot catch it: the channel has not changed, the session has.
+        const forSession = sessionGen;
         const res = pre ? await pre.res : await L.board('list', {
             query: { channel: forChannel, limit: PAGE, before: before || null }
         });
+        if (forSession !== sessionGen) return;   // the session ended mid-flight
         if (forChannel !== channel) return;   // stale — a switch happened mid-flight
 
         if (authGone(res)) return;
@@ -2797,7 +2827,16 @@
                 notifyForPosts(fresh);
             }
         }
-        hasMore = !!res.hasMore;
+        // `res.hasMore` answers "is there anything older than THIS page", and a
+        // refresh only ever asked about the newest one. Somebody who has paged
+        // back below it is holding that older history already — so adopting the
+        // answer put a "Load earlier messages" row back over the channel intro
+        // they had just reached, and clicking it fetched nothing. Only take the
+        // server's word when the page it describes is the oldest thing we hold.
+        const freshOldest = (res.posts && res.posts.length) ? res.posts[0].id : 0;
+        if (before || !freshOldest || !posts.length || posts[0].id >= freshOldest) {
+            hasMore = !!res.hasMore;
+        }
 
         // Cap the retained history. Paging back far enough used to grow `posts`
         // without limit for the life of the session, and every render walks the
@@ -10848,6 +10887,25 @@
         return !!(slot && $('composer') && $('composer').parentElement === slot);
     }
 
+    // The inline rectangle a custom layout writes onto #composer is meaningless
+    // the moment the DM drawer takes it. Those numbers are only positions
+    // because of one DIRECT-CHILD rule — `#app[data-layout="custom"] >
+    // [data-el]` in styles.css — and inside #dm-composer-slot it stops
+    // matching. `position` falls back to static, so left/top/z-index quietly go
+    // inert; `width: <n>%` and `transform: scale(z)` do NOT, and they are then
+    // resolved against the conversation column instead of the app box. Anyone
+    // with a custom Edit Mode layout opened a DM and found the message box
+    // drawn at a fraction of its width, scaled. Stripped on the way in, written
+    // again by applyLayout() on the way out.
+    function clearComposerGeometry() {
+        const form = $('composer');
+        if (!form) return;
+        form.style.left = form.style.top = form.style.width = form.style.height = '';
+        form.style.transform = '';
+        form.style.transformOrigin = '';
+        form.style.zIndex = '';
+    }
+
     // Called by moveComposer() on the way OUT of a conversation.
     function restoreComposerToLayout() {
         const form = $('composer');
@@ -10855,6 +10913,10 @@
         const lay = editing ? work : activeLayout();
         const want = lay.custom ? $('app') : $('main');
         want.appendChild(form);
+        // …and the geometry with it. Re-parenting alone left the box in its new
+        // home with nothing telling it where to be, which is what the comment
+        // on applyLayout has always claimed this path does.
+        applyLayout(lay);
     }
 
     // ---- edit mode ---------------------------------------------------------
@@ -14204,6 +14266,15 @@
     // you are in a call and never touches the published track.
 
     let micTest = null;
+    // Bumped by every stopMicTest(), so a capture still opening when one lands
+    // knows it has been cancelled. stopMicTest() itself can only release a
+    // capture that already EXISTS, and micTest is not assigned until after the
+    // getUserMedia await — so every teardown that fires inside the 100-500ms
+    // device-open window was a no-op, and the stream installed itself
+    // afterwards regardless. Closing Settings mid-open therefore left the
+    // microphone running with the sheet gone: the OS in-use light stayed lit,
+    // and nothing on screen could turn it off.
+    let micTestGen = 0;
 
     function vadValue() { return Number(settings.speakThreshold) || 6; }
     function vadRms() { return vadValue() / 100; }
@@ -14215,6 +14286,10 @@
     }
 
     function stopMicTest() {
+        // Before the guard: a capture that has not finished opening yet is
+        // exactly the one this cannot otherwise reach, and cancelling it is the
+        // whole point of the generation.
+        micTestGen++;
         if (!micTest) return;
         micTest.off();
         micTest.meter.stop();
@@ -14229,6 +14304,7 @@
     async function startMicTest() {
         stopMicTest();
         const gen = sessionGen;
+        const myTest = micTestGen;
         let stream;
         try {
             // The SAME processing chain the call uses. Testing with plain
@@ -14257,7 +14333,15 @@
         // Test, not closing Settings, not signing out — the microphone-in-use
         // light stayed on until the app was quit. Whichever capture loses the
         // race is stopped here.
-        if (gen !== sessionGen || micTest) {
+        //
+        // `micTestGen` is the third, and it covers the case the other two
+        // miss: the SURFACE that owns this meter going away. closeSettings()
+        // and a pane switch both call stopMicTest(), which does nothing while
+        // micTest is null — so closing the sheet during the device-open window
+        // left the microphone open behind it with no way back to the Stop
+        // button. The sibling meter (startApMeter) guards the same race by
+        // re-checking its popover; a generation says it once for every caller.
+        if (gen !== sessionGen || micTest || myTest !== micTestGen) {
             try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
             return;
         }
@@ -14565,6 +14649,14 @@
             // decides whether the scroll position is reset — see below.
             const changed = target !== items.find((it) => !it.g.hidden)?.g;
             if (micTest && target !== voiceGroup) stopMicTest();
+            // A hotkey recorder dies with the pane it was armed on, exactly as
+            // it dies with the sheet (see closeSettings). Its two window
+            // CAPTURE listeners are detached only by finish(), so leaving the
+            // pane left them live over a screen with no visible "press a
+            // key…" button — and the next keystroke anywhere was swallowed and
+            // written straight into the push-to-talk / mute / deafen binding,
+            // with the control that would have shown it now hidden.
+            if (changed && cancelKeyRecorder) cancelKeyRecorder();
             items.forEach((it) => {
                 const on = it.g === target;
                 it.g.hidden = !on;
@@ -16929,13 +17021,30 @@
     // other nine.
     function applyFilter() {
         const active = filterActive();
+        const surface = dmOpen ? 'dm' : 'channel';
         const box = dmOpen ? $('dm-messages') : $('messages');
-        if (active && filterScrollTop === null) filterScrollTop = box.scrollTop;
+        if (active && filterScrollTop === null) {
+            filterScrollTop = box.scrollTop;
+            // WHICH list that offset belongs to. It is a bare number otherwise,
+            // and the surface can change between capture and restore: closeDm()
+            // nulls dmOpen before it calls clearSearch(), so leaving a searched
+            // conversation restored the DM's offset into the channel list —
+            // scrolling the channel to a position that means nothing in it.
+            // openDm() has the mirror problem.
+            filterScrollSurface = surface;
+        }
         if (dmOpen) renderDmMessages(); else renderMessages();
         if (!active) {
             if (filterScrollTop !== null) {
-                const t = filterScrollTop; filterScrollTop = null;
-                requestAnimationFrame(() => { box.scrollTop = t; if (!dmOpen) settleScroll(); });
+                const t = filterScrollTop;
+                const from = filterScrollSurface;
+                filterScrollTop = null;
+                filterScrollSurface = null;
+                // Dropped rather than misapplied when the list has changed
+                // underneath: no restore is better than the wrong one.
+                if (from === surface) {
+                    requestAnimationFrame(() => { box.scrollTop = t; if (!dmOpen) settleScroll(); });
+                }
             }
         }
         if (!dmOpen) settleScroll();
@@ -17662,7 +17771,13 @@
             await loadMessages(false, posts.length ? posts[0].id : null);
         }
 
-        const el = document.querySelector(`.msg[data-id="${target.id}"]`);
+        // Scoped to the channel list. DM rows are the same `.msg` nodes with the
+        // same `data-id`, drawn from a different table whose ids collide with
+        // this one's — and #dm-messages is not emptied on the way out of a
+        // conversation. A document-wide lookup could therefore return a hidden
+        // DM row, which swallows the "can't jump" message and then scrolls
+        // nothing: the click simply did nothing at all.
+        const el = $('messages').querySelector(`.msg[data-id="${target.id}"]`);
         if (!el) {
             toast('That message is further back than we can jump — try the website');
             return;
@@ -19082,8 +19197,13 @@
         // return it to a comment node planted beside it the first time a DM was
         // ever opened, so a box the user had since moved to the top of the
         // window came back to the bottom on the way out of every conversation.
-        if (intoDm && slot) slot.appendChild(form);
-        else restoreComposerToLayout();
+        if (intoDm && slot) {
+            slot.appendChild(form);
+            // See clearComposerGeometry: a custom layout's inline width and
+            // scale survive the move and are then resolved against the wrong
+            // box.
+            clearComposerGeometry();
+        } else restoreComposerToLayout();
 
         // Both callers can fire twice for one transition (setDmMode calls
         // closeDm, which moves the composer, and then moves it again), so the
@@ -19119,6 +19239,16 @@
         $('dm-panel').classList.toggle('empty', dmMode);
         $('dm-profile').hidden = true;
         if (was) { moveComposer(false); setComposerPlaceholder(); }
+        // The HEAD has to come back too, and nothing here was repainting it.
+        // renderDmHead() is the only writer of the member count, the add and
+        // more buttons and the conversation's face, and it is called on the way
+        // IN and never on the way out — so closing a conversation left the
+        // person you had just been talking to sitting above the "Direct
+        // Messages" empty state, complete with two buttons that now act on
+        // nothing. Called with dmOpen already null, which is the state it
+        // paints from; the title it writes is corrected a line below for the
+        // one case that wants a different word.
+        renderDmHead();
         if (dmMode) { $('dm-title').textContent = 'Direct Messages'; renderDmMessages(); }
         renderDmSection();
     }

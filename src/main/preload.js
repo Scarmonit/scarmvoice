@@ -157,7 +157,7 @@ contextBridge.exposeInMainWorld('lounge', {
         notify: (payload) => ipcRenderer.invoke('app:notify', payload),
         setVoiceState: (state) => ipcRenderer.invoke('app:voiceState', state),
         // `flash` is the taskbar-flashing setting, separate from the count.
-        setBadge: (count, flash) => ipcRenderer.invoke('app:badge', count, flash),
+        setBadge: (count, flash, showCount) => ipcRenderer.invoke('app:badge', count, flash, showCount),
         openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
         // Theme. The renderer decides dark/light/follow-Windows; main owns the
         // system answer and restyles the native caption buttons to match.

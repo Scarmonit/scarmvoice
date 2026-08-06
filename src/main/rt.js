@@ -250,6 +250,15 @@ function stop() {
         // 'close'/'error' must not run at all — not against it, and certainly
         // not against whatever start() puts in its place a moment later.
         try { sock.removeAllListeners(); } catch (e) {}
+        // …but 'error' needs a floor under it. terminate() on a socket still in
+        // CONNECTING does not destroy anything: ws aborts the handshake and
+        // emits 'error' on the NEXT TICK, and an 'error' with no listener is
+        // the one EventEmitter event that THROWS. With every handler just
+        // removed, that lands as an uncaught exception in the main process —
+        // i.e. rebindRealtime() (stop() + start()) firing while a connect is
+        // mid-handshake could take the whole app down. The handshake window is
+        // 15s, so it is not a narrow one.
+        try { sock.on('error', () => {}); } catch (e) {}
         try { sock.terminate(); } catch (e) {}
     }
     attempts = 0;
