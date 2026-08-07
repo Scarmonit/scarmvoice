@@ -1489,12 +1489,37 @@ function registerIpc() {
             const ext = path.extname(safe);
             const stem = ext ? safe.slice(0, -ext.length) : safe;
 
+            // RESERVE the name, do not merely look at it. access() answers
+            // "was this free a moment ago", and the moment is the width of a
+            // whole network fetch: streamToFile awaits the response before it
+            // opens the file. Two downloads of one name — two messages
+            // carrying image.png, or one picture asked for twice — both saw
+            // ENOENT, both chose the same path, and both pipelined into it,
+            // because createWriteStream's default flags create-or-truncate.
+            // The bytes interleave and BOTH calls still answer success, from a
+            // handler whose own comment promises it never clobbers. `wx`
+            // creates or fails EEXIST, so exactly one caller can win a name.
             let target = path.join(dir, safe);
             for (let n = 2; ; n++) {
-                try { await fsp.access(target); } catch (e) { break; }   // free
-                target = path.join(dir, `${stem} (${n})${ext}`);
+                try {
+                    const h = await fsp.open(target, 'wx');
+                    await h.close();
+                    break;
+                } catch (e) {
+                    if (e.code !== 'EEXIST') throw e;
+                    target = path.join(dir, `${stem} (${n})${ext}`);
+                }
             }
-            await streamToFile({ key, url }, target);
+            try {
+                await streamToFile({ key, url }, target);
+            } catch (e) {
+                // The empty reservation is ours to clean up. streamToFile only
+                // unlinks after a failed PIPELINE; a fetch that throws before
+                // it never reaches that catch. Left behind, a 0-byte file both
+                // lies to the reader and holds the name against their retry.
+                try { await fsp.unlink(target); } catch (_) { /* already gone */ }
+                throw e;
+            }
             rememberRevealable(target);
             return { success: true, path: target };
         } catch (e) {
