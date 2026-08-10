@@ -6873,6 +6873,14 @@
             openProfileCard({ id: account.id, username: account.username });
         } },
         { name: 'settings', desc: 'Open settings', run: () => { openSettings(); } },
+        // Straight to the pane, not just to the sheet: openSettings() lands on
+        // Account, which is nowhere near what was asked for. Same two-step the
+        // theme panel's Back button and the notification menu use — the sheet
+        // has to exist before a pane in it can be shown, and openSettings is
+        // async because it re-reads the settings file first.
+        { name: 'about', desc: 'Open Settings › About', run: () => {
+            openSettings().then(() => showSettingsPane(settingsPaneByTitle('About')));
+        } },
         { name: 'dm', args: '[user]', desc: 'Open a direct message', run: (arg) => openDmFor(arg) },
         { name: 'mute', desc: 'Toggle your microphone', run: () => {
             if (!voice.isJoined()) return toast('Join voice first');

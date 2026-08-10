@@ -94,7 +94,8 @@ describe('the command menu', () => {
 
         expect(popOpen()).toBe(true);
         expect(popLabels()).toEqual(expect.arrayContaining([
-            '/profile', '/settings', '/dm [user]', '/mute', '/deafen', '/leave', '/theme', '/shrug'
+            '/profile', '/settings', '/about', '/dm [user]', '/mute', '/deafen',
+            '/leave', '/theme', '/shrug'
         ]));
     });
 
@@ -183,6 +184,30 @@ describe('running a command', () => {
         expect(sent(board)).toEqual([]);
         expect($('settings').hidden).toBe(false);
         expect(cmEditor().getValue()).toBe('');
+    });
+
+    it('/about goes to Settings › About, not just to settings', async () => {
+        // openSettings() lands on Account, so "opens the sheet" is not the same
+        // thing as "takes you to About" — the pane is what this asserts.
+        await bootRenderer({ user: ME, board: router() });
+
+        put('/about');
+        await settle(2);
+        await pressEnter();
+        await settle(4);
+
+        expect($('settings').hidden).toBe(false);
+        const pane = (title) => Array.from(document.querySelectorAll('#settings-body .set-group'))
+            .find((g) => {
+                const h = g.querySelector('h3');
+                return h && h.textContent.trim() === title;
+            });
+        const about = pane('About');
+        expect(about, 'no settings section headed About').toBeTruthy();
+        expect(about.hidden, 'the About pane was not the one shown').toBe(false);
+        // …and it is the ONLY one shown, i.e. the sheet did not simply open on
+        // whatever it opens on by default.
+        expect(pane('Account').hidden).toBe(true);
     });
 
     it('/profile opens your own profile card', async () => {
