@@ -205,6 +205,12 @@ const DEFAULTS = {
     // Whether the formatting toolbar is remembered between sessions. Off, like
     // the reference's: the bar is a thing you open when you want it.
     formatBarOpen: false,
+    // ":)" becomes 🙂 on the space after it, and again over the whole message on
+    // send. On by default, which is what every chat client this one is measured
+    // against does. Code is exempt whatever this says — a smiley inside
+    // backticks or a fenced block is nearly always code, and rewriting
+    // somebody's regex is not a feature.
+    emojiAutoConvert: true,
     // The last MESSAGE_HISTORY_MAX (25) message bodies, newest FIRST. Persisted
     // so the history survives a restart, and CLEARED BY teardownSession() the
     // way the drafts and the composer are: it is a record of what somebody

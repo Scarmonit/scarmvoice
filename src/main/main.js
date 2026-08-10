@@ -1758,6 +1758,27 @@ function registerIpc() {
     // re-fetches past the session cache, which is what the Retry there does.
     handle('update:history', (_e, force) => updater.history(!!force));
 
+    // THE TOAST IS ALWAYS SILENT, and that is the fix rather than an omission.
+    //
+    // A Windows toast raised with `silent: false` plays the OS default
+    // notification ding — Windows' own sound, chosen in Settings > System >
+    // Notifications, and nothing to do with this app. So the app shipped with a
+    // custom message chime AND asked Windows to play its stock one on top of it,
+    // which is what somebody with the window minimised actually heard: the
+    // system ding, over (or instead of) the chime this app is supposed to make.
+    // It was worst exactly where it mattered, because a toast only ever appears
+    // when the window is NOT focused.
+    //
+    // The sound for a new message is the renderer's, in every case: sounds.js
+    // owns it, it honours the notificationSound / disableAllSounds switches and
+    // Do Not Disturb, and it plays out of the speaker chosen in Settings — none
+    // of which the OS ding can be told. The renderer stays alive and audible
+    // behind the tray (backgroundThrottling is off and the autoplay policy is
+    // disabled at startup), so there is no case where handing the sound to
+    // Windows buys anything.
+    //
+    // `notificationSound` therefore now means one thing — the chime — instead of
+    // meaning the chime here and the Windows ding over there.
     handle('app:notify', (_e, payload) => {
         if (!store.get().notifications) return false;
         if (win && win.isFocused()) return false;         // you're already looking at it
@@ -1766,7 +1787,7 @@ function registerIpc() {
             title: (payload && payload.title) || 'ScarmVoice',
             body: (payload && payload.body) || '',
             icon: ICON,
-            silent: !store.get().notificationSound
+            silent: true
         });
         n.on('click', () => showWindow());
         n.show();

@@ -4321,6 +4321,77 @@
         }
     });
 
+    // ---- text emoticons ----------------------------------------------------
+    //
+    // ":( " becomes "🙁 " under the caret. The rules and the table are in lib.js,
+    // where they can be tested; this is the part that has to know about the
+    // editor. Two triggers, and they cover different ground:
+    //
+    //   • HERE, on the space that ends the emoticon — the visible half, so the
+    //     conversion happens while the message is being written rather than
+    //     surprising the writer after they press Enter.
+    //   • On SEND (see the submit handler), over the whole message — which is
+    //     what catches an emoticon typed at the very end, on a line finished
+    //     with shift+enter, or pasted in.
+    //
+    // Only for input the USER produced: cm.on('inputRead') fires for typing and
+    // pasting and nothing else, so a draft restored into the box, a recalled
+    // message and the emoji picker's own insertions never come through here.
+    //
+    // BEHIND A SWITCH (Settings › Chat › Formatting), read at the moment of the
+    // conversion rather than captured at startup — so turning it off stops the
+    // next keystroke converting, with no reload and nothing to reapply.
+    // `!== false` because a settings file written before this feature has no
+    // such key, and the default it must read as is the one the store declares.
+    function emojiConvertOn() { return settings.emojiAutoConvert !== false; }
+
+    // The send-time pass, as one place, so every composer asks the same
+    // question. Off means the text goes out exactly as it was typed.
+    function applyEmoticons(text) {
+        return emojiConvertOn() ? window.ScarmLib.emoticonsToEmoji(text) : text;
+    }
+
+    function emoticonAtCaret() {
+        if (!emojiConvertOn()) return;
+        const cur = cm.getCursor();
+        if (cm.somethingSelected()) return;
+        const before = cm.getRange({ line: cur.line, ch: 0 }, cur);
+        const hit = window.ScarmLib.emoticonBeforeCaret(before);
+        if (!hit) return;
+        // Code is exempt, the same as it is in the whole-message pass. A line
+        // inside a fenced block is code outright; on an ordinary line, an odd
+        // number of backticks in front of the token means the caret is inside an
+        // inline span that has been opened and not yet closed.
+        if (fenceBlocks(cm.getValue()).some((b) => cur.line > b.start && cur.line <= b.end)) return;
+        if ((before.slice(0, hit.start).match(/`/g) || []).length % 2) return;
+        cm.replaceRange(hit.emoji,
+            { line: cur.line, ch: hit.start },
+            { line: cur.line, ch: hit.start + hit.token.length },
+            '+emoticon');
+    }
+
+    cm.on('inputRead', (_, chg) => { if (chg && chg.origin === '+input') emoticonAtCaret(); });
+
+    // The same thing for the app's plain boxes — the thread reply, which is a
+    // real textarea rather than the editor above. `insertText` only: a deletion
+    // that happens to leave ":( " in front of the caret is not somebody typing
+    // an emoticon, and a paste is left to the send-time pass.
+    function wireEmoticonInput(el) {
+        if (!el) return;
+        el.addEventListener('input', (e) => {
+            if (!emojiConvertOn()) return;
+            if (e && e.inputType && e.inputType !== 'insertText') return;
+            const pos = el.selectionStart;
+            if (pos == null || pos !== el.selectionEnd) return;
+            const hit = window.ScarmLib.emoticonBeforeCaret(el.value.slice(0, pos));
+            if (!hit) return;
+            const end = hit.start + hit.token.length;
+            el.value = el.value.slice(0, hit.start) + hit.emoji + el.value.slice(end);
+            const caret = pos - hit.token.length + hit.emoji.length;
+            el.setSelectionRange(caret, caret);
+        });
+    }
+
     // ---- message recall (Ctrl+Up / Ctrl+Down) -----------------------------
     //
     // What you have already sent, walked backwards, the way a shell walks its
@@ -5381,7 +5452,11 @@
     $('composer').addEventListener('submit', async (e) => {
         e.preventDefault();
         if (mentionPopOpen()) return;        // Enter is the autocomplete's
-        const body = input.value.trim();
+        // Emoticons that the live conversion never saw — the one at the end of
+        // the message, the one on a line ended with shift+enter, the ones in
+        // pasted text. Applied to what is SENT, and to what message recall
+        // remembers, so the emoji is what goes out and what comes back.
+        const body = applyEmoticons(input.value.trim());
         const attachments = validStaged();   // errored items are never sent
         if (!body && !attachments.length) return;
 
@@ -8127,7 +8202,12 @@
         $('pop-vol').hidden = !canAudio;
         $('pop-audio-sep').hidden = !canAudio;
 
-        paintAvatarEl($('pop-avatar'), p.name, p.uid || uidForClient(p.id));
+        const popAvatarUid = p.uid || uidForClient(p.id);
+        paintAvatarEl($('pop-avatar'), p.name, popAvatarUid);
+        // The face at the top of this popout opens the picture full size. The
+        // rest of the popout — Message, Block, Ban — is untouched, and so is the
+        // member-list row that opened it: clicking a member still opens this.
+        setAvatarEnlarge($('pop-avatar'), popAvatarUid, p.name);
         $('pop-name').textContent = p.name;
 
         // The custom status lives in the presence list, not the SFU roster.
@@ -9271,10 +9351,27 @@
 
     // A post landed in a channel we're not viewing. We don't have its body, so
     // this stays deliberately terse; the unread badge carries the rest.
+    //
+    // THE CHIME IS RAISED HERE TOO, and it did not used to be — which is the
+    // half of "the custom sound doesn't play" that the silent toast alone does
+    // not fix. Every other arrival in this app makes the app's own noise: the
+    // current channel chimes from loadMessages, a DM chimes from the DM
+    // notifier. A post in a channel you are not reading raised a desktop toast
+    // and nothing else, so the only sound it ever produced was the one Windows
+    // put on the toast — and with the window minimised, which is when a message
+    // is most likely to land somewhere you are not looking, that stock ding was
+    // the whole of what anybody heard.
+    //
+    // Ordered before the toast, and NOT behind the `notifications` switch: that
+    // switch is about toasts. The sound answers to the sound settings, which
+    // sounds.js checks for itself, and to alertsAllowed — the per-channel
+    // all/mentions/none level, the timed mutes and Do Not Disturb — exactly like
+    // the chime on every other path.
     async function notifyOtherChannel(m) {
-        if (settings.notifications === false) return;
         const mentioned = namesIncludeMe(m && m.mentions);
         if (!alertsAllowed(m.channel, mentioned)) return;
+        window.loungeSounds.playMessage();
+        if (settings.notifications === false) return;
         await L.app.notify({
             title: (mentioned ? '@you · #' : '#') + (m.channel || 'general'),
             body: m.name
@@ -15388,6 +15485,14 @@
         await saveSettings({ formatBarOpen: v });
         setFormatBar(v, false);
     });
+    // Nothing to re-apply: both the live conversion and the send-time pass ask
+    // emojiConvertOn() when they run, so the answer changes with the switch.
+    // What is already in the box stays as it is — an emoji typed a moment ago
+    // is a character somebody has written, not a setting to be undone.
+    wireSwitch('set-emoticons', emojiConvertOn, async (v) => {
+        await saveSettings({ emojiAutoConvert: v });
+        toast(v ? 'Emoticons will turn into emoji' : 'Emoticons will stay as text');
+    });
 
     wireSwitch('set-msg-recall', messageRecallOn, async (v) => {
         await saveSettings({ messageRecall: v });
@@ -16557,6 +16662,65 @@
             link && 'sep',
             link && { label: 'Copy image link', icon: 'link', onClick: () => copyLink(link) }
         ];
+    }
+
+    // ---------- a profile picture, enlarged --------------------------------
+    //
+    // Somebody's face, big enough to actually look at. It reuses the image
+    // lightbox rather than growing a second overlay: the backdrop click, the
+    // close button, Escape (which ranks the lightbox above the popover, so the
+    // picture comes off and the popout it was opened from stays), the focus
+    // trap and the save/copy menu are all already right in there.
+    //
+    // WIRED IN TWO PLACES ONLY — the profile panel beside a conversation and
+    // the member-list popout — because everywhere else an avatar click already
+    // means something. A face in the member list or on a message opens the
+    // profile, and that is the behaviour those clicks keep.
+    //
+    // The ref carries the R2 KEY, not the lounge:// url built from it, so "Save
+    // image as…" and "Copy image" reach the same gated endpoint every other
+    // attachment does.
+    function openAvatarLightbox(uid, name) {
+        const key = uid && avatarMap[uid];
+        // Letters on a coloured disc are not a picture. There is nothing to
+        // enlarge, so the click does nothing at all rather than opening an
+        // empty stage — which is also why the cursor and the tooltip below are
+        // only applied when there IS one.
+        if (!key) return false;
+        openLightbox(L.fileUrl(key), { key, name: (name || 'Profile') + ' — profile picture' });
+        return true;
+    }
+
+    // Make one avatar element open the picture it is showing. Called on every
+    // repaint of the two panels, because both rebuild their face from scratch —
+    // and it has to UNDO itself for somebody with no picture, or a panel that
+    // has just been repainted for a different person would keep the cursor, the
+    // tooltip and the tab stop of the one before.
+    function setAvatarEnlarge(el, uid, name) {
+        if (!el) return;
+        const has = !!(uid && avatarMap[uid]);
+        el.classList.toggle('av-zoomable', has);
+        if (!has) {
+            el.onclick = null;
+            el.onkeydown = null;
+            el.removeAttribute('role');
+            el.removeAttribute('tabindex');
+            el.removeAttribute('aria-label');
+            el.removeAttribute('title');
+            return;
+        }
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-label', 'Enlarge ' + (name || 'this') + '’s profile picture');
+        el.setAttribute('title', 'Click to enlarge');
+        // Stopped, so the click cannot also reach whatever the surface behind
+        // the face does with one.
+        el.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openAvatarLightbox(uid, name); };
+        el.onkeydown = (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault(); e.stopPropagation();
+            openAvatarLightbox(uid, name);
+        };
     }
 
     // ---------- image lightbox --------------------------------------------
@@ -18296,9 +18460,12 @@
         }
     });
 
+    // Emoticons in thread replies too — a reply is a message like any other.
+    wireEmoticonInput($('thread-input'));
+
     $('thread-composer').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const body = $('thread-input').value.trim();
+        const body = applyEmoticons($('thread-input').value.trim());
         if (!body || !threadRootId) return;
         $('thread-send').disabled = true;
         $('thread-input').value = '';
@@ -19121,6 +19288,10 @@
             `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>` +
             `<i class="presence${statusDot(status)}" aria-hidden="true"></i>`;
         wireAvatarFallback($('dm-prof-face'));
+        // The big face opens the picture full size. Only the face — "View Full
+        // Profile" below it, and every other avatar in the app, keep doing what
+        // they already did.
+        setAvatarEnlarge($('dm-prof-face').querySelector('.av'), u.id, u.username);
         $('dm-prof-name').textContent = u.username;
         // No '@'. The reference shows the bare handle, and the prefix was the
         // same decoration the profile popout carried until it was measured.

@@ -116,6 +116,115 @@
         return count > 0 && count <= 6;
     }
 
+    // ---- text emoticons -> emoji -------------------------------------------
+    //
+    // ":( " becomes "🙁 " as it is typed, the way every chat client does it.
+    //
+    // TWO RULES DECIDE EVERY CASE HERE, and both exist to stop this converting
+    // something that was never an emoticon:
+    //
+    //   1. The token must START a word — at the beginning of the text or after
+    //      whitespace. This is what keeps "http://x" out of it: the ':' there
+    //      follows a 'p', so ":/" is not a candidate at all. Same for "12:00",
+    //      "a:)" and every path, ratio and timestamp anyone types.
+    //   2. The token must END one, at a space or the end of the message. So
+    //      nothing converts MID-WORD while it is still being typed — which is
+    //      the rule that keeps this away from `:name:` custom emoji. Typing
+    //      ":party:" passes through ":p", which is an emoticon; a converter
+    //      that fired on completion rather than on the boundary would turn it
+    //      into "😛arty:" under the user's hands.
+    //
+    // Code is exempt (see emoticonsToEmoji): ":(" inside `backticks` or a fenced
+    // block is somebody quoting a smiley, or Lisp, and must stay as it was.
+    const EMOTICONS = {
+        ':)': '🙂', ':-)': '🙂', '=)': '🙂', '(:': '🙂',
+        ':(': '🙁', ':-(': '🙁', '=(': '🙁', '):': '🙁',
+        ':D': '😃', ':-D': '😃', '=D': '😃',
+        ';)': '😉', ';-)': '😉',
+        ':P': '😛', ':-P': '😛', ':p': '😛', ':-p': '😛', '=P': '😛', '=p': '😛',
+        ':O': '😮', ':-O': '😮', ':o': '😮', ':-o': '😮',
+        ":'(": '😢', ":'-(": '😢',
+        ':/': '😕', ':-/': '😕', ':\\': '😕', ':-\\': '😕',
+        ':|': '😐', ':-|': '😐',
+        ':*': '😘', ':-*': '😘',
+        'XD': '😆', 'xD': '😆', 'X-D': '😆', 'xd': '😆',
+        ':3': '😺',
+        '>:(': '😠', '>:-(': '😠',
+        '8)': '😎', '8-)': '😎', 'B)': '😎', 'B-)': '😎',
+        '<3': '❤️', '</3': '💔',
+        '^_^': '😊', '-_-': '😑', 'T_T': '😭', 'o_O': '😳', 'O_o': '😳'
+    };
+
+    // Longest first, so ":-)" is matched as itself rather than as a ":-" that
+    // isn't in the table followed by a ")" that isn't either — and so ">:(" wins
+    // over the ":(" sitting inside it.
+    const EMOTICON_TOKENS = Object.keys(EMOTICONS).sort((a, b) => b.length - a.length);
+    const EMOTICON_ALT = EMOTICON_TOKENS
+        .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+    // Rule 1 + rule 2, as one expression. The trailing boundary is a lookahead
+    // so that two emoticons separated by a single space both convert — consuming
+    // the space would leave the second one without the whitespace in front of it
+    // that rule 1 demands.
+    const EMOTICON_RE = new RegExp('(^|\\s)(' + EMOTICON_ALT + ')(?=\\s|$)', 'g');
+    // The live form: the caret sits just after a terminator, and the token is
+    // the word that terminator just ended.
+    const EMOTICON_CARET_RE = new RegExp('(^|\\s)(' + EMOTICON_ALT + ')([ \\t\\u00a0])$');
+
+    function emoticonEmoji(token) {
+        return Object.prototype.hasOwnProperty.call(EMOTICONS, token) ? EMOTICONS[token] : null;
+    }
+
+    function convertEmoticonRun(run) {
+        return run.replace(EMOTICON_RE, (all, pre, tok) => pre + EMOTICONS[tok]);
+    }
+
+    // Every emoticon in a whole message. This is the pass that runs on SEND, and
+    // it is the one that has to be right: the live conversion only ever fires on
+    // a space, so anything typed at the very end of a message, or on a line
+    // finished with shift+enter, or pasted in, arrives here still as text.
+    function emoticonsToEmoji(text) {
+        const s = String(text == null ? '' : text);
+        if (!s) return s;
+        // AN UNCLOSED FENCE IS DEALT WITH FIRST, because it is the normal state
+        // of a message being written and because the span scan below cannot see
+        // it: with an odd number of ``` markers the last one opens a block that
+        // has no end, and everything after it is code the writer has not
+        // finished. (Left to the scan, the two backticks at the front of that
+        // fence read as an empty inline span and the "code" after it converts.)
+        const fences = [];
+        const FENCE = /```/g;
+        let f;
+        while ((f = FENCE.exec(s))) fences.push(f.index);
+        const cut = fences.length % 2 ? fences[fences.length - 1] : s.length;
+        const head = s.slice(0, cut);
+
+        // Balanced fences and inline spans pass through untouched. Fences are
+        // first in the alternation so the single-backtick branch cannot bite a
+        // chunk out of the middle of a block.
+        const CODE = /```[\s\S]*?```|``[^`]*``|`[^`\n]*`/g;
+        let out = '';
+        let i = 0;
+        let m;
+        while ((m = CODE.exec(head))) {
+            out += convertEmoticonRun(head.slice(i, m.index));
+            out += m[0];
+            i = m.index + m[0].length;
+        }
+        return out + convertEmoticonRun(head.slice(i)) + s.slice(cut);
+    }
+
+    // The live conversion, expressed as a pure question about the text in front
+    // of the caret: "has a space just ended an emoticon?" `before` is everything
+    // from the start of the line to the caret. Returns where the token starts,
+    // what it was, and what replaces it — the caller does the editing, because
+    // one caller holds a textarea and another holds a CodeMirror document.
+    function emoticonBeforeCaret(before) {
+        const m = EMOTICON_CARET_RE.exec(String(before == null ? '' : before));
+        if (!m) return null;
+        return { start: m.index + m[1].length, token: m[2], emoji: EMOTICONS[m[2]] };
+    }
+
     // @mention of a given display name. "Anonymous" is excluded because it is the
     // default for anyone who hasn't set a name — matching it would mention a
     // crowd.
@@ -589,6 +698,7 @@
         parseSearchQuery, opAtCaret, writeOp, SEARCH_OPS, HAS_KINDS,
         FONT_SIZES, fontSizeIndex,
         matchesPttBinding, inheritDeviceId,
+        EMOTICONS, emoticonEmoji, emoticonsToEmoji, emoticonBeforeCaret,
         URL_RE
     };
 }));

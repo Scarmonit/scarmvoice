@@ -55,7 +55,7 @@
     // ---- message chime (Web Audio, buffered) -----------------------------
 
     function loadMessageBuffer(i) {
-        if (i >= MESSAGE_URLS.length) { ctx = null; initElementFallback(); return; }
+        if (i >= MESSAGE_URLS.length) { ctx = null; return; }
         fetch(MESSAGE_URLS[i])
             .then((r) => { if (!r.ok) throw new Error('http ' + r.status); return r.arrayBuffer(); })
             .then((raw) => new Promise((res, rej) => ctx.decodeAudioData(raw, res, rej)))
@@ -90,7 +90,15 @@
         // its own, which counted against Chromium's six-context page limit for
         // the whole life of the app.
         ctx = window.ScarmAudio ? window.ScarmAudio.context() : null;
-        if (ctx) loadMessageBuffer(0); else initElementFallback();
+        if (ctx) loadMessageBuffer(0);
+        // The element is built EITHER WAY now. It used to exist only when Web
+        // Audio was missing entirely, which left a window — from boot until the
+        // fetch and decode of the chime finish — where playMessage() had a
+        // context but no buffer and therefore made no sound at all. A message
+        // landing in those first moments (the app starts into the tray, the
+        // socket connects, somebody has been talking) was silent, and the only
+        // thing the user heard was whatever the OS put on the toast.
+        initElementFallback();
 
         // Preload the voice chimes as plain elements — they're short and only
         // ever fire while the window has already been interacted with.
@@ -161,21 +169,56 @@
         applySink();
     }
 
+    // Two arrivals inside this window are one chime. A burst — several people
+    // posting at once, a channel catching up after the socket reconnects, one
+    // person pasting three lines — used to start a source per post on top of
+    // itself, which is not three chimes but one smeared, louder noise.
+    const CHIME_COALESCE_MS = 150;
+    let lastChimeAt = 0;
+
+    function playBuffer() {
+        const src = ctx.createBufferSource();
+        const gain = ctx.createGain();
+        gain.gain.value = VOLUME;
+        src.buffer = messageBuf;
+        src.connect(gain);
+        gain.connect(ctx.destination);
+        src.start(0);
+    }
+
+    function playElement() {
+        if (!messageEl) return;
+        messageEl.currentTime = 0;
+        const p = messageEl.play();
+        if (p && p.catch) p.catch(() => {});
+    }
+
+    // THE NEW-MESSAGE CHIME, and the only sound this app makes for a message:
+    // the desktop toast is raised silent precisely so that this is what is
+    // heard rather than the Windows default ding (see app:notify in main.js).
+    // Which means every path out of here has to end in a sound if one is at all
+    // possible — a fallthrough that quietly plays nothing is not a missing
+    // chime, it is the OS's stock sound winning by default.
     function playMessage() {
         if (!notifyEnabled()) return;
+        const now = Date.now();
+        if (now - lastChimeAt < CHIME_COALESCE_MS) return;
+        lastChimeAt = now;
         try {
             if (ctx && messageBuf) {
-                if (ctx.state !== 'running') window.ScarmAudio.resume();
-                const src = ctx.createBufferSource();
-                const gain = ctx.createGain();
-                gain.gain.value = VOLUME;
-                src.buffer = messageBuf;
-                src.connect(gain);
-                gain.connect(ctx.destination);
-                src.start(0);
+                if (ctx.state === 'running') { playBuffer(); return; }
+                // A suspended context that is resumed and played in the same
+                // breath schedules the source against a clock that has not
+                // started yet. Resume FIRST and play when it is actually
+                // running; if it refuses (no gesture has ever reached this
+                // window), the element is a second, independent chance at a
+                // sound rather than silence.
+                window.ScarmAudio.resume()
+                    .then((running) => { if (running && messageBuf) playBuffer(); else playElement(); })
+                    .catch(() => playElement());
                 return;
             }
-            if (messageEl) { messageEl.currentTime = 0; const p = messageEl.play(); if (p && p.catch) p.catch(() => {}); }
+            playElement();
         } catch (e) { /* never let a sound break the UI */ }
     }
 
