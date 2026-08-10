@@ -392,12 +392,28 @@
     // relationship), so anything offering Block from an account has to resolve one
     // first — and offer nothing when it cannot, which is what the profile popover
     // already does.
+    // BOTH PRESENCE TABLES ARE TABLES OF PEOPLE WHO ARE HERE, which is why this
+    // used to answer nothing for anyone offline — and an answer of nothing is
+    // what hid Block from an offline member's popout while the person beside
+    // them, online, had it. Same list, same menu, two different sets of
+    // actions, for a reason nothing on screen explained.
+    //
+    // The messages already loaded are the third source, and the durable one: a
+    // post carries its author's account id AND the install that wrote it, so
+    // anybody who has said anything in this channel can be resolved whether or
+    // not they are online now. Newest first, because the id that matters is the
+    // one they last used.
     function clientForUser(uid) {
         if (!uid) return '';
         const m = members.find((x) => x.user_id === uid && x.client_id);
         if (m) return m.client_id;
         const v = voicePresence.find((x) => x.user_id === uid && x.client_id);
-        return (v && v.client_id) || '';
+        if (v && v.client_id) return v.client_id;
+        for (let i = posts.length - 1; i >= 0; i--) {
+            const p = posts[i];
+            if (p && p.user_id === uid && p.client_id) return p.client_id;
+        }
+        return '';
     }
     function avatarSrc(uid) {
         const key = uid && avatarMap[uid];
@@ -2735,6 +2751,56 @@
         renderMessages();
         renderChannels();
         loadMessages(true);
+    }
+
+    // CLEAR A CHANNEL — every message in it, for everyone, permanently.
+    //
+    // Delete-the-channel without losing the channel, which is what makes it the
+    // answer for #general: that one cannot be deleted, and it is the one that
+    // fills up with junk. Owner only, and the server says so too — see
+    // channels.js and the `channel.clear` capability. The check here decides
+    // whether the item is OFFERED; it is not what makes it safe.
+    //
+    // Two things the confirmation has to say, because both are easy to get
+    // wrong from the wording alone: this cannot be undone, and it is not a
+    // "clear my view" — everybody loses the history.
+    async function clearChannel() {
+        const target = channel;
+        const yes = await askConfirm(
+            `Clear all messages in #${target}?`,
+            'Every message in this channel is permanently deleted for EVERYONE on the board, ' +
+            'along with their replies, reactions and attachments. The channel itself stays. ' +
+            'This cannot be undone.',
+            'Delete all messages', true
+        );
+        if (!yes) return;
+        const res = await L.board('channels', {
+            method: 'POST', body: { clear: target, clientId: settings.clientId, reads }
+        });
+        if (authGone(res)) return;
+        if (!res || !res.success) return toast((res && res.error) || 'Could not clear the channel', true);
+
+        // Whatever else has changed about the channel list travels back with the
+        // same call, so take it.
+        channels = res.channels || channels;
+        channelCache.delete(target);
+        // Only if we are still looking at the channel that was cleared — this
+        // awaits a confirmation and a round trip, and somebody can have moved on
+        // by the time it lands.
+        if (channel === target) {
+            resetChannelView();
+            renderMessages();
+            await loadMessages(true);
+        }
+        renderChannels();
+        // Everybody else is holding the messages that no longer exist. A
+        // 'refresh' nudge is the shape for "something changed here that is not a
+        // new message" — it refetches without counting an arrival or chiming.
+        L.rt.notifyPosted(target, null, 'refresh');
+        const n = res.cleared && res.cleared.deleted;
+        toast(typeof n === 'number'
+            ? `Cleared #${target} — ${n} ${n === 1 ? 'message' : 'messages'} deleted`
+            : `Cleared #${target}`);
     }
 
     // ---------- messages --------------------------------------------------
@@ -5452,6 +5518,15 @@
     $('composer').addEventListener('submit', async (e) => {
         e.preventDefault();
         if (mentionPopOpen()) return;        // Enter is the autocomplete's
+        // A SLASH COMMAND RUNS INSTEAD OF BEING SENT. Normally the menu is open
+        // and Enter never reaches here, but Escape dismisses the menu without
+        // emptying the box — and "/mute" sent as a message to the channel is not
+        // what anybody who typed it meant.
+        //
+        // Only an exact command name is taken. "/home/user", "/xyz" and "/half
+        // the time" are messages, and they go out as messages.
+        const slash = pendingSlashCommand();
+        if (slash) { runSlashCommand(slash.cmd, slash.arg); return; }
         // Emoticons that the live conversion never saw — the one at the end of
         // the message, the one on a line ended with shift+enter, the ones in
         // pasted text. Applied to what is SENT, and to what message recall
@@ -6541,7 +6616,18 @@
         openEmojiPicker($('btn-emoji'), (em) => insertAtCursor(input, em));
     });
 
-    // @mention autocomplete over the names seen this session.
+    // ---------- the composer's suggestion popup -----------------------------
+    //
+    // ONE popup, ONE keyboard handler, two things that fill it: @mentions and
+    // /commands. They are the same interaction — a list over the message box,
+    // arrow keys, Enter or Tab to take the highlighted one, Escape to dismiss —
+    // and building the second one its own popup would have meant two of every
+    // one of those, drifting apart a fix at a time.
+    //
+    // An entry is { title, sub, avatar, accept } and the popup knows nothing
+    // else about it. A mention's accept writes text into the box; a command's
+    // runs the command. That difference is the whole of what the two providers
+    // do not share.
     let mentionPop = null, mentionItems = [], mentionActive = 0, mentionStart = -1;
 
     function mentionPopOpen() { return !!(mentionPop && !mentionPop.hidden); }
@@ -6552,20 +6638,8 @@
         mentionStart = -1;
     }
 
-    function updateMentionPop() {
-        const pos = input.selectionStart || 0;
-        const before = input.value.slice(0, pos);
-        const m = /(^|\s)@([^@\s]{0,30})$/.exec(before);
-        if (!m) { closeMentionPop(); return; }
-
-        mentionStart = pos - m[2].length - 1;     // index of the '@'
-        const q = m[2].toLowerCase();
-        const me = (settings.displayName || '').toLowerCase();
-        const matches = getRoster()
-            .filter((nm) => nm.toLowerCase() !== me)
-            .filter((nm) => !q || nm.toLowerCase().includes(q))
-            .slice(0, 8);
-        if (!matches.length) { closeMentionPop(); return; }
+    function paintSuggestions(items) {
+        if (!items || !items.length) { closeMentionPop(); return; }
 
         if (!mentionPop) {
             mentionPop = document.createElement('div');
@@ -6573,22 +6647,31 @@
             mentionPop.hidden = true;
             document.body.appendChild(mentionPop);
         }
-        mentionItems = matches;
+        mentionItems = items;
         mentionPop.innerHTML = '';
-        matches.forEach((nm, i) => {
+        items.forEach((entry, i) => {
             const it = document.createElement('button');
             it.type = 'button';
             it.className = 'mention-item' + (i === 0 ? ' active' : '');
-            const av = document.createElement('span');
-            av.className = 'mention-av';
-            av.setAttribute('style', avatarStyle(nm));
-            av.textContent = initials(nm);
+            if (entry.avatar) {
+                const av = document.createElement('span');
+                av.className = 'mention-av';
+                av.setAttribute('style', avatarStyle(entry.avatar));
+                av.textContent = initials(entry.avatar);
+                it.appendChild(av);
+            }
             const t = document.createElement('span');
-            t.textContent = nm;
-            it.appendChild(av);
+            t.className = 'mention-title';
+            t.textContent = entry.title;
             it.appendChild(t);
+            if (entry.sub) {
+                const s = document.createElement('span');
+                s.className = 'mention-sub';
+                s.textContent = entry.sub;
+                it.appendChild(s);
+            }
             // mousedown, not click: the composer must not lose the caret.
-            it.addEventListener('mousedown', (e) => { e.preventDefault(); chooseMention(i); });
+            it.addEventListener('mousedown', (e) => { e.preventDefault(); acceptSuggestion(i); });
             mentionPop.appendChild(it);
         });
         mentionActive = 0;
@@ -6601,15 +6684,35 @@
         mentionPop.style.top = Math.max(8, r.top - h - 6) + 'px';
     }
 
-    function setMentionActive(i) {
-        if (!mentionItems.length) return;
-        mentionActive = (i + mentionItems.length) % mentionItems.length;
-        [...mentionPop.children].forEach((c, idx) => c.classList.toggle('active', idx === mentionActive));
+    // Commands first: they answer only for a box that IS a command (see
+    // slashContext), so a message that merely contains an @ is never in
+    // competition with them.
+    function updateMentionPop() {
+        const cmds = slashSuggestions();
+        // null means "not command mode at all" — an ARRAY, even an empty one,
+        // means the box is a command and mentions must not have a turn.
+        paintSuggestions(cmds || mentionSuggestions());
     }
 
-    function chooseMention(i) {
-        if (!mentionItems.length || mentionStart < 0) { closeMentionPop(); return; }
-        const nm = mentionItems[i] || mentionItems[0];
+    // @mention autocomplete over the names seen this session.
+    function mentionSuggestions() {
+        const pos = input.selectionStart || 0;
+        const before = input.value.slice(0, pos);
+        const m = /(^|\s)@([^@\s]{0,30})$/.exec(before);
+        if (!m) { mentionStart = -1; return []; }
+
+        mentionStart = pos - m[2].length - 1;     // index of the '@'
+        const q = m[2].toLowerCase();
+        const me = (settings.displayName || '').toLowerCase();
+        return getRoster()
+            .filter((nm) => nm.toLowerCase() !== me)
+            .filter((nm) => !q || nm.toLowerCase().includes(q))
+            .slice(0, 8)
+            .map((nm) => ({ title: nm, avatar: nm, accept: () => insertMention(nm) }));
+    }
+
+    function insertMention(nm) {
+        if (mentionStart < 0) { closeMentionPop(); return; }
         const pos = input.selectionStart || 0;
         const v = input.value;
         input.value = v.slice(0, mentionStart) + '@' + nm + ' ' + v.slice(pos);
@@ -6619,6 +6722,144 @@
         input.setSelectionRange(caret, caret);
         autosize();
         updateSendEnabled();
+    }
+
+    function setMentionActive(i) {
+        if (!mentionItems.length) return;
+        mentionActive = (i + mentionItems.length) % mentionItems.length;
+        [...mentionPop.children].forEach((c, idx) => c.classList.toggle('active', idx === mentionActive));
+    }
+
+    function acceptSuggestion(i) {
+        if (!mentionItems.length) { closeMentionPop(); return; }
+        const entry = mentionItems[i] || mentionItems[0];
+        entry.accept();
+    }
+
+    // ---------- slash commands ----------------------------------------------
+    //
+    // THE REGISTRY IS THE FEATURE. A command is one entry — a name, what to
+    // show beside it, and what it does — and everything else (the menu, the
+    // filtering, the keyboard, running it, keeping it out of ordinary messages)
+    // is written once against the list. Adding one later is adding a row here.
+    //
+    //   name  what is typed after the '/', lower case
+    //   args  shown in the menu, for the ones that take something
+    //   desc  the line beside it in the menu
+    //   run   (arg) => void. `arg` is everything after the first space,
+    //         trimmed; '' when nothing was typed.
+    //
+    // The box is cleared BEFORE run() is called (see runSlashCommand), so a
+    // command that wants to leave text behind — /shrug — just writes it.
+    const SLASH_COMMANDS = [
+        { name: 'profile', desc: 'Open your profile', run: () => {
+            if (!account) return toast('Sign in to see your profile', true);
+            openProfileCard({ id: account.id, username: account.username });
+        } },
+        { name: 'settings', desc: 'Open settings', run: () => { openSettings(); } },
+        { name: 'dm', args: '[user]', desc: 'Open a direct message', run: (arg) => openDmFor(arg) },
+        { name: 'mute', desc: 'Toggle your microphone', run: () => {
+            if (!voice.isJoined()) return toast('Join voice first');
+            voice.toggleMuted();
+        } },
+        { name: 'deafen', desc: 'Toggle deafen', run: () => {
+            if (!voice.isJoined()) return toast('Join voice first');
+            voice.toggleDeafened();
+        } },
+        { name: 'leave', desc: 'Leave the voice channel', run: () => {
+            if (!voice.isJoined()) return toast('You are not in a call');
+            $('voice-panel').classList.add('is-gone');
+            leaveVoice();
+        } },
+        { name: 'theme', desc: 'Customise the theme', run: () => { openThemeModal(); } },
+        { name: 'shrug', desc: 'Add ¯\\_(ツ)_/¯ to your message', run: () => {
+            // The one command that does not take over the message: it writes
+            // into the box and leaves it to be sent, edited or thrown away.
+            input.value = '¯\\_(ツ)_/¯';
+            const end = input.value.length;
+            input.focus();
+            input.setSelectionRange(end, end);
+            autosize();
+            updateSendEnabled();
+        } }
+    ];
+
+    // /dm with a name goes straight there; /dm on its own opens the picker,
+    // because "which conversation" is exactly what that dialog asks.
+    function openDmFor(arg) {
+        const q = String(arg || '').replace(/^@/, '').trim().toLowerCase();
+        if (!q) { openDmPicker(); return; }
+        const hit = roster.find((u) => (u.username || '').toLowerCase() === q)
+            || roster.find((u) => (u.username || '').toLowerCase().startsWith(q));
+        if (!hit) return toast('No member called "' + arg + '"', true);
+        if (account && hit.id === account.id) return toast('You cannot message yourself');
+        messageUser(hit.id);
+    }
+
+    // IS THE BOX A COMMAND? This is the guardrail, and it is deliberately strict
+    // — a slash is an ordinary character in URLs, paths, dates and code, and all
+    // of those must reach the channel exactly as typed.
+    //
+    //   • The '/' must be the FIRST character of the whole box. A slash typed
+    //     anywhere else is text: "and/or", "https://example.com", "24/7".
+    //   • The whole box must be ONE line. A message that opens with a slash and
+    //     carries on over several lines is prose, not a command — and a fenced
+    //     code block can never qualify, since it opens with backticks.
+    //   • What follows the slash must be a single bare word, optionally then a
+    //     space and anything. So "/home/user/notes" and "/etc/hosts" are not
+    //     commands (that second slash disqualifies them), and neither is "/".
+    //     …though a bare "/" IS the trigger for the menu, which is why the word
+    //     is optional and the empty token lists everything.
+    //
+    // Returns null for "not a command box" — which is what lets @mentions have
+    // their turn — or { token, arg, hasArg }.
+    function slashContext() {
+        const v = input.value;
+        if (v.charAt(0) !== '/') return null;
+        if (v.indexOf('\n') !== -1) return null;
+        const m = /^\/([a-zA-Z][a-zA-Z0-9-]*)?(?:[ \t]([\s\S]*))?$/.exec(v);
+        if (!m) return null;
+        return { token: (m[1] || '').toLowerCase(), arg: (m[2] || '').trim(), hasArg: m[2] !== undefined };
+    }
+
+    // The menu's contents. An ARRAY (possibly empty) means the box is a command
+    // box; null means it is not one and mentions may answer instead.
+    function slashSuggestions() {
+        const ctx = slashContext();
+        if (!ctx) return null;
+        // Once a space has been typed the menu is no longer a list to choose
+        // from — it is the one command about to run, with its argument. A typo
+        // ("/xyz something") matches nothing, the menu closes, and Enter sends
+        // the line as the ordinary message it is.
+        const matches = SLASH_COMMANDS.filter((c) => (ctx.hasArg
+            ? c.name === ctx.token
+            : c.name.startsWith(ctx.token)));
+        return matches.map((c) => ({
+            title: '/' + c.name + (c.args ? ' ' + c.args : ''),
+            sub: c.desc,
+            accept: () => runSlashCommand(c, ctx.arg)
+        }));
+    }
+
+    // The command the box would run if it were sent right now — an EXACT name
+    // and nothing else, which is what keeps "/hello everyone" a message.
+    function pendingSlashCommand() {
+        const ctx = slashContext();
+        if (!ctx || !ctx.token) return null;
+        const cmd = SLASH_COMMANDS.find((c) => c.name === ctx.token);
+        return cmd ? { cmd, arg: ctx.arg } : null;
+    }
+
+    function runSlashCommand(cmd, arg) {
+        closeMentionPop();
+        // The command is not a message, so the box empties first — and it
+        // empties BEFORE run(), so /shrug can write into it afterwards.
+        input.value = '';
+        autosize();
+        updateSendEnabled();
+        resetRecall();
+        try { cmd.run(String(arg || '')); }
+        catch (e) { toast('/' + cmd.name + ' could not run', true); }
     }
 
     // Capture on the document so this beats the composer's own Enter handler —
@@ -6632,7 +6873,7 @@
         const plainArrow = !e.ctrlKey && !e.metaKey && !e.altKey;
         if (plainArrow && e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive + 1); }
         else if (plainArrow && e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); setMentionActive(mentionActive - 1); }
-        else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); chooseMention(mentionActive); }
+        else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); acceptSuggestion(mentionActive); }
         else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMentionPop(); }
     }, true);
 
@@ -8131,10 +8372,19 @@
     // Opened from either voice list. Same floating surface as the context menu,
     // but it needs a switch and a slider, which a menu of items cannot express.
 
+    // The install whose LOCAL AUDIO this popover controls — the mute switch and
+    // the volume slider, and nothing else. It is null for anyone not in the
+    // call with us, which is why nothing about a person's identity may be built
+    // on it (see popBlockCid).
     let popFor = null;
     // The ACCOUNT behind the open popover, when one is known — the admin
     // actions act on this, never on popFor (an install id).
     let popUid = null;
+    // The install to BLOCK, which is not the same question as popFor: a block
+    // hides someone's messages, so it applies to a person who is not in the
+    // call and to one who is not even online. Resolved in openPopover from
+    // every source that knows, rather than taken off the row.
+    let popBlockCid = '';
     // WHICH ROW the popover is open about, for the open/close toggle alone.
     //
     // The toggle used to compare popFor, the install id, and every member in the
@@ -8202,19 +8452,35 @@
         $('pop-vol').hidden = !canAudio;
         $('pop-audio-sep').hidden = !canAudio;
 
-        const popAvatarUid = p.uid || uidForClient(p.id);
-        paintAvatarEl($('pop-avatar'), p.name, popAvatarUid);
-        // The face at the top of this popout opens the picture full size. The
-        // rest of the popout — Message, Block, Ban — is untouched, and so is the
-        // member-list row that opened it: clicking a member still opens this.
-        setAvatarEnlarge($('pop-avatar'), popAvatarUid, p.name);
-        $('pop-name').textContent = p.name;
-
         // The custom status lives in the presence list, not the SFU roster.
         // Matched on install id and then on ACCOUNT, because an Offline row is
         // built from the account directory and carries no install id at all.
         const m = members.find((x) => x.client_id === p.id)
             || (p.uid ? members.find((x) => x.user_id === p.uid) : null);
+
+        // ---- WHO THIS ROW IS, resolved ONCE, before anything is decided ----
+        //
+        // Every action below turns on one of two ids, and the rows arriving here
+        // carry different halves of the pair: a voice-roster row is an INSTALL,
+        // a directory row for somebody offline is an ACCOUNT and nothing else, a
+        // presence row is usually both. Each action used to reach for whichever
+        // half it wanted straight off `p` and hide itself when that half was
+        // missing — so which buttons a person got depended on which list they
+        // happened to be in, and an offline member's popout was quietly missing
+        // Block while the person above them had it.
+        //
+        // Resolved in one place instead, from every source that knows: the row,
+        // the presence table, and (for the install) the messages on screen.
+        popUid = p.uid || (m && m.user_id) || uidForClient(p.id) || null;
+        popBlockCid = p.id || clientForUser(popUid);
+
+        paintAvatarEl($('pop-avatar'), p.name, popUid);
+        // The face at the top of this popout opens the picture full size — the
+        // same enlarged view the profile panel and the full profile card use.
+        // The member-list row that opened this popout is untouched: clicking a
+        // member still opens it.
+        setAvatarEnlarge($('pop-avatar'), popUid, p.name);
+        $('pop-name').textContent = p.name;
         // `known` rather than a bare 'online': a directory row passes 'offline',
         // while a voice-roster row that has not heartbeated yet passes nothing
         // and keeps its green dot.
@@ -8233,15 +8499,20 @@
         paintPopVolume(pct);
         $('pop-mute').checked = !!(settings.localMuted && settings.localMuted[p.id]);
 
-        const blocked = isBlocked(p.id);
+        const blocked = isBlocked(popBlockCid);
         // settings.blocked is keyed by INSTALL id — it is what isBlocked() is
         // asked about everywhere a message, a roster row or a mention is
-        // filtered. A row with no install id therefore has nothing to block, and
-        // the button was doing exactly nothing when pressed: the popover closed,
-        // no confirmation, no entry in Settings > Blocked, and it still said
-        // "Block" next time. Hidden rather than dead, the same way the message
-        // menu already drops Block when there is no client_id.
-        $('pop-block').hidden = !p.id;
+        // filtered. So this needs an install, and it asks the resolver above for
+        // one rather than reading `p.id` and giving up: `p.id` is null for every
+        // OFFLINE member (that row is built from the account directory), which
+        // is precisely why Block was there for some people in this list and
+        // missing for others.
+        //
+        // Hidden, still, in the one case left — nothing this computer has ever
+        // seen has an install for them — because the button would do exactly
+        // nothing when pressed: the popover closes, no confirmation, no entry in
+        // Settings › Blocked, and it still says "Block" next time.
+        $('pop-block').hidden = !popBlockCid;
         $('pop-block-label').textContent = blocked ? 'Unblock' : 'Block';
         $('pop-block').classList.toggle('danger', !blocked);
 
@@ -8251,7 +8522,6 @@
         // anybody. No account resolved (a pre-accounts row, or a person the
         // presence list hasn't caught up with) means nothing to act on, so the
         // buttons stay hidden rather than offering a request that must 400.
-        popUid = p.uid || (m && m.user_id) || null;
         const isMe = p.id === settings.clientId || !!(account && popUid && popUid === account.id);
         // Two different tiers now, so two different answers. Removing somebody from
         // a call is moderation (admin and above); banning them is an account action
@@ -8268,6 +8538,13 @@
         const canDm = !!(account && popUid && !isMe);
         $('pop-dm').hidden = !canDm;
         $('pop-dm-label').textContent = 'Message ' + (p.name || 'them');
+        // The full profile card. Shown for ANYONE this row resolves an account
+        // for — including yourself, unlike Message: there is nothing odd about
+        // reading your own profile, and refusing it here would be another
+        // silent gap of the kind this popout had too many of. The card is what
+        // the person IS (status, role, account, your note about them) rather
+        // than something done TO them, so it sits above the destructive half.
+        $('pop-profile').hidden = !popUid;
         // In voice right now? Only then is there a call to remove them from.
         const inVoice = canKick && voicePresence.some((v) => v.user_id === popUid);
         $('pop-kick').hidden = !inVoice;
@@ -8334,8 +8611,19 @@
         if (name) insertAtCursor(input, '@' + name + ' ');
     });
 
+    // The account and the name are read BEFORE the popover closes, the way kick
+    // and ban already do it — closePopover clears the identity this needs.
+    $('pop-profile').addEventListener('click', () => {
+        const uid = popUid, name = $('pop-name').textContent;
+        closePopover();
+        if (uid) openProfileCard({ id: uid, username: name });
+    });
+
     $('pop-block').addEventListener('click', () => {
-        const cid = popFor;
+        // popBlockCid, not popFor: popFor is the install whose AUDIO this
+        // popover controls, and an offline member has none — the block is about
+        // the person, and their install is whichever one we resolved for them.
+        const cid = popBlockCid;
         const name = $('pop-name').textContent;
         closePopover();
         if (!cid) return;
@@ -13087,10 +13375,17 @@
             // message in the channel along with its reactions and attachments and
             // cannot be undone. Offering either to somebody who cannot use it just
             // produces a 403 toast.
-            ...(can('channel.rename') || can('channel.delete') ? ['sep'] : []),
+            ...(can('channel.rename') || can('channel.delete') || can('channel.clear') ? ['sep'] : []),
             ...(can('channel.rename') ? [
                 { label: 'Rename channel', icon: 'pencil', disabled: name === 'general',
                     onClick: () => { switchChannel(name).then(renameChannel); } }
+            ] : []),
+            // Clearing is the owner's too, and NOT disabled for #general — that
+            // is the channel it exists for, since #general is the one that
+            // cannot be deleted and the one that fills up.
+            ...(can('channel.clear') ? [
+                { label: 'Clear all messages', icon: 'trash', danger: true,
+                    onClick: () => { switchChannel(name).then(clearChannel); } }
             ] : []),
             ...(can('channel.delete') ? [
                 { label: 'Delete channel', icon: 'trash', danger: true, disabled: name === 'general',
@@ -13630,6 +13925,12 @@
         'channel.rename': ['owner', 'admin'],
         // Destructive, and anything that touches an ACCOUNT — owner only.
         'channel.delete': ['owner'],
+        // Clearing a channel is deleting one without losing the channel: every
+        // message, reaction and attachment in it, gone for everybody and not
+        // recoverable. Same tier as channel.delete for that reason, and this
+        // table has to keep matching the server's (_accounts.js CAPABILITIES) —
+        // this one decides what is OFFERED, that one decides what is allowed.
+        'channel.clear': ['owner'],
         'member.setRole': ['owner'],
         'member.ban': ['owner'],
         'member.unban': ['owner'],
@@ -19368,6 +19669,16 @@
             `${esc(initials(u.username))}${avatarImgHtml(u.id)}</span>` +
             `<i class="presence${statusDot(status)}" aria-hidden="true"></i>`;
         wireAvatarFallback($('pc-face'));
+        // The big face here opens the picture full size too — the same enlarged
+        // view as the profile panel and the member popout, so a face behaves the
+        // same wherever it is shown large. Nothing else about this card changes:
+        // its buttons, status, role, account and note are untouched.
+        //
+        // The lightbox is drawn at z-index 400 against this overlay's 100 and
+        // takes the focus trap on top of this one, so Escape closes the picture
+        // and leaves the card up — the document's Escape chain ranks the
+        // lightbox above everything this card would otherwise reach.
+        setAvatarEnlarge($('pc-face').querySelector('.av'), u.id, u.username);
         $('pc-name').textContent = u.username;
         $('pc-handle').textContent = u.username;
 

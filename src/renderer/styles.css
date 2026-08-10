@@ -3326,6 +3326,21 @@ html.tm-underlay .settings-modal {
   width: 24px; height: 24px; border-radius: 50%; flex: 0 0 24px;
   display: grid; place-items: center; font-size: 10px; font-weight: 800; color: var(--on-accent);
 }
+/* The two halves of a row. A mention is a name and nothing else; a slash
+   command is "/name" with what it does beside it, which is the only way a menu
+   of commands says anything useful before you have learned them. The name holds
+   its width and the description takes the rest, ellipsised — a long one must not
+   push the command it belongs to out of the popup. */
+.mention-title { flex: 0 0 auto; }
+.mention-sub {
+  flex: 1 1 auto; min-width: 0; text-align: right;
+  color: var(--dim); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mention-item:hover .mention-sub, .mention-item.active .mention-sub { color: var(--muted); }
+/* A command menu is a list to read, so it is allowed to be wider than the
+   names-only one it shares an element with. */
+.mention-pop { max-width: 380px; }
 
 /* ---------- context menu ----------------------------------------------- */
 
