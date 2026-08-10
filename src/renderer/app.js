@@ -4387,6 +4387,62 @@
         }
     });
 
+    // ---- double-tap Escape clears the message box --------------------------
+    //
+    // Esc, Esc — and whatever you had typed is gone, in a channel or in a
+    // conversation (there is one composer and it moves between them, so both
+    // are this one box).
+    //
+    // WHERE THIS IS CALLED FROM IS THE FEATURE. It is the last branch of the
+    // document's Escape chain, reached only when every other thing Escape
+    // could mean has already been ruled out: no modal, no menu, no
+    // autocomplete, no picker, no drawer, no open editor. So the guarantee is
+    // structural rather than a list of exceptions kept in step by hand — a
+    // surface added to that chain later is automatically ahead of this, and an
+    // Esc that dismissed something never counts as half of a double-tap,
+    // because the branch that arms the timer did not run.
+    //
+    // The window is deliberately short. A single stray Escape must leave the
+    // message alone, and two presses half a second apart are a decision.
+    const ESC_CLEAR_MS = 500;
+    let lastEscAt = 0;
+
+    // Is somebody part-way through a message? The caret in the box AND
+    // something in it — the two together are what make Escape mean "this
+    // message" rather than "this drawer".
+    function composerHasDraft() {
+        return !!(cm && cm.hasFocus() && input.value);
+    }
+
+    function doubleEscClear() {
+        // Belt and braces: the caller already asked composerHasDraft(), and a
+        // future caller that does not must still not clear an unfocused box.
+        if (!composerHasDraft()) { lastEscAt = 0; return; }
+
+        const now = Date.now();
+        if (now - lastEscAt > ESC_CLEAR_MS) { lastEscAt = now; return; }
+        lastEscAt = 0;
+
+        // CTRL+Z BRINGS IT BACK, and that falls out of clearing it the way the
+        // adapter clears anything: `input.value = ''` is a replaceRange over
+        // the document, not a setValue, so the edit joins CodeMirror's undo
+        // history like every other edit and the editor's own Ctrl+Z restores
+        // it. (setValue would have thrown that history away, which for a
+        // one-keystroke way to lose a long message is the difference between a
+        // shortcut and a trap.)
+        //
+        // The undo also puts the rest back by itself: it is an ordinary change,
+        // so it fires the composer's input event, and the send button, the box
+        // height and the code-block chrome all follow from that.
+        input.value = '';
+        autosize();
+        updateSendEnabled();
+        // Message recall walks what you have SENT and hands back the draft it
+        // interrupted; a box that was just emptied is not that draft any more.
+        resetRecall();
+        toast('Message cleared — Ctrl+Z to undo');
+    }
+
     // ---- text emoticons ----------------------------------------------------
     //
     // ":( " becomes "🙁 " under the caret. The rules and the table are in lib.js,
@@ -6656,8 +6712,12 @@
             if (entry.avatar) {
                 const av = document.createElement('span');
                 av.className = 'mention-av';
-                av.setAttribute('style', avatarStyle(entry.avatar));
-                av.textContent = initials(entry.avatar);
+                // paintAvatarEl, not a hand-built initials disc — which is what
+                // this used to be, and why somebody with a profile picture was
+                // the only face in the app drawn as two letters on a gradient.
+                // The initials and the gradient are still there UNDERNEATH the
+                // picture, so they show while it loads and stay if it 404s.
+                paintAvatarEl(av, entry.avatar, entry.avatarUid);
                 it.appendChild(av);
             }
             const t = document.createElement('span');
@@ -6694,7 +6754,51 @@
         paintSuggestions(cmds || mentionSuggestions());
     }
 
-    // @mention autocomplete over the names seen this session.
+    // WHO CAN BE MENTIONED: everybody, whatever their status.
+    //
+    // This used to be `getRoster()` alone — the names SEEN this session, which
+    // is to say the people who happened to be online or to have said something
+    // while the app was open. Anyone offline was unmentionable, and there was
+    // nothing on screen to say why: you typed their name and the list simply
+    // had no such person in it.
+    //
+    // The account directory is the honest source. It is the whole membership,
+    // online or not, and it carries the account id — which is also what the
+    // picture is keyed by, so taking the list from here is what lets the menu
+    // draw real faces instead of initials. Names seen this session are still
+    // added on top, for anyone the directory does not know.
+    function mentionCandidates() {
+        const out = [];
+        const seen = new Set();
+        const add = (name, uid) => {
+            const n = String(name || '').trim();
+            if (!n || n.toLowerCase() === 'anonymous') return;
+            const key = n.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push({ name: n, uid: uid || 0 });
+        };
+        // A banned account is not a person you can talk to any more.
+        roster.forEach((u) => { if (u && !u.banned) add(u.username, u.id); });
+        getRoster().forEach((nm) => add(nm, uidForName(nm)));
+        return out;
+    }
+
+    // The account behind a name we only have as text. Presence first, then the
+    // messages on screen — a post carries its author's account id, which is the
+    // one source that still answers for somebody who has since gone offline.
+    function uidForName(name) {
+        const k = String(name || '').trim().toLowerCase();
+        if (!k) return 0;
+        const m = members.find((x) => String(x.name || '').toLowerCase() === k && x.user_id);
+        if (m) return m.user_id;
+        for (let i = posts.length - 1; i >= 0; i--) {
+            const p = posts[i];
+            if (p && p.user_id && String(p.name || '').toLowerCase() === k) return p.user_id;
+        }
+        return 0;
+    }
+
     function mentionSuggestions() {
         const pos = input.selectionStart || 0;
         const before = input.value.slice(0, pos);
@@ -6704,11 +6808,23 @@
         mentionStart = pos - m[2].length - 1;     // index of the '@'
         const q = m[2].toLowerCase();
         const me = (settings.displayName || '').toLowerCase();
-        return getRoster()
-            .filter((nm) => nm.toLowerCase() !== me)
-            .filter((nm) => !q || nm.toLowerCase().includes(q))
+        return mentionCandidates()
+            .filter((c) => c.name.toLowerCase() !== me)
+            .filter((c) => !q || c.name.toLowerCase().includes(q))
+            // The ones that START with what has been typed first, then
+            // alphabetical. The list is capped at eight, so with a whole
+            // membership to draw from the order decides what somebody halfway
+            // through a name actually sees.
+            .sort((a, b) => {
+                const an = a.name.toLowerCase(), bn = b.name.toLowerCase();
+                return (an.startsWith(q) ? 0 : 1) - (bn.startsWith(q) ? 0 : 1)
+                    || an.localeCompare(bn);
+            })
             .slice(0, 8)
-            .map((nm) => ({ title: nm, avatar: nm, accept: () => insertMention(nm) }));
+            .map((c) => ({
+                title: c.name, avatar: c.name, avatarUid: c.uid,
+                accept: () => insertMention(c.name)
+            }));
     }
 
     function insertMention(nm) {
@@ -9596,10 +9712,18 @@
     // two can never disagree about what counts as a mention. The roster is a
     // handful of people on this board; if it ever isn't, this is the line to
     // revisit.
+    // The same widened list the picker offers, for the same reason: this is the
+    // hint that travels with the realtime nudge, and it is what lets somebody
+    // reading a channel on "only @mentions" know an @you from ordinary chatter
+    // in a channel they are not looking at. Built from the names seen this
+    // session alone, an @mention of somebody OFFLINE — now that they can be
+    // picked at all — would have gone out with no hint attached, and the one
+    // person it was addressed to is exactly the one who would not be told.
     function mentionNamesIn(body) {
         if (!body) return [];
         try {
-            return getRoster()
+            return mentionCandidates()
+                .map((c) => c.name)
                 .filter((nm) => window.ScarmLib.mentionsMe(body, nm))
                 .slice(0, 16);
         } catch (e) { return []; }
@@ -21168,12 +21292,31 @@
             // they were ranked underneath: with a thread open, opening Settings
             // and pressing Escape left Settings on screen and quietly closed the
             // thread behind it — including whatever reply was half-typed in it.
+            // WHILE YOU ARE TYPING, ESCAPE IS ABOUT WHAT YOU HAVE TYPED — and
+            // that is what makes double-tap-to-clear work in a conversation as
+            // well as in a channel. There is ONE composer and it moves into the
+            // DM drawer, so without this rank the branch below would answer
+            // first and every Escape in a DM would close the conversation
+            // instead, leaving the feature working in exactly half the places
+            // it was asked for.
+            //
+            // Narrow on purpose: the caret has to be IN the message box and the
+            // box has to have something in it. Empty box, or focus anywhere
+            // else, and Escape closes the drawer exactly as it always did.
+            // Everything above this line — modals, menus, autocomplete, the
+            // inline editor, the pickers — still wins, which is the whole of
+            // what "do not interfere with Escape" asks for.
+            else if (composerHasDraft()) doubleEscClear();
             else if (threadOpen()) closeThread();
             else if (dmPanelOpen()) closeDm();
             else if (searchOpen()) closeSearchPop();
             else if (!$('search-panel').hidden) hideSearchResults();
             else if (filterActive()) clearSearch();
             else if (!$('pinned-panel').hidden) togglePinned(false);
+            // Nothing left for Escape to mean. The timer is dropped rather than
+            // left armed, so a stray Escape now and another one minutes later
+            // can never add up to a double-tap.
+            else lastEscAt = 0;
         }
         // Ctrl+F goes to the search box, like every other chat client — which
         // is now the box in the header rather than a row that appeared under it.
