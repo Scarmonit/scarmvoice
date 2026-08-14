@@ -5392,7 +5392,20 @@
             'Shift-Ctrl-9': () => applyLineMark('quote'),
             'Ctrl-Alt-C': () => { if (!formatBarOpen()) setFormatBar(true, true); openLangPop(null, $('btn-more')); },
             'Ctrl-Up': () => { if (!messageRecallOn()) return CM_PASS; stepRecall(1); },
-            'Ctrl-Down': () => { if (!messageRecallOn()) return CM_PASS; stepRecall(-1); }
+            'Ctrl-Down': () => { if (!messageRecallOn()) return CM_PASS; stepRecall(-1); },
+
+            // UP ON AN EMPTY BOX EDITS THE LAST THING YOU SAID. See
+            // editWalkStep() for what the walk is over and where it stops.
+            //
+            // Every guard here is about giving the key back: with text in the
+            // box it is the caret's, with the suggestion list open it is the
+            // list's (which answers it in the capture phase anyway), and with
+            // nothing of yours on screen it is nobody's.
+            Up: () => {
+                if (mentionPopOpen()) return CM_PASS;
+                if (input.value !== '') return CM_PASS;
+                if (!editWalkStep(1)) return CM_PASS;
+            }
         };
     }
 
@@ -5696,6 +5709,12 @@
             }
             if (ok) {
                 if (forDm) {
+                    // Yours, so the conversation follows it — the same rule
+                    // sendDm() applies to a text message. An attachment is the
+                    // case where it matters most: the row grows as the image
+                    // decodes, which is exactly what used to leave it below the
+                    // fold of a column that had stopped following.
+                    dmFollowing = true;
                     await loadDmMessages(true);
                     loadDmThreads();
                 } else {
@@ -14745,7 +14764,12 @@
             ['New line — inside a code block', ['Enter']],
             ['Send — inside a code block', ['Shift', 'Enter']],
             ['Accept the @mention being suggested', ['Tab']],
-            ['Reveal a spoiler', ['Enter']]
+            ['Reveal a spoiler', ['Enter']],
+            // Only from an empty box — with text in it the arrows belong to the
+            // caret. See the Up entry in composerKeymap().
+            ['Edit your last message — with the box empty', ['↑']],
+            ['While editing: the message before / after it', ['↑', '↓']],
+            ['Bring back something you already sent', ['Ctrl', '↑']]
         ]],
         ['The conversation', [
             ['Move between messages', ['↑', '↓']],
@@ -17329,6 +17353,26 @@
 
         ta.addEventListener('keydown', async (e) => {
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); restore(); return; }
+            // THE WALK CONTINUES FROM IN HERE. Up on the top line goes one
+            // message further back, Down on the bottom line comes forward again
+            // and, past the newest, hands the keyboard back to the composer.
+            // Both defer to the caret first — this box holds multi-line
+            // messages, and the arrows have to keep moving through them.
+            if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+                const back = e.key === 'ArrowUp';
+                if (ta.selectionStart === ta.selectionEnd &&
+                    (back ? ta.value.lastIndexOf('\n', ta.selectionStart - 1) === -1
+                          : ta.value.indexOf('\n', ta.selectionEnd) === -1) &&
+                    // …and only while there is nothing to lose. Once they have
+                    // typed into this box it is work, not a stop on a walk, and
+                    // an arrow key must not throw it away.
+                    ta.value === (p.body || '') &&
+                    editWalkStep(back ? 1 : -1)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
             if (e.key !== 'Enter' || e.shiftKey) return;
             e.preventDefault();
 
@@ -17382,6 +17426,89 @@
             L.rt.notifyPosted(channel, null, 'refresh');
             toast('Message edited');
         });
+    }
+
+    // ---- Up-arrow editing --------------------------------------------------
+    //
+    // An empty message box and Up opens the last thing you said for editing;
+    // Up again walks back through the one before it, and Down comes forward
+    // and eventually out to the composer again. The chord every chat client
+    // has, and the fastest way to fix a typo you noticed a second too late.
+    //
+    // ONLY FROM AN EMPTY BOX. The composer holds multi-line messages and the
+    // arrows have to keep moving the caret through them — the same reason
+    // message recall is on Ctrl+Up rather than on Up (see stepRecall). Empty,
+    // there is no caret to move and the key is free.
+    //
+    // The walk is over the column ON SCREEN — the conversation when one is
+    // open, the channel otherwise — and over rows, not over `posts`: what can
+    // be edited is what has a body drawn in front of you. That skips an
+    // optimistic echo the server has not confirmed (no id to edit), an
+    // attachment posted without a caption (no text node to open an editor
+    // beside), and anything a filter is hiding.
+
+    // Newest first, and only ever YOUR OWN — an admin's power to edit other
+    // people's messages is a menu item, never something an arrow key does.
+    function myEditableRows() {
+        if (!account) return [];
+        // In the DM view with no conversation picked there is no column to walk.
+        // The channel list is still behind the panel, and opening an editor into
+        // something nobody can see would strand a .msg-edit node there —
+        // renderMessages() bails whenever one exists, so that freezes the
+        // channel list for the rest of the session.
+        if (dmMode && !dmOpen) return [];
+        const box = dmOpen ? $('dm-messages') : $('messages');
+        const list = dmOpen ? displayedDms().map((m) => dmAsPost(m)) : displayedPosts();
+        const out = [];
+        for (let i = list.length - 1; i >= 0; i--) {
+            const p = list[i];
+            if (!ownsPost(p)) continue;
+            // A locally minted id — an optimistic echo still in flight
+            // ('send:1'), a queued message waiting for the connection
+            // ('out:1'). There is no row on the server to edit yet, and /edit
+            // would answer "Not found" for one of these ids.
+            if (typeof p.id !== 'number') continue;
+            const el = box.querySelector(`.msg[data-id="${p.id}"]`);
+            if (el && el.querySelector('.msg-text')) out.push({ p, el });
+        }
+        return out;
+    }
+
+    // step +1 goes further back, -1 comes forward again. Returns false when the
+    // key should do whatever it would have done anyway.
+    function editWalkStep(step) {
+        const rows = myEditableRows();
+        if (!rows.length) return false;
+        let idx = 0;
+        if (editingId != null) {
+            const at = rows.findIndex((r) => r.p.id === editingId);
+            // An editor over something this walk cannot see — a thread drawer,
+            // a message a filter now hides — is not a place to walk from.
+            if (at < 0) return false;
+            idx = at + step;
+        } else if (step < 0) {
+            return false;                  // nothing forward of the composer
+        }
+        // The oldest one STOPS rather than wrapping, exactly as message recall
+        // does: wrapping round to the newest is indistinguishable from a missed
+        // keypress.
+        if (idx >= rows.length) return false;
+
+        // Ordered: cancelEdit() repaints the list, so the node captured above is
+        // not necessarily the node that ends up on screen. Take the id from the
+        // list, close the old editor, then find the row again.
+        const target = idx < 0 ? null : rows[idx].p;
+        cancelEdit();
+        if (!target) {
+            // Forward past the newest message: back to writing a new one.
+            input.focus();
+            return true;
+        }
+        const box = dmOpen ? $('dm-messages') : $('messages');
+        const el = box.querySelector(`.msg[data-id="${target.id}"]`);
+        if (!el) return false;
+        startEdit(target, el);
+        return true;
     }
 
     async function deletePost(p) {
@@ -19451,6 +19578,30 @@
     let dmHasMore = false;
     let dmPaging = false;
     let dmTimer = null;
+    // IS THE CONVERSATION COLUMN TRACKING THE LIVE EDGE? The channel column's
+    // `following`, for the other list — and the piece this one never had.
+    //
+    // renderDmMessages() decided that question afresh on every paint, purely by
+    // measuring where the scrollbar happened to be, and nothing ever pinned the
+    // column back. Both halves of that go wrong the same way:
+    //
+    //   • A message, an avatar or a link preview finishing AFTER the column was
+    //     scrolled to the bottom grows the content under the reader, who is now
+    //     "not at the bottom" without having touched anything. The channel
+    //     column re-pins on exactly this (see the `load` listener beside its
+    //     echo); this one did not.
+    //   • From there every repaint left the column wherever innerHTML = ''
+    //     had dropped it — the TOP of the loaded history — so sending a message
+    //     threw the reader up to the oldest message on screen with their own
+    //     new row far below the fold. Which is the bug as reported: "I send a
+    //     DM and can't see it until I click into a channel and back", because
+    //     coming back re-opens the conversation, and openDm scrolls to the end.
+    //
+    // So it is STATE, set by the reader's own scrolling and forced true by
+    // their own send — a message you just wrote always pulls you to it, exactly
+    // as echoPost does for a channel.
+    let dmFollowing = true;
+    let dmLastHeight = 0;        // content height, to spot late-loading images
     // Whether the profile column is showing, as a CHOICE rather than as
     // whatever the last render happened to leave behind. renderDmProfile() runs
     // on every DM poll, and it used to set `hidden` outright — so closing the
@@ -19593,6 +19744,10 @@
         closeThread();
         dmMsgs = [];
         dmHasMore = false;
+        // Opening a conversation lands on its newest message (see the scroll
+        // below), so it starts out following — whatever the last one was doing.
+        dmFollowing = true;
+        dmLastHeight = 0;
         loadDmMessages.lastSig = null;    // the last conversation's payload isn't this one's
         $('dm-messages').innerHTML = '<div class="thread-loading">Loading…</div>';
         await loadDmMessages(true);
@@ -20236,11 +20391,12 @@
     async function loadOlderDms() {
         if (dmPaging || !dmHasMore || !dmOpen || !dmMsgs.length) return;
         dmPaging = true;
+        // Reading backwards is the definition of not being at the live edge.
+        // The scroll listener says the same thing on the way in, but the "Load
+        // earlier messages" button reaches here without a scroll at all.
+        dmFollowing = false;
         const forThread = dmOpen.id;
         const before = dmMsgs[0].id;
-        const box = $('dm-messages');
-        const wasHeight = box.scrollHeight;
-        const wasTop = box.scrollTop;
         try {
             const res = await L.board('dm/list', { query: { thread: forThread, before } });
             if (!dmOpen || dmOpen.id !== forThread) return;   // switched mid-flight
@@ -20258,18 +20414,50 @@
             const fresh = older.filter((m) => !have.has(m.id));
             if (!fresh.length) return;
             dmMsgs = fresh.concat(dmMsgs);
-            if (renderDmMessages()) {
-                box.scrollTop = wasTop + (box.scrollHeight - wasHeight);
-            }
+            // The height-difference restore this used to do itself now belongs
+            // to renderDmMessages(), which has to do it for EVERY repaint of a
+            // conversation the reader has scrolled up in — not only this one.
+            renderDmMessages();
         } finally {
             dmPaging = false;
         }
     }
 
-    // Same trigger as the channel list: near the top, with more behind it.
+    // Near enough to the bottom to count as reading the live edge. The margin
+    // this column has always used, now named and asked in one place.
+    function dmNearBottom() {
+        const box = $('dm-messages');
+        return box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    }
+
+    // Same trigger as the channel list: near the top, with more behind it —
+    // and, before that, the reader's own answer to "am I still at the live
+    // edge". Scrolling is the ONLY thing that may set this to false; paging
+    // back through the history is a scroll like any other, and reaches here
+    // first, so loadOlderDms below cannot be dragged to the bottom by the
+    // repaint it asks for.
     $('dm-messages').addEventListener('scroll', () => {
+        dmFollowing = dmNearBottom();
         if ($('dm-messages').scrollTop < 60) loadOlderDms();
     });
+
+    // Images and link previews have no height until they load, so one finishing
+    // shifts everything below it — the channel column's own listener, for the
+    // column that was missing it. Following means stay pinned to the newest;
+    // otherwise give the scroll back the height it gained above the reader, so
+    // their place does not jump.
+    $('dm-messages').addEventListener('load', (e) => {
+        const box = $('dm-messages');
+        if (!(e.target instanceof HTMLImageElement)) return;
+        const grew = box.scrollHeight - dmLastHeight;
+        dmLastHeight = box.scrollHeight;
+        if (grew <= 0) return;
+        if (dmFollowing) box.scrollTop = box.scrollHeight;
+        else if (e.target.getBoundingClientRect().top < box.getBoundingClientRect().top) {
+            box.scrollTop += grew;
+        }
+        dmLastHeight = box.scrollHeight;
+    }, true);
 
     // The drawer's "Loading…" placeholder never clears on its own, so a failed
     // first load has to replace it. Only when nothing is rendered yet — wiping a
@@ -20384,7 +20572,35 @@
         // every poll, so a DM arriving while you were reading back through the
         // conversation yanked you away from it. The main list and the thread
         // panel already extend this courtesy.
-        const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+        //
+        // `dmFollowing` is the other half, and it is the half that was missing.
+        // The measurement alone answers "is the scrollbar at the end RIGHT NOW",
+        // which stops being the same question the moment anything in the column
+        // loads late — and once it read false the column was never pinned again.
+        // See the declaration.
+        const atBottom = dmFollowing || dmNearBottom();
+        // Where the reader is, for the paint that is NOT going to follow the
+        // newest message. innerHTML = '' collapses the content to nothing and
+        // takes scrollTop to 0 with it, and nothing here ever put it back — so
+        // every repaint of a conversation the reader had scrolled up in threw
+        // them to the oldest message loaded.
+        const wasTop = box.scrollTop;
+        const wasHeight = box.scrollHeight;
+        // Every exit from this function goes through here, so no branch can
+        // leave the column parked where the rebuild dropped it.
+        const settle = () => {
+            if (atBottom) {
+                box.scrollTop = box.scrollHeight;
+                dmFollowing = true;
+            } else {
+                // Height-difference restore, the same way loadOlderDms() puts
+                // the reader back after prepending a page: rows above may have
+                // been added or removed by this very paint.
+                box.scrollTop = Math.max(0, wasTop + (box.scrollHeight - wasHeight));
+            }
+            dmLastHeight = box.scrollHeight;
+            return true;
+        };
         box.innerHTML = '';
         // In the DM view with nothing selected: the list is on the left and this
         // column has nothing to say yet.
@@ -20395,7 +20611,7 @@
                 ? 'Pick a conversation on the left.'
                 : 'No conversations yet — start one with the + above.';
             box.appendChild(e);
-            return true;
+            return settle();
         }
 
         // No early return for an empty conversation any more: the start block
@@ -20533,7 +20749,7 @@
             e.textContent = 'No loaded messages match these filters.' +
                 (dmHasMore ? ' Load earlier messages to search further back.' : '');
             box.appendChild(e);
-            return true;
+            return settle();
         }
         shown.forEach((m) => {
             const day = dayStr(m.created_at);
@@ -20552,9 +20768,9 @@
             box.appendChild(renderMessage(p, compact ? null : prev));
             prev = p;
         });
-        // Follow the live edge only if that's where the reader already was.
-        if (atBottom) box.scrollTop = box.scrollHeight;
-        return true;
+        // Follow the live edge only if that's where the reader already was —
+        // otherwise put them back where they were reading.
+        return settle();
     }
 
     // Sending a DM is a branch inside the real composer's submit handler now,
@@ -20576,6 +20792,11 @@
         const q = quoteId ? dmMsgs.find((m) => m.id === quoteId) : null;
         let temp = null;
         if (dmOpen && dmOpen.id === thread) {
+            // A MESSAGE YOU JUST WROTE ALWAYS PULLS YOU TO IT. echoPost() says
+            // the same thing for a channel; without it the row went up at the
+            // bottom of a column the reader was not looking at the bottom of,
+            // and sending appeared to do nothing at all.
+            dmFollowing = true;
             temp = {
                 id: pendingEchoId(), body, created_at: Date.now(),
                 fromMe: true, from: account ? account.id : null,
@@ -20604,6 +20825,9 @@
             return res;
         }
         if (dmOpen && dmOpen.id === thread) {
+            // The conversation may have been opened, or switched to, between the
+            // echo above and this answer — either way this row is still theirs.
+            dmFollowing = true;
             if (dmMsgs.includes(temp)) {
                 temp.id = res.id;
                 temp.created_at = res.created_at || temp.created_at;
