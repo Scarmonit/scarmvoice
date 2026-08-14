@@ -23,6 +23,28 @@
             this.outFrame = null;
             this.outPos = 0;
 
+            // ---- health counters, for the outgoing-audio watch ------------
+            //
+            // This processor sits directly in front of the microphone, so if it
+            // ever fails to produce a frame in time the call hears a hole — and
+            // from the far end that is indistinguishable from packet loss. The
+            // two have completely different fixes, so they have to be
+            // distinguishable HERE, where the difference is still visible.
+            //
+            // `underruns` counts output samples this processor filled with
+            // silence because no processed frame was ready. Priming (the first
+            // ~10ms after the graph is built, before the first full 480-sample
+            // frame exists) is expected and excluded — anything after that is
+            // the audio thread having missed its deadline.
+            //
+            // Counters only: no timers, no allocation, no performance.now() on
+            // the render thread. The main thread PULLS them (see 'stats'
+            // below), so the audio thread never does work nobody asked for.
+            this.quanta = 0;
+            this.frames = 0;
+            this.underruns = 0;
+            this.primed = false;
+
             // Report the outcome back to noise.js. Without this the main thread
             // logged "rnnoise active" purely because the graph was built, so a
             // wasm that never compiled looked identical to one that worked —
@@ -60,6 +82,21 @@
             }
 
             this.port.onmessage = (ev) => {
+                // Pull the health counters. Answered from the audio thread with
+                // a plain snapshot; the caller diffs successive ones.
+                if (ev.data === 'stats') {
+                    try {
+                        this.port.postMessage({
+                            t: 'stats',
+                            quanta: this.quanta,
+                            frames: this.frames,
+                            underruns: this.underruns,
+                            ready: this.ready,
+                            failed: this.failed
+                        });
+                    } catch (e) {}
+                    return;
+                }
                 if (ev.data !== 'close') return;
                 this.closed = true;
                 try {
@@ -106,15 +143,24 @@
                         out[j] = v > 1 ? 1 : (v < -1 ? -1 : v);
                     }
                     this.outQueue.push(out);
+                    this.frames++;
                     this.inLen = 0;
                 }
             }
 
+            this.quanta++;
             for (let o = 0; o < output.length; o++) {
                 if (!this.outFrame) {
-                    if (!this.outQueue.length) { output[o] = 0; continue; }
+                    if (!this.outQueue.length) {
+                        output[o] = 0;
+                        // Silence before the first frame ever existed is the
+                        // buffer filling, not a miss. See the counters.
+                        if (this.primed) this.underruns++;
+                        continue;
+                    }
                     this.outFrame = this.outQueue.shift();
                     this.outPos = 0;
+                    this.primed = true;
                 }
                 output[o] = this.outFrame[this.outPos++];
                 if (this.outPos >= this.outFrame.length) this.outFrame = null;

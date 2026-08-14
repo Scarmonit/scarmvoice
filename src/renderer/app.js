@@ -6915,6 +6915,23 @@
             leaveVoice();
         } },
         { name: 'theme', desc: 'Customise the theme', run: () => { openThemeModal(); } },
+        // "You sound robotic" -> type this WHILE it is happening.
+        //
+        // The watch in voice.js writes a report by itself when it detects a bad
+        // run, but a detector only catches what its thresholds describe, and
+        // the person listening to you is a better judge of your audio than any
+        // threshold. This dumps the last ten minutes of measured send-path
+        // numbers into the log whether or not anything tripped, which is what
+        // turns "it sounded bad just then" into evidence with a timestamp.
+        { name: 'voicecheck', desc: 'Save a report on your outgoing audio', run: () => {
+            if (!window.loungeVoiceReport) return toast('Voice diagnostics are unavailable', true);
+            const wrote = window.loungeVoiceReport();
+            if (!wrote) {
+                return toast('Nothing recorded yet — this reports on a call in progress', true);
+            }
+            // Named, because the next thing they will do is go looking for it.
+            toast('Outgoing audio report saved to the log — Settings › About › Open Logs');
+        } },
         { name: 'shrug', desc: 'Add ¯\\_(ツ)_/¯ to your message', run: () => {
             // The one command that does not take over the message: it writes
             // into the box and leaves it to be sent, edited or thrown away.

@@ -432,6 +432,404 @@
     // now" is the first question anyone asks when the number looks wrong.
     window.loungeRtt = sampleRtt;
 
+    // ---- txwatch: what is happening to the audio we SEND --------------------
+    //
+    // "You sound robotic and choppy, but only you" is a report about ONE
+    // direction of ONE person's audio, and until now nothing in this app could
+    // say anything about that direction. sampleConnection() above reports
+    // CUMULATIVE loss since the call began, which is exactly the wrong shape:
+    // a thirty-second degradation inside a two-hour call moves a lifetime
+    // average by a fraction of a percent and then hides it forever. [calltrace]
+    // records transports DYING, which this is not — the call stays up
+    // throughout. So the evidence for the actual complaint did not exist.
+    //
+    // This samples the send path every two seconds and keeps per-interval
+    // DELTAS, which is the only way a burst is visible at all. It exists to
+    // separate causes that produce identical symptoms at the far end:
+    //
+    //   packets leave at the normal rate, far end reports them missing
+    //       -> loss on the upload path. NOT this app.
+    //   packets stop leaving while the mic still has signal
+    //       -> capture or encoder stall on this machine.
+    //   the suppressor reports underruns
+    //       -> the audio worklet missed its deadline. THIS APP.
+    //   the media source produced less audio than wall-clock time
+    //       -> the capture graph starved: device, driver or CPU.
+    //   send delay climbs while the bandwidth estimate collapses
+    //       -> the upload is congested and packets are queueing locally.
+    //
+    // Every field is measured by the transport, the audio thread or the clock.
+    // Nothing here is estimated, and anything unavailable stays null rather
+    // than becoming a plausible number — a fabricated metric in a diagnosis is
+    // worse than a gap, because somebody will act on it.
+
+    // Monotonic, so an interval cannot be distorted by a clock adjustment
+    // mid-call — everything here is a rate, and a rate divided by a wrong
+    // elapsed time is a wrong rate that looks exactly like a real fault.
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+    const TX_SAMPLE_MS = 2000;
+    // Ten minutes of samples. The report is written when a problem is DETECTED,
+    // and the useful part is the run-up to it, so the window has to be long
+    // enough to hold whatever the user was doing beforehand.
+    const TX_HISTORY = 300;
+    // Opus at the 20ms packetisation this app negotiates: 50 packets/second.
+    // Anything meaningfully under that means packets are not being produced,
+    // which is a different fault from packets being lost.
+    const TX_EXPECTED_PPS = 50;
+
+    const txHistory = [];
+    let txPrev = null;          // the previous raw sample, for deltas
+    let txTimer = null;
+    let txExpectedAt = 0;       // when this tick was due, for event-loop lag
+    let txBadRun = 0;           // consecutive unhealthy samples
+    let txLastDumpAt = 0;
+    let txDumps = 0;
+
+    function txNum(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
+
+    // One raw reading of the send path. Cumulative counters, straight off
+    // getStats — the differencing happens in txTick().
+    async function sampleTx() {
+        prunePCS();
+        const out = {
+            at: Date.now(),
+            mono: now(),
+            // outbound-rtp (audio): what we handed to the network.
+            packetsSent: 0, bytesSent: 0, sendDelay: 0, retrans: 0,
+            // remote-inbound-rtp (audio): what the FAR END says it got. This is
+            // the only field in the whole app that speaks for the listener.
+            packetsLost: null, jitterMs: null, rttMs: null,
+            // media-source (audio): the track feeding the encoder.
+            audioLevel: null, samplesDur: null, droppedDur: null, droppedEvents: null,
+            // candidate-pair: the send-side bandwidth estimate and path RTT.
+            availOutKbps: null, pairRttMs: null,
+            // Negotiated codec parameters — see txCodecFlags().
+            codec: null, fmtp: null,
+            senders: 0
+        };
+        let sawOutbound = false;
+        for (const pc of PCS) {
+            if (!pc || typeof pc.getStats !== 'function') continue;
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') continue;
+            let stats;
+            try { stats = await pc.getStats(); } catch (e) { continue; }
+
+            const byId = new Map();
+            const pairs = new Map();
+            let selectedId = null;
+            stats.forEach((r) => {
+                byId.set(r.id, r);
+                if (r.type === 'candidate-pair') pairs.set(r.id, r);
+                if (r.type === 'transport' && r.selectedCandidatePairId) selectedId = r.selectedCandidatePairId;
+            });
+
+            stats.forEach((r) => {
+                if (r.type === 'outbound-rtp' && r.kind === 'audio') {
+                    sawOutbound = true;
+                    out.senders++;
+                    if (txNum(r.packetsSent) !== null) out.packetsSent += r.packetsSent;
+                    if (txNum(r.bytesSent) !== null) out.bytesSent += r.bytesSent;
+                    // Seconds, cumulative across every packet ever sent. Divided
+                    // by the packets in the same interval it becomes "how long
+                    // did a packet wait in the local send queue" — the local
+                    // half of congestion, which no far-end metric can see.
+                    if (txNum(r.totalPacketSendDelay) !== null) out.sendDelay += r.totalPacketSendDelay;
+                    if (txNum(r.retransmittedPacketsSent) !== null) out.retrans += r.retransmittedPacketsSent;
+                    const c = byId.get(r.codecId);
+                    if (c && c.mimeType && out.codec === null) {
+                        out.codec = c.mimeType.split('/').pop();
+                        out.fmtp = c.sdpFmtpLine || '';
+                    }
+                    const ms = byId.get(r.mediaSourceId);
+                    if (ms) {
+                        if (txNum(ms.audioLevel) !== null) out.audioLevel = ms.audioLevel;
+                        if (txNum(ms.totalSamplesDuration) !== null) {
+                            out.samplesDur = (out.samplesDur || 0) + ms.totalSamplesDuration;
+                        }
+                        // Chromium only populates these for a real capture
+                        // device. The track this app publishes is the
+                        // suppressor's OUTPUT, so they are often absent — which
+                        // is exactly why ScarmNoise.stats() exists beside them.
+                        if (txNum(ms.droppedSamplesDuration) !== null) {
+                            out.droppedDur = (out.droppedDur || 0) + ms.droppedSamplesDuration;
+                        }
+                        if (txNum(ms.droppedSamplesEvents) !== null) {
+                            out.droppedEvents = (out.droppedEvents || 0) + ms.droppedSamplesEvents;
+                        }
+                    }
+                }
+                if (r.type === 'remote-inbound-rtp' && r.kind === 'audio') {
+                    if (txNum(r.packetsLost) !== null) out.packetsLost = (out.packetsLost || 0) + r.packetsLost;
+                    // Seconds in the stat, milliseconds everywhere a human
+                    // reads it.
+                    if (txNum(r.jitter) !== null) {
+                        const j = r.jitter * 1000;
+                        if (out.jitterMs === null || j > out.jitterMs) out.jitterMs = Math.round(j * 10) / 10;
+                    }
+                    if (txNum(r.roundTripTime) !== null) {
+                        const t = r.roundTripTime * 1000;
+                        if (out.rttMs === null || t > out.rttMs) out.rttMs = Math.round(t);
+                    }
+                }
+            });
+
+            let pair = selectedId ? pairs.get(selectedId) : null;
+            if (!pair) pairs.forEach((p) => { if (!pair && p.state === 'succeeded' && p.nominated) pair = p; });
+            if (pair) {
+                if (txNum(pair.availableOutgoingBitrate) !== null) {
+                    const k = Math.round(pair.availableOutgoingBitrate / 1000);
+                    if (out.availOutKbps === null || k < out.availOutKbps) out.availOutKbps = k;
+                }
+                if (txNum(pair.currentRoundTripTime) !== null) {
+                    const t = Math.round(pair.currentRoundTripTime * 1000);
+                    if (out.pairRttMs === null || t > out.pairRttMs) out.pairRttMs = t;
+                }
+            }
+        }
+        return sawOutbound ? out : null;
+    }
+
+    // The opus parameters actually negotiated, read back off the live codec
+    // rather than off what we asked for. `usedtx=1` here would mean the DTX
+    // strip in patchRTC() stopped taking — that flag alone produces exactly the
+    // symptom being investigated, and it is the one cause of it that lives in
+    // this codebase, so it is checked on every sample rather than assumed.
+    function txCodecFlags(fmtp) {
+        const s = String(fmtp || '');
+        return {
+            dtx: /usedtx=1/.test(s),
+            fec: /useinbandfec=1/.test(s)
+        };
+    }
+
+    // Turn two raw samples into one interval, in units a person can read.
+    function txDelta(prev, cur, lagMs, noise) {
+        const secs = (cur.mono - prev.mono) / 1000;
+        if (secs <= 0) return null;
+        const dPackets = cur.packetsSent - prev.packetsSent;
+        const dBytes = cur.bytesSent - prev.bytesSent;
+        const dLost = (cur.packetsLost !== null && prev.packetsLost !== null)
+            ? Math.max(0, cur.packetsLost - prev.packetsLost) : null;
+        const dDelay = cur.sendDelay - prev.sendDelay;
+        const dSamples = (cur.samplesDur !== null && prev.samplesDur !== null)
+            ? cur.samplesDur - prev.samplesDur : null;
+        const dDropped = (cur.droppedDur !== null && prev.droppedDur !== null)
+            ? cur.droppedDur - prev.droppedDur : null;
+        const flags = txCodecFlags(cur.fmtp);
+        return {
+            at: cur.at,
+            secs: Math.round(secs * 100) / 100,
+            // Packets per second we PRODUCED. ~50 is healthy; a dip here is a
+            // hole punched on this machine, before the network ever saw it.
+            pps: Math.round((dPackets / secs) * 10) / 10,
+            kbps: Math.round((dBytes * 8) / secs / 100) / 10,
+            // Loss over THIS interval only, as a share of what was sent in it.
+            lossPct: (dLost === null || dPackets <= 0) ? null
+                : Math.round((dLost / (dPackets + dLost)) * 1000) / 10,
+            lostPkts: dLost,
+            jitterMs: cur.jitterMs,
+            rttMs: cur.rttMs !== null ? cur.rttMs : cur.pairRttMs,
+            // Mean time a packet spent waiting locally before it went out.
+            sendDelayMs: dPackets > 0 ? Math.round((dDelay / dPackets) * 10000) / 10 : null,
+            availOutKbps: cur.availOutKbps,
+            audioLevel: cur.audioLevel === null ? null : Math.round(cur.audioLevel * 1000) / 1000,
+            // How much audio the source actually produced against how much
+            // wall-clock time passed. Below 1.0 means the capture graph
+            // starved — the device, its driver or the CPU could not keep up.
+            captureRatio: dSamples === null ? null : Math.round((dSamples / secs) * 1000) / 1000,
+            droppedMs: dDropped === null ? null : Math.round(dDropped * 1000),
+            // The suppressor's own missed deadlines over this interval.
+            nsUnderruns: noise ? noise.underruns : null,
+            nsFrames: noise ? noise.frames : null,
+            // Renderer event-loop lag: how late this sample was against its own
+            // schedule. The audio thread is separate, so this does not prove an
+            // audio glitch — it proves the machine was busy, which is context.
+            lagMs: Math.round(lagMs),
+            dtx: flags.dtx,
+            fec: flags.fec,
+            codec: cur.codec
+        };
+    }
+
+    // Is this interval unhealthy, and — the part that matters — WHY.
+    //
+    // The thresholds are deliberately conservative: this drives an automatic
+    // log dump, and a report that fires on every ordinary hiccup would bury the
+    // one that matters. Each reason names the layer it accuses, because the
+    // whole point of the exercise is telling the app apart from the machine it
+    // runs on.
+    function txReasons(d) {
+        const r = [];
+        if (d.lossPct !== null && d.lossPct >= 3) {
+            r.push('UPLOAD-LOSS ' + d.lossPct + '% (' + d.lostPkts + ' packets the far end never got)');
+        }
+        if (d.jitterMs !== null && d.jitterMs >= 30) {
+            r.push('UPLOAD-JITTER ' + d.jitterMs + 'ms as measured at the far end');
+        }
+        // Only when the microphone actually had something to send: a genuinely
+        // silent mic legitimately produces fewer packets on some stacks, and
+        // accusing the encoder of that would be a false positive every time
+        // somebody stops talking.
+        if (d.pps < TX_EXPECTED_PPS * 0.8 && d.audioLevel !== null && d.audioLevel > 0.01) {
+            r.push('SEND-STALL ' + d.pps + ' packets/s (expected ~' + TX_EXPECTED_PPS +
+                ') while the mic had signal — packets were not produced, not lost');
+        }
+        if (d.nsUnderruns) {
+            r.push('SUPPRESSOR-UNDERRUN ' + d.nsUnderruns +
+                ' samples of silence the noise filter could not fill in time');
+        }
+        if (d.captureRatio !== null && d.captureRatio < 0.97) {
+            r.push('CAPTURE-STARVED source produced ' + d.captureRatio + 's of audio per second of clock');
+        }
+        if (d.droppedMs) r.push('MIC-DROPPED ' + d.droppedMs + 'ms of samples dropped by the capture device');
+        if (d.sendDelayMs !== null && d.sendDelayMs >= 100) {
+            r.push('SEND-QUEUE ' + d.sendDelayMs + 'ms mean local queueing before packets left');
+        }
+        if (d.availOutKbps !== null && d.availOutKbps < 40) {
+            r.push('UPLOAD-STARVED bandwidth estimate down to ' + d.availOutKbps + 'kbps');
+        }
+        if (d.dtx) r.push('DTX-ON usedtx=1 survived into the negotiated codec — the strip in patchRTC did not hold');
+        return r;
+    }
+
+    function txFmt(d) {
+        const p = (k, v, unit) => (v === null || v === undefined ? '' : ' ' + k + '=' + v + (unit || ''));
+        return 'pps=' + d.pps +
+            p('kbps', d.kbps) +
+            p('loss', d.lossPct, '%') +
+            p('jitter', d.jitterMs, 'ms') +
+            p('rtt', d.rttMs, 'ms') +
+            p('sendDelay', d.sendDelayMs, 'ms') +
+            p('availOut', d.availOutKbps, 'kbps') +
+            p('level', d.audioLevel) +
+            p('capture', d.captureRatio) +
+            p('dropped', d.droppedMs, 'ms') +
+            p('nsUnderruns', d.nsUnderruns) +
+            p('lag', d.lagMs, 'ms') +
+            (d.dtx ? ' DTX=ON' : '') +
+            (d.fec ? '' : ' FEC=OFF');
+    }
+
+    function txLog(s) {
+        try { console.info(s); } catch (e) {}
+        // The log FILE is the whole point: this fires while the user is mid-
+        // conversation and cannot be watching a console, and the report has to
+        // survive until somebody comes looking for it.
+        try { window.lounge.app.log(s); } catch (e) {}
+    }
+
+    // Write the window around a detected problem. Not just the bad samples —
+    // the run-up is what says whether something degraded or simply arrived.
+    function txDump(why, spanSamples) {
+        const n = Math.min(txHistory.length, spanSamples || 30);
+        const slice = txHistory.slice(-n);
+        if (!slice.length) return false;
+        txDumps++;
+        txLog('[txwatch] ==== outgoing audio report #' + txDumps + ' — ' + why + ' ====');
+        const first = slice[0];
+        txLog('[txwatch] codec=' + (first.codec || '?') +
+            ' dtxStripped=' + (!first.dtx) + ' inbandFec=' + first.fec +
+            ' suppressor=' + (window.ScarmNoise && window.ScarmNoise.isEnabled()
+                ? (window.ScarmNoise.isWorking() ? 'on' : 'ENABLED-BUT-BROKEN') : 'off') +
+            ' samples=' + slice.length + ' @' + (TX_SAMPLE_MS / 1000) + 's');
+        slice.forEach((d) => {
+            const t = new Date(d.at);
+            const hh = String(t.getHours()).padStart(2, '0') + ':' +
+                String(t.getMinutes()).padStart(2, '0') + ':' +
+                String(t.getSeconds()).padStart(2, '0');
+            const bad = txReasons(d);
+            txLog('[txwatch] ' + hh + ' ' + txFmt(d) + (bad.length ? '  <<< ' + bad.join(' | ') : ''));
+        });
+        txLog('[txwatch] ==== end of report #' + txDumps + ' ====');
+        return true;
+    }
+
+    async function txTick() {
+        const due = txExpectedAt;
+        const lag = due ? Math.max(0, now() - due) : 0;
+        txExpectedAt = now() + TX_SAMPLE_MS;
+
+        let cur;
+        try { cur = await sampleTx(); } catch (e) { cur = null; }
+        // No outbound audio stream: the mic is shut, or the call is still
+        // coming up. Not a fault, and not a sample — differencing across the
+        // gap would invent a stall that never happened.
+        if (!cur) { txPrev = null; return; }
+
+        let noise = null;
+        try {
+            if (window.ScarmNoise && window.ScarmNoise.stats) noise = await window.ScarmNoise.stats(400);
+        } catch (e) { noise = null; }
+        // Per-interval, like everything else here.
+        let noiseDelta = null;
+        if (noise && txPrev && txPrev.noise) {
+            noiseDelta = {
+                underruns: Math.max(0, noise.underruns - txPrev.noise.underruns),
+                frames: Math.max(0, noise.frames - txPrev.noise.frames)
+            };
+        }
+        cur.noise = noise;
+
+        const prev = txPrev;
+        txPrev = cur;
+        if (!prev) return;
+
+        const d = txDelta(prev, cur, lag, noiseDelta);
+        if (!d) return;
+        txHistory.push(d);
+        while (txHistory.length > TX_HISTORY) txHistory.shift();
+
+        const reasons = txReasons(d);
+        if (!reasons.length) { txBadRun = 0; return; }
+        txBadRun++;
+        // Two consecutive bad samples — four seconds — before anything is
+        // written. One is a blip nobody hears; this is aimed at the thing
+        // somebody complained about out loud.
+        if (txBadRun !== 2) return;
+        // …and at most one report a minute, so a genuinely bad ten minutes
+        // produces a readable log rather than a megabyte of it.
+        if (txLastDumpAt && (Date.now() - txLastDumpAt) < 60000) return;
+        txLastDumpAt = Date.now();
+        txDump(reasons.join(' + '), 30);
+    }
+
+    function startTxWatch() {
+        stopTxWatch();
+        // Cleared HERE rather than on stop. "That call just sounded terrible"
+        // is said after hanging up at least as often as during, and a history
+        // wiped by leave() would have thrown the evidence away seconds before
+        // anybody thought to ask for it. It survives until the next call needs
+        // the room.
+        txHistory.length = 0;
+        txPrev = null;
+        txBadRun = 0;
+        txLastDumpAt = 0;
+        txExpectedAt = now() + TX_SAMPLE_MS;
+        txTimer = setInterval(() => { txTick(); }, TX_SAMPLE_MS);
+    }
+
+    function stopTxWatch() {
+        if (txTimer) clearInterval(txTimer);
+        txTimer = null;
+        txPrev = null;
+        txExpectedAt = 0;
+        txBadRun = 0;
+    }
+
+    // "It just happened" — write everything held, whether or not the automatic
+    // detector agreed. The person on the other end of the call is a better
+    // detector than any threshold, and this is how their report becomes data.
+    window.loungeVoiceReport = (span) => {
+        if (!txHistory.length) {
+            txLog('[txwatch] nothing recorded — join a call and let it run for a few seconds first');
+            return false;
+        }
+        return txDump('manual request', span || TX_HISTORY);
+    };
+    // The live numbers, for reading in devtools rather than in the log.
+    window.loungeVoiceStats = () => txHistory.slice();
+
     function createVoice(opts) {
         const on = Object.assign({
             onState: () => {},
@@ -506,6 +904,12 @@
         const RTT_MS = 3000;
         function startRtt() {
             stopRtt();
+            // The outgoing-audio watch runs for as long as the call does, on
+            // its own two-second clock. It is deliberately tied to the call
+            // rather than to the mic: a stall in which packets STOP is exactly
+            // the case worth catching, and a watch that stopped with them
+            // would go blind at the only moment it matters.
+            startTxWatch();
             const tick = () => sampleConnection().then((c) => {
                 const v = c.rtt;
                 conn = c;
@@ -527,6 +931,7 @@
             rttMs = null;
             conn = null;
             rttHistory.length = 0;
+            stopTxWatch();
         }
 
         function state() {

@@ -1026,7 +1026,11 @@ describe('the latency readout', () => {
         // It is a running average inside the transport already, so a push on
         // every tick would repaint the panel for a millisecond nobody can see.
         const at = voice().indexOf('function startRtt()');
-        const body = voice().slice(at, at + 700);
+        // To the end of the function rather than a fixed number of characters:
+        // a comment added inside startRtt pushed the assertion out of a 700-char
+        // window once already, which fails as though the throttle had been
+        // removed when nothing about it had changed.
+        const body = voice().slice(at, voice().indexOf('function stopRtt()', at));
         expect(body).toMatch(/Math\.abs\(v - rttMs\) >= 3/);
         expect(body).toMatch(/if \(changed\) pushState\(\)/);
     });

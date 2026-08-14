@@ -26,6 +26,11 @@
     let broken = false;
     let failureCb = null;
 
+    // The AudioWorkletNode currently in front of the microphone, and the one
+    // pending stats() reply. See ScarmNoise.stats().
+    let liveNode = null;
+    let statsWaiter = null;
+
     function markBroken(why) {
         if (broken) return;     // one report per enable, not one per acquisition
         broken = true;
@@ -167,6 +172,11 @@
                 // 'ended' event, {once} never fired and these would otherwise
                 // pile up one set per mic acquisition.
                 srcTracks.forEach((t) => { try { t.removeEventListener('ended', onSourceEnded); } catch (e) {} });
+                // Nothing may poll a processor that is going away, and a
+                // caller waiting on a reply that will never come has to be
+                // released rather than left hanging.
+                if (liveNode === node) liveNode = null;
+                if (statsWaiter) { const w = statsWaiter; statsWaiter = null; try { w(null); } catch (e) {} }
                 try { node.port.postMessage('close'); } catch (e) {}
                 try { src.disconnect(); } catch (e) {}
                 try { node.disconnect(); } catch (e) {}
@@ -205,9 +215,21 @@
             // The processor reports whether the wasm actually came up. Logging
             // "active" merely because the graph was built meant a suppression
             // that silently passed audio straight through still claimed to be on.
+            // The live processor, so its health counters can be read while a
+            // call is up (see stats() below). One at a time in practice — the
+            // app holds a single mic capture — and cleared on teardown so a
+            // dead worklet is never polled.
+            liveNode = node;
+
             node.port.onmessage = (ev) => {
                 const d = ev && ev.data;
                 if (!d || !d.t) return;
+                if (d.t === 'stats') {
+                    const w = statsWaiter;
+                    statsWaiter = null;
+                    if (w) w(d);
+                    return;
+                }
                 if (d.t === 'ready') {
                     broken = false;
                     console.info('[noise] rnnoise active on mic capture');
@@ -260,6 +282,36 @@
         // "Enabled" is what the user asked for; this is what they are actually
         // getting. Optimistic until an acquisition proves otherwise.
         isWorking() { return enabled && !broken; },
+        // THE SUPPRESSOR'S OWN HEALTH, pulled from the audio thread.
+        //
+        // This node sits between the microphone and the encoder, so a frame it
+        // fails to deliver on time leaves a hole in the outgoing audio that
+        // the far end hears as a dropout — identical, to the listener, to a
+        // lost packet, and with a completely different cause. `underruns` is
+        // the count of output samples it had to fill with silence because no
+        // processed frame was ready; on a healthy machine it stays at zero for
+        // the whole call.
+        //
+        // Resolves null when there is no live capture, or when the worklet
+        // does not answer within the timeout (an audio thread that wedged
+        // hard, which is itself the answer).
+        stats(timeoutMs) {
+            const node = liveNode;
+            if (!node) return Promise.resolve(null);
+            // One outstanding request at a time — a second would steal the
+            // first one's reply.
+            if (statsWaiter) return Promise.resolve(null);
+            return new Promise((resolve) => {
+                let settled = false;
+                const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+                statsWaiter = finish;
+                setTimeout(() => {
+                    if (statsWaiter === finish) statsWaiter = null;
+                    finish(null);
+                }, timeoutMs || 500);
+                try { node.port.postMessage('stats'); } catch (e) { statsWaiter = null; finish(null); }
+            });
+        },
         // Called with the reason the first time suppression fails while
         // enabled. The listener's job is to put the browser's own suppression
         // back — audio itself is never at risk, the raw mic is always returned.
