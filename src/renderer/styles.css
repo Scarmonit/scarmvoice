@@ -998,6 +998,16 @@ body.edit-mode { overflow: hidden; }
 .vp.vu .vp-flag .ico { width: 15px; height: 15px; }
 .vp .vp-flag { margin-left: auto; font-size: 12px; opacity: .85; flex: 0 0 auto; }
 .vp .vp-flag + .vp-flag { margin-left: 4px; }
+/* Somebody is streaming. Since watching became opt-in this is the only thing in
+   the sidebar that says a stream exists, so it is the one badge here allowed to
+   be loud — everything else in this list is deliberately quiet. */
+.vp .vp-live {
+  margin-left: auto; flex: 0 0 auto;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--danger); color: #fff;
+  font-size: 9.5px; font-weight: 800; letter-spacing: .4px; line-height: 15px;
+}
+.vp .vp-live + .vp-flag { margin-left: 4px; }
 .vp.unreachable .vp-name { color: var(--dim); }
 .vp.unreachable { border-color: rgba(223, 163, 44, .38); }
 
@@ -2678,6 +2688,67 @@ ul.msg-list ul.msg-list ul.msg-list { list-style-type: square; }
   font-size: 11px; font-weight: 600; color: #fff;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
 }
+
+/* ---------- live tiles: the offer to watch a screen share ----------------
+   A tile with no video in it, deliberately: nothing about an unwatched stream is
+   attached or decoded on this machine until the button below is pressed. It sits
+   in the same grid as the camera tiles because it is the same kind of thing —
+   somebody broadcasting, and a choice about whether to look. */
+.share-tile { background: var(--chat-2); cursor: pointer; }
+.share-tile:hover { border-color: var(--accent-line); }
+.live-card {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 12px; text-align: center; min-height: 0; overflow: hidden;
+}
+/* NOT shrinkable. A column flex container whose content is taller than the tile
+   shrinks its items along the main axis, and a <span> with no height of its own
+   goes to ZERO — which is what silently ate the presenter's name in a tile one
+   line too short. Clipping the card is the honest failure; erasing a line from
+   the middle of it is not. */
+.live-card > * { flex: 0 0 auto; }
+.live-av {
+  width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto;
+  display: grid; place-items: center; position: relative;
+  font-size: 15px; font-weight: 700; color: var(--on-accent);
+}
+.live-badge {
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--danger); color: #fff;
+  font-size: 9.5px; font-weight: 800; letter-spacing: .4px;
+}
+.live-name {
+  max-width: 100%; font-size: 13px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.live-sub { font-size: 11px; color: var(--dim); }
+.live-watch {
+  margin-top: 2px; padding: 6px 14px; border: 0; border-radius: 6px; cursor: pointer;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 12px; font-weight: 600;
+}
+.live-watch:hover { filter: brightness(1.08); }
+/* Already watching: the button is the way back out, so it stops shouting. */
+.live-watch.on { background: var(--input); color: var(--muted); }
+.live-watch.on:hover { background: var(--elev); color: var(--text); filter: none; }
+/* Under an open stage the grid is capped at 24vh (see above), which on a short
+   window bottoms out at its 110px min — not enough for the full card. So the
+   decoration goes and the three things that matter stay: that they are live,
+   who they are, and the way in. */
+#stage:not([hidden]) ~ #camera-stage .live-av,
+#stage:not([hidden]) ~ #camera-stage .live-sub { display: none; }
+#stage:not([hidden]) ~ #camera-stage .live-card { gap: 5px; padding: 8px; }
+
+/* Offers and nothing else — somebody is live and nobody has taken it up yet.
+   These tiles carry no picture, so the video-sized region the camera grid claims
+   would push the conversation out of the window for something no one has agreed
+   to watch. A strip is the honest size for it. Both cases are spelled out
+   because the sibling rule above outranks a bare class. */
+#camera-stage.offers-only,
+#stage:not([hidden]) ~ #camera-stage.offers-only {
+  flex: 0 0 auto; min-height: 0; max-height: 168px;
+}
+#camera-stage.offers-only .live-av { width: 36px; height: 36px; font-size: 13px; }
 
 /* Per-tile viewing tools, revealed on hover — same actions the share stage has. */
 .cam-tools {

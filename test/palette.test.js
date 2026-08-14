@@ -2223,3 +2223,39 @@ describe('presence dots', () => {
         expect(rules).toMatch(/\.pop-presence\.offline \{ background: var\(--offline\); \}/);
     });
 });
+
+describe('the live tile — the offer to watch a screen share', () => {
+    it('refuses to let a flex column erase a line out of the card', () => {
+        // Measured, and this is not hypothetical: `.live-card` is a column flex
+        // container with a fixed height, and when the card is one line taller
+        // than its tile the browser shrinks the items along the main axis. A
+        // <span> with no height of its own goes to ZERO — the presenter's NAME
+        // vanished from the middle of the card while the badge above and the
+        // button below stayed put, which reads as a rendering glitch rather than
+        // a layout rule. Clipping the card is the honest failure.
+        expect(rules).toMatch(/\.live-card > \* \{ flex: 0 0 auto; \}/);
+        expect(rules).toMatch(/\.live-card \{[^}]*overflow: hidden/);
+    });
+
+    it('sizes an offer like a strip rather than like video', () => {
+        // A live tile carries no picture until somebody opts in, so the region
+        // must not claim the video-sized slab #camera-stage normally does — that
+        // would push the conversation out of the window for something nobody has
+        // agreed to watch. Spelled out for both cases because the
+        // `#stage ~ #camera-stage` rule outranks a bare class.
+        expect(rules).toMatch(/#camera-stage\.offers-only,\s*\n#stage:not\(\[hidden\]\) ~ #camera-stage\.offers-only \{/);
+        expect(rules).toMatch(/#camera-stage\.offers-only[^{]*\{[^}]*max-height: 168px/);
+    });
+
+    it('marks a stream that is live, and the one you are already watching', () => {
+        // Both are tokens, so the light theme and high contrast move them with
+        // everything else. LIVE is deliberately the loud one in the voice list:
+        // since watching became opt-in it is the only thing in the sidebar that
+        // says a stream exists at all.
+        expect(rules).toMatch(/\.vp \.vp-live \{[^}]*background: var\(--danger\)/);
+        expect(rules).toMatch(/\.live-badge \{[^}]*background: var\(--danger\)/);
+        expect(rules).toMatch(/\.live-watch \{[^}]*background: var\(--accent\)/);
+        // Already watching: the button is the way back OUT, so it stops shouting.
+        expect(rules).toMatch(/\.live-watch\.on \{[^}]*background: var\(--input\)/);
+    });
+});

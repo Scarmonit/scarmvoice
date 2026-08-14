@@ -378,9 +378,11 @@
       <div id="search-results"></div>
     </div>
 
-    <!-- Viewing stage. Several people can present at once; the strip below the
-         head lists every live screen share and camera, and you pick which one
-         plays here. -->
+    <!-- Viewing stage. Nothing appears here unless it was asked for: a stream
+         that starts is offered as a tile in the call grid below, and only a
+         deliberate Watch Stream / Watch Camera puts it on screen. The strip
+         below the head lists every live screen share and camera, so switching
+         between somebody's screen and their webcam is one click. -->
     <section id="stage" hidden>
       <div class="stage-head">
         <span class="stage-live"></span>
@@ -394,6 +396,9 @@
           <button class="stage-btn" id="stage-motion" title="Sharp = crisp text · Smooth = fluid motion">Sharp</button>
           <button class="stage-btn" id="stage-pip" title="Pop out">Pop out</button>
           <button class="stage-btn" id="stage-full" title="Fullscreen">Fullscreen</button>
+          <!-- Leaves the stream. Distinct from Stop beside it, which ends YOUR
+               share for everyone — see renderStage for the label swap. -->
+          <button class="stage-btn" id="stage-close" title="Stop watching this stream">Stop Watching</button>
           <button class="stage-btn danger" id="stage-stop" title="Stop sharing">Stop</button>
         </div>
       </div>
@@ -1962,6 +1967,18 @@
          aria-label="Volume for this person">
 
   <div class="pop-sep" id="pop-audio-sep"></div>
+
+  <!-- Watching is opt-in, so every place that names a person is a place to opt
+       in from. Both hide unless that person actually has one live right now, and
+       they are separate entries on purpose: someone streaming their screen AND
+       their camera is two things to watch, and this is where you choose. -->
+  <button type="button" class="pop-action" id="pop-watch" hidden>
+    <span class="ico" data-icon="screen"></span><span id="pop-watch-label">Watch Stream</span>
+  </button>
+  <button type="button" class="pop-action" id="pop-watch-cam" hidden>
+    <span class="ico" data-icon="camera"></span><span id="pop-watch-cam-label">Watch Camera</span>
+  </button>
+  <div class="pop-sep" id="pop-watch-sep" hidden></div>
 
   <!-- Addressed by account, so it is hidden for anyone this row cannot resolve
        one for — see openPopover. The label carries the name, because a popover

@@ -162,13 +162,21 @@ describe('voice presenters', () => {
         expect(voice.shares()[0].stream).not.toBe(first);
     });
 
-    it('plays share audio on its own element so an unwatched presenter is still heard', async () => {
+    it('keeps a share silent until you opt into watching it', async () => {
+        // Hearing somebody's desktop audio is part of watching them, and
+        // watching is opt-in. Before this, every presenter's audio played for
+        // everyone in the call whether or not they had asked to see the stream.
         const { voice } = await joinedVoice();
         const alice = participant('a', 'Alice');
         remoteShare(alice, true, { video: track('v-a', 'video'), audio: track('a-a', 'audio') });
 
         const els = document.querySelectorAll('#audio-sink audio');
+        // Attached but muted: switching to it has to be instant, and rebuilding
+        // srcObject mid-presentation is an audible drop for the listener.
         expect(els).toHaveLength(1);
+        expect(els[0].muted).toBe(true);
+
+        voice.setWatchedShare('a');
         expect(els[0].muted).toBe(false);
 
         voice.setDeafened(true);
@@ -179,9 +187,29 @@ describe('voice presenters', () => {
         // Muting the person mutes their share too — one control, both streams.
         voice.setLocalMuted('a', true);
         expect(els[0].muted).toBe(true);
+        voice.setLocalMuted('a', false);
+        expect(els[0].muted).toBe(false);
 
+        // Watching somebody else silences the one you left.
+        voice.setWatchedShare('b');
+        expect(els[0].muted).toBe(true);
+
+        voice.setWatchedShare('a');
         remoteShare(alice, false);
         expect(document.querySelectorAll('#audio-sink audio')).toHaveLength(0);
+    });
+
+    it('forgets what you were watching when the call ends', async () => {
+        // Left set, the next call's first share would come up already unmuted
+        // for a presenter this user never opted into.
+        const { voice } = await joinedVoice();
+        remoteShare(participant('a', 'Alice'), true, {
+            video: track('v-a', 'video'), audio: track('a-a', 'audio')
+        });
+        voice.setWatchedShare('a');
+
+        voice.leave();
+        expect(voice.watchedShare()).toBe(null);
     });
 
     it('clears every presenter on leave', async () => {

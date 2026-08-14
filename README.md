@@ -65,12 +65,22 @@ board session is remembered for 30 days.
   same viewing options as the stage. The speaker's tile is ringed, and the one
   you're watching is outlined in the accent colour.
   Plain RealtimeKit video on the same meeting, so it works across desktop and web
+- **Watching is opt-in** — a screen share never takes your window on its own.
+  Somebody going live gets a **LIVE** tile in the call grid (name, badge, *Watch
+  Stream*), a LIVE badge beside their name in the voice list, and a *Watch
+  Stream* entry in their popover; the stream plays only once you press one of
+  them, and *Stop Watching* puts it away without touching the presenter. Their
+  desktop audio arrives and leaves with the picture. An unwatched share is not
+  attached to any element on your machine, so it costs you nothing to decline
 - **Multi-presenter viewing** — several people can share a screen at once, and
-  you choose which one you watch. The stage lists every live screen share and
-  camera as a pill above the video; click to switch. Your choice sticks until
-  that stream ends, at which point it falls back to someone else's screen. Share
-  audio plays from its own element, so a presenter you aren't watching is still
-  audible
+  cameras count as sources too, so choosing between somebody's *screen* and
+  their *camera* is one click. The stage lists every live stream as a pill above
+  the video; click to switch, click the active one to stop. Your choice sticks
+  until that stream ends, at which point the stage closes rather than helping
+  itself to the next presenter
+- Your **own** share is the one thing that opens by itself — you just pressed
+  Share, and that is the preview of what the call is being sent. *Hide* closes
+  it and it stays closed
 - Microphone and speaker selection, echo cancellation / noise suppression /
   AGC toggles
 - **Soundboard** — a tray of clips that everyone in the call hears, not just
@@ -819,29 +829,45 @@ picture-in-picture window (always-on-top, resizable, aspect-preserving). The
 tile's own tool buttons `stopPropagation` so they don't also trigger
 click-to-watch.
 
-### One stage, many sources
+### One stage, many sources — and nothing on it you didn't ask for
 
 `voice.js` keeps presenters in a `Map` keyed by participant id and emits the
 whole set through `onShares`, because the SFU carries as many screen shares as
 people start — the earlier one-slot model made a second presenter silently
 replace the first with no way back. The renderer flattens shares and cameras
-into one list of stage sources (`screen:<cid>` / `cam:<cid>`). `watching` holds
-an **explicit** pick and is honoured until that stream disappears, so a new
-presenter never yanks the view out from under you; with nothing picked the stage
-falls back to a screen share, and to nothing at all if there is none — cameras
-are never auto-promoted, or one person turning a webcam on would claim half the
-window when the grid was already doing the job.
+into one list of stage sources (`screen:<cid>` / `cam:<cid>`), and `watching`
+names the single one playing large.
 
-Two consequences worth keeping:
+**`watching` is written by nothing but a deliberate click.** There is no
+fallback: a stream that starts is *offered* — a Live tile in the call grid, a
+LIVE badge in the voice roster, an entry in that person's popover — and if the
+one you picked ends, the stage closes rather than promoting whoever is left.
+Every route in (pill, tile, popover) calls the same `watchSource(key)`, which
+toggles, so picking what is already playing stops it.
 
+The single exception is your own share: `onShares` opens it when a *local* share
+appears that wasn't there before, because you pressed Share a moment ago and
+this is where you check what the call is being sent. Closing it sets `watching`
+to null and nothing re-opens it.
+
+Consequences worth keeping:
+
+- A screen share's tile in the grid carries **no `<video>` at all** until it is
+  watched. That is what makes the opt-in real rather than cosmetic — declining a
+  stream costs this machine nothing to decode. (The SFU still delivers it; the
+  vendored SDK exposes no public per-consumer subscription control.)
 - The `MediaStream` for a share is **reused** while its track ids are unchanged.
   The SDK re-fires `screenShareUpdate` for unrelated reasons, and rebuilding the
   stream each time would swap `srcObject` and flash the video black mid-talk.
 - Share audio rides a hidden `<audio>` per presenter rather than the on-screen
-  `<video>`, which is what lets you keep hearing someone you're not watching.
-  The stage `<video>` is therefore *always* muted — that also removes the old
-  feedback-loop guard around your own share. Those elements follow deafen and
-  the same per-person volume/mute prefs as the presenter's microphone.
+  `<video>`, so switching sources never interrupts the sound and your own share
+  can never feed back — the stage `<video>` is therefore *always* muted. The
+  element stays attached whether or not you are watching, and `watchedShare`
+  (set by the renderer through `voice.setWatchedShare`) decides whether it is
+  audible: hearing a presenter's desktop audio is part of watching them, and
+  before that flag existed everyone in the call heard every share regardless.
+  Those elements also follow deafen and the same per-person volume/mute prefs as
+  the presenter's microphone.
 
 ### Opening links
 

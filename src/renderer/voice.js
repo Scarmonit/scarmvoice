@@ -869,7 +869,17 @@
         // Every live presenter, keyed by participant id. The SFU happily carries
         // several screen shares at once; which one you WATCH is a viewer-side
         // choice made in the UI, so the engine keeps them all published.
-        const sharers = new Map();  // cid -> { id, name, isLocal, stream, sig }
+        const sharers = new Map();  // cid -> { id, name, isLocal, stream, sig, hasAudio }
+        // The ONE presenter this user has opted into watching, or null. Set by
+        // the renderer (setWatchedShare) whenever the stage changes.
+        //
+        // It gates the share AUDIO, which is the half of "watching" that follows
+        // you around the window: a share's audio rides its own element rather
+        // than the on-screen <video>, so before this existed every presenter's
+        // desktop audio played for everyone in the call whether or not they had
+        // asked to see the stream. Watching is opt-in now, and hearing goes with
+        // it — the same rule the client this is modelled on uses.
+        let watchedShare = null;
 
         let settings = {};
         const audioEls = {};        // cid -> HTMLAudioElement
@@ -1019,7 +1029,14 @@
         }
 
         // Screen-share audio rides its own element rather than the on-screen
-        // <video>, so you keep hearing a presenter you're not currently watching.
+        // <video>, so switching what the stage shows never interrupts the sound
+        // and your own share can never feed back into the call.
+        //
+        // Audible only while you are WATCHING that presenter. The element stays
+        // attached either way — muted, not torn down — so opting in is instant
+        // and re-attaching mid-presentation (an audible drop for the listener,
+        // see attachShareAudio) never happens.
+        //
         // No >100% boost path here: a share's audio follows the same person's
         // volume/mute prefs, clamped to what the element can do.
         function applyShareAudio(cid) {
@@ -1028,7 +1045,8 @@
             const vol = settings.localVolumes && settings.localVolumes[cid] !== undefined
                 ? Number(settings.localVolumes[cid]) : 1;
             const master = settings.outputVolume === undefined ? 1 : Number(settings.outputVolume);
-            el.muted = deafened || !!(settings.localMuted && settings.localMuted[cid]);
+            el.muted = deafened || watchedShare !== cid ||
+                !!(settings.localMuted && settings.localMuted[cid]);
             el.volume = Math.max(0, Math.min(1, vol * master));
         }
 
@@ -1560,7 +1578,12 @@
         function shareList() {
             const arr = Array.from(sharers.values());
             return arr.filter((s) => !s.isLocal).concat(arr.filter((s) => s.isLocal))
-                .map((s) => ({ id: s.id, name: s.name, isLocal: s.isLocal, stream: s.stream }));
+                .map((s) => ({
+                    id: s.id, name: s.name, isLocal: s.isLocal, stream: s.stream,
+                    // Whether there is desktop audio riding along, so the offer to
+                    // watch can say so — "with audio" is often the reason to.
+                    hasAudio: !!s.hasAudio
+                }));
         }
 
         function pushShares() {
@@ -1587,7 +1610,7 @@
             const prev = sharers.get(id);
             const sig = trackSig(tracks);
             const stream = (prev && prev.sig === sig) ? prev.stream : buildShareStream(tracks);
-            sharers.set(id, { id, name, isLocal, stream, sig });
+            sharers.set(id, { id, name, isLocal, stream, sig, hasAudio: !!(tracks && tracks.audio) });
             // Your own share's audio is already coming out of your speakers.
             if (!isLocal) attachShareAudio(id, tracks);
             if (!prev && !quiet) uiSound('share-start');
@@ -2494,6 +2517,10 @@
             lastTransmit = null;
             txSent = null;
             localSharing = false;
+            // Nothing is being watched once there is no call. Left set, the next
+            // call's first share would come up already unmuted for a presenter
+            // this user never opted into.
+            watchedShare = null;
             sharers.clear();
             camStreams.clear();
             Object.keys(shareAudioEls).forEach(detachShareAudio);
@@ -2692,6 +2719,21 @@
             stopShare,
             isSharing: () => localSharing,
             shares: shareList,
+
+            // Which presenter this user has opted into, or null for none. The
+            // engine holds no opinion about what should be on screen — the
+            // renderer decides, and tells it, so the share audio can follow.
+            setWatchedShare(cid) {
+                const next = cid || null;
+                if (next === watchedShare) return;
+                const was = watchedShare;
+                watchedShare = next;
+                // Only the two that changed, so switching presenters never
+                // re-applies volume to everyone else's element.
+                if (was) applyShareAudio(was);
+                if (next) applyShareAudio(next);
+            },
+            watchedShare: () => watchedShare,
 
             enableCam,
             disableCam,

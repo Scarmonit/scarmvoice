@@ -7362,6 +7362,10 @@
                     window.loungeSounds.warmAnnouncements(myAnnounceName);
                 } else if (wasJoined && !st.joined) {
                     window.loungeSounds.announceSelf('leave', myAnnounceName);
+                    // Nothing is being watched outside a call, and the next call
+                    // starts its "who is already live" set from scratch.
+                    watching = null;
+                    liveSeen = null;
                 }
                 // Leaving is the moment to mint the NEXT token. The pointer is
                 // usually already inside the voice area when somebody hangs up,
@@ -7374,7 +7378,22 @@
                 // rather than left behind.
                 if (!st.joined) markMeSpeaking(false);
             },
-            onShares: (list) => { shareSources = list || []; renderStage(); },
+            onShares: (list) => {
+                const next = list || [];
+                const mineBefore = shareSources.some((s) => s.isLocal);
+                const mineNow = next.find((s) => s.isLocal);
+                shareSources = next;
+                // The one automatic open in the whole feature, and it is your
+                // own: you pressed Share a moment ago, and this is where you
+                // check what the rest of the call is being sent. Close it and it
+                // stays closed — nothing re-opens it but another share.
+                if (mineNow && !mineBefore) watching = 'screen:' + mineNow.id;
+                announceLive(next);
+                renderCallGrid();
+                // A LIVE badge belongs beside the name in the voice list too,
+                // and that list is redrawn from the roster rather than from here.
+                renderVoiceRoster();
+            },
             onCams: (list) => renderCams(list),
             onParticipants: () => renderVoiceRoster(),
             onSpeaking: (cid, on, isLocal) => {
@@ -7518,20 +7537,37 @@
     });
 
     // ---------- viewing stage ----------------------------------------------
-    // Any number of people can present at once and any number of cameras can be
-    // live, so "the stage" is no longer whoever shared last. Every watchable
-    // stream — screen shares and cameras alike — becomes an entry in one list;
-    // `watching` names the one playing large, and the strip under the head is
-    // how you switch. The camera grid below still shows everybody.
+    // WATCHING IS OPT-IN. Any number of people can present at once and any
+    // number of cameras can be live, and none of them takes this window on its
+    // own: a stream that starts is OFFERED — a Live tile in the call grid, a
+    // LIVE badge beside the name in the voice roster, an entry in that person's
+    // popover — and plays here only once somebody asks for it. That is the whole
+    // difference from the old behaviour, where the newest screen share was
+    // dropped straight onto the stage of everyone in the call, sound and all,
+    // with no way to have said no.
+    //
+    // `watching` names the one stream playing large, and is set by nothing but a
+    // deliberate click. Screen shares and cameras are the same kind of thing to
+    // it, so choosing between somebody's screen and their camera is one pick
+    // rather than two different features — the strip under the stage head, the
+    // grid tiles and the popover all write the same variable.
+    //
+    // The single exception is your OWN screen share: starting one opens its
+    // preview, because you just asked for it and this is where you check what
+    // the rest of the call is getting. Close it and it stays closed.
 
     let shareSources = [];      // live screen shares, newest presenter last
     let watching = null;        // explicit pick: 'screen:<cid>' | 'cam:<cid>' | null
     let stageStreamId = null;   // what the <video> currently holds
+    // The presenter the engine has been told we are watching, so share audio can
+    // follow the picture. Mirrored here only to keep the call idempotent.
+    let watchedShareCid = null;
 
     function stageSources() {
         const out = shareSources.map((s) => ({
             key: 'screen:' + s.id, kind: 'screen',
-            id: s.id, name: s.name, isMe: !!s.isLocal, stream: s.stream
+            id: s.id, name: s.name, isMe: !!s.isLocal, stream: s.stream,
+            hasAudio: !!s.hasAudio
         }));
         camList.forEach((c) => out.push({
             key: 'cam:' + c.id, kind: 'cam',
@@ -7540,19 +7576,10 @@
         return out;
     }
 
-    // With nothing picked, the stage follows the screen shares — someone else's
-    // first, since that's what you'd have opened it for. Cameras are NOT auto-
-    // promoted: they have their own grid, and one person turning a webcam on
-    // shouldn't take over half the window.
-    function defaultSource(list) {
-        return list.find((s) => s.kind === 'screen' && !s.isMe) ||
-            list.find((s) => s.kind === 'screen') || null;
-    }
-
     function sourceLabel(s, long) {
         if (s.kind === 'screen') {
             if (!long) return s.isMe ? 'Your screen' : `${s.name}'s screen`;
-            return s.isMe ? 'You are sharing your screen' : `${s.name} is sharing their screen`;
+            return s.isMe ? 'You are sharing your screen' : `Watching ${s.name}'s screen`;
         }
         return s.isMe ? 'Your camera' : `${s.name}'s camera`;
     }
@@ -7562,17 +7589,19 @@
         const video = $('stage-video');
         const list = stageSources();
 
-        // An explicit choice is kept until that stream goes away; otherwise the
-        // stage falls back to a screen share, or closes if there is none.
-        let cur = list.find((s) => s.key === watching);
-        if (!cur) { watching = null; cur = defaultSource(list); }
+        // NO FALLBACK. The stage shows what was asked for and nothing else — if
+        // the stream you picked ends, it closes rather than helping itself to
+        // the next presenter in the list.
+        const cur = watching ? (list.find((s) => s.key === watching) || null) : null;
+        if (!cur) watching = null;
 
         if (!cur) {
             stageStreamId = null;
             try { video.srcObject = null; } catch (e) {}
             stage.hidden = true;
             renderStageSources([], null);
-            markWatchedCam();
+            syncWatchedShare(null);
+            markWatchedTiles();
             return;
         }
 
@@ -7584,8 +7613,8 @@
             video.play().catch(() => {});
         }
         // Always silent: share audio plays through the voice engine's own
-        // elements, so your own share can't feed back and a presenter you are
-        // not watching stays audible.
+        // elements, which is what lets it survive a switch between sources
+        // without a gap — and what keeps your own share from feeding back.
         video.muted = true;
         video.classList.toggle('mirror', cur.kind === 'cam' && cur.isMe);
 
@@ -7597,13 +7626,30 @@
         ['stage-quality', 'stage-motion', 'stage-stop'].forEach((id) => {
             $(id).hidden = !mine;
         });
+        // Leaving a stream is as explicit as joining it. Your own preview is
+        // not something you are "watching", so that button says what it does.
+        const close = $('stage-close');
+        close.textContent = mine ? 'Hide' : 'Stop Watching';
+        setTip(close, mine ? 'Hide your own preview' : 'Stop watching this stream');
 
         renderStageSources(list, cur.key);
-        markWatchedCam();
+        // Hearing a presenter's desktop audio is part of watching them, so it
+        // arrives and leaves with the picture — see applyShareAudio in voice.js.
+        syncWatchedShare(cur.kind === 'screen' && !cur.isMe ? cur.id : null);
+        markWatchedTiles();
     }
 
-    // The switcher. With a single source there is nothing to choose, so it
-    // stays out of the way until a second one appears.
+    function syncWatchedShare(cid) {
+        const next = cid || null;
+        if (next === watchedShareCid) return;
+        watchedShareCid = next;
+        try { if (voice && voice.setWatchedShare) voice.setWatchedShare(next); } catch (e) {}
+    }
+
+    // The switcher, and the answer to "screen or camera?" — every live stream in
+    // the call is a pill here, so swapping between somebody's screen share and
+    // their webcam is one click. With a single source there is nothing to choose
+    // from, so it stays out of the way until a second one appears.
     function renderStageSources(list, activeKey) {
         const bar = $('stage-sources');
         bar.hidden = list.length < 2;
@@ -7616,7 +7662,7 @@
             b.className = 'stage-src' + (s.key === activeKey ? ' active' : '');
             b.setAttribute('role', 'tab');
             b.setAttribute('aria-selected', String(s.key === activeKey));
-            b.title = 'Watch ' + sourceLabel(s, false);
+            b.title = (s.key === activeKey ? 'Stop watching ' : 'Watch ') + sourceLabel(s, false);
             b.innerHTML = I(s.kind === 'screen' ? 'screen' : 'camera') +
                 `<span>${esc(sourceLabel(s, false))}</span>`;
             b.addEventListener('click', () => watchSource(s.key));
@@ -7624,24 +7670,41 @@
         });
     }
 
-    // Picking the source already on the stage puts it back: for a camera that
-    // means closing the stage and going back to just the grid, the same
-    // click-again-to-shrink the tiles have always had.
+    // One rule for every way in — the pills, the grid tiles, the popover: the
+    // source you pick starts playing, and picking the one already playing stops
+    // it. Nothing else moves the stage.
     function watchSource(key) {
-        if (watching === key) {
-            // Screen shares behave like radio buttons — re-picking the active
-            // one changes nothing.
-            if (!key.startsWith('cam:')) return;
-            watching = null;
-        } else {
-            watching = key;
-        }
+        watching = (watching === key) ? null : key;
         renderStage();
     }
 
-    // Camera tiles. Kept keyed by participant so a re-render doesn't tear down
-    // and re-attach a <video> that's already playing — that flashes black.
-    const camTiles = new Map();
+    // Somebody going live no longer announces itself by taking over the window,
+    // so it has to announce itself in words. Once, per presenter, and only for a
+    // share that STARTS while we are here: the set is seeded from whatever was
+    // already running when we joined, or arriving in a busy call would stack up
+    // a toast for every presenter in it.
+    let liveSeen = null;
+    function announceLive(list) {
+        const ids = new Set(list.filter((s) => !s.isLocal).map((s) => s.id));
+        if (liveSeen === null) { liveSeen = ids; return; }
+        list.forEach((s) => {
+            if (s.isLocal || liveSeen.has(s.id)) return;
+            toast(`${s.name} is streaming — press Watch Stream to join`);
+        });
+        liveSeen = ids;
+    }
+
+    // ---------- the call grid ------------------------------------------------
+    // One tile per watchable thing: a live camera plays in its tile the way it
+    // always has, while a screen share shows an OFFER — the presenter's name, a
+    // LIVE badge and a Watch Stream button — and decodes nothing until it is
+    // taken up. That is what makes the opt-in real rather than cosmetic: an
+    // unwatched share is never attached to any element on this machine.
+
+    // Kept keyed by participant so a re-render doesn't tear down and re-attach a
+    // <video> that's already playing — that flashes black.
+    const camTiles = new Map();    // cid -> camera tile
+    const shareTiles = new Map();  // cid -> "live" tile for that person's share
     let camList = [];              // last list, so speaking updates can re-lay-out
 
     // Balanced column count: 1→1, 2→2, 3-4→2, 5-6→3, 7-9→3, 10-12→4 …
@@ -7689,13 +7752,97 @@
         return { wrap, video, label, streamId: null };
     }
 
-    function renderCams(list) {
-        camList = list || [];
-        const grid = $('cam-grid');
-        const seen = new Set();
+    // The offer to watch somebody's screen. No <video> at all — the stream is
+    // not attached anywhere until the button is pressed, so a call where nobody
+    // opts in decodes nothing. The presenter's own tile is the same card with
+    // the labels turned around, because a preview you asked for is still a thing
+    // you can put away.
+    function buildShareTile(s) {
+        const wrap = document.createElement('div');
+        wrap.className = 'cam-tile share-tile';
+        wrap.dataset.cid = s.id;
 
+        const card = document.createElement('div');
+        card.className = 'live-card';
+
+        const av = document.createElement('span');
+        const badge = document.createElement('span');
+        badge.className = 'live-badge';
+        badge.textContent = 'LIVE';
+        const name = document.createElement('span');
+        name.className = 'live-name';
+        const sub = document.createElement('span');
+        sub.className = 'live-sub';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'live-watch';
+
+        card.appendChild(av);
+        card.appendChild(badge);
+        card.appendChild(name);
+        card.appendChild(sub);
+        card.appendChild(btn);
+        wrap.appendChild(card);
+
+        // Button and card do the same thing — the button is what the eye goes
+        // to, the card is the bigger target.
+        const pick = () => watchSource('screen:' + s.id);
+        btn.addEventListener('click', (e) => { e.stopPropagation(); pick(); });
+        wrap.addEventListener('click', pick);
+
+        return { wrap, av, name, sub, btn, uid: undefined };
+    }
+
+    function paintShareTile(tile, s) {
+        const watched = watching === 'screen:' + s.id;
+        const uid = uidForClient(s.id);
+        // The avatar is rebuilt only when the account behind it changes: it
+        // carries a background image, and rewriting it on every roster event
+        // makes it flicker.
+        if (tile.uid !== uid) {
+            tile.uid = uid;
+            tile.av.className = 'av live-av' + avatarCls(uid);
+            tile.av.setAttribute('style', avatarStyle(s.name));
+            tile.av.innerHTML = esc(initials(s.name)) + avatarImgHtml(uid);
+            wireAvatarFallback(tile.wrap);
+        }
+        tile.name.textContent = s.isLocal ? 'You are streaming' : s.name;
+        tile.sub.textContent = (s.isLocal ? 'Your screen' : 'Screen share') +
+            (s.hasAudio ? ' · with audio' : '');
+        tile.btn.textContent = watched
+            ? (s.isLocal ? 'Hide preview' : 'Stop Watching')
+            : (s.isLocal ? 'Show preview' : 'Watch Stream');
+        tile.btn.classList.toggle('on', watched);
+        tile.wrap.classList.toggle('me', !!s.isLocal);
+        tile.wrap.classList.toggle('speaking', !!speaking[s.id]);
+        tile.wrap.title = watched
+            ? 'Stop watching this stream'
+            : (s.isLocal ? 'Show what you are sharing' : `Watch ${s.name}'s screen`);
+    }
+
+    // Everything watchable in the call, in one grid: the live streams on offer
+    // first (they are the thing somebody has to decide about), then the cameras.
+    function renderCallGrid() {
+        const grid = $('cam-grid');
+        const order = [];
+
+        const liveSeen = new Set();
+        shareSources.forEach((s) => {
+            liveSeen.add(s.id);
+            let tile = shareTiles.get(s.id);
+            if (!tile) { tile = buildShareTile(s); shareTiles.set(s.id, tile); grid.appendChild(tile.wrap); }
+            paintShareTile(tile, s);
+            order.push(tile.wrap);
+        });
+        shareTiles.forEach((tile, id) => {
+            if (liveSeen.has(id)) return;
+            tile.wrap.remove();
+            shareTiles.delete(id);
+        });
+
+        const camSeen = new Set();
         camList.forEach((c) => {
-            seen.add(c.id);
+            camSeen.add(c.id);
             let tile = camTiles.get(c.id);
             if (!tile) { tile = buildCamTile(c); camTiles.set(c.id, tile); grid.appendChild(tile.wrap); }
 
@@ -7709,26 +7856,49 @@
                 try { tile.video.srcObject = c.stream; } catch (e) {}
                 tile.video.play().catch(() => {});
             }
+            order.push(tile.wrap);
         });
 
         camTiles.forEach((tile, id) => {
-            if (seen.has(id)) return;
+            if (camSeen.has(id)) return;
             try { tile.video.srcObject = null; } catch (e) {}
             tile.wrap.remove();
             camTiles.delete(id);
         });
 
-        grid.style.setProperty('--cols', String(camColumns(camTiles.size)));
-        $('camera-stage').hidden = camTiles.size === 0;
+        // Re-appended only when the order is actually wrong: moving a live
+        // <video> for no reason is a needless risk of a repaint mid-call.
+        const misordered = order.some((el, i) => grid.children[i] !== el);
+        if (misordered) order.forEach((el) => grid.appendChild(el));
 
-        // Cameras are stage sources too, so the switcher has to follow them.
+        const total = shareTiles.size + camTiles.size;
+        grid.style.setProperty('--cols', String(camColumns(total)));
+        $('camera-stage').hidden = total === 0;
+        // Nothing here is a picture yet — see .offers-only. The region is sized
+        // for video, and a call where somebody went live and nobody has said yes
+        // should not lose that much of the conversation to a row of buttons.
+        $('camera-stage').classList.toggle('offers-only', camTiles.size === 0);
+
+        // Everything in the grid is also a stage source, so the switcher and
+        // whatever is playing have to follow it.
         renderStage();
     }
 
-    // Ring the tile whose camera is currently on the stage.
-    function markWatchedCam() {
+    function renderCams(list) {
+        camList = list || [];
+        renderCallGrid();
+    }
+
+    // Ring whichever tile is currently on the stage — camera or screen share.
+    function markWatchedTiles() {
         camTiles.forEach((tile, id) => {
             tile.wrap.classList.toggle('watching', watching === 'cam:' + id);
+        });
+        shareTiles.forEach((tile, id) => {
+            const watched = watching === 'screen:' + id;
+            tile.wrap.classList.toggle('watching', watched);
+            const s = shareSources.find((x) => x.id === id);
+            if (s) paintShareTile(tile, s);
         });
     }
 
@@ -7743,10 +7913,14 @@
         if (wrap) wrap.classList.toggle('speaking', meSpeaking);
     }
 
-    // Keep the speaking ring on camera tiles in sync without a full re-render.
+    // Keep the speaking ring on the call tiles in sync without a full re-render.
+    // Both kinds: a presenter with no camera has only their Live tile, and it is
+    // the only thing in the grid that can show they are the one talking.
     function markCamSpeaking(cid, on) {
-        const tile = camTiles.get(cid);
-        if (tile) tile.wrap.classList.toggle('speaking', on);
+        const cam = camTiles.get(cid);
+        if (cam) cam.wrap.classList.toggle('speaking', on);
+        const share = shareTiles.get(cid);
+        if (share) share.wrap.classList.toggle('speaking', on);
     }
 
     $('btn-cam').addEventListener('click', () => { if (voice) voice.toggleCam(); });
@@ -7957,6 +8131,10 @@
     });
 
     $('stage-stop').addEventListener('click', () => voice.stopShare());
+    // Leaving a stream, which is a different thing from ending one: this puts
+    // the window back and leaves the presenter alone. Their tile stays in the
+    // grid offering to start again.
+    $('stage-close').addEventListener('click', () => { watching = null; renderStage(); });
 
     $('stage-quality').addEventListener('change', async (e) => {
         await saveSettings({ shareQuality: e.target.value });
@@ -8225,6 +8403,11 @@
             // In the room but absent from our SFU peer list: present, yet unable
             // to exchange media with us.
             const unreachable = !!(inCall && p.remoteOnly && !isMe);
+            // Since watching became opt-in, this badge is the only thing in the
+            // sidebar that says a stream exists at all — the row it sits on
+            // opens the popover that offers to watch it.
+            const isLive = shareSources.some((s) => s.id === p.id);
+            const camOn = camList.some((c) => c.id === p.id);
 
             const li = document.createElement('li');
             li.className = 'vp vu' + (isMe ? ' me' : '') +
@@ -8235,6 +8418,8 @@
                 `<span class="av${avatarCls(p.uid)}" style="${avatarStyle(p.name)}">${esc(initials(p.name))}${avatarImgHtml(p.uid)}</span>` +
                 // No "(you)" — the roster is short and your own avatar is in it.
                 `<span class="vp-name">${esc(p.name)}</span>` +
+                (isLive ? `<span class="vp-live" title="${isMe ? 'You are streaming' : 'Streaming — click to watch'}">LIVE</span>` : '') +
+                (camOn ? '<span class="vp-flag" title="Camera on">' + I('camera') + '</span>' : '') +
                 (unreachable ? '<span class="vp-flag warn" title="In voice, but not connected to you — they may need to reload the website">' + I('warning') + '</span>' : '') +
                 // Muted and deafened are two different states and someone can be
                 // in both. One glyph for the pair could only ever report one.
@@ -8691,6 +8876,20 @@
         const canBan = can('member.ban') && hasTarget;
         const canModerate = canKick || canBan;
 
+        // ---- what this person is broadcasting, if anything ----
+        // Keyed on the INSTALL id, because that is what the SFU publishes under
+        // — the same id `watching` is built from. Your own row offers nothing
+        // here: your share already has its preview and its own controls.
+        const theirShare = shareSources.find((s) => s.id === p.id && !s.isLocal);
+        const theirCam = camList.find((c) => c.id === p.id && !c.isMe);
+        $('pop-watch').hidden = !theirShare;
+        $('pop-watch-label').textContent =
+            watching === 'screen:' + p.id ? 'Stop Watching Stream' : 'Watch Stream';
+        $('pop-watch-cam').hidden = !theirCam;
+        $('pop-watch-cam-label').textContent =
+            watching === 'cam:' + p.id ? 'Stop Watching Camera' : 'Watch Camera';
+        $('pop-watch-sep').hidden = !(theirShare || theirCam);
+
         // Message them. Same account-or-nothing rule as the moderation actions
         // below, and for the same reason: a DM is addressed to an account, so a
         // row that resolves to none has nothing to open. Sits above Mention,
@@ -8763,6 +8962,19 @@
         const uid = popUid;
         closePopover();
         if (uid) messageUser(uid);
+    });
+
+    // popFor is the install id the popover was opened about, read before
+    // closePopover clears it — the same order Message and Profile above use.
+    $('pop-watch').addEventListener('click', () => {
+        const cid = popFor;
+        closePopover();
+        if (cid) watchSource('screen:' + cid);
+    });
+    $('pop-watch-cam').addEventListener('click', () => {
+        const cid = popFor;
+        closePopover();
+        if (cid) watchSource('cam:' + cid);
     });
 
     $('pop-mention').addEventListener('click', () => {

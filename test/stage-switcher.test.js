@@ -5,9 +5,13 @@
 // callbacks app.js registers — so onShares/onCams can be fired by hand and the
 // resulting DOM asserted.
 //
-// What it protects: with several presenters live, the user's pick of what to
-// watch is the whole feature. Silently following the newest share, or losing the
-// switcher when a camera joins, would be invisible to every other test.
+// What it protects: WATCHING IS OPT-IN. A stream that starts is offered — a Live
+// tile in the call grid, a LIVE badge in the roster — and plays only once
+// somebody asks for it. The regression this exists to catch is the old
+// behaviour, where the newest screen share was dropped onto the stage of
+// everyone in the call whether they wanted it or not. With several streams live,
+// the user's pick between them (and between somebody's screen and their camera)
+// is the rest of the feature.
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,18 +25,26 @@ const unsub = () => noop;
 // Only the callbacks matter here; every method app.js calls on the engine is a
 // no-op that reports "not in a call".
 const cb = {};
+let watched = null;
+// Driven by the roster test at the bottom, which needs the app to believe it is
+// in a call with somebody in it.
+let inCall = false;
+let people = [];
 function fakeVoice(opts) {
     Object.assign(cb, opts);
     return {
-        join: async () => {}, leave: noop, roster: () => [], shares: () => [],
+        join: async () => {}, leave: noop, roster: () => people, shares: () => [],
         state: () => ({ joined: false, shareQuality: '1080p', shareMotion: 'sharp' }),
         setSettings: noop, setMuted: noop, setDeafened: noop, setPttHeld: noop,
         setLocalVolume: noop, setLocalMuted: noop,
         setShareQuality: noop, setShareMotion: noop,
+        // The renderer tells the engine what it is watching so the share audio
+        // can follow the picture; the last value is asserted below.
+        setWatchedShare: (cid) => { watched = cid || null; }, watchedShare: () => watched,
         startShare: async () => false, stopShare: noop, isSharing: () => false,
         enableCam: async () => false, disableCam: async () => false,
         isCamOn: () => false, toggleCam: noop, cams: () => [],
-        isJoined: () => false, isMuted: () => false, isDeafened: () => false
+        isJoined: () => inCall, isMuted: () => false, isDeafened: () => false
     };
 }
 
@@ -45,6 +57,12 @@ const $ = (id) => document.getElementById(id);
 const pills = () => Array.from(document.querySelectorAll('.stage-src'));
 const pillText = () => pills().map((b) => b.textContent.trim());
 const activePill = () => (pills().find((b) => b.classList.contains('active')) || {}).textContent;
+const pill = (name) => pills().find((b) => b.textContent.includes(name));
+// The offer in the call grid: one Live tile per screen share, each with the
+// button that opts you in.
+const liveTiles = () => Array.from(document.querySelectorAll('.share-tile'));
+const liveTile = (name) => liveTiles().find((t) => t.textContent.includes(name));
+const watchBtn = (name) => liveTile(name).querySelector('.live-watch');
 
 beforeAll(async () => {
     const html = fs.readFileSync(path.join(RENDERER, 'index.html'), 'utf8');
@@ -138,56 +156,105 @@ describe('viewing stage', () => {
         expect($('stage').hidden).toBe(true);
     });
 
-    it('shows a single presenter with no switcher to choose from', () => {
+    it('OFFERS a stream rather than starting it — the whole point', () => {
         cb.onShares([share('a', 'Alice')]);
-        expect($('stage').hidden).toBe(false);
-        expect($('stage-title').textContent).toBe('Alice is sharing their screen');
-        expect($('stage-sources').hidden).toBe(true);
+        // Nothing is playing. The old behaviour put Alice's screen on every
+        // participant's stage the instant she pressed Share.
+        expect($('stage').hidden).toBe(true);
+        // What there is instead: a tile in the call grid saying she is live and
+        // a button to take it up.
+        expect($('camera-stage').hidden).toBe(false);
+        expect(liveTiles()).toHaveLength(1);
+        expect(liveTile('Alice').textContent).toContain('LIVE');
+        expect(watchBtn('Alice').textContent).toBe('Watch Stream');
+        // And no video element for it: an unwatched share is not decoded here.
+        expect(liveTile('Alice').querySelector('video')).toBe(null);
+        // The engine is told nobody is being watched, so its audio stays muted.
+        expect(watched).toBe(null);
     });
 
-    it('offers every presenter once a second one starts', () => {
+    it('opens the stream when you press Watch Stream', () => {
+        watchBtn('Alice').click();
+        expect($('stage').hidden).toBe(false);
+        expect($('stage-title').textContent).toBe("Watching Alice's screen");
+        expect(watched).toBe('a');
+        expect(watchBtn('Alice').textContent).toBe('Stop Watching');
+        expect(liveTile('Alice').classList.contains('watching')).toBe(true);
+    });
+
+    it('leaves the stream again without ending it', () => {
+        $('stage-close').click();
+        expect($('stage').hidden).toBe(true);
+        expect(watched).toBe(null);
+        // The presenter is untouched — the offer is still standing.
+        expect(watchBtn('Alice').textContent).toBe('Watch Stream');
+    });
+
+    it('does not drag you into a second presenter either', () => {
         cb.onShares([share('a', 'Alice'), share('b', 'Bob')]);
+        expect($('stage').hidden).toBe(true);
+        expect(liveTiles()).toHaveLength(2);
+
+        watchBtn('Bob').click();
+        expect($('stage-title').textContent).toBe("Watching Bob's screen");
+        // With more than one live stream the strip appears, so switching
+        // between them is one click.
         expect($('stage-sources').hidden).toBe(false);
         expect(pillText()).toEqual(["Alice's screen", "Bob's screen"]);
-        // The newest share must not steal the view.
-        expect($('stage-title').textContent).toBe('Alice is sharing their screen');
-        expect(activePill()).toBe("Alice's screen");
-    });
-
-    it('switches to whichever presenter you pick', () => {
-        pills().find((b) => b.textContent.includes('Bob')).click();
-        expect($('stage-title').textContent).toBe('Bob is sharing their screen');
         expect(activePill()).toBe("Bob's screen");
     });
 
     it('keeps your pick when another presenter appears or leaves', () => {
         cb.onShares([share('a', 'Alice'), share('b', 'Bob'), share('c', 'Cass')]);
-        expect($('stage-title').textContent).toBe('Bob is sharing their screen');
+        expect($('stage-title').textContent).toBe("Watching Bob's screen");
 
         // Alice stops: Bob was the explicit choice and stays put.
         cb.onShares([share('b', 'Bob'), share('c', 'Cass')]);
-        expect($('stage-title').textContent).toBe('Bob is sharing their screen');
+        expect($('stage-title').textContent).toBe("Watching Bob's screen");
     });
 
-    it('falls back to another presenter when the one you watched stops', () => {
+    it('closes rather than helping itself to the next presenter', () => {
+        // The one you were watching stops. Falling through to Cass would be the
+        // same forced view this feature exists to remove.
         cb.onShares([share('c', 'Cass')]);
-        expect($('stage-title').textContent).toBe('Cass is sharing their screen');
+        expect($('stage').hidden).toBe(true);
+        expect(watched).toBe(null);
+        expect(liveTile('Cass')).toBeTruthy();
     });
 
-    it('lists live cameras as sources alongside the shares', () => {
+    it('offers a camera and a screen as two separate things to watch', () => {
+        watchBtn('Cass').click();
         cb.onCams([cam('d', 'Dev')]);
         expect(pillText()).toEqual(["Cass's screen", "Dev's camera"]);
-        // A camera does not take the stage on its own.
-        expect($('stage-title').textContent).toBe("Cass is sharing their screen");
+        // A camera does not take the stage on its own either.
+        expect($('stage-title').textContent).toBe("Watching Cass's screen");
     });
 
     it('puts a camera on the stage when you choose it', () => {
-        pills().find((b) => b.textContent.includes('Dev')).click();
+        pill('Dev').click();
         expect($('stage-title').textContent).toBe("Dev's camera");
-        expect($('cam-grid').querySelector('.cam-tile').classList.contains('watching')).toBe(true);
+        // …and the share audio goes with the picture: no longer watching Cass.
+        expect(watched).toBe(null);
+        expect($('cam-grid').querySelector('.cam-tile:not(.share-tile)')
+            .classList.contains('watching')).toBe(true);
     });
 
-    it('closes the stage when the last share ends and only a camera is left', () => {
+    it('lets one person offer both, and lets you pick between them', () => {
+        // Dev shares their screen while their camera is still on.
+        cb.onShares([share('d', 'Dev')]);
+        expect(pillText()).toEqual(["Dev's screen", "Dev's camera"]);
+        expect($('stage-title').textContent).toBe("Dev's camera");
+
+        pill("Dev's screen").click();
+        expect($('stage-title').textContent).toBe("Watching Dev's screen");
+        expect(watched).toBe('d');
+
+        pill("Dev's camera").click();
+        expect($('stage-title').textContent).toBe("Dev's camera");
+        expect(watched).toBe(null);
+    });
+
+    it('closes the stage when the share you left ends and only a camera is left', () => {
         cb.onShares([]);
         // A camera you chose deliberately keeps the stage…
         expect($('stage').hidden).toBe(false);
@@ -203,10 +270,67 @@ describe('viewing stage', () => {
         expect($('stage-title').textContent).toBe("Dev's camera");
     });
 
+    it('opens your OWN share by itself, and lets you put it away', () => {
+        cb.onCams([]);
+        cb.onShares([share('me', 'Me', true)]);
+        // You pressed Share a moment ago; this is where you check what the rest
+        // of the call is being sent.
+        expect($('stage').hidden).toBe(false);
+        expect($('stage-title').textContent).toBe('You are sharing your screen');
+        // Your own preview is not something you "watch", so nothing is reported
+        // to the engine and the buttons say what they do.
+        expect(watched).toBe(null);
+        expect($('stage-close').textContent).toBe('Hide');
+        expect($('stage-stop').hidden).toBe(false);
+
+        $('stage-close').click();
+        expect($('stage').hidden).toBe(true);
+        // …and it stays away until you ask for it back.
+        cb.onShares([share('me', 'Me', true)]);
+        expect($('stage').hidden).toBe(true);
+        expect(watchBtn('You').textContent).toBe('Show preview');
+    });
+
     it('drops the stage when every source goes away', () => {
         cb.onCams([]);
         cb.onShares([]);
         expect($('stage').hidden).toBe(true);
         expect($('camera-stage').hidden).toBe(true);
+    });
+
+    // The sidebar half of the offer. With nothing auto-opening, a person who is
+    // looking at the conversation rather than the grid needs the roster to say a
+    // stream exists — and the row they click has to lead somewhere.
+    it('badges a live presenter in the voice roster and offers both streams from their popover', () => {
+        inCall = true;
+        people = [
+            { id: 'a', name: 'Alice', isMe: false, muted: false },
+            { id: 'me', name: 'Me', isMe: true, muted: false }
+        ];
+        cb.onCams([cam('a', 'Alice')]);
+        cb.onShares([share('a', 'Alice')]);
+
+        const row = Array.from(document.querySelectorAll('#voice-users .vu'))
+            .find((li) => li.textContent.includes('Alice'));
+        expect(row.querySelector('.vp-live').textContent).toBe('LIVE');
+
+        row.click();
+        // Screen and camera are two separate entries: someone doing both is two
+        // things to watch, and this is where you choose.
+        expect($('pop-watch').hidden).toBe(false);
+        expect($('pop-watch-label').textContent).toBe('Watch Stream');
+        expect($('pop-watch-cam').hidden).toBe(false);
+        expect($('pop-watch-cam-label').textContent).toBe('Watch Camera');
+
+        $('pop-watch').click();
+        expect($('stage-title').textContent).toBe("Watching Alice's screen");
+        expect(watched).toBe('a');
+
+        // …and the camera is one more click away, not a different feature.
+        row.click();
+        expect($('pop-watch-label').textContent).toBe('Stop Watching Stream');
+        $('pop-watch-cam').click();
+        expect($('stage-title').textContent).toBe("Alice's camera");
+        expect(watched).toBe(null);
     });
 });
