@@ -7630,7 +7630,9 @@
         // not something you are "watching", so that button says what it does.
         const close = $('stage-close');
         close.textContent = mine ? 'Hide' : 'Stop Watching';
-        setTip(close, mine ? 'Hide your own preview' : 'Stop watching this stream');
+        // `title`, not setTip: the other buttons in this header use the native
+        // tooltip, and an element carrying both gets two of them stacked.
+        close.title = mine ? 'Hide your own preview' : 'Stop watching this stream';
 
         renderStageSources(list, cur.key);
         // Hearing a presenter's desktop audio is part of watching them, so it
@@ -7790,17 +7792,19 @@
         btn.addEventListener('click', (e) => { e.stopPropagation(); pick(); });
         wrap.addEventListener('click', pick);
 
-        return { wrap, av, name, sub, btn, uid: undefined };
+        return { wrap, av, name, sub, btn, face: null };
     }
 
     function paintShareTile(tile, s) {
         const watched = watching === 'screen:' + s.id;
         const uid = uidForClient(s.id);
-        // The avatar is rebuilt only when the account behind it changes: it
-        // carries a background image, and rewriting it on every roster event
-        // makes it flicker.
-        if (tile.uid !== uid) {
-            tile.uid = uid;
+        // Rebuilt only when what it DRAWS changes — the account, its picture, or
+        // the name the initials and gradient come from. This runs on every
+        // roster event, and re-setting an <img src> each time restarts the load
+        // and flickers the face.
+        const face = String(uid) + '|' + (avatarSrc(uid) || '') + '|' + s.name;
+        if (tile.face !== face) {
+            tile.face = face;
             tile.av.className = 'av live-av' + avatarCls(uid);
             tile.av.setAttribute('style', avatarStyle(s.name));
             tile.av.innerHTML = esc(initials(s.name)) + avatarImgHtml(uid);
