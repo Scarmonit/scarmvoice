@@ -234,8 +234,11 @@ them**
 - **Threads inside a conversation** — a thread hangs off a message here too, and
   opens in the same drawer, beside the conversation rather than underneath it
 - **Group conversations** — add people, name the group, leave it
-- **One exception, on purpose** — a moderator cannot edit or delete somebody
-  else's message in a private conversation, and the server refuses it too. See
+- **The same roles** — an Owner or Admin can edit and delete somebody else's
+  message in a conversation, exactly as in a channel, **and only in
+  conversations they are actually in**. Nobody, the Owner included, can reach
+  into a private conversation they are not part of; that is checked on the
+  server before any role is consulted. See
   [A DM is a channel message](#a-dm-is-a-channel-message)
 
 **Sounds** (same assets as the website, `src/renderer/sounds/`)
@@ -1078,18 +1081,70 @@ silencing a conversation does not silence the channel behind it — and a `dm:`
 key is deliberately kept out of the legacy `mutedChannels` list, which is read
 by clients that know nothing about conversations.
 
-Two rules are deliberately **not** copied from the channel:
+#### One message system, two surfaces
 
-- **Who may pin.** `pin.js` is admin-or-author because a channel has roles. A
-  conversation has none — membership is its entire permission model — and *only
-  your own* would make the common case (pinning the address somebody just sent
-  you) impossible. So any member may pin anything in it, and `mayPin()` and
-  `dm/pin.js` agree on that.
-- **Moderator edit and delete.** Moderation is a power over a shared, public
-  space. Two people talking privately is not one, and a board admin able to
-  rewrite what was said there would be a worse bug than any missing button.
-  `dm/message.js` checks authorship as well as membership, and the menu does not
-  offer what the server would refuse.
+The client half above — one renderer, one row mapper, one `surfaceKey()` — used
+to have no counterpart on the server. There, a channel message was a row in
+`posts` reached through `/api/board/*` and a direct message was a row in
+`dm_messages` reached through `/api/board/dm/*`, and **every rule about messages
+was written twice**. They drifted in one direction, constantly: pins, threads,
+search, reactions and the *(edited)* marker each shipped for channels and then
+had to be discovered missing from DMs and built again.
+
+The last of that family was moderation. The board's Owner could delete anybody's
+message in `#general` and nobody's in a DM — `dm/message.js` decided permissions
+itself, with a hand-written `from_user === me.id`, and had never heard of the
+role table `/api/board/delete.js` had been consulting for a year.
+
+Copying the missing check across would have been the fifth patch of that shape.
+There is one message system now, in three files:
+
+| file | question |
+| --- | --- |
+| `functions/api/board/_surface.js` | **where** a message lives |
+| `functions/api/board/_authz.js` | **who** may touch it |
+| `functions/api/board/_messages.js` | **what** acting on it does |
+
+A **surface** is a place messages live. There are two kinds, and the difference
+between them is *data* — table and column names, plus whether the place is
+private — rather than a fork in the code. `delete`, `edit`, `pin`, `react`,
+`dm/message`, `dm/pin` and `dm/react` are adapters over it: resolve a surface,
+ask `_authz`, call the core. Adding a third kind of message container should be
+adding a row to one table.
+
+That is not only tidier. Those seven endpoints held **two copies of all four
+actions and disagreed about each one** — deleting a DM leaked its attachment
+into R2 for months, because only the channel copy had ever been taught to sweep
+the bucket, and only the channel edit recorded who had rewritten somebody else's
+words.
+
+**The permission answer is built in two steps, and the order is the safety
+property.**
+
+1. **Reach** — is this a place the caller may act in at all? A channel is
+   shared, so anyone through the front door is in. A conversation is reachable
+   **only by the people in it**, and *no capability buys past it*: not the
+   Owner's, not the service key's.
+2. **Authority** — inside a place they can reach, may they touch a message they
+   did not write? That is a capability, read from the same `CAPABILITIES` table
+   on both surfaces.
+
+So *"Owner and Admin can delete other people's messages in DMs"* means exactly
+the DMs they are in. A private conversation between two other people stays
+unreachable, and it is refused before a role is ever looked at — which is why
+the feature can be turned on without turning the Owner into somebody who can
+read and rewrite the whole board's private mail.
+
+A surface may **grant** a capability on top of the table, never revoke one. The
+only grant today: a conversation has no roles, everyone in it is a peer, so
+every member may pin anything in it — otherwise pinning the address somebody
+just sent you would need moderator rights. That rule used to *be* `dm/pin.js`'s
+own permission model, which is how a whole second one grew up around it.
+
+`dm_messages` gained `edited_by` with this work, applied out of band ahead of
+the deploy the way `posts.edited_by` was. A moderator can now edit a private
+message, and one rewritten by a third party with no attribution — still showing
+its original author — would be worse than the feature it enables.
 
 One consequence worth knowing about: since replies are now excluded from the
 conversation stream (as they always were from a channel's), the newest message
@@ -1541,6 +1596,9 @@ them were invisible:
 - **A moderator could delete somebody else's message but not edit one.** The server
   always allowed it; the hover bar and the right-click menu both gated edit on
   ownership, so the ability existed and could not be reached.
+- **A moderator could do neither inside a DM**, whatever their role, because the
+  DM endpoints had a second permission model that knew nothing about roles. See
+  [One message system, two surfaces](#one-message-system-two-surfaces).
 - **Role checks were bare `role === 'admin'` comparisons** spread across the
   Functions and a 12,000-line renderer. "What can an admin do" was not answerable
   by reading anything; it was answerable by grepping and hoping. There is now one

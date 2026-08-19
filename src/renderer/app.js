@@ -3918,13 +3918,18 @@
             (!mayPin(p) ? '' : `<button class="msg-act${p.pinned ? ' on' : ''}" data-act="pin" title="${p.pinned ? 'Unpin' : 'Pin'} this message">` + I('pin') + '</button>') +
             '<button class="msg-act" data-act="copy" title="Copy text">' + I('copy') + '</button>' +
             // Editing somebody ELSE's message is a real ability the server has
-            // always allowed a moderator (mayModifyPost) and the UI never offered:
-            // the hover bar and the right-click menu both gated edit on `mine`, so
-            // an admin could DELETE another person's message but not correct it.
-            // Titled differently, because rewriting what somebody else said in
-            // their name is not the same gesture as fixing your own typo — and it
-            // is now recorded on the message itself (see edited_by).
-            ((mine || (!dm && can('message.moderate')))
+            // always allowed a moderator and the UI never offered: the hover bar
+            // and the right-click menu both gated edit on `mine`, so an admin
+            // could DELETE another person's message but not correct it. Titled
+            // differently, because rewriting what somebody else said in their
+            // name is not the same gesture as fixing your own typo — and it is
+            // recorded on the message itself (see edited_by), in a conversation
+            // exactly as in a channel.
+            //
+            // `!dm &&` used to sit in front of this. It was the client half of
+            // the DM/channel permission split; mayModerate is the one question
+            // now, asked the same way in both places.
+            ((mine || mayModerate(p))
                 ? `<button class="msg-act" data-act="edit" title="${mine ? 'Edit message' : 'Edit as moderator'}">` + I('pencil') + '</button>'
                 : '') +
             (mine ? '<button class="msg-act danger" data-act="delete" title="Delete message">' + I('trash') + '</button>' : '') +
@@ -14350,14 +14355,39 @@
         return !!(p && p.user_id && account && p.user_id === account.id);
     }
 
-    // Pinning is the same rule as editing and deleting — admins anything, members
-    // only their own — and pin.js enforces it. See the pin button in renderMessage.
+    // MAY I MODERATE THIS — act on a message somebody ELSE wrote.
     //
-    // A CONVERSATION has no roles. Membership is its whole permission model
-    // (dm/pin.js says the same thing from the other side), everyone in it is an
-    // equal, and "only your own" would make the common case — pinning the
-    // address somebody just sent you — impossible. The client and the endpoint
-    // have to agree on this, or you get a button that 403s.
+    // The client mirror of the server's mayModifyMessage (_authz.js), and the
+    // affordance side of the DM/channel unification. It asks the SAME question in
+    // both places, because the server now answers it in one function instead of
+    // two that disagreed: a channel post consulted the role table, a direct
+    // message was checked against `from_user === me.id` and nothing else, so the
+    // board's Owner could delete anybody's message in #general and nobody's in a
+    // DM. This used to be written as `!p.isDm && can(...)` at each call site,
+    // which was the client half of exactly that split.
+    //
+    // NOTE WHAT IS NOT ASKED HERE: whether I am in the conversation. The server
+    // checks that first and no role buys past it (see reach() in _surface.js) —
+    // and a DM I am not in is one whose messages were never sent to this client
+    // in the first place. A message on screen is by construction one I can reach.
+    function mayModerate(p) {
+        return !!p && can('message.moderate');
+    }
+
+    // Editing or deleting a message at all: mine, or moderation. One rule, both
+    // surfaces — a button that disagrees with the server is a button that 403s.
+    function mayChange(p) {
+        return ownsPost(p) || mayModerate(p);
+    }
+
+    // Pinning is the same shape — the role table first — with one extra grant a
+    // conversation makes and a channel does not: everyone in a DM is a peer, so
+    // any member may pin anything in it. "Only your own" would make the common
+    // case (pinning the address somebody just sent you) impossible.
+    //
+    // That grant is declared server-side in _surface.js rather than hidden in
+    // dm/pin.js, which is where it used to live and how a whole second permission
+    // model grew up around it. This mirrors it; the two have to agree.
     function mayPin(p) {
         if (p && p.isDm) return true;
         return can('message.pin') || ownsPost(p);
@@ -16986,25 +17016,28 @@
             mine && 'sep',
             mine && { label: 'Edit message', icon: 'pencil', onClick: () => startEdit(p, el) },
             mine && { label: 'Delete message', icon: 'trash', danger: true, onClick: () => deletePost(p) },
-            // THE ONE THING THAT IS DELIBERATELY NOT AT PARITY.
-            //
-            // dm/message.js checks authorship as well as membership, so an admin
-            // acting on somebody else's message in a conversation they are in
-            // would be refused — and should be. Moderation is a power over a
-            // shared, public space; a private conversation between two people is
-            // not one, and a board admin being able to rewrite what was said in
-            // it would be a worse bug than the missing feature. This is the only
-            // channel action a DM does not get, and it is on purpose.
             // Editing and deleting somebody ELSE's message — the moderation
             // capability. Labelled "(moderator)" so it is never mistaken for the
             // ordinary edit of your own message; the edit is attributed on the
             // message itself afterwards.
-            !dm && !mine && can('message.moderate') && 'sep',
-            !dm && !mine && can('message.moderate') && {
+            //
+            // THIS USED TO BE CHANNEL-ONLY (`!dm && …`), because dm/message.js
+            // had its own permission check that had never heard of the role
+            // table and would refuse an admin acting in a conversation they were
+            // sitting in. The server has one rule for both surfaces now, so the
+            // menu asks it once: mayModerate.
+            //
+            // The scope limit is real and it is enforced SERVER-SIDE, not by
+            // hiding this entry: moderation reaches only conversations the
+            // moderator is a MEMBER of. Nobody, the Owner included, can act on a
+            // private conversation they are not part of — reach() refuses before
+            // any capability is consulted (_authz.js).
+            !mine && mayModerate(p) && 'sep',
+            !mine && mayModerate(p) && {
                 label: 'Edit (moderator)', icon: 'pencil',
                 onClick: () => startEdit(p, el)
             },
-            !dm && !mine && can('message.moderate') && { label: 'Delete (moderator)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
+            !mine && mayModerate(p) && { label: 'Delete (moderator)', icon: 'trash', danger: true, onClick: () => deletePost(p) },
             // One separator for the person group, whichever of the two it holds.
             (canDm || canBlock) && 'sep',
             canDm && {
@@ -17614,8 +17647,9 @@
             if (body === (p.body || '')) { restore(); return; }
 
             ta.disabled = true;
-            // Same split as delete: /edit reads the posts table, so a DM has to
-            // go to its own endpoint or it fails the same way.
+            // Same routing as delete: /edit reads the posts table, so a DM has to
+            // go to its own endpoint. Same shared core behind both, including the
+            // edited_by attribution when a moderator rewrote somebody else's.
             const res = p.isDm
                 ? await L.board('dm/message', { method: 'POST', body: { id: p.id, action: 'edit', body } })
                 : await L.board('edit', {
@@ -17745,7 +17779,8 @@
     }
 
     async function deletePost(p) {
-        if (!can('message.moderate') && !ownsPost(p)) return toast('You can only delete your own messages', true);
+        // One rule, both surfaces — see mayChange/mayModerate.
+        if (!mayChange(p)) return toast('You can only delete your own messages', true);
 
         const preview = (p.body || p.att_name || '').slice(0, 80);
         const ok = await askConfirm(
@@ -17756,9 +17791,11 @@
         );
         if (!ok) return;
 
-        // A DM is not a post: /delete reads the posts table, so sending a DM's
-        // id there asked for a post that does not exist and came back "Not
-        // found". Its own endpoint checks membership AND authorship.
+        // WHICH ENDPOINT, not which rule. /delete reads the posts table, so a DM's
+        // id sent there asks for a post that does not exist; the two routes are a
+        // routing detail and nothing else. Both are thin adapters over the same
+        // server-side core, so the permission answer, the reply-thread cascade
+        // and the attachment cleanup are literally the same code.
         if (p.isDm) {
             const dres = await L.board('dm/message', { method: 'POST', body: { id: p.id, action: 'delete' } });
             if (authGone(dres)) return;
@@ -20770,6 +20807,12 @@
             // The shared renderer draws "(edited)" from this. dm/list returns it
             // now; older servers omit it, which reads as 0 and draws nothing.
             edited_at: m.edited_at || 0,
+            // …and WHO, when it was not the author. Moderators can edit in a
+            // conversation now, so the same "(edited by X)" the renderer already
+            // draws for a channel message has to be reachable here — a private
+            // message rewritten by a third party with no marker would be worse
+            // than the missing feature it replaces.
+            edited_by: m.edited_by || null,
             pinned: m.pinned ? 1 : 0,
             reactions: m.reactions || [],
             reply_count: m.reply_count || 0,

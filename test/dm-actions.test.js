@@ -18,8 +18,14 @@
 //
 // So every test below that names an action asserts it is present in BOTH
 // places, and the control block at the bottom is what catches the two drifting
-// apart again. The one deliberate exception is moderation, which a private
-// conversation does not have — see the last test.
+// apart again.
+//
+// This file signs in as a plain MEMBER, which is why moderation is absent from
+// it. That used to be a rule about conversations ("a board role does not follow
+// anybody into one") and it is not any more: the server unified its two message
+// systems, so an Owner or Admin moderates a DM they are in exactly as they
+// moderate a channel. The member's view of that is unchanged — nothing here
+// should move — and the moderator's is test/dm-moderation.test.js.
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -410,15 +416,20 @@ describe('a message inside a conversation', () => {
         expect(mine).toContain('Save attachment…');
     });
 
-    // The ONE thing a conversation deliberately does not inherit. Moderation is
-    // a power over a shared space; two people talking privately is not one, and
-    // a board admin able to rewrite what was said there would be a worse bug
-    // than any missing button. dm/message.js enforces the same rule server-side.
-    it('does not offer moderator edit or delete', () => {
+    // A MEMBER gets no moderator actions — here or in a channel. That is the
+    // half of the unification which must not move: making the rule the same on
+    // both surfaces had to mean the role table applies in a DM, never that
+    // everybody in one is a moderator. The Owner's side of the same contract is
+    // test/dm-moderation.test.js.
+    it('does not offer a member moderator edit or delete', () => {
         rightClick(rowFor($('dm-messages'), 501));
         const labels = menuLabels();
         expect(labels).not.toContain('Edit (moderator)');
         expect(labels).not.toContain('Delete (moderator)');
+        // …and the control: the same member gets the same nothing on a channel
+        // message, so this assertion is about the ROLE and not about DMs.
+        rightClick(rowFor($('messages'), 7));
+        expect(menuLabels()).not.toContain('Delete (moderator)');
     });
 
     it('does not tell a channel you are typing in a conversation', async () => {
